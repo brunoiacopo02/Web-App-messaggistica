@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__vercel__list_deployments",
+      "mcp__vercel__get_deployment"
+    ]
+  }
+}
