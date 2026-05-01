@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
         .from('leads').insert({ phone_e164: phone }).select('id').single();
       if (leadErr || !leadNew) {
         await supabase.from('event_log').insert({
-          type: 'twilio_inbound', payload: { params, error: leadErr },
+          type: 'twilio_inbound', payload: { params, error: leadErr } as any,
           message: 'Lead create fallito', level: 'error',
         });
         return new NextResponse(TWIML_OK, { status: 200, headers: TWIML_HEADERS });
@@ -101,7 +101,7 @@ export async function POST(req: NextRequest) {
         .from('conversations').insert({ lead_id: leadId }).select('id').single();
       if (convErr || !convNew) {
         await supabase.from('event_log').insert({
-          type: 'twilio_inbound', payload: { params, error: convErr },
+          type: 'twilio_inbound', payload: { params, error: convErr } as any,
           message: 'Conv create fallito', level: 'error',
         });
         return new NextResponse(TWIML_OK, { status: 200, headers: TWIML_HEADERS });
@@ -121,7 +121,7 @@ export async function POST(req: NextRequest) {
     if (msgErr) {
       // Possibile duplicato (UNIQUE violation) → skip
       await supabase.from('event_log').insert({
-        type: 'twilio_inbound', payload: { sid: params.MessageSid, error: msgErr },
+        type: 'twilio_inbound', payload: { sid: params.MessageSid, error: msgErr } as any,
         message: msgErr.code === '23505' ? 'Duplicato (UNIQUE)' : `Insert fallito: ${msgErr.message}`,
         level: msgErr.code === '23505' ? 'info' : 'error',
       });

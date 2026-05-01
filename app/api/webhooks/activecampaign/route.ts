@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
   // Log iniziale (servirà anche come storia per dedup)
   await supabase.from('event_log').insert({
     type: 'ac_webhook',
-    payload: { email: lead.email, phone: lead.phone, listName: lead.listName, listId: lead.listId, raw: body },
+    payload: { email: lead.email, phone: lead.phone, listName: lead.listName, listId: lead.listId, raw: body } as any,
     message: 'AC webhook received',
     level: 'info',
   });
@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
   if (!phone) {
     await supabase.from('event_log').insert({
       type: 'send_error',
-      payload: { lead },
+      payload: { lead } as any,
       message: 'Telefono mancante o non valido',
       level: 'warn',
     });
@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
   // Trova campagna matching
   const { data: campaignsData } = await supabase
     .from('campaigns').select('*').eq('active', true);
-  const campaigns = (campaignsData ?? []) as CampaignRow[];
+  const campaigns = (campaignsData ?? []) as unknown as CampaignRow[];
   const campaign = matchCampaign(campaigns, lead);
   if (!campaign) {
     await supabase.from('event_log').insert({
@@ -112,7 +112,7 @@ export async function POST(req: NextRequest) {
   if (leadErr || !leadRow) {
     await supabase.from('event_log').insert({
       type: 'send_error', message: `Lead upsert fallito: ${leadErr?.message}`,
-      payload: { phone, error: leadErr }, level: 'error',
+      payload: { phone, error: leadErr } as any, level: 'error',
     });
     return NextResponse.json({ ok: true, skipped: 'lead_upsert_failed' });
   }
