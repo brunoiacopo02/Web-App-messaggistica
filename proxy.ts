@@ -3,7 +3,7 @@ import { refreshSession } from '@/lib/supabase/middleware';
 
 const PUBLIC_PATHS = ['/login', '/api/webhooks'];
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const { response, user } = await refreshSession(request);
 
   const path = request.nextUrl.pathname;
