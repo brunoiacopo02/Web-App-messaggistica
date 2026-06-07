@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { refreshSession } from '@/lib/supabase/middleware';
 
-const PUBLIC_PATHS = ['/login', '/api/webhooks', '/api/cron'];
+const PUBLIC_PATHS = ['/login', '/api/webhooks', '/api/cron', '/api/send-agenda'];
 
 export async function proxy(request: NextRequest) {
   const { response, user } = await refreshSession(request);

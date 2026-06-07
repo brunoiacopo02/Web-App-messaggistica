@@ -16,6 +16,10 @@
     {
       "path": "/api/cron/send-batch?campaign=4",
       "schedule": "30 11 11 6 *"
+    },
+    {
+      "path": "/api/cron/send-video",
+      "schedule": "* * * * *"
     }
   ]
 }
