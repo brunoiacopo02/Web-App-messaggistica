@@ -177,14 +177,24 @@ export async function GET(req: NextRequest) {
   const max = Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : 0;
 
   const supabase = getSupabaseAdmin();
+  const campaignParam = sp.get('campaign');
 
   const { data: campaignsData } = await supabase.from('campaigns').select('*').eq('active', true);
-  const campaigns = (campaignsData ?? []) as unknown as CampaignRow[];
+  let campaigns = (campaignsData ?? []) as unknown as CampaignRow[];
+  if (campaignParam) {
+    const cid = parseInt(campaignParam, 10);
+    campaigns = campaigns.filter((c) => c.id === cid);
+  }
 
-  // Salvaguardia: invio reale solo se BATCH_ENABLED=true (oppure dry-run).
+  // Salvaguardie: invio reale SOLO con una campagna specificata + BATCH_ENABLED=true.
   const enabled = process.env.BATCH_ENABLED === 'true';
-  if (!dry && !enabled) {
-    return NextResponse.json({ ok: true, skipped: 'BATCH_ENABLED non attivo', dry, campaigns: campaigns.length });
+  if (!dry) {
+    if (!campaignParam) {
+      return NextResponse.json({ ok: true, skipped: 'campaign param richiesto per invio reale' });
+    }
+    if (!enabled) {
+      return NextResponse.json({ ok: true, skipped: 'BATCH_ENABLED non attivo', campaigns: campaigns.length });
+    }
   }
 
   const report: Record<string, unknown>[] = [];
