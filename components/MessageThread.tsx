@@ -53,6 +53,13 @@ export function MessageThread({ conversationId, initial, campaignNamesById }: {
     return () => clearInterval(t);
   }, [refetch]);
 
+  // Ricarica immediata dopo un invio dal Composer.
+  useEffect(() => {
+    const h = () => refetch();
+    window.addEventListener('thread-refetch', h);
+    return () => window.removeEventListener('thread-refetch', h);
+  }, [refetch]);
+
   // Realtime (istantaneo) — il token va impostato PRIMA della subscribe o l'RLS blocca gli eventi.
   useEffect(() => {
     const sb = getSupabaseBrowser();

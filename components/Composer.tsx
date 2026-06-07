@@ -37,6 +37,8 @@ export function Composer({ conversationId, windowOpen, campaigns }: {
         return;
       }
       setBody(''); setVars({});
+      // Aggiorna subito il thread senza attendere il polling.
+      window.dispatchEvent(new Event('thread-refetch'));
     } finally { setSending(false); }
   }
 
@@ -80,17 +82,17 @@ export function Composer({ conversationId, windowOpen, campaigns }: {
       <TabsContent value="free" className="p-3">
         <div className="flex gap-2">
           <Textarea
-            placeholder="Scrivi una risposta… (Cmd/Ctrl+Enter per inviare)"
+            placeholder="Scrivi una risposta… (Invio per inviare, Shift+Invio per andare a capo)"
             value={body}
             onChange={(e) => setBody(e.target.value)}
             onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); send(); }
+              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (body.trim() && !sending) send(); }
             }}
             rows={2}
           />
           <Button onClick={send} disabled={!body.trim() || sending}>Invia</Button>
         </div>
-        <div className="text-xs text-zinc-500 mt-1">{body.length}/4096</div>
+        <div className="text-xs text-zinc-500 mt-1">{body.length}/4096 · Invio per inviare, Shift+Invio per andare a capo</div>
       </TabsContent>
       <TabsContent value="template" className="p-3">
         <div className="flex gap-2 flex-wrap">
