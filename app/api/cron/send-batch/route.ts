@@ -172,7 +172,8 @@ export async function GET(req: NextRequest) {
 
   const sp = req.nextUrl.searchParams;
   const dry = sp.get('dry') === '1';
-  const maxRaw = parseInt(sp.get('max') ?? '0', 10);
+  // Tetto massimo invii: query ?max= (test) oppure env BATCH_MAX (salvaguardia per il limite WhatsApp/24h).
+  const maxRaw = parseInt(sp.get('max') ?? process.env.BATCH_MAX ?? '0', 10);
   const max = Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : 0;
 
   const supabase = getSupabaseAdmin();

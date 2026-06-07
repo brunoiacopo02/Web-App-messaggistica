@@ -38,7 +38,8 @@ export async function fetchListContacts(
 
   // Guard rail: evita loop infiniti (max 100 pagine = 10.000 contatti).
   for (let page = 0; page < 100; page++) {
-    const url = `${base}/api/3/contacts?listid=${encodeURIComponent(listId)}&limit=${limit}&offset=${offset}`;
+    // status=1 → SOLO iscritti attivi (esclude disiscritti/rimbalzati/non confermati).
+    const url = `${base}/api/3/contacts?listid=${encodeURIComponent(listId)}&status=1&limit=${limit}&offset=${offset}`;
     const res = await fetchImpl(url, { headers: { 'Api-Token': token } });
     if (!res.ok) {
       throw new Error(`AC API ${res.status} su ${url}`);

@@ -38,7 +38,7 @@ describe('fetchListContacts', () => {
     // phone vuoto → null
     expect(out[100].phone).toBeNull();
     // url con listid/limit/offset
-    expect(String(fetchImpl.mock.calls[0][0])).toContain('/api/3/contacts?listid=4&limit=100&offset=0');
+    expect(String(fetchImpl.mock.calls[0][0])).toContain('/api/3/contacts?listid=4&status=1&limit=100&offset=0');
     expect(String(fetchImpl.mock.calls[1][0])).toContain('offset=100');
   });
 
