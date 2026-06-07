@@ -19,34 +19,43 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     }
   }, [pathname]);
 
-  // Subscription globale: nuovi inbound
+  // Subscription globale: nuovi inbound (suono + notifica desktop)
   useEffect(() => {
     const sb = getSupabaseBrowser();
-    const ch = sb.channel('global-inbound')
-      .on('postgres_changes', {
-        event: 'INSERT', schema: 'public', table: 'messages',
-        filter: 'direction=eq.in',
-      }, (payload) => {
-        const msg: any = payload.new;
-        router.refresh();
+    let ch: ReturnType<typeof sb.channel> | null = null;
+    let active = true;
+    (async () => {
+      // Il token va impostato prima della subscribe, altrimenti l'RLS blocca gli eventi.
+      const { data } = await sb.auth.getSession();
+      sb.realtime.setAuth(data.session?.access_token ?? null);
+      if (!active) return;
+      ch = sb.channel('global-inbound')
+        .on('postgres_changes', {
+          event: 'INSERT', schema: 'public', table: 'messages',
+          filter: 'direction=eq.in',
+        }, (payload) => {
+          const msg: any = payload.new;
+          router.refresh();
 
-        try { audioRef.current?.play().catch(() => {}); } catch {}
+          try { audioRef.current?.play().catch(() => {}); } catch {}
 
-        const inThisConv = pathname?.startsWith(`/inbox/${msg.conversation_id}`);
-        if (!inThisConv && 'Notification' in window && Notification.permission === 'granted') {
-          const n = new Notification('Nuova risposta WhatsApp', {
-            body: msg.body?.slice(0, 120) ?? '',
-            tag: `conv-${msg.conversation_id}`,
-          });
-          n.onclick = () => {
-            window.focus();
-            window.location.href = `/inbox/${msg.conversation_id}`;
-          };
-        }
-      })
-      .subscribe();
+          const inThisConv = pathname?.startsWith(`/inbox/${msg.conversation_id}`);
+          if (!inThisConv && 'Notification' in window && Notification.permission === 'granted') {
+            const n = new Notification('Nuova risposta WhatsApp', {
+              body: msg.body?.slice(0, 120) ?? '',
+              tag: `conv-${msg.conversation_id}`,
+            });
+            n.onclick = () => {
+              window.focus();
+              window.location.href = `/inbox/${msg.conversation_id}`;
+            };
+          }
+        })
+        .subscribe();
+    })();
     return () => {
-      sb.removeChannel(ch);
+      active = false;
+      if (ch) sb.removeChannel(ch);
     };
   }, [router, pathname]);
 

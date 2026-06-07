@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useTransition } from 'react';
+import { useCallback, useEffect, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { cn, formatRelativeShort } from '@/lib/utils';
@@ -24,26 +24,40 @@ export function ConversationList({ initial }: { initial: Conv[] }) {
   const [q, setQ] = useState('');
   const [, startTransition] = useTransition();
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     const url = new URL('/api/conversations', window.location.origin);
     url.searchParams.set('filter', filter);
     if (q) url.searchParams.set('q', q);
-    const res = await fetch(url);
+    const res = await fetch(url, { cache: 'no-store' });
     const json = await res.json();
     setItems(json.data ?? []);
-  }
+  }, [filter, q]);
 
-  useEffect(() => { startTransition(refresh); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [filter, q]);
+  useEffect(() => { startTransition(refresh); }, [refresh]);
 
+  // Rete di sicurezza: polling ogni 5s.
+  useEffect(() => {
+    const t = setInterval(() => startTransition(refresh), 5000);
+    return () => clearInterval(t);
+  }, [refresh]);
+
+  // Realtime (istantaneo): token impostato prima della subscribe.
   useEffect(() => {
     const sb = getSupabaseBrowser();
-    const ch = sb.channel('inbox-list')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, () => startTransition(refresh))
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, () => startTransition(refresh))
-      .subscribe();
-    return () => { sb.removeChannel(ch); };
-    /* eslint-disable-next-line react-hooks/exhaustive-deps */
-  }, [filter, q]);
+    let ch: ReturnType<typeof sb.channel> | null = null;
+    let active = true;
+    (async () => {
+      const { data } = await sb.auth.getSession();
+      sb.realtime.setAuth(data.session?.access_token ?? null);
+      if (!active) return;
+      ch = sb
+        .channel('inbox-list')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, () => startTransition(refresh))
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, () => startTransition(refresh))
+        .subscribe();
+    })();
+    return () => { active = false; if (ch) sb.removeChannel(ch); };
+  }, [refresh]);
 
   return (
     <div className="flex flex-col h-full border-r w-full md:w-96 shrink-0">

@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { MessageBubble } from './MessageBubble';
 import { formatDateGroup } from '@/lib/utils';
 import { getSupabaseBrowser } from '@/lib/supabase/client';
@@ -18,6 +18,12 @@ function groupByDay(msgs: Msg[]): { day: string; items: Msg[] }[] {
   return Object.entries(groups).map(([, items]) => ({ day: items[0].created_at, items }));
 }
 
+function mergeSorted(list: Msg[]): Msg[] {
+  const byId = new Map<number, Msg>();
+  for (const m of list) byId.set(m.id, m);
+  return [...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at));
+}
+
 export function MessageThread({ conversationId, initial, campaignNamesById }: {
   conversationId: number;
   initial: Msg[];
@@ -26,24 +32,54 @@ export function MessageThread({ conversationId, initial, campaignNamesById }: {
   const [items, setItems] = useState<Msg[]>(initial);
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  // Reset quando si cambia conversazione.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setItems(initial); }, [conversationId]);
+
+  const refetch = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/conversations/${conversationId}/messages`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const json = await res.json();
+      if (Array.isArray(json.data)) setItems(mergeSorted(json.data as Msg[]));
+    } catch {
+      /* noop */
+    }
+  }, [conversationId]);
+
+  // Rete di sicurezza: polling ogni 4s (garantisce l'aggiornamento anche senza realtime).
+  useEffect(() => {
+    const t = setInterval(refetch, 4000);
+    return () => clearInterval(t);
+  }, [refetch]);
+
+  // Realtime (istantaneo) — il token va impostato PRIMA della subscribe o l'RLS blocca gli eventi.
+  useEffect(() => {
+    const sb = getSupabaseBrowser();
+    let ch: ReturnType<typeof sb.channel> | null = null;
+    let active = true;
+    (async () => {
+      const { data } = await sb.auth.getSession();
+      sb.realtime.setAuth(data.session?.access_token ?? null);
+      if (!active) return;
+      ch = sb
+        .channel(`thread-${conversationId}`)
+        .on('postgres_changes', {
+          event: 'INSERT', schema: 'public', table: 'messages',
+          filter: `conversation_id=eq.${conversationId}`,
+        }, (payload) => setItems((prev) => mergeSorted([...prev, payload.new as Msg])))
+        .on('postgres_changes', {
+          event: 'UPDATE', schema: 'public', table: 'messages',
+          filter: `conversation_id=eq.${conversationId}`,
+        }, (payload) => setItems((prev) => prev.map((m) => (m.id === (payload.new as Msg).id ? (payload.new as Msg) : m))))
+        .subscribe();
+    })();
+    return () => { active = false; if (ch) sb.removeChannel(ch); };
+  }, [conversationId]);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'auto' });
   }, [items.length]);
-
-  useEffect(() => {
-    const sb = getSupabaseBrowser();
-    const ch = sb.channel(`thread-${conversationId}`)
-      .on('postgres_changes', {
-        event: 'INSERT', schema: 'public', table: 'messages',
-        filter: `conversation_id=eq.${conversationId}`,
-      }, (payload) => setItems((prev) => [...prev, payload.new as Msg]))
-      .on('postgres_changes', {
-        event: 'UPDATE', schema: 'public', table: 'messages',
-        filter: `conversation_id=eq.${conversationId}`,
-      }, (payload) => setItems((prev) => prev.map((m) => m.id === (payload.new as Msg).id ? (payload.new as Msg) : m)))
-      .subscribe();
-    return () => { sb.removeChannel(ch); };
-  }, [conversationId]);
 
   const groups = groupByDay(items);
 
