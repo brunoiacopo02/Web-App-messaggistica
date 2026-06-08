@@ -24,20 +24,36 @@ export function ConversationList({ initial }: { initial: Conv[] }) {
   const [q, setQ] = useState('');
   const [, startTransition] = useTransition();
 
-  const refresh = useCallback(async () => {
+  // merge=true (refresh in background): nella vista "Non lette" mantiene visibili le
+  // chat appena aperte/lette (badge azzerato), così la lista non collassa sotto di te.
+  // merge=false (cambio filtro/ricerca): lista fresca.
+  const refresh = useCallback(async (merge = false) => {
     const url = new URL('/api/conversations', window.location.origin);
     url.searchParams.set('filter', filter);
     if (q) url.searchParams.set('q', q);
     const res = await fetch(url, { cache: 'no-store' });
     const json = await res.json();
-    setItems(json.data ?? []);
+    const fetched: Conv[] = json.data ?? [];
+
+    if (merge && filter === 'unread') {
+      setItems((prev) => {
+        const fetchedIds = new Set(fetched.map((c) => c.id));
+        const stickyRead = prev
+          .filter((c) => !fetchedIds.has(c.id))
+          .map((c) => ({ ...c, unread_count: 0 }));
+        return [...fetched, ...stickyRead].sort((a, b) => b.last_message_at.localeCompare(a.last_message_at));
+      });
+    } else {
+      setItems(fetched);
+    }
   }, [filter, q]);
 
-  useEffect(() => { startTransition(refresh); }, [refresh]);
+  // Cambio filtro/ricerca → lista fresca.
+  useEffect(() => { startTransition(() => refresh(false)); }, [refresh]);
 
-  // Rete di sicurezza: polling ogni 5s.
+  // Rete di sicurezza: polling ogni 5s (merge → sticky in "Non lette").
   useEffect(() => {
-    const t = setInterval(() => startTransition(refresh), 5000);
+    const t = setInterval(() => startTransition(() => refresh(true)), 5000);
     return () => clearInterval(t);
   }, [refresh]);
 
@@ -52,8 +68,8 @@ export function ConversationList({ initial }: { initial: Conv[] }) {
       if (!active) return;
       ch = sb
         .channel('inbox-list')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, () => startTransition(refresh))
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, () => startTransition(refresh))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, () => startTransition(() => refresh(true)))
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, () => startTransition(() => refresh(true)))
         .subscribe();
     })();
     return () => { active = false; if (ch) sb.removeChannel(ch); };
