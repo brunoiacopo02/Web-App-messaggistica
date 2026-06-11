@@ -89,6 +89,28 @@ export async function sendFreeText(
   }, opts);
 }
 
+// Cache del testo dei template (per mostrare il messaggio reale invece di "[template] X").
+const _templateBodyCache = new Map<string, string>();
+
+export async function getTemplateBody(contentSid: string): Promise<string | null> {
+  if (_templateBodyCache.has(contentSid)) return _templateBodyCache.get(contentSid)!;
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const tok = process.env.TWILIO_AUTH_TOKEN;
+  if (!sid || !tok) return null;
+  try {
+    const res = await fetch(`https://content.twilio.com/v1/Content/${contentSid}`, {
+      headers: { Authorization: 'Basic ' + Buffer.from(`${sid}:${tok}`).toString('base64') },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { types?: Record<string, { body?: string }> };
+    const text = data?.types?.['twilio/text']?.body ?? null;
+    if (text) _templateBodyCache.set(contentSid, text);
+    return text;
+  } catch {
+    return null;
+  }
+}
+
 export type ValidateSigInput = {
   url: string;
   signature: string;

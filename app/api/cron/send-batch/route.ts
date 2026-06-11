@@ -3,7 +3,7 @@ import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { renderTemplateVariables, type CampaignRow } from '@/lib/campaigns';
 import { fetchListContacts } from '@/lib/ac-api';
 import { planBatch, type PlannedSend } from '@/lib/batch';
-import { sendTemplate } from '@/lib/twilio';
+import { sendTemplate, getTemplateBody } from '@/lib/twilio';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -128,12 +128,13 @@ async function sendOne(
     listId: campaign.ac_list_match,
   });
 
+  const tplBody = (await getTemplateBody(campaign.twilio_template_sid)) ?? `[template] ${campaign.name}`;
   try {
     const sent = await sendTemplate({ to: phone, contentSid: campaign.twilio_template_sid, variables: vars });
     await supabase.from('messages').insert({
       conversation_id: conversationId,
       direction: 'out',
-      body: `[template] ${campaign.name}`,
+      body: tplBody,
       twilio_sid: sent.sid,
       twilio_status: sent.status,
       template_sid: campaign.twilio_template_sid,
@@ -156,7 +157,7 @@ async function sendOne(
     await supabase.from('messages').insert({
       conversation_id: conversationId,
       direction: 'out',
-      body: `[template] ${campaign.name}`,
+      body: tplBody,
       twilio_status: 'failed',
       twilio_error_code: e?.code ?? null,
       template_sid: campaign.twilio_template_sid,

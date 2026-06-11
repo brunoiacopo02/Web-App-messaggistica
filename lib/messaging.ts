@@ -1,5 +1,5 @@
 import type { getSupabaseAdmin } from './supabase/admin';
-import { sendTemplate } from './twilio';
+import { sendTemplate, getTemplateBody } from './twilio';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -59,12 +59,13 @@ export async function sendTemplateAndLog(
   templateSid: string,
   label: string,
 ): Promise<{ ok: boolean; sid?: string; error?: string }> {
+  const tplBody = (await getTemplateBody(templateSid)) ?? `[template] ${label}`;
   try {
     const sent = await sendTemplate({ to: phone, contentSid: templateSid, variables: {} });
     await supabase.from('messages').insert({
       conversation_id: conversationId,
       direction: 'out',
-      body: `[template] ${label}`,
+      body: tplBody,
       twilio_sid: sent.sid,
       twilio_status: sent.status,
       template_sid: templateSid,
@@ -80,7 +81,7 @@ export async function sendTemplateAndLog(
     await supabase.from('messages').insert({
       conversation_id: conversationId,
       direction: 'out',
-      body: `[template] ${label}`,
+      body: tplBody,
       twilio_status: 'failed',
       twilio_error_code: e?.code ?? null,
       template_sid: templateSid,

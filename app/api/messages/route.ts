@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { getSupabaseServer } from '@/lib/supabase/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { SendMessageSchema } from '@/lib/schemas';
-import { sendFreeText, sendTemplate } from '@/lib/twilio';
+import { sendFreeText, sendTemplate, getTemplateBody } from '@/lib/twilio';
 import { isWindowOpen } from '@/lib/utils';
 
 export const runtime = 'nodejs';
@@ -80,10 +80,11 @@ export async function POST(req: Request) {
     });
     return NextResponse.json({ error: 'twilio_error', code: err?.code }, { status: 502 });
   }
+  const tplBody = (await getTemplateBody((campaign as any).twilio_template_sid)) ?? `[template] ${(campaign as any).name}`;
   const { data: msg } = await admin.from('messages').insert({
     conversation_id: input.conversation_id,
     direction: 'out',
-    body: `[template] ${(campaign as any).name}`,
+    body: tplBody,
     twilio_sid: sent.sid,
     twilio_status: sent.status,
     template_sid: (campaign as any).twilio_template_sid,

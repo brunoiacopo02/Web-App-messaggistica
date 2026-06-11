@@ -16,7 +16,7 @@ export async function GET(req: Request) {
   let query = supabase
     .from('conversations')
     .select(`
-      id, last_message_at, last_inbound_at, unread_count, campaign_id,
+      id, last_message_at, last_inbound_at, unread_count, campaign_id, last_message_preview,
       lead:leads ( id, phone_e164, first_name, last_name, email )
     `)
     .order('last_message_at', { ascending: false })
@@ -39,5 +39,6 @@ export async function GET(req: Request) {
         return fn.includes(s) || ln.includes(s) || ph.includes(s);
       });
 
-  return NextResponse.json({ data: filtered });
+  const withPreview = (filtered ?? []).map((c: any) => ({ ...c, preview: c.last_message_preview ?? undefined }));
+  return NextResponse.json({ data: withPreview });
 }

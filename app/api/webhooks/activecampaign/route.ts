@@ -3,7 +3,7 @@ import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { parseAcPayload, DEDUP_WINDOW_MINUTES } from '@/lib/ac';
 import { matchCampaign, renderTemplateVariables, type CampaignRow } from '@/lib/campaigns';
 import { toE164 } from '@/lib/phone';
-import { sendTemplate } from '@/lib/twilio';
+import { sendTemplate, getTemplateBody } from '@/lib/twilio';
 import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
@@ -138,6 +138,7 @@ export async function POST(req: NextRequest) {
 
   // Render variabili e invia template
   const vars = renderTemplateVariables(campaign.template_variables, lead);
+  const tplBody = (await getTemplateBody(campaign.twilio_template_sid)) ?? `[template] ${campaign.name}`;
 
   let sent: { sid: string; status: string } | null = null;
   try {
@@ -155,7 +156,7 @@ export async function POST(req: NextRequest) {
     await supabase.from('messages').insert({
       conversation_id: conversationId,
       direction: 'out',
-      body: `[template] ${campaign.name}`,
+      body: tplBody,
       twilio_status: 'failed',
       twilio_error_code: err?.code ?? null,
       template_sid: campaign.twilio_template_sid,
