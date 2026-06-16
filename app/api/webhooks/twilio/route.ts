@@ -3,6 +3,8 @@ import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { validateTwilioSignature } from '@/lib/twilio';
 import { toE164 } from '@/lib/phone';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { getAutoReply } from '@/lib/fenice-settings';
+import { shouldAutoReply, runMarioAutoReply } from '@/lib/fenice-autoreply';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -142,6 +144,26 @@ export async function POST(req: NextRequest) {
       type: 'twilio_inbound', payload: { sid: params.MessageSid, from: phone },
       message: `Inbound ricevuto da ${phone}`, level: 'info',
     });
+
+    // Auto-risposta Mario (solo numero Fenice + lead arruolato + switch ON)
+    const feniceNumber = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
+    const toMatchesFenice = !!feniceNumber && (params.To ?? '') === feniceNumber;
+    if (toMatchesFenice) {
+      const { data: conv } = await supabase
+        .from('conversations')
+        .select('ai_owner, ai_status')
+        .eq('id', conversationId)
+        .single();
+      const autoReplyOn = await getAutoReply(supabase);
+      if (shouldAutoReply({
+        toMatchesFenice,
+        autoReplyOn,
+        aiOwner: conv?.ai_owner ?? null,
+        aiStatus: conv?.ai_status ?? null,
+      })) {
+        await runMarioAutoReply(supabase, conversationId, phone);
+      }
+    }
   }
 
   return new NextResponse(TWIML_OK, { status: 200, headers: TWIML_HEADERS });
