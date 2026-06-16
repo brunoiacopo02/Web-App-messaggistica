@@ -1,11 +1,11 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { refreshSession } from '@/lib/supabase/middleware';
+import { canAccess, landingPath } from '@/lib/access';
 
 const PUBLIC_PATHS = ['/login', '/api/webhooks', '/api/cron', '/api/send-agenda', '/api/send-template'];
 
 export async function proxy(request: NextRequest) {
   const { response, user } = await refreshSession(request);
-
   const path = request.nextUrl.pathname;
   const isPublic = PUBLIC_PATHS.some((p) => path.startsWith(p));
 
@@ -18,7 +18,14 @@ export async function proxy(request: NextRequest) {
 
   if (user && path === '/login') {
     const url = request.nextUrl.clone();
-    url.pathname = '/inbox';
+    url.pathname = landingPath(user.email);
+    return NextResponse.redirect(url);
+  }
+
+  // Gate per area: un utente fenice-only fuori da /fenice -> torna a /fenice
+  if (user && !isPublic && !canAccess(user.email, path)) {
+    const url = request.nextUrl.clone();
+    url.pathname = landingPath(user.email);
     return NextResponse.redirect(url);
   }
 
