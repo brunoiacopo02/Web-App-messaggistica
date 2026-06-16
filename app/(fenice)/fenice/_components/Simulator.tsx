@@ -17,44 +17,56 @@ export function Simulator() {
   const [handoff, setHandoff] = useState(false);
   const [thinking, setThinking] = useState(false); // chiamata API in corso
   const [countdown, setCountdown] = useState<number | null>(null); // secondi all'attesa
-  const [pending, setPending] = useState(0); // messaggi lead in coda non ancora gestiti
+  const [pending, setPending] = useState(0); // messaggi lead non ancora risposti
 
-  const modelHistory = useRef<Turn[]>([]); // cronologia logica passata all'API (incrementale)
-  const queue = useRef<string[]>([]);      // messaggi lead in attesa di risposta
-  const processing = useRef(false);
+  const modelHistory = useRef<Turn[]>([]); // cronologia logica passata all'API
+  const buffer = useRef<string[]>([]);     // messaggi digitati MENTRE Mario genera
+  const inFlight = useRef(false);
   const started = useRef(false);
+  const tick = useRef<ReturnType<typeof setInterval> | null>(null);
   const skipResolve = useRef<(() => void) | null>(null);
+  const scheduleToken = useRef(0);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Attesa 5-40s con countdown visibile e possibilità di saltarla.
-  function delayWithCountdown(): Promise<void> {
-    const ms = marioDelayMs();
-    return new Promise<void>((resolve) => {
-      let remaining = Math.ceil(ms / 1000);
-      setCountdown(remaining);
-      const cleanup = () => {
-        clearInterval(tick);
-        setCountdown(null);
-        skipResolve.current = null;
-      };
-      const tick = setInterval(() => {
-        remaining -= 1;
-        if (remaining <= 0) {
-          cleanup();
-          resolve();
-        } else {
-          setCountdown(remaining);
-        }
-      }, 1000);
-      skipResolve.current = () => {
-        cleanup();
-        resolve();
-      };
-    });
+  function clearCountdown() {
+    if (tick.current) {
+      clearInterval(tick.current);
+      tick.current = null;
+    }
+    setCountdown(null);
+    skipResolve.current = null;
+  }
+
+  // Attesa con countdown visibile e bottone "salta attesa".
+  function startCountdown(ms: number, onDone: () => void) {
+    let remaining = Math.ceil(ms / 1000);
+    setCountdown(remaining);
+    tick.current = setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        clearCountdown();
+        onDone();
+      } else {
+        setCountdown(remaining);
+      }
+    }, 1000);
+    skipResolve.current = () => {
+      clearCountdown();
+      onDone();
+    };
   }
 
   function skip() {
     skipResolve.current?.();
+  }
+
+  // Debounce: (ri)avvia la finestra di attesa; al termine accorpa e risponde.
+  function scheduleReply() {
+    const myToken = ++scheduleToken.current;
+    clearCountdown();
+    startCountdown(marioDelayMs(), () => {
+      if (scheduleToken.current === myToken) void fireReply();
+    });
   }
 
   async function callMario(history: Turn[]): Promise<MarioResult | null> {
@@ -82,35 +94,51 @@ export function Simulator() {
     if (data.passToHuman) setHandoff(true);
   }
 
-  // Processa la coda un messaggio alla volta: ogni messaggio del lead riceve la
-  // sua risposta, in ordine, dopo l'attesa. Niente sovrapposizioni / impallamenti.
-  async function runProcessor() {
-    if (processing.current) return;
-    processing.current = true;
-    while (queue.current.length > 0) {
-      const text = queue.current.shift()!;
-      modelHistory.current = [...modelHistory.current, { role: 'user', content: text }];
-      await delayWithCountdown();
-      const data = await callMario(modelHistory.current);
-      setPending((p) => Math.max(0, p - 1));
-      if (!data) {
-        // errore: interrompo, lo stato resta per ritentare
-        processing.current = false;
-        return;
-      }
+  // Una risposta sola a tutti i messaggi accumulati. Se durante la generazione il lead
+  // ne manda altri, finiscono nel buffer e fanno scattare un altro round.
+  async function fireReply() {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    const data = await callMario(modelHistory.current);
+    if (data) {
       modelHistory.current = [...modelHistory.current, { role: 'assistant', content: data.visibleReply }];
       setTurns((t) => [...t, { role: 'assistant', content: data.visibleReply }]);
       applyFlags(data);
     }
-    processing.current = false;
+    const remaining = buffer.current.length;
+    if (remaining > 0) {
+      modelHistory.current = [
+        ...modelHistory.current,
+        ...buffer.current.map((c) => ({ role: 'user' as const, content: c })),
+      ];
+      buffer.current = [];
+      setPending(remaining);
+      inFlight.current = false;
+      scheduleReply();
+    } else {
+      setPending(0);
+      inFlight.current = false;
+    }
   }
 
   async function openConversation() {
+    inFlight.current = true;
     const data = await callMario([]);
     if (data) {
       modelHistory.current = [{ role: 'assistant', content: data.visibleReply }];
       setTurns([{ role: 'assistant', content: data.visibleReply }]);
       applyFlags(data);
+    }
+    if (buffer.current.length > 0) {
+      modelHistory.current = [
+        ...modelHistory.current,
+        ...buffer.current.map((c) => ({ role: 'user' as const, content: c })),
+      ];
+      buffer.current = [];
+      inFlight.current = false;
+      scheduleReply();
+    } else {
+      inFlight.current = false;
     }
   }
 
@@ -130,22 +158,26 @@ export function Simulator() {
     const text = input.trim();
     if (!text) return; // input MAI disabilitato: il lead può mandarne più di fila
     setTurns((t) => [...t, { role: 'user', content: text }]); // mostra subito il messaggio
-    queue.current.push(text);
     setPending((p) => p + 1);
+    if (inFlight.current) {
+      buffer.current.push(text); // arrivato mentre Mario genera: round successivo
+    } else {
+      modelHistory.current = [...modelHistory.current, { role: 'user', content: text }];
+      scheduleReply(); // (ri)avvia la finestra: i messaggi della finestra vengono accorpati
+    }
     setInput('');
-    void runProcessor();
   }
 
   function reset() {
-    queue.current = [];
+    clearCountdown();
+    buffer.current = [];
     modelHistory.current = [];
-    processing.current = false;
-    skipResolve.current = null;
+    inFlight.current = false;
+    scheduleToken.current++;
     setTurns([]);
     setAppointment(false);
     setHandoff(false);
     setError(null);
-    setCountdown(null);
     setThinking(false);
     setPending(0);
     started.current = true;
@@ -184,7 +216,7 @@ export function Simulator() {
         <div className="flex gap-2">
           {appointment && <Badge className="bg-emerald-600">✅ Appuntamento fissato</Badge>}
           {handoff && <Badge variant="destructive">🔔 Passaggio a operatore</Badge>}
-          {pending > 0 && <Badge variant="secondary">{pending} in coda</Badge>}
+          {pending > 0 && <Badge variant="secondary">{pending} in attesa</Badge>}
         </div>
         <div className="flex gap-2">
           <Input

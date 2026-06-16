@@ -36,13 +36,14 @@ export function nextUnansweredInboundIndex(rows: MsgRow[]): number {
   return -1;
 }
 
-const MAX_REPLIES_PER_DRAIN = 8; // anti-runaway per singola esecuzione
+const MAX_ROUNDS_PER_DRAIN = 5; // anti-runaway: round di accorpamento per esecuzione
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Best-effort: risponde a OGNI messaggio del lead non ancora gestito, uno alla volta,
- * in ordine, con latenza umana (5-40s) prima di ciascuna risposta. Serializzato tramite
- * lock CAS sulla conversazione (ai_status 'active' -> 'replying'). Non lancia: logga errori.
+ * Best-effort: ACCORPA i messaggi del lead. Attende la finestra di latenza (5-40s) e poi
+ * risponde UNA volta a tutti i messaggi arrivati (cronologia dall'arruolamento in poi,
+ * via ai_started_at). Se durante l'attesa/elaborazione arrivano altri messaggi, fa un altro
+ * round. Serializzato tramite lock CAS (ai_status 'active' -> 'replying'). Non lancia.
  */
 export async function drainMarioReplies(
   supabase: Supa,
@@ -60,35 +61,45 @@ export async function drainMarioReplies(
   }
 
   // Lock: claim del turno. Se un'altra esecuzione sta già rispondendo, esci:
-  // quel drain ricontrolla i messaggi a ogni giro e gestirà anche questo inbound.
+  // quel drain ricontrolla i messaggi e gestirà anche questo inbound.
   const { data: claimed } = await supabase
     .from('conversations')
     .update({ ai_status: 'replying' })
     .eq('id', conversationId)
     .eq('ai_status', 'active')
-    .select('id');
-  if (!claimed || claimed.length === 0) return;
+    .select('id, ai_started_at')
+    .single();
+  if (!claimed) return;
+  const startedAt = (claimed as { ai_started_at: string | null }).ai_started_at;
+
+  // Carica i messaggi della conversazione dall'arruolamento in poi (in ordine).
+  async function loadHistory(): Promise<MsgRow[]> {
+    let q = supabase
+      .from('messages')
+      .select('direction, body, created_at')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: true })
+      .limit(200);
+    if (startedAt) q = q.gte('created_at', startedAt);
+    const { data } = await q;
+    return (data ?? []) as MsgRow[];
+  }
 
   let finalStatus = 'active';
   try {
-    for (let n = 0; n < MAX_REPLIES_PER_DRAIN; n++) {
-      const { data: rows } = await supabase
-        .from('messages')
-        .select('direction, body, created_at')
-        .eq('conversation_id', conversationId)
-        .order('created_at', { ascending: true })
-        .limit(200);
+    for (let round = 0; round < MAX_ROUNDS_PER_DRAIN; round++) {
+      const before = await loadHistory();
+      if (nextUnansweredInboundIndex(before) === -1) break; // niente di nuovo da gestire
 
-      const all = (rows ?? []) as MsgRow[];
-      const idx = nextUnansweredInboundIndex(all);
-      if (idx === -1) break;
+      // Finestra di accorpamento: aspetta, poi ricarica per includere ciò che è arrivato.
+      await sleep(delayMs());
+      const rows = await loadHistory();
+      if (nextUnansweredInboundIndex(rows) === -1) break;
 
-      const history: MarioTurn[] = all.slice(0, idx + 1).map((m) => ({
+      const history: MarioTurn[] = rows.map((m) => ({
         role: m.direction === 'in' ? 'user' : 'assistant',
         content: m.body,
       }));
-
-      await sleep(delayMs());
       const result = await generateMarioReply(history);
 
       if (result.visibleReply) {

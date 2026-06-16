@@ -66,6 +66,7 @@ export type Database = {
       conversations: {
         Row: {
           ai_owner: string | null
+          ai_started_at: string | null
           ai_status: string | null
           campaign_id: number | null
           created_at: string
@@ -77,6 +78,7 @@ export type Database = {
         }
         Insert: {
           ai_owner?: string | null
+          ai_started_at?: string | null
           ai_status?: string | null
           campaign_id?: number | null
           created_at?: string
@@ -88,6 +90,7 @@ export type Database = {
         }
         Update: {
           ai_owner?: string | null
+          ai_started_at?: string | null
           ai_status?: string | null
           campaign_id?: number | null
           created_at?: string

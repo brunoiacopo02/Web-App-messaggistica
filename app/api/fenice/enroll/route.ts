@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
   const res = await sendTemplateAndLog(supabase, conversationId, phone, templateSid, 'Fenice apertura', from);
 
   await supabase.from('conversations')
-    .update({ ai_owner: 'mario', ai_status: 'active' })
+    .update({ ai_owner: 'mario', ai_status: 'active', ai_started_at: new Date().toISOString() })
     .eq('id', conversationId);
 
   await supabase.from('event_log').insert({
