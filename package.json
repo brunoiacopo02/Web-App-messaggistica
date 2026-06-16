@@ -16,6 +16,7 @@
     "supabase:gen-types": "supabase gen types typescript --project-id $SUPABASE_PROJECT_ID > lib/supabase/types.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.2",
     "@base-ui/react": "^1.4.1",
     "@hookform/resolvers": "^5.2.2",
     "@radix-ui/react-avatar": "^1.1.11",

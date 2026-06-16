@@ -2,6 +2,7 @@
 
 import { redirect } from 'next/navigation';
 import { getSupabaseServer } from '@/lib/supabase/server';
+import { landingPath } from '@/lib/access';
 
 export async function signInAction(formData: FormData) {
   const email = String(formData.get('email') ?? '');
@@ -19,7 +20,9 @@ export async function signInAction(formData: FormData) {
     redirect(`/login?error=${encodeURIComponent('Credenziali non valide')}&from=${encodeURIComponent(from)}`);
   }
 
-  redirect(from);
+  const { data: { user } } = await supabase.auth.getUser();
+  const dest = from && from !== '/inbox' ? from : landingPath(user?.email);
+  redirect(dest);
 }
 
 export async function signOutAction() {

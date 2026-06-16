@@ -12,6 +12,24 @@ export type Database = {
   }
   public: {
     Tables: {
+      app_settings: {
+        Row: {
+          key: string
+          updated_at: string
+          value: Json
+        }
+        Insert: {
+          key: string
+          updated_at?: string
+          value: Json
+        }
+        Update: {
+          key?: string
+          updated_at?: string
+          value?: Json
+        }
+        Relationships: []
+      }
       campaigns: {
         Row: {
           ac_list_match: string
@@ -47,6 +65,8 @@ export type Database = {
       }
       conversations: {
         Row: {
+          ai_owner: string | null
+          ai_status: string | null
           campaign_id: number | null
           created_at: string
           id: number
@@ -56,6 +76,8 @@ export type Database = {
           unread_count: number
         }
         Insert: {
+          ai_owner?: string | null
+          ai_status?: string | null
           campaign_id?: number | null
           created_at?: string
           id?: number
@@ -65,6 +87,8 @@ export type Database = {
           unread_count?: number
         }
         Update: {
+          ai_owner?: string | null
+          ai_status?: string | null
           campaign_id?: number | null
           created_at?: string
           id?: number

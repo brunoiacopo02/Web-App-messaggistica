@@ -4,11 +4,13 @@ type SendTemplateInput = {
   to: string;                     // E.164 senza prefix
   contentSid: string;
   variables: Record<string, string>;
+  from?: string;
 };
 
 type SendFreeTextInput = {
   to: string;
   body: string;
+  from?: string;
 };
 
 type SendOptions = {
@@ -63,7 +65,7 @@ export async function sendTemplate(
   const client = getClient();
   return withRetry(async () => {
     const msg = await client.messages.create({
-      from: fromNumber(),
+      from: input.from ?? fromNumber(),
       to: `whatsapp:${input.to}`,
       contentSid: input.contentSid,
       contentVariables: JSON.stringify(input.variables),
@@ -80,7 +82,7 @@ export async function sendFreeText(
   const client = getClient();
   return withRetry(async () => {
     const msg = await client.messages.create({
-      from: fromNumber(),
+      from: input.from ?? fromNumber(),
       to: `whatsapp:${input.to}`,
       body: input.body,
       statusCallback: statusCallbackUrl(),
