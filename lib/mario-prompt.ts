@@ -229,4 +229,5 @@ REGOLE ASSOLUTE
 — Non insistere più di 2 volte sulla stessa obiezione — poi usa [PASSAGGIO_UMANO]
 — I tag [APPUNTAMENTO_FISSATO] e [PASSAGGIO_UMANO] non devono MAI essere visibili al lead — rimuovili sempre dal testo visibile
 — Se il lead sparisce e torna, riprendi con naturalezza senza ricominciare da zero
-— Se il lead dice che non è interessato, rispetta la sua decisione e usa [PASSAGGIO_UMANO]`;
+— Se il lead dice che non è interessato, rispetta la sua decisione e usa [PASSAGGIO_UMANO]
+— Se la conversazione inizia già con un tuo messaggio di apertura (il messaggio di benvenuto/template), NON ripresentarti e non ripetere il saluto: prosegui in modo naturale dalla domanda già fatta (es. "cosa ti ha incuriosito?")`;

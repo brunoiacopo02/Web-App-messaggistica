@@ -3,6 +3,7 @@ import { getSupabaseServer } from '@/lib/supabase/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { toE164 } from '@/lib/phone';
 import { findOrCreateLeadConversation, sendTemplateAndLog } from '@/lib/messaging';
+import { feniceOpening } from '@/lib/fenice-opening';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -22,13 +23,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'FENICE_OPENING_TEMPLATE_SID o TWILIO_WHATSAPP_NUMBER_FENICE non configurati' }, { status: 500 });
   }
 
+  const firstName = (body.firstName ?? body.first_name) as string | undefined;
+
   const supabase = getSupabaseAdmin();
   const { conversationId } = await findOrCreateLeadConversation(supabase, {
     phone,
-    firstName: (body.firstName ?? body.first_name) as string | undefined,
+    firstName,
   });
 
-  const res = await sendTemplateAndLog(supabase, conversationId, phone, templateSid, 'Fenice apertura', from);
+  // Riempi il nome ({{3}}) nel template e registra il testo risolto come apertura,
+  // così la cronologia non mostra il placeholder e Mario prosegue senza ripresentarsi.
+  const variables: Record<string, string> = firstName ? { '3': firstName } : {};
+  const res = await sendTemplateAndLog(
+    supabase, conversationId, phone, templateSid, 'Fenice apertura', from, variables, feniceOpening(firstName),
+  );
 
   await supabase.from('conversations')
     .update({ ai_owner: 'mario', ai_status: 'active', ai_started_at: new Date().toISOString() })

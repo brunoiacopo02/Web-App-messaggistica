@@ -59,10 +59,12 @@ export async function sendTemplateAndLog(
   templateSid: string,
   label: string,
   from?: string,
+  variables: Record<string, string> = {},
+  bodyOverride?: string,
 ): Promise<{ ok: boolean; sid?: string; error?: string }> {
-  const tplBody = (await getTemplateBody(templateSid)) ?? `[template] ${label}`;
+  const tplBody = bodyOverride ?? (await getTemplateBody(templateSid)) ?? `[template] ${label}`;
   try {
-    const sent = await sendTemplate({ to: phone, contentSid: templateSid, variables: {}, from });
+    const sent = await sendTemplate({ to: phone, contentSid: templateSid, variables, from });
     await supabase.from('messages').insert({
       conversation_id: conversationId,
       direction: 'out',

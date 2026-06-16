@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { marioDelayMs } from '@/lib/mario-latency';
+import { feniceOpening } from '@/lib/fenice-opening';
 
 type Turn = { role: 'user' | 'assistant'; content: string };
 type MarioResult = { visibleReply: string; appointmentFixed: boolean; passToHuman: boolean };
@@ -121,32 +122,19 @@ export function Simulator() {
     }
   }
 
-  async function openConversation() {
-    inFlight.current = true;
-    const data = await callMario([]);
-    if (data) {
-      modelHistory.current = [{ role: 'assistant', content: data.visibleReply }];
-      setTurns([{ role: 'assistant', content: data.visibleReply }]);
-      applyFlags(data);
-    }
-    if (buffer.current.length > 0) {
-      modelHistory.current = [
-        ...modelHistory.current,
-        ...buffer.current.map((c) => ({ role: 'user' as const, content: c })),
-      ];
-      buffer.current = [];
-      inFlight.current = false;
-      scheduleReply();
-    } else {
-      inFlight.current = false;
-    }
+  // L'apertura è il testo del template (come lo riceve il lead reale): nessuna
+  // generazione separata, così non c'è ridondanza con la presentazione dello script.
+  function openConversation() {
+    const opening = feniceOpening();
+    modelHistory.current = [{ role: 'assistant', content: opening }];
+    setTurns([{ role: 'assistant', content: opening }]);
   }
 
   // Apertura di Mario al primo mount (senza latenza).
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    void openConversation();
+    openConversation();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -181,7 +169,7 @@ export function Simulator() {
     setThinking(false);
     setPending(0);
     started.current = true;
-    void openConversation();
+    openConversation();
   }
 
   return (
