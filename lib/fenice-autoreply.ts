@@ -1,6 +1,7 @@
 import type { getSupabaseAdmin } from './supabase/admin';
 import { generateMarioReply, type MarioTurn } from './mario';
 import { sendFreeText } from './twilio';
+import { marioDelayMs } from './mario-latency';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -11,19 +12,43 @@ export type AutoReplyGate = {
   aiStatus: string | null;
 };
 
-/** Pure: decide se Mario deve rispondere in automatico a questo inbound. */
+/**
+ * Pure: la conversazione è candidata all'auto-risposta di Mario? Vero per gli stati
+ * 'active' e 'replying' (il lock CAS in drainMarioReplies serializza le esecuzioni
+ * concorrenti). Falso per stati terminali ('handed_off' / 'booked') o non arruolati.
+ */
 export function shouldAutoReply(g: AutoReplyGate): boolean {
-  return g.toMatchesFenice && g.autoReplyOn && g.aiOwner === 'mario' && g.aiStatus === 'active';
+  if (!(g.toMatchesFenice && g.autoReplyOn && g.aiOwner === 'mario')) return false;
+  return g.aiStatus === 'active' || g.aiStatus === 'replying';
 }
 
+type MsgRow = { direction: string; body: string };
+
 /**
- * Best-effort: ricostruisce la cronologia, chiama Mario, invia la risposta dal numero
- * Fenice e aggiorna lo stato sui tag. Non lancia: logga gli errori in event_log.
+ * Pure: dato l'elenco messaggi in ordine cronologico, ritorna l'indice del primo
+ * messaggio 'in' (lead) NON ancora gestito — cioè che viene dopo l'ultimo 'out'.
+ * Ritorna -1 se non c'è nessun inbound da gestire.
  */
-export async function runMarioAutoReply(
+export function nextUnansweredInboundIndex(rows: MsgRow[]): number {
+  let lastOut = -1;
+  for (let i = 0; i < rows.length; i++) if (rows[i].direction === 'out') lastOut = i;
+  for (let i = lastOut + 1; i < rows.length; i++) if (rows[i].direction === 'in') return i;
+  return -1;
+}
+
+const MAX_REPLIES_PER_DRAIN = 8; // anti-runaway per singola esecuzione
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Best-effort: risponde a OGNI messaggio del lead non ancora gestito, uno alla volta,
+ * in ordine, con latenza umana (5-40s) prima di ciascuna risposta. Serializzato tramite
+ * lock CAS sulla conversazione (ai_status 'active' -> 'replying'). Non lancia: logga errori.
+ */
+export async function drainMarioReplies(
   supabase: Supa,
   conversationId: number,
   phone: string,
+  delayMs: () => number = marioDelayMs,
 ): Promise<void> {
   const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
   if (!from) {
@@ -34,8 +59,8 @@ export async function runMarioAutoReply(
     return;
   }
 
-  // Claim the turn: solo un'invocazione alla volta risponde per conversazione.
-  // CAS: porta lo stato da 'active' a 'replying'; se nessuna riga aggiornata, esci.
+  // Lock: claim del turno. Se un'altra esecuzione sta già rispondendo, esci:
+  // quel drain ricontrolla i messaggi a ogni giro e gestirà anche questo inbound.
   const { data: claimed } = await supabase
     .from('conversations')
     .update({ ai_status: 'replying' })
@@ -44,49 +69,56 @@ export async function runMarioAutoReply(
     .select('id');
   if (!claimed || claimed.length === 0) return;
 
+  let finalStatus = 'active';
   try {
-    const { data: msgs } = await supabase
-      .from('messages')
-      .select('direction, body, created_at')
-      .eq('conversation_id', conversationId)
-      .order('created_at', { ascending: false })
-      .limit(100);
+    for (let n = 0; n < MAX_REPLIES_PER_DRAIN; n++) {
+      const { data: rows } = await supabase
+        .from('messages')
+        .select('direction, body, created_at')
+        .eq('conversation_id', conversationId)
+        .order('created_at', { ascending: true })
+        .limit(200);
 
-    const history: MarioTurn[] = (msgs ?? [])
-      .slice()
-      .reverse()
-      .map((m: any) => ({
+      const all = (rows ?? []) as MsgRow[];
+      const idx = nextUnansweredInboundIndex(all);
+      if (idx === -1) break;
+
+      const history: MarioTurn[] = all.slice(0, idx + 1).map((m) => ({
         role: m.direction === 'in' ? 'user' : 'assistant',
         content: m.body,
       }));
 
-    const result = await generateMarioReply(history);
+      await sleep(delayMs());
+      const result = await generateMarioReply(history);
 
-    if (result.visibleReply) {
-      const sent = await sendFreeText({ to: phone, body: result.visibleReply, from });
-      await supabase.from('messages').insert({
-        conversation_id: conversationId, direction: 'out', body: result.visibleReply,
-        twilio_sid: sent.sid, twilio_status: sent.status,
+      if (result.visibleReply) {
+        const sent = await sendFreeText({ to: phone, body: result.visibleReply, from });
+        await supabase.from('messages').insert({
+          conversation_id: conversationId, direction: 'out', body: result.visibleReply,
+          twilio_sid: sent.sid, twilio_status: sent.status,
+        });
+        await supabase.from('conversations')
+          .update({ last_message_at: new Date().toISOString() })
+          .eq('id', conversationId);
+      }
+
+      await supabase.from('event_log').insert({
+        type: 'fenice_ai_reply',
+        payload: { conversationId, phone, appointmentFixed: result.appointmentFixed, passToHuman: result.passToHuman } as never,
+        message: `Mario ha risposto a ${phone}`, level: 'info',
       });
-      await supabase.from('conversations')
-        .update({ last_message_at: new Date().toISOString() })
-        .eq('id', conversationId);
+
+      if (result.passToHuman) { finalStatus = 'handed_off'; break; }
+      if (result.appointmentFixed) { finalStatus = 'booked'; break; }
     }
-
-    const finalStatus = result.passToHuman ? 'handed_off' : result.appointmentFixed ? 'booked' : 'active';
-    await supabase.from('conversations').update({ ai_status: finalStatus }).eq('id', conversationId);
-
-    await supabase.from('event_log').insert({
-      type: 'fenice_ai_reply',
-      payload: { conversationId, phone, appointmentFixed: result.appointmentFixed, passToHuman: result.passToHuman } as never,
-      message: `Mario ha risposto a ${phone}`, level: 'info',
-    });
   } catch (err) {
-    await supabase.from('conversations').update({ ai_status: 'active' }).eq('id', conversationId);
     const m = err instanceof Error ? err.message : 'errore';
     await supabase.from('event_log').insert({
       type: 'fenice_ai_error', payload: { conversationId, phone, error: m } as never,
       message: `Auto-risposta Mario fallita per ${phone}: ${m}`, level: 'error',
     });
+    finalStatus = 'active';
+  } finally {
+    await supabase.from('conversations').update({ ai_status: finalStatus }).eq('id', conversationId);
   }
 }

@@ -1,10 +1,10 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { validateTwilioSignature } from '@/lib/twilio';
 import { toE164 } from '@/lib/phone';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getAutoReply } from '@/lib/fenice-settings';
-import { shouldAutoReply, runMarioAutoReply } from '@/lib/fenice-autoreply';
+import { shouldAutoReply, drainMarioReplies } from '@/lib/fenice-autoreply';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -161,7 +161,8 @@ export async function POST(req: NextRequest) {
         aiOwner: conv?.ai_owner ?? null,
         aiStatus: conv?.ai_status ?? null,
       })) {
-        await runMarioAutoReply(supabase, conversationId, phone);
+        // Dopo aver risposto 200 a Twilio: Mario risponde in background, con latenza.
+        after(drainMarioReplies(supabase, conversationId, phone));
       }
     }
   }
