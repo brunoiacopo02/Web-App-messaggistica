@@ -13,7 +13,8 @@ export function areaForEmail(email: string | null | undefined): Area {
 export function canAccess(email: string | null | undefined, path: string): boolean {
   if (areaForEmail(email) === 'all') return true;
   // fenice-only: solo /fenice (e relative API)
-  return path.startsWith('/fenice') || path.startsWith('/api/fenice');
+  return path === '/fenice' || path.startsWith('/fenice/')
+    || path === '/api/fenice' || path.startsWith('/api/fenice/');
 }
 
 /** Dove mandare l'utente dopo il login. */

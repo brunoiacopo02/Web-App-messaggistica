@@ -20,4 +20,10 @@ describe('access map', () => {
     expect(areaForEmail('x@y.com')).toBe('all');
     expect(canAccess('x@y.com', '/fenice')).toBe(true);
   });
+
+  it('fenice-only: blocca route sibling con prefisso simile', () => {
+    expect(canAccess('fenicebot@fenice.com', '/fenice-admin')).toBe(false);
+    expect(canAccess('fenicebot@fenice.com', '/fenice/live')).toBe(true);
+    expect(canAccess('fenicebot@fenice.com', '/api/fenice/sim')).toBe(true);
+  });
 });

@@ -24,6 +24,9 @@ export async function proxy(request: NextRequest) {
 
   // Gate per area: un utente fenice-only fuori da /fenice -> torna a /fenice
   if (user && !isPublic && !canAccess(user.email, path)) {
+    if (path.startsWith('/api')) {
+      return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+    }
     const url = request.nextUrl.clone();
     url.pathname = landingPath(user.email);
     return NextResponse.redirect(url);

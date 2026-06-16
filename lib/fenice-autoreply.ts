@@ -34,18 +34,31 @@ export async function runMarioAutoReply(
     return;
   }
 
+  // Claim the turn: solo un'invocazione alla volta risponde per conversazione.
+  // CAS: porta lo stato da 'active' a 'replying'; se nessuna riga aggiornata, esci.
+  const { data: claimed } = await supabase
+    .from('conversations')
+    .update({ ai_status: 'replying' })
+    .eq('id', conversationId)
+    .eq('ai_status', 'active')
+    .select('id');
+  if (!claimed || claimed.length === 0) return;
+
   try {
     const { data: msgs } = await supabase
       .from('messages')
       .select('direction, body, created_at')
       .eq('conversation_id', conversationId)
-      .order('created_at', { ascending: true })
+      .order('created_at', { ascending: false })
       .limit(100);
 
-    const history: MarioTurn[] = (msgs ?? []).map((m: any) => ({
-      role: m.direction === 'in' ? 'user' : 'assistant',
-      content: m.body,
-    }));
+    const history: MarioTurn[] = (msgs ?? [])
+      .slice()
+      .reverse()
+      .map((m: any) => ({
+        role: m.direction === 'in' ? 'user' : 'assistant',
+        content: m.body,
+      }));
 
     const result = await generateMarioReply(history);
 
@@ -60,11 +73,8 @@ export async function runMarioAutoReply(
         .eq('id', conversationId);
     }
 
-    if (result.passToHuman) {
-      await supabase.from('conversations').update({ ai_status: 'handed_off' }).eq('id', conversationId);
-    } else if (result.appointmentFixed) {
-      await supabase.from('conversations').update({ ai_status: 'booked' }).eq('id', conversationId);
-    }
+    const finalStatus = result.passToHuman ? 'handed_off' : result.appointmentFixed ? 'booked' : 'active';
+    await supabase.from('conversations').update({ ai_status: finalStatus }).eq('id', conversationId);
 
     await supabase.from('event_log').insert({
       type: 'fenice_ai_reply',
@@ -72,6 +82,7 @@ export async function runMarioAutoReply(
       message: `Mario ha risposto a ${phone}`, level: 'info',
     });
   } catch (err) {
+    await supabase.from('conversations').update({ ai_status: 'active' }).eq('id', conversationId);
     const m = err instanceof Error ? err.message : 'errore';
     await supabase.from('event_log').insert({
       type: 'fenice_ai_error', payload: { conversationId, phone, error: m } as never,

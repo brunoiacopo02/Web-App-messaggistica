@@ -80,7 +80,7 @@ export function LivePanel({ initialAutoReply, initialRows }: { initialAutoReply:
                 <td className="px-4 py-2">
                   {r.status === 'booked' && <Badge className="bg-emerald-600">appuntamento</Badge>}
                   {r.status === 'handed_off' && <Badge variant="destructive">a operatore</Badge>}
-                  {(!r.status || r.status === 'active') && <Badge variant="secondary">attivo</Badge>}
+                  {(!r.status || r.status === 'active' || r.status === 'replying') && <Badge variant="secondary">attivo</Badge>}
                 </td>
               </tr>
             ))}
