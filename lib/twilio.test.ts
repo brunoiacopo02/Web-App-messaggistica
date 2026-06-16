@@ -72,6 +72,26 @@ describe('sendFreeText', () => {
   });
 });
 
+describe('from override', () => {
+  it('sendTemplate usa il from passato', async () => {
+    messagesCreate.mockResolvedValueOnce({ sid: 'SM_O', status: 'queued' });
+    await sendTemplate({
+      to: '+393331234567', contentSid: 'HX1', variables: {}, from: 'whatsapp:+393520413199',
+    });
+    expect(messagesCreate).toHaveBeenCalledWith(expect.objectContaining({
+      from: 'whatsapp:+393520413199',
+    }));
+  });
+
+  it('sendFreeText usa il from passato', async () => {
+    messagesCreate.mockResolvedValueOnce({ sid: 'SM_O2', status: 'queued' });
+    await sendFreeText({ to: '+393331234567', body: 'ciao', from: 'whatsapp:+393520413199' });
+    expect(messagesCreate).toHaveBeenCalledWith(expect.objectContaining({
+      from: 'whatsapp:+393520413199',
+    }));
+  });
+});
+
 describe('validateTwilioSignature', () => {
   it('ritorna true se TWILIO_VALIDATE_SIGNATURE=false', async () => {
     process.env.TWILIO_VALIDATE_SIGNATURE = 'false';
