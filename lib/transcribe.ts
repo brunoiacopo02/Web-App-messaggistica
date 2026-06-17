@@ -1,7 +1,9 @@
 // Trascrizione note vocali: scarica l'audio da Twilio e lo trascrive in testo
-// (italiano) via OpenAI. Best-effort: ritorna null se non configurato o in errore.
+// (italiano) via Groq (Whisper large-v3, API compatibile OpenAI, piano gratuito).
+// Best-effort: ritorna null se non configurato o in errore.
 
-const OPENAI_TRANSCRIBE_MODEL = 'whisper-1';
+const GROQ_TRANSCRIBE_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
+const GROQ_TRANSCRIBE_MODEL = 'whisper-large-v3';
 
 export type InboundParams = Record<string, string>;
 
@@ -33,10 +35,10 @@ async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Pro
 
 /** Scarica l'audio dalla MediaUrl di Twilio e ritorna la trascrizione (it), o null. */
 export async function transcribeTwilioAudio(mediaUrl: string, contentType: string): Promise<string | null> {
-  const openaiKey = process.env.OPENAI_API_KEY;
+  const groqKey = process.env.GROQ_API_KEY;
   const sid = process.env.TWILIO_ACCOUNT_SID;
   const tok = process.env.TWILIO_AUTH_TOKEN;
-  if (!openaiKey || !sid || !tok || !mediaUrl) return null;
+  if (!groqKey || !sid || !tok || !mediaUrl) return null;
 
   try {
     // 1) scarica l'audio da Twilio (basic auth)
@@ -49,11 +51,11 @@ export async function transcribeTwilioAudio(mediaUrl: string, contentType: strin
     const ext = extForContentType(contentType);
     const form = new FormData();
     form.append('file', new Blob([buf], { type: contentType || 'audio/ogg' }), `audio.${ext}`);
-    form.append('model', OPENAI_TRANSCRIBE_MODEL);
+    form.append('model', GROQ_TRANSCRIBE_MODEL);
     form.append('language', 'it');
     const sttRes = await fetchWithTimeout(
-      'https://api.openai.com/v1/audio/transcriptions',
-      { method: 'POST', headers: { Authorization: `Bearer ${openaiKey}` }, body: form },
+      GROQ_TRANSCRIBE_URL,
+      { method: 'POST', headers: { Authorization: `Bearer ${groqKey}` }, body: form },
       30_000,
     );
     if (!sttRes.ok) return null;
