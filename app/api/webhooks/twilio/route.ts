@@ -5,6 +5,7 @@ import { toE164 } from '@/lib/phone';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getAutoReply } from '@/lib/fenice-settings';
 import { shouldAutoReply, drainMarioReplies } from '@/lib/fenice-autoreply';
+import { isAudioInbound, transcribeTwilioAudio } from '@/lib/transcribe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -62,8 +63,8 @@ export async function POST(req: NextRequest) {
     return new NextResponse(TWIML_OK, { status: 200, headers: TWIML_HEADERS });
   }
 
-  // Inbound message
-  if (params.MessageSid && params.From && params.Body !== undefined) {
+  // Inbound message (testo o nota vocale)
+  if (params.MessageSid && params.From && (params.Body !== undefined || isAudioInbound(params))) {
     const phone = toE164(params.From);
     if (!phone) {
       await supabase.from('event_log').insert({
@@ -111,11 +112,26 @@ export async function POST(req: NextRequest) {
       conversationId = convNew.id;
     }
 
+    // Nota vocale → trascrivi in testo così Mario (e l'inbox) la leggono come messaggio.
+    let messageBody = params.Body ?? '';
+    if ((!messageBody || messageBody.trim() === '') && isAudioInbound(params)) {
+      const transcript = await transcribeTwilioAudio(params.MediaUrl0 ?? '', params.MediaContentType0 ?? '');
+      messageBody = transcript ?? '[nota vocale]';
+      await supabase.from('event_log').insert({
+        type: transcript ? 'voice_transcribed' : 'voice_transcribe_failed',
+        payload: { from: phone, contentType: params.MediaContentType0 } as never,
+        message: transcript
+          ? `Nota vocale trascritta da ${phone}`
+          : `Trascrizione nota vocale non riuscita da ${phone}`,
+        level: transcript ? 'info' : 'warn',
+      });
+    }
+
     // Insert messaggio (UNIQUE su twilio_sid → dedup retry)
     const { error: msgErr } = await supabase.from('messages').insert({
       conversation_id: conversationId,
       direction: 'in',
-      body: params.Body,
+      body: messageBody,
       twilio_sid: params.MessageSid,
       twilio_status: 'received',
     });
