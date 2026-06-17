@@ -2,6 +2,7 @@ import type { getSupabaseAdmin } from './supabase/admin';
 import { generateMarioReply, type MarioTurn } from './mario';
 import { sendFreeText } from './twilio';
 import { marioDelayMs } from './mario-latency';
+import { splitMarioMessages } from './mario-split';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -102,12 +103,17 @@ export async function drainMarioReplies(
       }));
       const result = await generateMarioReply(history);
 
-      if (result.visibleReply) {
-        const sent = await sendFreeText({ to: phone, body: result.visibleReply, from });
+      // Invia ogni a-capo come messaggio separato (più umano), con breve pausa.
+      const parts = splitMarioMessages(result.visibleReply);
+      for (let i = 0; i < parts.length; i++) {
+        if (i > 0) await sleep(Math.min(3000, 800 + parts[i].length * 25));
+        const sent = await sendFreeText({ to: phone, body: parts[i], from });
         await supabase.from('messages').insert({
-          conversation_id: conversationId, direction: 'out', body: result.visibleReply,
+          conversation_id: conversationId, direction: 'out', body: parts[i],
           twilio_sid: sent.sid, twilio_status: sent.status,
         });
+      }
+      if (parts.length > 0) {
         await supabase.from('conversations')
           .update({ last_message_at: new Date().toISOString() })
           .eq('id', conversationId);

@@ -6,6 +6,9 @@ import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { marioDelayMs } from '@/lib/mario-latency';
 import { feniceOpening } from '@/lib/fenice-opening';
+import { splitMarioMessages } from '@/lib/mario-split';
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 type Turn = { role: 'user' | 'assistant'; content: string };
 type MarioResult = { visibleReply: string; appointmentFixed: boolean; passToHuman: boolean };
@@ -95,6 +98,21 @@ export function Simulator() {
     if (data.passToHuman) setHandoff(true);
   }
 
+  // Mostra la risposta come messaggi separati (ogni a-capo = nuova bolla), con breve
+  // pausa e "sta scrivendo" tra l'uno e l'altro: sembra una persona che scrive a raffica.
+  async function appendAssistantChunks(text: string) {
+    const parts = splitMarioMessages(text);
+    for (let i = 0; i < parts.length; i++) {
+      if (i > 0) {
+        setThinking(true);
+        await sleep(Math.min(2200, 500 + parts[i].length * 25));
+        setThinking(false);
+      }
+      const content = parts[i];
+      setTurns((t) => [...t, { role: 'assistant', content }]);
+    }
+  }
+
   // Una risposta sola a tutti i messaggi accumulati. Se durante la generazione il lead
   // ne manda altri, finiscono nel buffer e fanno scattare un altro round.
   async function fireReply() {
@@ -103,7 +121,7 @@ export function Simulator() {
     const data = await callMario(modelHistory.current);
     if (data) {
       modelHistory.current = [...modelHistory.current, { role: 'assistant', content: data.visibleReply }];
-      setTurns((t) => [...t, { role: 'assistant', content: data.visibleReply }]);
+      await appendAssistantChunks(data.visibleReply);
       applyFlags(data);
     }
     const remaining = buffer.current.length;
