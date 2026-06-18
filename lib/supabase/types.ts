@@ -72,8 +72,15 @@ export type Database = {
           ai_status: string | null
           ai_summary: string | null
           ai_summary_at: string | null
+          bot_followups_sent: number
+          bot_outcome: string | null
+          bot_outcome_at: string | null
+          bot_report: Json | null
+          bot_scheduled_at: string | null
           campaign_id: number | null
           created_at: string
+          crm_funnel: string | null
+          crm_lead_id: string | null
           id: number
           last_inbound_at: string | null
           last_message_at: string
@@ -87,8 +94,15 @@ export type Database = {
           ai_status?: string | null
           ai_summary?: string | null
           ai_summary_at?: string | null
+          bot_followups_sent?: number
+          bot_outcome?: string | null
+          bot_outcome_at?: string | null
+          bot_report?: Json | null
+          bot_scheduled_at?: string | null
           campaign_id?: number | null
           created_at?: string
+          crm_funnel?: string | null
+          crm_lead_id?: string | null
           id?: number
           last_inbound_at?: string | null
           last_message_at?: string
@@ -102,8 +116,15 @@ export type Database = {
           ai_status?: string | null
           ai_summary?: string | null
           ai_summary_at?: string | null
+          bot_followups_sent?: number
+          bot_outcome?: string | null
+          bot_outcome_at?: string | null
+          bot_report?: Json | null
+          bot_scheduled_at?: string | null
           campaign_id?: number | null
           created_at?: string
+          crm_funnel?: string | null
+          crm_lead_id?: string | null
           id?: number
           last_inbound_at?: string | null
           last_message_at?: string
