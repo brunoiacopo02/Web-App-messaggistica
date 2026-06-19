@@ -5,7 +5,6 @@ import { marioDelayMs } from './mario-latency';
 import { splitMarioMessages } from './mario-split';
 import { generateBotReport } from './bot-report';
 import { sendOutcome } from './bot-outcome';
-import type { BotOutcome } from './bot-contract';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -131,17 +130,17 @@ export async function drainMarioReplies(
 
       if (crmLeadId && result.outcome) {
         const report = await generateBotReport(history);
-        const map: Record<string, BotOutcome> = {
-          APPUNTAMENTO: 'APPUNTAMENTO', RICHIAMO: 'RICHIAMO', DA_SCARTARE: 'DA_SCARTARE',
-        };
-        await sendOutcome(supabase, conversationId, {
-          outcome: map[result.outcome],
+        const sent = await sendOutcome(supabase, conversationId, {
+          outcome: result.outcome,
           date: result.scheduledAt,
           discardReason: result.discardReason,
           report,
         });
-        finalStatus = 'closed';
-        break;
+        if (sent.sent) {
+          finalStatus = 'closed';
+          break;
+        }
+        // callback fallito: non chiudere, lascia la conversazione ritentabile.
       }
 
       if (result.passToHuman) { finalStatus = 'handed_off'; break; }
