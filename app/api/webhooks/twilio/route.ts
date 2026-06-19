@@ -167,9 +167,15 @@ export async function POST(req: NextRequest) {
     if (toMatchesFenice) {
       const { data: conv } = await supabase
         .from('conversations')
-        .select('ai_owner, ai_status')
+        .select('ai_owner, ai_status, crm_lead_id')
         .eq('id', conversationId)
         .single();
+
+      if (conv?.crm_lead_id && conv.ai_status === 'closed') {
+        await supabase.from('conversations').update({ ai_status: 'active' }).eq('id', conversationId);
+        conv.ai_status = 'active';
+      }
+
       const autoReplyOn = await getAutoReply(supabase);
       if (shouldAutoReply({
         toMatchesFenice,

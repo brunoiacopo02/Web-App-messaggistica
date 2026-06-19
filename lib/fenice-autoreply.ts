@@ -3,6 +3,9 @@ import { generateMarioReply, type MarioTurn } from './mario';
 import { sendFreeText } from './twilio';
 import { marioDelayMs } from './mario-latency';
 import { splitMarioMessages } from './mario-split';
+import { generateBotReport } from './bot-report';
+import { sendOutcome } from './bot-outcome';
+import type { BotOutcome } from './bot-contract';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -68,10 +71,11 @@ export async function drainMarioReplies(
     .update({ ai_status: 'replying' })
     .eq('id', conversationId)
     .eq('ai_status', 'active')
-    .select('id, ai_started_at')
+    .select('id, ai_started_at, crm_lead_id')
     .single();
   if (!claimed) return;
   const startedAt = (claimed as { ai_started_at: string | null }).ai_started_at;
+  const crmLeadId = (claimed as { crm_lead_id: string | null }).crm_lead_id;
 
   // Carica i messaggi della conversazione dall'arruolamento in poi (in ordine).
   async function loadHistory(): Promise<MsgRow[]> {
@@ -124,6 +128,21 @@ export async function drainMarioReplies(
         payload: { conversationId, phone, appointmentFixed: result.appointmentFixed, passToHuman: result.passToHuman } as never,
         message: `Mario ha risposto a ${phone}`, level: 'info',
       });
+
+      if (crmLeadId && result.outcome) {
+        const report = await generateBotReport(history);
+        const map: Record<string, BotOutcome> = {
+          APPUNTAMENTO: 'APPUNTAMENTO', RICHIAMO: 'RICHIAMO', DA_SCARTARE: 'DA_SCARTARE',
+        };
+        await sendOutcome(supabase, conversationId, {
+          outcome: map[result.outcome],
+          date: result.scheduledAt,
+          discardReason: result.discardReason,
+          report,
+        });
+        finalStatus = 'closed';
+        break;
+      }
 
       if (result.passToHuman) { finalStatus = 'handed_off'; break; }
       if (result.appointmentFixed) { finalStatus = 'booked'; break; }
