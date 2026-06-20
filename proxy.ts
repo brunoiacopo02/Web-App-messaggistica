@@ -2,7 +2,9 @@ import { type NextRequest, NextResponse } from 'next/server';
 import { refreshSession } from '@/lib/supabase/middleware';
 import { canAccess, landingPath } from '@/lib/access';
 
-const PUBLIC_PATHS = ['/login', '/api/webhooks', '/api/cron', '/api/send-agenda', '/api/send-template'];
+// /api/bot è macchina-a-macchina: si autentica via firma HMAC, mai via sessione.
+// Va esentato dal redirect a /login (come /api/webhooks e /api/cron).
+const PUBLIC_PATHS = ['/login', '/api/webhooks', '/api/cron', '/api/bot', '/api/send-agenda', '/api/send-template'];
 
 export async function proxy(request: NextRequest) {
   const { response, user } = await refreshSession(request);
