@@ -73,9 +73,9 @@ export async function GET(req: NextRequest) {
         report.push({ id: c.id, action, sent: false });
       }
     } else {
-      // Numero non configurato: avanza comunque il contatore per non bloccare la pipeline.
-      await supabase.from('conversations').update({ bot_followups_sent: idx + 1 }).eq('id', c.id);
-      report.push({ id: c.id, action, sent: false, reason: 'no_from' });
+      // Numero non configurato (es. numero WhatsApp bloccato): NON avanzare il contatore,
+      // così non spingiamo il lead verso NON_RISPOSTO senza averlo mai contattato.
+      report.push({ id: c.id, action, sent: false, reason: 'no_from_skipped' });
     }
   }
 

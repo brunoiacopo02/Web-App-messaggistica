@@ -136,11 +136,11 @@ export async function drainMarioReplies(
           discardReason: result.discardReason,
           report,
         });
-        if (sent.sent) {
-          finalStatus = 'closed';
-          break;
-        }
-        // callback fallito: non chiudere, lascia la conversazione ritentabile.
+        // Esito CRM: chiudiamo solo se il callback è andato a buon fine; altrimenti
+        // restiamo 'active' (ritentabile). In ogni caso usciamo: i rami legacy
+        // (booked/handed_off) non valgono per i lead CRM.
+        if (sent.sent) finalStatus = 'closed';
+        break;
       }
 
       if (result.passToHuman) { finalStatus = 'handed_off'; break; }
