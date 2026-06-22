@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import { Bot, Radio, MessagesSquare } from 'lucide-react';
+import { Bot, Radio, MessagesSquare, Users } from 'lucide-react';
 import { signOutAction } from '@/app/(auth)/login/actions';
 import { ThemeToggle } from '@/components/ThemeToggle';
 
@@ -10,6 +10,7 @@ const NAV = [
   { href: '/fenice', label: 'Simulatore', icon: Bot, exact: true },
   { href: '/fenice/live', label: 'Live', icon: Radio },
   { href: '/fenice/conversazioni', label: 'Conversazioni', icon: MessagesSquare },
+  { href: '/fenice/lead', label: 'Lead', icon: Users },
 ];
 
 export function FeniceSidebar({ userEmail }: { userEmail: string }) {
