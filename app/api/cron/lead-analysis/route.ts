@@ -54,12 +54,13 @@ export async function GET(req: NextRequest) {
     if (history.length === 0) continue;
     try {
       const insight = await extractLeadInsight(history);
-      await admin.from('conversations').update({
+      const { error: updateErr } = await admin.from('conversations').update({
         ai_dropoff_stage: insight.dropoffStage,
         ai_objection_category: insight.objectionCategory,
         ai_objection_note: insight.objectionNote,
         ai_insight_at: new Date().toISOString(),
       }).eq('id', c.id);
+      if (updateErr) continue;
       extracted++;
     } catch { /* salta questa conversazione, riprova al prossimo run */ }
   }
