@@ -13,6 +13,8 @@ export default async function InboxLayout({ children }: { children: React.ReactN
       id, last_message_at, last_inbound_at, unread_count, last_message_preview,
       lead:leads ( id, phone_e164, first_name, last_name )
     `)
+    // Le conversazioni gestite da Mario (Fenice) vivono solo in /fenice: escludile dal CRM.
+    .is('ai_owner', null)
     .order('last_message_at', { ascending: false })
     .limit(200);
 

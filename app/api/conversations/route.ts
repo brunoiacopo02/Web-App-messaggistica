@@ -19,6 +19,8 @@ export async function GET(req: Request) {
       id, last_message_at, last_inbound_at, unread_count, campaign_id, last_message_preview,
       lead:leads ( id, phone_e164, first_name, last_name, email )
     `)
+    // Escludi le conversazioni di Mario (Fenice): appartengono solo a /fenice.
+    .is('ai_owner', null)
     .order('last_message_at', { ascending: false })
     .limit(200);
 
