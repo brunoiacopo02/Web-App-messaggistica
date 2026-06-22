@@ -1,7 +1,9 @@
 const H = 3600_000;
-export const FOLLOWUP_1_H = 18;
-export const FOLLOWUP_2_H = 36;
-export const GIVEUP_H = 48;
+// Tutto deve stare entro 24h: oltre la finestra WhatsApp/Facebook non recapita più
+// testo libero, quindi niente solleciti tardivi e si chiude a 24h.
+export const FOLLOWUP_1_H = 12;
+export const FOLLOWUP_2_H = 22;
+export const GIVEUP_H = 24;
 
 export const FOLLOWUP_TEXTS: [string, string] = [
   'Ciao, sono ancora Mario di Fenice, sei riuscito a leggere il mio messaggio?',
@@ -19,8 +21,9 @@ export function decideFollowupAction(input: {
 }): FollowupAction {
   if (input.hasInbound) return 'none';
   const elapsedH = (input.nowMs - input.startedAtMs) / H;
+  // Passate le 24h non si manda più nulla in testo libero: si chiude e basta.
+  if (elapsedH >= GIVEUP_H) return 'non_risposto';
   if (input.followupsSent < 1 && elapsedH >= FOLLOWUP_1_H) return 'sollecito_1';
   if (input.followupsSent < 2 && elapsedH >= FOLLOWUP_2_H) return 'sollecito_2';
-  if (input.followupsSent >= 2 && elapsedH >= GIVEUP_H) return 'non_risposto';
   return 'none';
 }

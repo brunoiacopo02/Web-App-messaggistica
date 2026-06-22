@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { MARIO_SYSTEM_PROMPT } from './mario-prompt';
 import { romeNowContext } from './rome-time';
+import { bookingSlotsContext } from './booking-slots';
 
 export const MARIO_MODEL = 'claude-sonnet-4-6';
 
@@ -71,7 +72,7 @@ export async function generateMarioReply(
       : [{ role: 'user' as const, content: 'Inizia la conversazione presentandoti.' }];
 
   const now = opts?.now ?? new Date();
-  const system = `${MARIO_SYSTEM_PROMPT}\n\n${romeNowContext(now)}`;
+  const system = `${MARIO_SYSTEM_PROMPT}\n\n${romeNowContext(now)}\n\n${bookingSlotsContext(now)}`;
 
   const response = await getClient().messages.create({
     model: MARIO_MODEL,
