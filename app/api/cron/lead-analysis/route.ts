@@ -70,7 +70,8 @@ export async function GET(req: NextRequest) {
     .from('conversations')
     .select('ai_dropoff_stage, ai_objection_category, ai_objection_note, last_inbound_at, bot_outcome')
     .eq('ai_owner', 'mario')
-    .not('ai_insight_at', 'is', null);
+    .not('ai_insight_at', 'is', null)
+    .limit(5000);
 
   const insights: LeadInsight[] = (cached ?? [])
     .filter((c: any) => c.last_inbound_at && c.bot_outcome !== 'APPUNTAMENTO' && c.ai_objection_category)
