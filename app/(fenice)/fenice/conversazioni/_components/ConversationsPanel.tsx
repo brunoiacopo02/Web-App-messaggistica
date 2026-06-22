@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -43,8 +44,12 @@ function fmt(iso: string | null): string {
 }
 
 export function ConversationsPanel({ rows }: { rows: Row[] }) {
+  const searchParams = useSearchParams();
+  const urlId = Number(searchParams.get('id'));
   const [query, setQuery] = useState('');
-  const [selected, setSelected] = useState<number | null>(rows[0]?.id ?? null);
+  const [selected, setSelected] = useState<number | null>(
+    Number.isFinite(urlId) && urlId > 0 ? urlId : (rows[0]?.id ?? null)
+  );
   const [detail, setDetail] = useState<Detail | null>(null);
   const [loading, setLoading] = useState(false);
   const [summarizing, setSummarizing] = useState(false);

@@ -28,17 +28,22 @@ export function LeadPipeline() {
     let active = true;
     setLoading(true);
     (async () => {
-      if (tab === 'REPORT') {
-        const r = await fetch(`/api/fenice/report?period=${period}`).then((x) => x.json());
-        if (active) setReport(r);
-      } else if (tab === 'ANALISI') {
-        const r = await fetch('/api/fenice/analysis').then((x) => x.json());
-        if (active) setAnalysis(r);
-      } else {
-        const r = await fetch(`/api/fenice/segments?segment=${tab}&period=${period}`).then((x) => x.json());
-        if (active) { setCounts(r.counts); setRows(r.rows ?? []); }
+      try {
+        if (tab === 'REPORT') {
+          setCounts(null);
+          const r = await fetch(`/api/fenice/report?period=${period}`).then((x) => x.json());
+          if (active) setReport(r);
+        } else if (tab === 'ANALISI') {
+          setCounts(null);
+          const r = await fetch('/api/fenice/analysis').then((x) => x.json());
+          if (active) setAnalysis(r);
+        } else {
+          const r = await fetch(`/api/fenice/segments?segment=${tab}&period=${period}`).then((x) => x.json());
+          if (active) { setCounts(r.counts); setRows(r.rows ?? []); }
+        }
+      } catch { /* ignore */ } finally {
+        if (active) setLoading(false);
       }
-      if (active) setLoading(false);
     })();
     return () => { active = false; };
   }, [tab, period]);
