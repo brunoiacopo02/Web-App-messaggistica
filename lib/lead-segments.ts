@@ -18,8 +18,8 @@ export function segmentOf(c: SegmentInput, now: string): LeadSegment {
   return 'FERMA';
 }
 
-export function fermaReason(c: SegmentInput, now: string): string | null {
+export function fermaReason(c: SegmentInput, now: string): 'RICHIAMO' | 'DA_SCARTARE' | 'NON_RISPOSTO' | 'SILENTE' | null {
   if (segmentOf(c, now) !== 'FERMA') return null;
-  if (c.bot_outcome) return c.bot_outcome;
+  if (c.bot_outcome) return c.bot_outcome as 'RICHIAMO' | 'DA_SCARTARE' | 'NON_RISPOSTO';
   return 'SILENTE';
 }

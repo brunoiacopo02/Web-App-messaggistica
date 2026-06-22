@@ -20,6 +20,18 @@ describe('segmentOf', () => {
   it('chat chiusa pur con inbound recente → FERMA', () => {
     expect(segmentOf({ bot_outcome: 'NON_RISPOSTO', last_inbound_at: hoursAgo(1), ai_status: 'closed' }, NOW)).toBe('FERMA');
   });
+  it('ai_status: replying e inbound recente → ATTIVA', () => {
+    expect(segmentOf({ bot_outcome: null, last_inbound_at: hoursAgo(1), ai_status: 'replying' }, NOW)).toBe('ATTIVA');
+  });
+  it('ai_status: null e inbound recente, no bot_outcome → FERMA', () => {
+    expect(segmentOf({ bot_outcome: null, last_inbound_at: hoursAgo(1), ai_status: null }, NOW)).toBe('FERMA');
+  });
+  it('boundary: 22h con ai_status active → ATTIVA (inclusive)', () => {
+    expect(segmentOf({ bot_outcome: null, last_inbound_at: hoursAgo(22), ai_status: 'active' }, NOW)).toBe('ATTIVA');
+  });
+  it('boundary: 23h oltre soglia → FERMA', () => {
+    expect(segmentOf({ bot_outcome: null, last_inbound_at: hoursAgo(23), ai_status: 'active' }, NOW)).toBe('FERMA');
+  });
 });
 
 describe('fermaReason', () => {
@@ -36,6 +48,6 @@ describe('fermaReason', () => {
 
 describe('ACTIVE_WINDOW_MS', () => {
   it('è 22 ore', () => {
-    expect(ACTIVE_WINDOW_MS).toBe(22 * 3600_000);
+    expect(ACTIVE_WINDOW_MS).toBe(79_200_000);
   });
 });
