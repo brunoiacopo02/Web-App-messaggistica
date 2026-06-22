@@ -11,11 +11,12 @@ export async function GET() {
   const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
 
   const [todayOut, totalOut, unread, lastError, dailySeries, latestInbound] = await Promise.all([
-    supabase.from('messages').select('id', { count: 'exact', head: true }).eq('direction', 'out').gte('created_at', startOfDay.toISOString()),
-    supabase.from('messages').select('id', { count: 'exact', head: true }).eq('direction', 'out'),
+    // Conteggi outbound del CRM: escludono il traffico di Mario (Fenice) via inner-join su ai_owner null.
+    supabase.from('messages').select('id, conversations!inner(ai_owner)', { count: 'exact', head: true }).eq('direction', 'out').is('conversations.ai_owner', null).gte('created_at', startOfDay.toISOString()),
+    supabase.from('messages').select('id, conversations!inner(ai_owner)', { count: 'exact', head: true }).eq('direction', 'out').is('conversations.ai_owner', null),
     supabase.from('conversations').select('unread_count').gt('unread_count', 0).is('ai_owner', null),
     supabase.from('event_log').select('*').eq('level', 'error').gte('created_at', new Date(Date.now() - 60 * 60_000).toISOString()).order('created_at', { ascending: false }).limit(1),
-    supabase.from('messages').select('created_at').eq('direction', 'out').gte('created_at', new Date(Date.now() - 14 * 86400_000).toISOString()).order('created_at', { ascending: true }),
+    supabase.from('messages').select('created_at, conversations!inner(ai_owner)').eq('direction', 'out').is('conversations.ai_owner', null).gte('created_at', new Date(Date.now() - 14 * 86400_000).toISOString()).order('created_at', { ascending: true }),
     supabase.from('messages').select(`
       id, body, created_at, conversation:conversations!inner(
         id, ai_owner, lead:leads(first_name, last_name, phone_e164)
