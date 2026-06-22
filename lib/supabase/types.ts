@@ -67,6 +67,10 @@ export type Database = {
       }
       conversations: {
         Row: {
+          ai_dropoff_stage: string | null
+          ai_insight_at: string | null
+          ai_objection_category: string | null
+          ai_objection_note: string | null
           ai_owner: string | null
           ai_started_at: string | null
           ai_status: string | null
@@ -89,6 +93,10 @@ export type Database = {
           unread_count: number
         }
         Insert: {
+          ai_dropoff_stage?: string | null
+          ai_insight_at?: string | null
+          ai_objection_category?: string | null
+          ai_objection_note?: string | null
           ai_owner?: string | null
           ai_started_at?: string | null
           ai_status?: string | null
@@ -111,6 +119,10 @@ export type Database = {
           unread_count?: number
         }
         Update: {
+          ai_dropoff_stage?: string | null
+          ai_insight_at?: string | null
+          ai_objection_category?: string | null
+          ai_objection_note?: string | null
           ai_owner?: string | null
           ai_started_at?: string | null
           ai_status?: string | null
@@ -173,6 +185,27 @@ export type Database = {
           message?: string | null
           payload?: Json | null
           type?: string
+        }
+        Relationships: []
+      }
+      lead_analysis_reports: {
+        Row: {
+          generated_at: string
+          id: number
+          payload: Json
+          period: string
+        }
+        Insert: {
+          generated_at?: string
+          id?: never
+          payload: Json
+          period?: string
+        }
+        Update: {
+          generated_at?: string
+          id?: never
+          payload?: Json
+          period?: string
         }
         Relationships: []
       }
