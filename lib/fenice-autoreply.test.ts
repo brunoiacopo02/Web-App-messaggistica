@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shouldAutoReply, nextUnansweredInboundIndex } from './fenice-autoreply';
+import { shouldAutoReply, nextUnansweredInboundIndex, lastIsUnansweredInbound } from './fenice-autoreply';
 
 describe('shouldAutoReply', () => {
   const ok = { toMatchesFenice: true, autoReplyOn: true, aiOwner: 'mario', aiStatus: 'active' };
@@ -54,5 +54,32 @@ describe('nextUnansweredInboundIndex', () => {
       { direction: 'in', body: 'msg2' },
     ];
     expect(nextUnansweredInboundIndex(rows)).toBe(2);
+  });
+});
+
+describe('lastIsUnansweredInbound', () => {
+  it('(a) ultimo messaggio inbound dopo un outbound → true', () => {
+    const rows = [
+      { direction: 'out', body: 'apertura' },
+      { direction: 'in', body: 'risposta lead' },
+    ];
+    expect(lastIsUnansweredInbound(rows)).toBe(true);
+  });
+  it('(b) ultimo messaggio outbound → false', () => {
+    const rows = [
+      { direction: 'out', body: 'apertura' },
+      { direction: 'in', body: 'msg1' },
+      { direction: 'out', body: 'risposta bot' },
+    ];
+    expect(lastIsUnansweredInbound(rows)).toBe(false);
+  });
+  it('(c) array vuoto → false', () => {
+    expect(lastIsUnansweredInbound([])).toBe(false);
+  });
+  it('(d) solo inbound senza outbound → true', () => {
+    const rows = [
+      { direction: 'in', body: 'primo messaggio lead' },
+    ];
+    expect(lastIsUnansweredInbound(rows)).toBe(true);
   });
 });

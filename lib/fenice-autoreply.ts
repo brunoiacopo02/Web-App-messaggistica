@@ -39,6 +39,12 @@ export function nextUnansweredInboundIndex(rows: MsgRow[]): number {
   return -1;
 }
 
+/** Pure: l'ultimo messaggio della conversazione è un inbound del lead non ancora risposto?
+ *  Vero quando esiste un inbound dopo l'ultimo outbound (cioè il bot deve ancora rispondere). */
+export function lastIsUnansweredInbound(rows: MsgRow[]): boolean {
+  return nextUnansweredInboundIndex(rows) !== -1;
+}
+
 const MAX_ROUNDS_PER_DRAIN = 5; // anti-runaway: round di accorpamento per esecuzione
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

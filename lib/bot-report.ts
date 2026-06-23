@@ -42,7 +42,7 @@ export async function generateBotReport(history: MarioTurn[]): Promise<BotReport
     .join('\n');
 
   try {
-    const client = new Anthropic({ apiKey });
+    const client = new Anthropic({ apiKey, maxRetries: 5, timeout: 60_000 });
     const response = await client.messages.create({
       model: REPORT_MODEL,
       max_tokens: 600,

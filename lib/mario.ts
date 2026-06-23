@@ -61,7 +61,7 @@ function getClient(): Anthropic {
   if (_client) return _client;
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('Missing ANTHROPIC_API_KEY');
-  _client = new Anthropic({ apiKey });
+  _client = new Anthropic({ apiKey, maxRetries: 5, timeout: 60_000 });
   return _client;
 }
 
