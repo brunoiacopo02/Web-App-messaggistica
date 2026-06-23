@@ -7,9 +7,14 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-muted: var(--brand-muted);
+  --color-brand-subtle: var(--brand-subtle);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --font-display: var(--font-bricolage), var(--font-geist-sans), ui-sans-serif, sans-serif;
+  --font-heading: var(--font-bricolage), var(--font-geist-sans), ui-sans-serif, sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -73,6 +78,11 @@
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
   --radius: 0.625rem;
+  /* Fenice ember brand */
+  --brand: oklch(0.62 0.2 42);
+  --brand-foreground: oklch(0.99 0.012 75);
+  --brand-muted: oklch(0.955 0.03 56);
+  --brand-subtle: oklch(0.97 0.018 58);
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
@@ -99,6 +109,11 @@
   --accent: oklch(0.269 0 0);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
+  /* Fenice ember brand (dark) */
+  --brand: oklch(0.72 0.18 52);
+  --brand-foreground: oklch(0.18 0.035 48);
+  --brand-muted: oklch(0.28 0.055 48);
+  --brand-subtle: oklch(0.235 0.035 48);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
@@ -127,4 +142,36 @@
   html {
     @apply font-sans;
   }
+}
+
+/* ── Fenice ember shell ─────────────────────────────────────────── */
+/* Warm aurora that sits behind the whole panel for atmosphere/depth. */
+.fenice-shell {
+  background:
+    radial-gradient(60rem 32rem at 12% -8%, color-mix(in oklch, var(--brand) 14%, transparent), transparent 60%),
+    radial-gradient(48rem 30rem at 100% 0%, color-mix(in oklch, var(--brand) 9%, transparent), transparent 55%),
+    var(--background);
+}
+
+/* Ember left-edge accent used on active nav + section markers. */
+.fenice-rail {
+  box-shadow: inset 3px 0 0 0 var(--brand);
+}
+
+@keyframes fenice-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fenice-rise {
+  animation: fenice-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes fenice-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.fenice-pulse { animation: fenice-pulse 1.6s ease-in-out infinite; }
+
+::selection {
+  background: color-mix(in oklch, var(--brand) 30%, transparent);
 }

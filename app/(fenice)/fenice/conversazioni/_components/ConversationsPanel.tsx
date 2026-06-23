@@ -1,11 +1,12 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
-import { RefreshCw, Sparkles, MessageSquare } from 'lucide-react';
+import { RefreshCw, Sparkles, MessageSquare, Search } from 'lucide-react';
+import { ChatStatusPill } from '@/components/fenice/status';
+import { StatCard } from '@/components/fenice/StatCard';
 
 type Row = {
   id: number;
@@ -25,12 +26,6 @@ type Detail = {
   summaryAt: string | null;
   messages: Msg[];
 };
-
-function StatusBadge({ status }: { status: string | null }) {
-  if (status === 'booked') return <Badge className="bg-emerald-600">appuntamento</Badge>;
-  if (status === 'handed_off') return <Badge variant="destructive">a operatore</Badge>;
-  return <Badge variant="secondary">attivo</Badge>;
-}
 
 function fmt(iso: string | null): string {
   if (!iso) return '—';
@@ -99,118 +94,126 @@ export function ConversationsPanel({ rows }: { rows: Row[] }) {
 
   return (
     <div className="flex h-full">
-      {/* Lista lead */}
-      <div className="w-72 shrink-0 border-r flex flex-col">
-        <div className="p-3 border-b">
-          <Input placeholder="Cerca nome o numero…" value={query} onChange={(e) => setQuery(e.target.value)} />
+      {/* ── Lead list ──────────────────────────────────────────── */}
+      <div className="flex w-72 shrink-0 flex-col border-r border-border/70 bg-card/30">
+        <div className="border-b border-border/70 p-3">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Cerca nome o numero…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              className="h-9 rounded-xl pl-9"
+            />
+          </div>
         </div>
-        <div className="flex-1 overflow-y-auto">
-          {filtered.length === 0 && (
-            <div className="p-4 text-sm text-zinc-400">Nessun lead.</div>
-          )}
-          {filtered.map((r) => (
-            <button
-              key={r.id}
-              onClick={() => setSelected(r.id)}
-              className={cn(
-                'w-full text-left px-3 py-2.5 border-b flex flex-col gap-1',
-                selected === r.id ? 'bg-zinc-100 dark:bg-zinc-800' : 'hover:bg-zinc-50 dark:hover:bg-zinc-900',
-              )}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-medium text-sm truncate">{r.name || r.phone}</span>
-                <StatusBadge status={r.status} />
-              </div>
-              <div className="flex items-center justify-between text-xs text-zinc-500">
-                <span className="truncate">{r.name ? r.phone : 'senza nome'}</span>
-                <span className="shrink-0">{fmt(r.lastMessageAt)}</span>
-              </div>
-            </button>
-          ))}
+        <div className="flex-1 overflow-y-auto p-2">
+          {filtered.length === 0 && <div className="p-4 text-sm text-muted-foreground">Nessun lead.</div>}
+          {filtered.map((r) => {
+            const active = selected === r.id;
+            return (
+              <button
+                key={r.id}
+                onClick={() => setSelected(r.id)}
+                className={cn(
+                  'flex w-full flex-col gap-1 rounded-xl px-3 py-2.5 text-left transition-colors',
+                  active ? 'fenice-rail bg-brand/10' : 'hover:bg-muted',
+                )}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-sm font-medium">{r.name || r.phone}</span>
+                  <ChatStatusPill status={r.status} />
+                </div>
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span className="truncate">{r.name ? r.phone : 'senza nome'}</span>
+                  <span className="shrink-0 tabular-nums">{fmt(r.lastMessageAt)}</span>
+                </div>
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {/* Dettaglio: report + chat */}
-      <div className="flex-1 min-w-0 flex flex-col">
+      {/* ── Detail: report + chat ──────────────────────────────── */}
+      <div className="flex min-w-0 flex-1 flex-col">
         {selected == null ? (
-          <div className="flex-1 grid place-items-center text-zinc-400">
-            <div className="flex flex-col items-center gap-2">
-              <MessageSquare className="size-8" />
-              <span>Seleziona un lead per vedere la chat e il report.</span>
-            </div>
-          </div>
+          <EmptyDetail />
         ) : (
           <>
-            {/* Report */}
-            <div className="border-b p-4 space-y-3">
+            <div className="space-y-4 border-b border-border/70 p-4 md:p-5">
               {detail && (
                 <>
-                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                      <div className="font-semibold">
+                      <div className="font-display text-lg font-bold tracking-tight">
                         {[detail.lead.firstName, detail.lead.lastName].filter(Boolean).join(' ') || detail.lead.phone}
                       </div>
-                      <div className="text-sm text-zinc-500">
+                      <div className="text-sm text-muted-foreground">
                         {detail.lead.phone}{detail.lead.email ? ` · ${detail.lead.email}` : ''}
                       </div>
                     </div>
-                    <StatusBadge status={detail.report.status} />
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
-                    <Stat label="Messaggi lead" value={String(detail.report.inbound)} />
-                    <Stat label="Risposte Mario" value={String(detail.report.outbound)} />
-                    <Stat label="Attivo dal" value={fmt(detail.report.startedAt)} />
-                    <Stat label="Ultima attività" value={fmt(detail.report.lastMessageAt)} />
+                    <ChatStatusPill status={detail.report.status} />
                   </div>
 
-                  {/* Riassunto AI */}
-                  <div className="rounded-lg border bg-zinc-50 dark:bg-zinc-900 p-3 space-y-2">
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <StatCard label="Messaggi lead" value={detail.report.inbound} tone="sky" />
+                    <StatCard label="Risposte Mario" value={detail.report.outbound} tone="ember" />
+                    <StatCard label="Attivo dal" value={fmt(detail.report.startedAt)} />
+                    <StatCard label="Ultima attività" value={fmt(detail.report.lastMessageAt)} />
+                  </div>
+
+                  {/* AI summary */}
+                  <div className="rounded-2xl border border-brand/20 bg-brand/[0.05] p-4">
                     <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-1.5 text-sm font-medium">
-                        <Sparkles className="size-4 text-amber-500" /> Riassunto AI
+                      <div className="flex items-center gap-1.5 text-sm font-semibold">
+                        <Sparkles className="size-4 text-brand" /> Riassunto AI
                       </div>
-                      <Button size="sm" variant="outline" onClick={summarize} disabled={summarizing}>
-                        <RefreshCw className={cn('size-3.5 mr-1', summarizing && 'animate-spin')} />
+                      <Button size="sm" variant="outline" onClick={summarize} disabled={summarizing} className="rounded-lg">
+                        <RefreshCw className={cn('mr-1 size-3.5', summarizing && 'animate-spin')} />
                         {detail.summary ? 'Rigenera' : 'Genera'}
                       </Button>
                     </div>
                     {detail.summary ? (
                       <>
-                        <p className="text-sm whitespace-pre-wrap text-zinc-700 dark:text-zinc-300">{detail.summary}</p>
-                        <div className="text-xs text-zinc-400">Generato il {fmt(detail.summaryAt)}</div>
+                        <p className="mt-2 whitespace-pre-wrap text-sm text-foreground/90">{detail.summary}</p>
+                        <div className="mt-2 text-xs text-muted-foreground">Generato il {fmt(detail.summaryAt)}</div>
                       </>
                     ) : (
-                      <p className="text-sm text-zinc-400">
-                        {summarizing ? 'Mario sta leggendo la conversazione…' : 'Nessun riassunto. Clicca "Genera".'}
+                      <p className="mt-2 text-sm text-muted-foreground">
+                        {summarizing ? 'Mario sta leggendo la conversazione…' : 'Nessun riassunto. Clicca “Genera”.'}
                       </p>
                     )}
                   </div>
                 </>
               )}
-              {loading && !detail && <div className="text-sm text-zinc-400">Carico…</div>}
-              {error && <div className="text-sm text-red-600">{error}</div>}
+              {loading && !detail && <div className="text-sm text-muted-foreground">Carico…</div>}
+              {error && (
+                <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-600 dark:text-rose-300">
+                  {error}
+                </div>
+              )}
             </div>
 
             {/* Chat */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-2 bg-zinc-50/50 dark:bg-zinc-950">
+            <div className="flex-1 space-y-2.5 overflow-y-auto bg-muted/30 p-4 md:p-5">
               {detail?.messages.length === 0 && (
-                <div className="text-sm text-zinc-400">Nessun messaggio.</div>
+                <div className="text-sm text-muted-foreground">Nessun messaggio.</div>
               )}
               {detail?.messages.map((m) => (
                 <div key={m.id} className={cn('flex', m.direction === 'out' ? 'justify-end' : 'justify-start')}>
                   <div
                     className={cn(
-                      'max-w-[75%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap break-words',
+                      'max-w-[78%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-sm shadow-sm',
                       m.direction === 'out'
-                        ? 'bg-emerald-600 text-white rounded-br-sm'
-                        : 'bg-white dark:bg-zinc-800 border rounded-bl-sm',
+                        ? 'rounded-br-sm bg-brand text-brand-foreground'
+                        : 'rounded-bl-sm border border-border/70 bg-card',
                     )}
                   >
                     {m.is_template && (
-                      <div className="text-[10px] uppercase tracking-wide opacity-70 mb-0.5">template</div>
+                      <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide opacity-70">template</div>
                     )}
                     {m.body}
-                    <div className={cn('text-[10px] mt-1', m.direction === 'out' ? 'text-emerald-100' : 'text-zinc-400')}>
+                    <div className={cn('mt-1 text-[10px]', m.direction === 'out' ? 'text-brand-foreground/70' : 'text-muted-foreground')}>
                       {fmt(m.created_at)}
                     </div>
                   </div>
@@ -224,11 +227,15 @@ export function ConversationsPanel({ rows }: { rows: Row[] }) {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function EmptyDetail() {
   return (
-    <div className="rounded-md border px-2.5 py-1.5">
-      <div className="text-xs text-zinc-500">{label}</div>
-      <div className="font-medium">{value}</div>
+    <div className="grid flex-1 place-items-center text-muted-foreground">
+      <div className="flex flex-col items-center gap-3">
+        <span className="grid size-14 place-items-center rounded-2xl border border-border/70 bg-card">
+          <MessageSquare className="size-6 text-brand" />
+        </span>
+        <span className="text-sm">Seleziona un lead per vedere la chat e il report.</span>
+      </div>
     </div>
   );
 }

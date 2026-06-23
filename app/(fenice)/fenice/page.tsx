@@ -1,12 +1,16 @@
+import { Bot } from 'lucide-react';
+import { PageHeader } from '@/components/fenice/PageHeader';
 import { Simulator } from './_components/Simulator';
 
 export default function FenicePage() {
   return (
-    <div className="h-full flex flex-col">
-      <header className="border-b px-6 py-4">
-        <h1 className="text-lg font-semibold">Simulatore — Mario</h1>
-        <p className="text-sm text-zinc-500">Scrivi come se fossi il lead. Mario risponde. Niente WhatsApp reale.</p>
-      </header>
+    <div className="flex h-full flex-col">
+      <PageHeader
+        icon={Bot}
+        kicker="Banco di prova"
+        title="Simulatore"
+        description="Scrivi come se fossi il lead — Mario risponde in tempo reale. È una palestra: niente WhatsApp, nessun messaggio parte davvero."
+      />
       <Simulator />
     </div>
   );

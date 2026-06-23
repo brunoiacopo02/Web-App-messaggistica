@@ -1,5 +1,7 @@
+import { MessagesSquare } from 'lucide-react';
 import { getSupabaseServer } from '@/lib/supabase/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
+import { PageHeader } from '@/components/fenice/PageHeader';
 import { ConversationsPanel } from './_components/ConversationsPanel';
 
 export const dynamic = 'force-dynamic';
@@ -26,8 +28,16 @@ export default async function FeniceConversazioniPage() {
   }));
 
   return (
-    <div className="h-full">
-      <ConversationsPanel rows={rows} />
+    <div className="flex h-full flex-col">
+      <PageHeader
+        icon={MessagesSquare}
+        kicker="Storico"
+        title="Conversazioni"
+        description="Ogni chat di Mario con riassunto AI, metriche e cronologia completa dei messaggi."
+      />
+      <div className="min-h-0 flex-1">
+        <ConversationsPanel rows={rows} />
+      </div>
     </div>
   );
 }

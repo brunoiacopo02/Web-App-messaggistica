@@ -2,13 +2,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
+import { Flame, RotateCcw } from 'lucide-react';
+import { StatusPill } from '@/components/fenice/status';
 import { cn } from '@/lib/utils';
 import { marioDelayMs } from '@/lib/mario-latency';
 import { feniceOpening } from '@/lib/fenice-opening';
 import { splitMarioMessages } from '@/lib/mario-split';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Risposte tipiche di un lead: scorciatoie per testare il flusso di Mario senza digitare.
+const PRESET_REPLIES = ['Sì, sono interessato', 'Quanto costa?', 'Come funziona?', 'Non ora, grazie'];
 
 type Turn = { role: 'user' | 'assistant'; content: string };
 type MarioResult = { visibleReply: string; appointmentFixed: boolean; passToHuman: boolean };
@@ -160,8 +164,8 @@ export function Simulator() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [turns, thinking, countdown]);
 
-  function send() {
-    const text = input.trim();
+  function send(preset?: string) {
+    const text = (preset ?? input).trim();
     if (!text) return; // input MAI disabilitato: il lead può mandarne più di fila
     setTurns((t) => [...t, { role: 'user', content: text }]); // mostra subito il messaggio
     setPending((p) => p + 1);
@@ -171,7 +175,7 @@ export function Simulator() {
       modelHistory.current = [...modelHistory.current, { role: 'user', content: text }];
       scheduleReply(); // (ri)avvia la finestra: i messaggi della finestra vengono accorpati
     }
-    setInput('');
+    if (!preset) setInput('');
   }
 
   function reset() {
@@ -191,58 +195,117 @@ export function Simulator() {
   }
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
-      <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
-        {turns.map((t, i) => (
-          <div key={i} className={cn('flex', t.role === 'user' ? 'justify-end' : 'justify-start')}>
-            <div
-              className={cn(
-                'max-w-[75%] rounded-2xl px-4 py-2 text-sm whitespace-pre-wrap',
-                t.role === 'user' ? 'bg-emerald-600 text-white' : 'bg-zinc-100 dark:bg-zinc-800',
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex-1 overflow-y-auto px-4 py-6 md:px-6">
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-3">
+          <div className="mb-1 flex items-center gap-2 self-center rounded-full border border-border/70 bg-card/60 px-3 py-1 text-xs text-muted-foreground">
+            <span className="size-1.5 rounded-full bg-brand" />
+            Stai impersonando il lead — Mario è l’assistente
+          </div>
+
+          {turns.map((t, i) => (
+            <div key={i} className={cn('flex gap-2', t.role === 'user' ? 'justify-end' : 'justify-start')}>
+              {t.role === 'assistant' && (
+                <span className="mt-auto grid size-7 shrink-0 place-items-center rounded-lg bg-brand/12 text-brand">
+                  <Flame className="size-3.5" />
+                </span>
               )}
-            >
-              {t.content}
+              <div
+                className={cn(
+                  'max-w-[78%] whitespace-pre-wrap rounded-2xl px-4 py-2 text-sm shadow-sm',
+                  t.role === 'user'
+                    ? 'rounded-br-sm bg-brand text-brand-foreground'
+                    : 'rounded-bl-sm border border-border/70 bg-card',
+                )}
+              >
+                {t.content}
+              </div>
             </div>
-          </div>
-        ))}
-        {countdown !== null && (
-          <div className="flex items-center gap-2 text-xs text-zinc-400">
-            <span>Mario risponde tra {countdown}s…</span>
-            <button type="button" onClick={skip} className="underline hover:text-zinc-600 dark:hover:text-zinc-200">
-              salta attesa
-            </button>
-          </div>
-        )}
-        {thinking && countdown === null && <div className="text-xs text-zinc-400">Mario sta scrivendo…</div>}
-        {error && <div className="text-sm text-red-600">{error}</div>}
-        <div ref={bottomRef} />
+          ))}
+
+          {countdown !== null && (
+            <div className="flex items-center gap-2 self-start rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground">
+              <span>Mario risponde tra {countdown}s</span>
+              <button
+                type="button"
+                onClick={skip}
+                className="font-medium text-brand underline-offset-2 hover:underline"
+              >
+                salta attesa
+              </button>
+            </div>
+          )}
+          {thinking && countdown === null && <TypingDots />}
+          {error && (
+            <div className="self-start rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-600 dark:text-rose-300">
+              {error}
+            </div>
+          )}
+          <div ref={bottomRef} />
+        </div>
       </div>
 
-      <div className="border-t px-6 py-3 space-y-2">
-        <div className="flex gap-2">
-          {appointment && <Badge className="bg-emerald-600">✅ Appuntamento fissato</Badge>}
-          {handoff && <Badge variant="destructive">🔔 Passaggio a operatore</Badge>}
-          {pending > 0 && <Badge variant="secondary">{pending} in attesa</Badge>}
+      <div className="border-t border-border/70 bg-card/50 px-4 py-3 md:px-6">
+        <div className="mx-auto w-full max-w-3xl space-y-2">
+          {(appointment || handoff || pending > 0) && (
+            <div className="flex flex-wrap gap-2">
+              {appointment && <StatusPill label="Appuntamento fissato" tone="emerald" />}
+              {handoff && <StatusPill label="Passaggio a operatore" tone="rose" />}
+              {pending > 0 && <StatusPill label={`${pending} in attesa`} tone="ember" />}
+            </div>
+          )}
+          <div className="flex flex-wrap gap-1.5">
+            {PRESET_REPLIES.map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                onClick={() => send(preset)}
+                className="rounded-full border border-border/70 bg-card px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-brand/40 hover:text-brand"
+              >
+                {preset}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <Input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  send();
+                }
+              }}
+              placeholder="Scrivi come lead… (puoi mandarne più di fila)"
+              className="h-10 rounded-xl"
+            />
+            <Button onClick={() => send()} disabled={!input.trim()} className="h-10 rounded-xl">
+              Invia
+            </Button>
+            <Button variant="outline" onClick={reset} className="h-10 rounded-xl" title="Ricomincia da capo">
+              <RotateCcw className="size-4" />
+            </Button>
+          </div>
         </div>
-        <div className="flex gap-2">
-          <Input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                send();
-              }
-            }}
-            placeholder="Scrivi come lead… (puoi mandarne più di fila)"
+      </div>
+    </div>
+  );
+}
+
+function TypingDots() {
+  return (
+    <div className="flex items-center gap-2 self-start">
+      <span className="grid size-7 place-items-center rounded-lg bg-brand/12 text-brand">
+        <Flame className="size-3.5" />
+      </span>
+      <div className="flex items-center gap-1 rounded-2xl rounded-bl-sm border border-border/70 bg-card px-3 py-2.5">
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            className="size-1.5 rounded-full bg-muted-foreground/60 fenice-pulse"
+            style={{ animationDelay: `${i * 0.18}s` }}
           />
-          <Button onClick={send} disabled={!input.trim()}>
-            Invia
-          </Button>
-          <Button variant="outline" onClick={reset}>
-            Reset
-          </Button>
-        </div>
+        ))}
       </div>
     </div>
   );

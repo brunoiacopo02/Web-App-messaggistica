@@ -8,9 +8,9 @@ export default async function FeniceLayout({ children }: { children: React.React
   if (!user) redirect('/login');
 
   return (
-    <div className="flex h-svh">
+    <div className="fenice-shell flex h-svh flex-col md:flex-row">
       <FeniceSidebar userEmail={user.email ?? ''} />
-      <main className="flex-1 overflow-hidden">{children}</main>
+      <main className="min-w-0 flex-1 overflow-hidden">{children}</main>
     </div>
   );
 }
