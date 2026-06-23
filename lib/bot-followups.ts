@@ -10,18 +10,25 @@ export const FOLLOWUP_TEXTS: [string, string] = [
   'Ti scrivo un ultima volta, se ti va ne parliamo due minuti quando hai tempo',
 ];
 
-export type FollowupAction = 'sollecito_1' | 'sollecito_2' | 'non_risposto' | 'none';
+export type FollowupAction = 'sollecito_1' | 'sollecito_2' | 'non_risposto' | 'interrotto' | 'none';
 
-/** Decide l'azione per un lead CRM che non ha ancora risposto. Puro. */
+/** Decide l'azione per un lead CRM. Puro. */
 export function decideFollowupAction(input: {
   startedAtMs: number;
   nowMs: number;
   followupsSent: number;
   hasInbound: boolean;
+  lastInboundAtMs: number | null;
 }): FollowupAction {
-  if (input.hasInbound) return 'none';
+  if (input.hasInbound) {
+    // Ha risposto almeno una volta poi è rimasto silente: nessun sollecito,
+    // chiudi come INTERROTTO dopo 24h di silenzio (= chiusura finestra free-text).
+    const ref = input.lastInboundAtMs ?? input.startedAtMs;
+    const silentH = (input.nowMs - ref) / H;
+    return silentH >= GIVEUP_H ? 'interrotto' : 'none';
+  }
+  // Mai risposto: solleciti poi NON_RISPOSTO (invariato).
   const elapsedH = (input.nowMs - input.startedAtMs) / H;
-  // Passate le 24h non si manda più nulla in testo libero: si chiude e basta.
   if (elapsedH >= GIVEUP_H) return 'non_risposto';
   if (input.followupsSent < 1 && elapsedH >= FOLLOWUP_1_H) return 'sollecito_1';
   if (input.followupsSent < 2 && elapsedH >= FOLLOWUP_2_H) return 'sollecito_2';
