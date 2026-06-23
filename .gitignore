@@ -57,3 +57,6 @@ test-results
 
 .vercel
 .gstack/
+
+# local design references (Stitch mockups, screenshots)
+design-reference/
