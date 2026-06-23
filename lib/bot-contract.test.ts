@@ -43,6 +43,9 @@ describe('validateOutcomeBody', () => {
   it('DA_SCARTARE non richiede date', () => {
     expect(validateOutcomeBody({ leadId: 'u1', outcome: 'DA_SCARTARE' })).toEqual({ ok: true });
   });
+  it('INTERROTTO non richiede date', () => {
+    expect(validateOutcomeBody({ leadId: 'u1', outcome: 'INTERROTTO' })).toEqual({ ok: true });
+  });
   it('outcome non valido → bad_request', () => {
     expect(validateOutcomeBody({ leadId: 'u1', outcome: 'BOH' as never })).toEqual({ ok: false, reason: 'bad_request' });
   });
