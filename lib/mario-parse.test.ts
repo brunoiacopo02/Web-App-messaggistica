@@ -26,6 +26,13 @@ describe('parseMarioReply — esiti CRM', () => {
     expect(r.appointmentFixed).toBe(true);
     expect(r.visibleReply).toBe('ok');
   });
+  it('INTERROTTO con motivo → outcome+note, testo pulito', () => {
+    const r = parseMarioReply('va bene, fammi sapere [ESITO:INTERROTTO|tentenna, dice ti faccio sapere]');
+    expect(r.outcome).toBe('INTERROTTO');
+    expect(r.note).toBe('tentenna, dice ti faccio sapere');
+    expect(r.discardReason).toBeUndefined();
+    expect(r.visibleReply).toBe('va bene, fammi sapere');
+  });
   it('nessun tag → outcome undefined', () => {
     const r = parseMarioReply('ciao come va');
     expect(r.outcome).toBeUndefined();

@@ -6,7 +6,7 @@ import { bookingSlotsContext } from './booking-slots';
 export const MARIO_MODEL = 'claude-sonnet-4-6';
 
 export type MarioTurn = { role: 'user' | 'assistant'; content: string };
-export type MarioOutcome = 'APPUNTAMENTO' | 'RICHIAMO' | 'DA_SCARTARE';
+export type MarioOutcome = 'APPUNTAMENTO' | 'RICHIAMO' | 'DA_SCARTARE' | 'INTERROTTO';
 export type MarioResult = {
   visibleReply: string;
   appointmentFixed: boolean;
@@ -14,9 +14,10 @@ export type MarioResult = {
   outcome?: MarioOutcome;
   scheduledAt?: string;
   discardReason?: string;
+  note?: string;
 };
 
-const ESITO_RE = /\[ESITO:(APPUNTAMENTO|RICHIAMO|SCARTO)\|([^\]]*)\]/i;
+const ESITO_RE = /\[ESITO:(APPUNTAMENTO|RICHIAMO|SCARTO|INTERROTTO)\|([^\]]*)\]/i;
 
 /** Rileva tag speciali, li rimuove dal testo visibile e ritorna flag + esito strutturato. */
 export function parseMarioReply(raw: string): MarioResult {
@@ -26,6 +27,7 @@ export function parseMarioReply(raw: string): MarioResult {
   let outcome: MarioOutcome | undefined;
   let scheduledAt: string | undefined;
   let discardReason: string | undefined;
+  let note: string | undefined;
 
   const m = raw.match(ESITO_RE);
   if (m) {
@@ -34,6 +36,7 @@ export function parseMarioReply(raw: string): MarioResult {
     if (kind === 'APPUNTAMENTO') { outcome = 'APPUNTAMENTO'; scheduledAt = arg || undefined; }
     else if (kind === 'RICHIAMO') { outcome = 'RICHIAMO'; scheduledAt = arg || undefined; }
     else if (kind === 'SCARTO') { outcome = 'DA_SCARTARE'; discardReason = arg || undefined; }
+    else if (kind === 'INTERROTTO') { outcome = 'INTERROTTO'; note = arg || undefined; }
   }
 
   const visibleReply = raw
@@ -49,6 +52,7 @@ export function parseMarioReply(raw: string): MarioResult {
     outcome,
     scheduledAt,
     discardReason,
+    note,
   };
 }
 
