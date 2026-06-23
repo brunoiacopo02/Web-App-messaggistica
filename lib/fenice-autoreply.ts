@@ -134,6 +134,7 @@ export async function drainMarioReplies(
           outcome: result.outcome,
           date: result.scheduledAt,
           discardReason: result.discardReason,
+          note: result.note,
           report,
         });
         // Esito CRM: chiudiamo solo se il callback è andato a buon fine; altrimenti

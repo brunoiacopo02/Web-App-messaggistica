@@ -37,8 +37,9 @@ export async function GET(req: NextRequest) {
     const startedAt = c.ai_started_at ? Date.parse(c.ai_started_at) : null;
     if (!startedAt) continue;
     const hasInbound = !!c.last_inbound_at && Date.parse(c.last_inbound_at) >= startedAt;
+    const lastInboundMs = c.last_inbound_at ? Date.parse(c.last_inbound_at) : null;
     const action = decideFollowupAction({
-      startedAtMs: startedAt, nowMs: now, followupsSent: c.bot_followups_sent ?? 0, hasInbound,
+      startedAtMs: startedAt, nowMs: now, followupsSent: c.bot_followups_sent ?? 0, hasInbound, lastInboundAtMs: lastInboundMs,
     });
     if (action === 'none') continue;
 
@@ -46,6 +47,12 @@ export async function GET(req: NextRequest) {
 
     if (action === 'non_risposto') {
       await sendOutcome(supabase, c.id, { outcome: 'NON_RISPOSTO', note: 'Nessuna risposta dopo i solleciti.' });
+      report.push({ id: c.id, action });
+      continue;
+    }
+
+    if (action === 'interrotto') {
+      await sendOutcome(supabase, c.id, { outcome: 'INTERROTTO', note: 'Chat interrotta senza obiezione, riassegnare a operatore.' });
       report.push({ id: c.id, action });
       continue;
     }

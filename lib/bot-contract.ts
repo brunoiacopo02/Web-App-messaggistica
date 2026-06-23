@@ -7,7 +7,7 @@ export interface BotIntakePayload {
   companyId: string;
 }
 
-export type BotOutcome = 'APPUNTAMENTO' | 'DA_SCARTARE' | 'RICHIAMO' | 'NON_RISPOSTO';
+export type BotOutcome = 'APPUNTAMENTO' | 'DA_SCARTARE' | 'RICHIAMO' | 'NON_RISPOSTO' | 'INTERROTTO';
 
 export interface BotReport {
   summary?: string;
@@ -27,7 +27,7 @@ export interface BotOutcomeBody {
   report?: BotReport;
 }
 
-const OUTCOMES: BotOutcome[] = ['APPUNTAMENTO', 'DA_SCARTARE', 'RICHIAMO', 'NON_RISPOSTO'];
+const OUTCOMES: BotOutcome[] = ['APPUNTAMENTO', 'DA_SCARTARE', 'RICHIAMO', 'NON_RISPOSTO', 'INTERROTTO'];
 const DATE_REQUIRED: BotOutcome[] = ['APPUNTAMENTO', 'RICHIAMO'];
 
 /** True solo se ISO 8601 con offset di fuso (`Z` oppure `±HH:MM`). */

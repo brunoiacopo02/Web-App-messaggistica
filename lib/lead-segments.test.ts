@@ -44,6 +44,9 @@ describe('fermaReason', () => {
   it('null per segmenti non FERMA', () => {
     expect(fermaReason({ bot_outcome: null, last_inbound_at: hoursAgo(1), ai_status: 'active' }, NOW)).toBeNull();
   });
+  it('INTERROTTO come motivo di FERMA', () => {
+    expect(fermaReason({ bot_outcome: 'INTERROTTO', last_inbound_at: hoursAgo(1), ai_status: 'closed' }, NOW)).toBe('INTERROTTO');
+  });
 });
 
 describe('ACTIVE_WINDOW_MS', () => {

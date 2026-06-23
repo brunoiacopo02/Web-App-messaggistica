@@ -1,29 +1,44 @@
 import { describe, it, expect } from 'vitest';
-import { decideFollowupAction } from './bot-followups';
+import { decideFollowupAction, FOLLOWUP_1_H, FOLLOWUP_2_H, GIVEUP_H } from './bot-followups';
 
 const H = 3600_000;
-const start = 0;
+const NOW = Date.parse('2026-06-23T12:00:00Z');
+const hAgo = (h: number) => NOW - h * H;
 
-describe('decideFollowupAction', () => {
-  it('lead che ha risposto → none', () => {
-    expect(decideFollowupAction({ startedAtMs: start, nowMs: 5 * H, followupsSent: 0, hasInbound: true })).toBe('none');
+describe('decideFollowupAction — mai risposto (invariato)', () => {
+  it('niente da fare prima del primo sollecito', () => {
+    const a = decideFollowupAction({ startedAtMs: hAgo(2), nowMs: NOW, followupsSent: 0, hasInbound: false, lastInboundAtMs: null });
+    expect(a).toBe('none');
   });
-  it('prima di 12h → none', () => {
-    expect(decideFollowupAction({ startedAtMs: start, nowMs: 10 * H, followupsSent: 0, hasInbound: false })).toBe('none');
+  it('primo sollecito dopo 12h', () => {
+    const a = decideFollowupAction({ startedAtMs: hAgo(FOLLOWUP_1_H), nowMs: NOW, followupsSent: 0, hasInbound: false, lastInboundAtMs: null });
+    expect(a).toBe('sollecito_1');
   });
-  it('>=12h e nessun sollecito → sollecito_1', () => {
-    expect(decideFollowupAction({ startedAtMs: start, nowMs: 13 * H, followupsSent: 0, hasInbound: false })).toBe('sollecito_1');
+  it('NON_RISPOSTO dopo 24h', () => {
+    const a = decideFollowupAction({ startedAtMs: hAgo(GIVEUP_H), nowMs: NOW, followupsSent: 2, hasInbound: false, lastInboundAtMs: null });
+    expect(a).toBe('non_risposto');
   });
-  it('>=22h e 1 sollecito → sollecito_2', () => {
-    expect(decideFollowupAction({ startedAtMs: start, nowMs: 23 * H, followupsSent: 1, hasInbound: false })).toBe('sollecito_2');
+  it('secondo sollecito dopo 22h', () => {
+    const a = decideFollowupAction({ startedAtMs: hAgo(FOLLOWUP_2_H), nowMs: NOW, followupsSent: 1, hasInbound: false, lastInboundAtMs: null });
+    expect(a).toBe('sollecito_2');
   });
-  it('a 24h chiude con non_risposto', () => {
-    expect(decideFollowupAction({ startedAtMs: start, nowMs: 24 * H, followupsSent: 2, hasInbound: false })).toBe('non_risposto');
+  it('oltre 24h va a NON_RISPOSTO anche con meno di 2 solleciti inviati', () => {
+    const a = decideFollowupAction({ startedAtMs: hAgo(25), nowMs: NOW, followupsSent: 0, hasInbound: false, lastInboundAtMs: null });
+    expect(a).toBe('non_risposto');
   });
-  it('oltre 24h chiude anche con un solo sollecito inviato (niente testo libero tardivo)', () => {
-    expect(decideFollowupAction({ startedAtMs: start, nowMs: 25 * H, followupsSent: 1, hasInbound: false })).toBe('non_risposto');
+});
+
+describe('decideFollowupAction — ha risposto poi silente', () => {
+  it('silente < 24h → none (nessun sollecito, ancora dentro finestra)', () => {
+    const a = decideFollowupAction({ startedAtMs: hAgo(48), nowMs: NOW, followupsSent: 0, hasInbound: true, lastInboundAtMs: hAgo(10) });
+    expect(a).toBe('none');
   });
-  it('oltre 24h chiude anche se nessun sollecito è partito (lead mai raggiunto)', () => {
-    expect(decideFollowupAction({ startedAtMs: start, nowMs: 25 * H, followupsSent: 0, hasInbound: false })).toBe('non_risposto');
+  it('silente ≥ 24h dall ultimo inbound → INTERROTTO', () => {
+    const a = decideFollowupAction({ startedAtMs: hAgo(60), nowMs: NOW, followupsSent: 0, hasInbound: true, lastInboundAtMs: hAgo(GIVEUP_H) });
+    expect(a).toBe('interrotto');
+  });
+  it('hasInbound con lastInboundAtMs null → fallback su startedAt, INTERROTTO se ≥24h', () => {
+    const a = decideFollowupAction({ startedAtMs: hAgo(GIVEUP_H), nowMs: NOW, followupsSent: 0, hasInbound: true, lastInboundAtMs: null });
+    expect(a).toBe('interrotto');
   });
 });
