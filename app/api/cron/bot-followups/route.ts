@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendOutcome } from '@/lib/bot-outcome';
 import { decideFollowupAction } from '@/lib/bot-followups';
-import { drainMarioReplies, lastIsUnansweredInbound } from '@/lib/fenice-autoreply';
+import { drainMarioReplies, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS } from '@/lib/fenice-autoreply';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -53,7 +53,20 @@ export async function GET(req: NextRequest) {
           report.push({ id: c.id, action: 'redrive', skipped: true, reason: 'no_from' });
           continue;
         }
-        // delayMs = () => 0: il lead ha già aspettato, salta la finestra di accorpamento.
+        // Calcola l'istante dell'ultimo inbound (lastIsUnansweredInbound è true,
+        // quindi rows[rows.length-1] è un inbound).
+        const lastInboundAtMs = Date.parse(rows[rows.length - 1].created_at);
+
+        if (isOrphanedReplyingLock(c.ai_status, lastInboundAtMs, now)) {
+          // Lock orfano: reset CAS sicuro. Se nel frattempo un drain reale ha
+          // cambiato stato, il reset non scatta.
+          await supabase
+            .from('conversations')
+            .update({ ai_status: 'active' })
+            .eq('id', c.id)
+            .eq('ai_status', 'replying');
+        }
+        // Il lead ha già aspettato, salta la finestra di accorpamento.
         await drainMarioReplies(supabase, c.id, phone, () => 0);
         report.push({ id: c.id, action: 'redrive' });
         continue;
@@ -70,6 +83,7 @@ export async function GET(req: NextRequest) {
           return r.direction === 'in' ? Date.parse(r.created_at) : null;
         }, null);
 
+      // phone non serve qui: sendOutcome fa solo callback CRM, non invia WhatsApp.
       const action = decideFollowupAction({ startedAtMs, nowMs: now, hasInbound, lastInboundAtMs });
 
       if (action === 'non_risposto') {

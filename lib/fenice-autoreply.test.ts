@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shouldAutoReply, nextUnansweredInboundIndex, lastIsUnansweredInbound } from './fenice-autoreply';
+import { shouldAutoReply, nextUnansweredInboundIndex, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS } from './fenice-autoreply';
 
 describe('shouldAutoReply', () => {
   const ok = { toMatchesFenice: true, autoReplyOn: true, aiOwner: 'mario', aiStatus: 'active' };
@@ -81,5 +81,24 @@ describe('lastIsUnansweredInbound', () => {
       { direction: 'in', body: 'primo messaggio lead' },
     ];
     expect(lastIsUnansweredInbound(rows)).toBe(true);
+  });
+});
+
+describe('isOrphanedReplyingLock', () => {
+  const NOW = 1_000_000_000_000; // ms epoch, arbitrary fixed point
+  const OLD = NOW - REPLYING_ORPHAN_MS - 1; // >10 min ago → orfano
+  const RECENT = NOW - REPLYING_ORPHAN_MS + 1; // <10 min ago → in corso
+
+  it('(a) status active → false', () => {
+    expect(isOrphanedReplyingLock('active', OLD, NOW)).toBe(false);
+  });
+  it('(b) replying + inbound recente (<10min) → false', () => {
+    expect(isOrphanedReplyingLock('replying', RECENT, NOW)).toBe(false);
+  });
+  it('(c) replying + inbound vecchio (>10min) → true', () => {
+    expect(isOrphanedReplyingLock('replying', OLD, NOW)).toBe(true);
+  });
+  it('(d) replying + lastInboundAtMs null → false', () => {
+    expect(isOrphanedReplyingLock('replying', null, NOW)).toBe(false);
   });
 });
