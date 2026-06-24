@@ -3,9 +3,6 @@ const H = 3600_000;
 // NON_RISPOSTO se mai risposto dopo 24h; INTERROTTO se risposto poi silente 24h.
 export const GIVEUP_H = 24;
 
-/** @deprecated Non più usati: i solleciti sono stati rimossi. Mantenuti per compatibilità import del cron. */
-export const FOLLOWUP_TEXTS: [string, string] = ['', ''];
-
 export type FollowupAction = 'non_risposto' | 'interrotto' | 'none';
 
 /** Decide l'azione per un lead CRM. Puro. */
