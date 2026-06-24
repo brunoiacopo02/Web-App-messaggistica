@@ -39,6 +39,29 @@ export function nextUnansweredInboundIndex(rows: MsgRow[]): number {
   return -1;
 }
 
+/** Pure: l'ultimo messaggio della conversazione è un inbound del lead non ancora risposto?
+ *  Vero quando esiste un inbound dopo l'ultimo outbound (cioè il bot deve ancora rispondere). */
+export function lastIsUnansweredInbound(rows: MsgRow[]): boolean {
+  return nextUnansweredInboundIndex(rows) !== -1;
+}
+
+export const REPLYING_ORPHAN_MS = 10 * 60_000;
+
+/**
+ * Pure: il lock 'replying' è orfano (drain killato) e va recuperato dal backstop?
+ * Vero solo se lo stato è 'replying' e l'ultimo inbound è più vecchio della soglia.
+ */
+export function isOrphanedReplyingLock(
+  aiStatus: string | null,
+  lastInboundAtMs: number | null,
+  nowMs: number,
+  thresholdMs = REPLYING_ORPHAN_MS,
+): boolean {
+  if (aiStatus !== 'replying') return false;
+  if (lastInboundAtMs == null) return false;
+  return nowMs - lastInboundAtMs >= thresholdMs;
+}
+
 const MAX_ROUNDS_PER_DRAIN = 5; // anti-runaway: round di accorpamento per esecuzione
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -47,6 +70,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * risponde UNA volta a tutti i messaggi arrivati (cronologia dall'arruolamento in poi,
  * via ai_started_at). Se durante l'attesa/elaborazione arrivano altri messaggi, fa un altro
  * round. Serializzato tramite lock CAS (ai_status 'active' -> 'replying'). Non lancia.
+ * `delayMs` è iniettabile: il cron passa `() => 0` per saltare la finestra di accorpamento
+ * (il lead ha già aspettato).
  */
 export async function drainMarioReplies(
   supabase: Supa,
