@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
   const admin = getSupabaseAdmin();
   const { data: conv } = await admin
     .from('conversations')
-    .select('id, ai_owner, ai_status, ai_started_at, last_message_at, created_at, ai_summary, ai_summary_at, leads(phone_e164, first_name, last_name, email)')
+    .select('id, ai_owner, ai_status, ai_started_at, last_message_at, created_at, ai_summary, ai_summary_at, bot_scheduled_at, leads(phone_e164, first_name, last_name, email)')
     .eq('id', id)
     .eq('ai_owner', 'mario')
     .maybeSingle();
@@ -62,6 +62,7 @@ export async function GET(req: NextRequest) {
       status: c.ai_status as string | null,
       startedAt,
       lastMessageAt: c.last_message_at as string,
+      scheduledAt: (c.bot_scheduled_at as string | null) ?? null,
       inbound,
       outbound,
       total: messages.length,

@@ -1,15 +1,16 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ArrowUpRight, BarChart3, Sparkles } from 'lucide-react';
+import { ArrowUpRight, BarChart3, CalendarClock, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ReasonPill } from '@/components/fenice/status';
 import { StatCard } from '@/components/fenice/StatCard';
 import { StatusLegend } from '@/components/fenice/StatusLegend';
 
-type Tab = 'ATTIVA' | 'MAI_RISPOSTO' | 'FERMA' | 'REPORT' | 'ANALISI';
+type Tab = 'PRESO' | 'ATTIVA' | 'MAI_RISPOSTO' | 'FERMA' | 'REPORT' | 'ANALISI';
 
 const SEGMENT_TABS: { key: Tab; label: string }[] = [
+  { key: 'PRESO', label: 'Presi' },
   { key: 'ATTIVA', label: 'Attive' },
   { key: 'MAI_RISPOSTO', label: 'Mai risposto' },
   { key: 'FERMA', label: 'Ferme' },
@@ -17,10 +18,24 @@ const SEGMENT_TABS: { key: Tab; label: string }[] = [
   { key: 'ANALISI', label: 'Analisi AI' },
 ];
 
-const LIST_TABS: Tab[] = ['ATTIVA', 'MAI_RISPOSTO', 'FERMA'];
+const LIST_TABS: Tab[] = ['PRESO', 'ATTIVA', 'MAI_RISPOSTO', 'FERMA'];
 
-interface SegRow { id: number; phone: string; name: string; segment: string; reason: string | null; lastMessageAt: string; status: string | null; }
+interface SegRow { id: number; phone: string; name: string; segment: string; reason: string | null; lastMessageAt: string; status: string | null; scheduledAt: string | null; }
 interface Counts { PRESO: number; MAI_RISPOSTO: number; ATTIVA: number; FERMA: number; total: number; }
+
+/** Formatta la data appuntamento in stile agenda: "Ven 26 Giu · 08:00". */
+function fmtAppt(iso: string | null): string | null {
+  if (!iso) return null;
+  try {
+    const d = new Date(iso);
+    const day = d.toLocaleDateString('it-IT', { weekday: 'short', day: '2-digit', month: 'short' });
+    const time = d.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+    const cap = day.charAt(0).toUpperCase() + day.slice(1);
+    return `${cap} · ${time}`;
+  } catch {
+    return null;
+  }
+}
 
 export function LeadPipeline() {
   const [tab, setTab] = useState<Tab>('ATTIVA');
@@ -56,6 +71,16 @@ export function LeadPipeline() {
   }, [tab, period]);
 
   const isList = LIST_TABS.includes(tab);
+
+  // Tab "Presi": ordina come un'agenda (appuntamento più imminente in cima, senza data in fondo).
+  const displayRows =
+    tab === 'PRESO'
+      ? [...rows].sort((a, b) => {
+          if (!a.scheduledAt) return 1;
+          if (!b.scheduledAt) return -1;
+          return a.scheduledAt.localeCompare(b.scheduledAt);
+        })
+      : rows;
 
   return (
     <div className="mx-auto w-full max-w-4xl space-y-5">
@@ -155,18 +180,27 @@ export function LeadPipeline() {
       {/* ── Segment lists ──────────────────────────────────────── */}
       {!loading && isList && (
         <div className="overflow-hidden rounded-2xl border border-border/70 bg-card">
-          {rows.length === 0 ? (
-            <p className="px-4 py-10 text-center text-sm text-muted-foreground">Nessun lead in questo segmento.</p>
+          {displayRows.length === 0 ? (
+            <p className="px-4 py-10 text-center text-sm text-muted-foreground">
+              {tab === 'PRESO' ? 'Nessun appuntamento preso.' : 'Nessun lead in questo segmento.'}
+            </p>
           ) : (
             <div className="divide-y divide-border/60">
-              {rows.map((r) => (
+              {displayRows.map((r) => (
                 <div key={r.id} className="flex items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-muted/50">
                   <div className="min-w-0">
                     <div className="truncate text-sm font-medium">{r.name || r.phone}</div>
                     <div className="truncate text-xs text-muted-foreground">{r.phone}</div>
                   </div>
                   <div className="flex shrink-0 items-center gap-3">
-                    {r.reason && <ReasonPill reason={r.reason} />}
+                    {tab === 'PRESO' ? (
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-0.5 text-xs font-semibold whitespace-nowrap text-emerald-700 dark:text-emerald-300">
+                        <CalendarClock className="size-3.5" />
+                        {fmtAppt(r.scheduledAt) ?? 'Data da definire'}
+                      </span>
+                    ) : (
+                      r.reason && <ReasonPill reason={r.reason} />
+                    )}
                     <a
                       href={`/fenice/conversazioni?id=${r.id}`}
                       className="inline-flex items-center gap-0.5 text-xs font-medium text-brand hover:underline"

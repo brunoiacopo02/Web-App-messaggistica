@@ -4,7 +4,7 @@ import { useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
-import { RefreshCw, Sparkles, MessageSquare, Search } from 'lucide-react';
+import { RefreshCw, Sparkles, MessageSquare, Search, CalendarClock } from 'lucide-react';
 import { ChatStatusPill } from '@/components/fenice/status';
 import { StatCard } from '@/components/fenice/StatCard';
 
@@ -21,7 +21,7 @@ type Msg = { id: number; direction: 'in' | 'out'; body: string; created_at: stri
 
 type Detail = {
   lead: { phone: string; firstName: string; lastName: string; email: string };
-  report: { status: string | null; startedAt: string | null; lastMessageAt: string; inbound: number; outbound: number; total: number };
+  report: { status: string | null; startedAt: string | null; lastMessageAt: string; scheduledAt: string | null; inbound: number; outbound: number; total: number };
   summary: string | null;
   summaryAt: string | null;
   messages: Msg[];
@@ -35,6 +35,19 @@ function fmt(iso: string | null): string {
     });
   } catch {
     return '—';
+  }
+}
+
+/** Data appuntamento in stile agenda: "Ven 26 Giu · 08:00". */
+function fmtAppt(iso: string | null): string | null {
+  if (!iso) return null;
+  try {
+    const d = new Date(iso);
+    const day = d.toLocaleDateString('it-IT', { weekday: 'short', day: '2-digit', month: 'short' });
+    const time = d.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+    return `${day.charAt(0).toUpperCase() + day.slice(1)} · ${time}`;
+  } catch {
+    return null;
   }
 }
 
@@ -152,7 +165,15 @@ export function ConversationsPanel({ rows }: { rows: Row[] }) {
                         {detail.lead.phone}{detail.lead.email ? ` · ${detail.lead.email}` : ''}
                       </div>
                     </div>
-                    <ChatStatusPill status={detail.report.status} />
+                    <div className="flex flex-wrap items-center gap-2">
+                      {fmtAppt(detail.report.scheduledAt) && (
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-0.5 text-xs font-semibold whitespace-nowrap text-emerald-700 dark:text-emerald-300">
+                          <CalendarClock className="size-3.5" />
+                          Appuntamento: {fmtAppt(detail.report.scheduledAt)}
+                        </span>
+                      )}
+                      <ChatStatusPill status={detail.report.status} />
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">

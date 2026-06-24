@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
   const admin = getSupabaseAdmin();
   let query = admin
     .from('conversations')
-    .select('id, ai_status, bot_outcome, last_message_at, last_inbound_at, created_at, leads(phone_e164, first_name, last_name)')
+    .select('id, ai_status, bot_outcome, bot_scheduled_at, last_message_at, last_inbound_at, created_at, leads(phone_e164, first_name, last_name)')
     .eq('ai_owner', 'mario')
     .order('last_message_at', { ascending: false })
     .limit(1000);
@@ -42,7 +42,7 @@ export async function GET(req: NextRequest) {
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
 
   const counts = { PRESO: 0, MAI_RISPOSTO: 0, ATTIVA: 0, FERMA: 0, total: 0 };
-  const rows: Array<{ id: number; phone: string; name: string; segment: LeadSegment; reason: string | null; lastMessageAt: string; lastInboundAt: string | null; status: string | null }> = [];
+  const rows: Array<{ id: number; phone: string; name: string; segment: LeadSegment; reason: string | null; lastMessageAt: string; lastInboundAt: string | null; status: string | null; scheduledAt: string | null }> = [];
 
   for (const c of (data ?? []) as any[]) {
     const input = { bot_outcome: c.bot_outcome ?? null, last_inbound_at: c.last_inbound_at ?? null, ai_status: c.ai_status ?? null };
@@ -60,6 +60,7 @@ export async function GET(req: NextRequest) {
       reason: fermaReason(input, now),
       lastMessageAt: c.last_message_at, lastInboundAt: c.last_inbound_at ?? null,
       status: c.ai_status ?? null,
+      scheduledAt: c.bot_scheduled_at ?? null,
     });
   }
 
