@@ -169,6 +169,20 @@ prompt per la gestione obiezioni. Alimenta la Fase 3 (tuning prompt, piano separ
 - Solleciti multipli / catena di follow-up (esplicitamente escluso: un solo messaggio).
 - Modifiche al flusso post-appuntamento (video di conferma) non toccate.
 
+## Addendum (25/06, post-implementazione): segnale "agenda inviata"
+
+In fase di backfill è emerso dai dati che il template `AGENDA_TEMPLATE_SID` è fermo dal
+19/06 e veniva inviato a lead ormai freddi: dei 100 lead "agenda-template, non presi" **zero**
+erano dentro la finestra 24h (non raggiungibili via free-text). Il segnale reale del flusso
+attuale è il **link di prenotazione JotForm** (`jotform.com/240755654585063`) che Mario manda
+in chat: 6 conversazioni recenti, l'ultima il 25/06. Il trigger del follow-up è stato quindi
+agganciato al link JotForm invece che al template (commit 29d57ab). Lead follow-uppabili al
+momento del deploy: conv 1233 e 1227.
+
+Il **backlog freddo** (link/template inviati > 24h fa, finestra chiusa) NON è raggiungibile
+via free-text per vincolo anti-ban: servirebbe un template WhatsApp approvato (decisione
+separata, fuori scope Fase 1).
+
 ## Criteri di completamento Fase 1
 
 - `computeBookingDays` ruota alle 20:00, test verdi.
