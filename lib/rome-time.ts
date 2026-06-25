@@ -9,6 +9,16 @@ export function romeOffset(date: Date): string {
   return off === '' ? '+00:00' : off;
 }
 
+/** Ora locale (0–23) di `date` nel fuso Europe/Rome. */
+export function romeHour(date: Date): number {
+  const h = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Rome',
+    hour: '2-digit',
+    hourCycle: 'h23',
+  }).format(date);
+  return parseInt(h, 10);
+}
+
 /** Riga di contesto da iniettare nel prompt così Mario risolve date relative. */
 export function romeNowContext(date: Date): string {
   const f = new Intl.DateTimeFormat('it-IT', {

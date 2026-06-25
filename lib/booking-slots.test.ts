@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { computeBookingDays, bookingSlotsContext } from './booking-slots';
+import { romeHour } from './rome-time';
 
 describe('computeBookingDays', () => {
   it('lunedì → martedì e mercoledì', () => {
@@ -25,10 +26,32 @@ describe('computeBookingDays', () => {
     expect(day1.date).toBe('2026-06-29');
     expect(day2.date).toBe('2026-06-30');
   });
+});
 
-  it('tarda sera resta sul giorno di Roma, non scivola a quello dopo', () => {
-    const { day1 } = computeBookingDays(new Date('2026-06-22T23:30:00+02:00'));
-    expect(day1.date).toBe('2026-06-23');
+describe('romeHour', () => {
+  it('ritorna l\'ora locale Europe/Rome (DST estiva +02:00)', () => {
+    expect(romeHour(new Date('2026-06-25T17:00:00Z'))).toBe(19);
+    expect(romeHour(new Date('2026-06-25T18:00:00Z'))).toBe(20);
+  });
+});
+
+describe('computeBookingDays rollover 20:00', () => {
+  it('prima delle 20:00 NON scivola: giovedì 19:00 → ven e sab', () => {
+    const { day1, day2 } = computeBookingDays(new Date('2026-06-25T17:00:00Z')); // Rome 19:00
+    expect(day1.date).toBe('2026-06-26'); // venerdì
+    expect(day2.date).toBe('2026-06-27'); // sabato
+  });
+
+  it('alle 20:00 scivola al giorno dopo: giovedì 20:00 → sab e lun (salta domenica)', () => {
+    const { day1, day2 } = computeBookingDays(new Date('2026-06-25T18:00:00Z')); // Rome 20:00
+    expect(day1.date).toBe('2026-06-27'); // sabato (anchor spostato a venerdì)
+    expect(day2.date).toBe('2026-06-29'); // lunedì (salta domenica 28)
+  });
+
+  it('sabato sera dopo le 20 → lun e mar', () => {
+    const { day1, day2 } = computeBookingDays(new Date('2026-06-27T18:00:00Z')); // Rome 20:00
+    expect(day1.date).toBe('2026-06-29'); // lunedì
+    expect(day2.date).toBe('2026-06-30'); // martedì
   });
 });
 
