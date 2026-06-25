@@ -1,4 +1,4 @@
-import { romeOffset } from './rome-time';
+import { romeOffset, romeHour } from './rome-time';
 
 // Calcolo degli unici due giorni in cui Mario può fissare l'appuntamento:
 // "il giorno dopo" e "il giorno dopo ancora", saltando SEMPRE la domenica.
@@ -47,7 +47,10 @@ export type BookingDay = { label: string; date: string };
 
 /** I due (e soli due) giorni prenotabili a partire da `now`, domenica esclusa. */
 export function computeBookingDays(now: Date): { day1: BookingDay; day2: BookingDay } {
-  const today = romeYmd(now);
+  let today = romeYmd(now);
+  // Dopo le 20:00 l'agenda del giorno corrente non è più prenotabile: entra in
+  // vigore quella del giorno successivo. Anticipiamo l'anchor di un giorno.
+  if (romeHour(now) >= 20) today = addDays(today, 1);
   const d1 = nextNonSunday(today);
   const d2 = nextNonSunday(d1);
   return {

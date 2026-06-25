@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendOutcome } from '@/lib/bot-outcome';
 import { decideFollowupAction } from '@/lib/bot-followups';
 import { drainMarioReplies, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS } from '@/lib/fenice-autoreply';
+import { runAgendaFollowups } from '@/lib/agenda-followup';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -104,6 +105,19 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // Follow-up agenda (singolo, idempotente) a chi ha ricevuto l'agenda e non ha preso.
+  let agendaFollowup = { sent: 0, skipped: 0 };
+  try {
+    agendaFollowup = await runAgendaFollowups(supabase, new Date(now));
+  } catch (e) {
+    await supabase.from('event_log').insert({
+      type: 'agenda_followup_error',
+      payload: { error: e instanceof Error ? e.message : 'errore' } as never,
+      message: `[bot-fissatore] errore follow-up agenda: ${e instanceof Error ? e.message : 'errore'}`,
+      level: 'error',
+    });
+  }
+
   await supabase.from('event_log').insert({
     type: 'bot_followups_run',
     payload: { count: report.length } as never,
@@ -111,5 +125,5 @@ export async function GET(req: NextRequest) {
     level: 'info',
   });
 
-  return NextResponse.json({ ok: true, actions: report });
+  return NextResponse.json({ ok: true, actions: report, agendaFollowup });
 }
