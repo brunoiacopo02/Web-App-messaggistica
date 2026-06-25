@@ -6,6 +6,13 @@ const H = 3600_000;
 
 /** Quanto deve essere vecchia l'agenda inviata perché parta il follow-up. */
 export const AGENDA_FOLLOWUP_DELAY_MS = 2 * H;
+/**
+ * Segnale "agenda inviata" nel flusso attuale: Mario manda in chat il link del
+ * form di prenotazione (JotForm). NON usiamo più il template legacy AGENDA_TEMPLATE_SID,
+ * fermo dal 19/06 e inviato a lead ormai freddi. Il link in chat individua i lead
+ * davvero ingaggiati, ancora dentro la finestra 24h.
+ */
+export const BOOKING_LINK_MATCH = 'jotform.com/240755654585063';
 /** Finestra di servizio WhatsApp: free-text lecito solo entro 24h dall'ultimo inbound. */
 export const WINDOW_MS = 24 * H;
 /** Fascia oraria (Rome) in cui è lecito inviare il follow-up. */
@@ -46,29 +53,27 @@ export function agendaFollowupText(firstName: string | null): string {
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
 /**
- * Invia (idempotente) un singolo follow-up free-text ai lead che hanno ricevuto
- * l'agenda da >= 2h e non hanno ancora preso l'appuntamento. Rispetta finestra 24h
- * e fascia oraria. Marca `bot_followups_sent` per non ripetere.
+ * Invia (idempotente) un singolo follow-up free-text ai lead a cui Mario ha mandato
+ * il link di prenotazione (l'agenda) da >= 2h e che non hanno ancora preso l'appuntamento.
+ * Rispetta finestra 24h e fascia oraria. Marca `bot_followups_sent` per non ripetere.
  */
 export async function runAgendaFollowups(
   supabase: Supa,
   now: Date = new Date(),
 ): Promise<{ sent: number; skipped: number }> {
-  const agendaSid = process.env.AGENDA_TEMPLATE_SID;
   const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
-  if (!agendaSid || !from) return { sent: 0, skipped: 0 };
+  if (!from) return { sent: 0, skipped: 0 };
 
   const nowMs = now.getTime();
   const twoHAgo = new Date(nowMs - AGENDA_FOLLOWUP_DELAY_MS).toISOString();
   const dayAgo = new Date(nowMs - WINDOW_MS).toISOString();
 
-  // 1. Agende inviate con successo tra 24h e 2h fa (oltre 24h la finestra è chiusa).
+  // 1. Link di prenotazione inviato tra 24h e 2h fa (oltre 24h la finestra è chiusa).
   const { data: agendaMsgs } = await supabase
     .from('messages')
     .select('conversation_id, created_at')
-    .eq('template_sid', agendaSid)
     .eq('direction', 'out')
-    .eq('is_template', true)
+    .ilike('body', `%${BOOKING_LINK_MATCH}%`)
     .not('twilio_status', 'in', '(failed,undelivered)')
     .lte('created_at', twoHAgo)
     .gte('created_at', dayAgo)
