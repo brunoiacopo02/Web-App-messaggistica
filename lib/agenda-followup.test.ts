@@ -8,6 +8,7 @@ const base = {
   booked: false,
   followupAlreadySent: false,
   lastInboundAtMs: 2.5 * H, // inbound recente → finestra 24h aperta
+  lastMessageIsInbound: false,
   romeHour: 15,             // orario buono
 };
 
@@ -35,6 +36,9 @@ describe('decideAgendaFollowup', () => {
   });
   it('niente a tarda sera (dalle 21 in poi)', () => {
     expect(decideAgendaFollowup({ ...base, romeHour: 21 })).toBe('none');
+  });
+  it('niente se l\'ultimo messaggio è un inbound non ancora risposto (lo gestisce il backstop)', () => {
+    expect(decideAgendaFollowup({ ...base, lastMessageIsInbound: true })).toBe('none');
   });
   it('la costante di ritardo è 2h', () => {
     expect(AGENDA_FOLLOWUP_DELAY_MS).toBe(2 * H);

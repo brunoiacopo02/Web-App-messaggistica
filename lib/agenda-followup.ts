@@ -18,6 +18,7 @@ export interface AgendaFollowupInput {
   booked: boolean;
   followupAlreadySent: boolean;
   lastInboundAtMs: number | null;
+  lastMessageIsInbound: boolean;
   romeHour: number;
 }
 
@@ -25,6 +26,10 @@ export interface AgendaFollowupInput {
 export function decideAgendaFollowup(input: AgendaFollowupInput): 'send' | 'none' {
   if (input.booked) return 'none';
   if (input.followupAlreadySent) return 'none';
+  // Se l'ultimo messaggio è un inbound non ancora risposto, il backstop cron
+  // genera già una risposta contestuale: evitare il follow-up canned per non
+  // sovrapporre due messaggi e per non disturbare chi ha appena confermato l'appuntamento.
+  if (input.lastMessageIsInbound) return 'none';
   if (input.nowMs - input.agendaSentAtMs < AGENDA_FOLLOWUP_DELAY_MS) return 'none';
   if (input.lastInboundAtMs === null) return 'none';
   if (input.nowMs - input.lastInboundAtMs >= WINDOW_MS) return 'none';
@@ -111,12 +116,23 @@ export async function runAgendaFollowups(
       .limit(1);
     const lastInboundAtMs = lastIn && lastIn[0] ? Date.parse(lastIn[0].created_at) : null;
 
+    // Ultimo messaggio in qualsiasi direzione → evita follow-up se il lead
+    // ha già scritto e il backstop sta già gestendo la risposta.
+    const { data: lastMsg } = await supabase
+      .from('messages')
+      .select('direction')
+      .eq('conversation_id', c.id)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    const lastMessageIsInbound = lastMsg?.[0]?.direction === 'in';
+
     const decision = decideAgendaFollowup({
       agendaSentAtMs,
       nowMs,
       booked: c.bot_outcome === 'APPUNTAMENTO' || c.ai_status === 'booked',
       followupAlreadySent: (c.bot_followups_sent ?? 0) >= 1,
       lastInboundAtMs,
+      lastMessageIsInbound,
       romeHour: hour,
     });
 
