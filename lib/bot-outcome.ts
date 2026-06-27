@@ -1,6 +1,7 @@
 import type { getSupabaseAdmin } from './supabase/admin';
 import { signPayload } from './bot-hmac';
 import { validateOutcomeBody, type BotOutcome, type BotOutcomeBody, type BotReport } from './bot-contract';
+import { resolveOutcomeAction } from './bot-outcome-rules';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -28,20 +29,47 @@ export async function sendOutcome(
 
   const { data: conv } = await supabase
     .from('conversations')
-    .select('crm_lead_id')
+    .select('crm_lead_id, bot_outcome, bot_scheduled_at')
     .eq('id', conversationId)
     .maybeSingle();
-  const crmLeadId = (conv as { crm_lead_id: string | null } | null)?.crm_lead_id ?? null;
+  const row = conv as { crm_lead_id: string | null; bot_outcome: string | null; bot_scheduled_at: string | null } | null;
+  const crmLeadId = row?.crm_lead_id ?? null;
   if (!crmLeadId) return { sent: false, error: 'not_crm_lead' };
 
-  const body: BotOutcomeBody = {
-    leadId: crmLeadId,
-    outcome: args.outcome,
-    ...(args.date ? { date: args.date } : {}),
-    ...(args.note ? { note: args.note } : {}),
-    ...(args.discardReason ? { discardReason: args.discardReason } : {}),
-    ...(args.report ? { report: args.report } : {}),
-  };
+  const action = resolveOutcomeAction(
+    (row?.bot_outcome ?? null) as BotOutcome | null,
+    args,
+    row?.bot_scheduled_at ?? null,
+  );
+
+  // Lead già fissato ma senza data originale: non possiamo re-inviare APPUNTAMENTO
+  // (la data è obbligatoria). Non declassiamo: logghiamo un warning ed usciamo.
+  if (action.kind === 'locked' && !action.date) {
+    await supabase.from('event_log').insert({
+      type: 'bot_outcome_locked',
+      level: 'warning',
+      payload: { conversationId, crmLeadId, attemptedOutcome: args.outcome, keptOutcome: 'APPUNTAMENTO' } as never,
+      message: `[bot-fissatore] esito ${args.outcome} ignorato: lead ${crmLeadId} già APPUNTAMENTO senza data`,
+    });
+    return { sent: true };
+  }
+
+  const body: BotOutcomeBody = action.kind === 'locked'
+    ? {
+        leadId: crmLeadId,
+        outcome: 'APPUNTAMENTO',
+        date: action.date as string,
+        note: action.note,
+        ...(args.report ? { report: args.report } : {}),
+      }
+    : {
+        leadId: crmLeadId,
+        outcome: args.outcome,
+        ...(args.date ? { date: args.date } : {}),
+        ...(args.note ? { note: args.note } : {}),
+        ...(args.discardReason ? { discardReason: args.discardReason } : {}),
+        ...(args.report ? { report: args.report } : {}),
+      };
 
   const valid = validateOutcomeBody(body);
   if (!valid.ok) {
@@ -63,19 +91,29 @@ export async function sendOutcome(
       body: rawBody,
     });
     if (res.ok) {
-      await supabase.from('conversations').update({
-        bot_outcome: args.outcome,
-        bot_outcome_at: new Date().toISOString(),
-        bot_scheduled_at: args.date ?? null,
-        bot_report: (args.report ?? null) as never,
-        ai_status: 'closed',
-      }).eq('id', conversationId);
-      await supabase.from('event_log').insert({
-        type: 'bot_outcome_sent',
-        payload: { conversationId, crmLeadId, outcome: args.outcome } as never,
-        message: `[bot-fissatore] esito ${args.outcome} inviato per lead ${crmLeadId}`,
-        level: 'info',
-      });
+      if (action.kind === 'normal') {
+        await supabase.from('conversations').update({
+          bot_outcome: args.outcome,
+          bot_outcome_at: new Date().toISOString(),
+          bot_scheduled_at: args.date ?? null,
+          bot_report: (args.report ?? null) as never,
+          ai_status: 'closed',
+        }).eq('id', conversationId);
+        await supabase.from('event_log').insert({
+          type: 'bot_outcome_sent',
+          payload: { conversationId, crmLeadId, outcome: args.outcome } as never,
+          message: `[bot-fissatore] esito ${args.outcome} inviato per lead ${crmLeadId}`,
+          level: 'info',
+        });
+      } else {
+        // Lead terminale: NON tocchiamo la riga. Logghiamo l'intercettazione.
+        await supabase.from('event_log').insert({
+          type: 'bot_outcome_locked',
+          payload: { conversationId, crmLeadId, attemptedOutcome: args.outcome, keptOutcome: 'APPUNTAMENTO', note: action.note } as never,
+          message: `[bot-fissatore] esito ${args.outcome} intercettato (lead ${crmLeadId} già APPUNTAMENTO) → nota CRM`,
+          level: 'info',
+        });
+      }
       return { sent: true, status: res.status };
     }
     const text = await res.text().catch(() => '');
