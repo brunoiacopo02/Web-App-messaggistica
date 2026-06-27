@@ -5,7 +5,7 @@ const H = 3600_000;
 const base = {
   agendaSentAtMs: 0,
   nowMs: 3 * H,            // 3h dopo l'agenda
-  booked: false,
+  terminal: false,
   followupAlreadySent: false,
   lastInboundAtMs: 2.5 * H, // inbound recente → finestra 24h aperta
   lastMessageIsInbound: false,
@@ -19,8 +19,8 @@ describe('decideAgendaFollowup', () => {
   it('niente se agenda inviata da meno di 2h', () => {
     expect(decideAgendaFollowup({ ...base, nowMs: 1 * H })).toBe('none');
   });
-  it('niente se ha già preso l\'appuntamento', () => {
-    expect(decideAgendaFollowup({ ...base, booked: true })).toBe('none');
+  it('niente se la conversazione ha un esito terminale (preso/scartato/interrotto)', () => {
+    expect(decideAgendaFollowup({ ...base, terminal: true })).toBe('none');
   });
   it('niente se il follow-up è già stato inviato', () => {
     expect(decideAgendaFollowup({ ...base, followupAlreadySent: true })).toBe('none');

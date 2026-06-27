@@ -22,7 +22,7 @@ export const FOLLOWUP_HOUR_END = 21; // escluso: invia solo se ora < 21
 export interface AgendaFollowupInput {
   agendaSentAtMs: number;
   nowMs: number;
-  booked: boolean;
+  terminal: boolean;
   followupAlreadySent: boolean;
   lastInboundAtMs: number | null;
   lastMessageIsInbound: boolean;
@@ -31,7 +31,7 @@ export interface AgendaFollowupInput {
 
 /** Decide se mandare il singolo follow-up agenda. Puro, niente effetti. */
 export function decideAgendaFollowup(input: AgendaFollowupInput): 'send' | 'none' {
-  if (input.booked) return 'none';
+  if (input.terminal) return 'none';
   if (input.followupAlreadySent) return 'none';
   // Se l'ultimo messaggio è un inbound non ancora risposto, il backstop cron
   // genera già una risposta contestuale: evitare il follow-up canned per non
@@ -134,7 +134,10 @@ export async function runAgendaFollowups(
     const decision = decideAgendaFollowup({
       agendaSentAtMs,
       nowMs,
-      booked: c.bot_outcome === 'APPUNTAMENTO' || c.ai_status === 'booked',
+      terminal: c.bot_outcome != null
+        || c.ai_status === 'closed'
+        || c.ai_status === 'booked'
+        || c.ai_status === 'handed_off',
       followupAlreadySent: (c.bot_followups_sent ?? 0) >= 1,
       lastInboundAtMs,
       lastMessageIsInbound,
