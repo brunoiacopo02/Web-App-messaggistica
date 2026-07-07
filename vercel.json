@@ -2,20 +2,16 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "crons": [
     {
-      "path": "/api/cron/send-batch?campaign=1",
-      "schedule": "0 11 8 6 *"
+      "path": "/api/cron/send-batch?campaign=5&max=450&slot=1",
+      "schedule": "0 12 13 7 *"
     },
     {
-      "path": "/api/cron/send-batch?campaign=2",
-      "schedule": "25 18 8 6 *"
+      "path": "/api/cron/send-batch?campaign=5&max=450&slot=2",
+      "schedule": "0 14 13 7 *"
     },
     {
-      "path": "/api/cron/send-batch?campaign=3",
-      "schedule": "0 12 9 6 *"
-    },
-    {
-      "path": "/api/cron/send-batch?campaign=4",
-      "schedule": "30 11 11 6 *"
+      "path": "/api/cron/send-batch?campaign=5",
+      "schedule": "0 16 13 7 *"
     },
     {
       "path": "/api/cron/send-video",
