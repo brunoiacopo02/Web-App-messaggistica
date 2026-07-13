@@ -7,11 +7,27 @@
     },
     {
       "path": "/api/cron/send-batch?campaign=5&max=450&slot=2",
+      "schedule": "0 13 13 7 *"
+    },
+    {
+      "path": "/api/cron/send-batch?campaign=5&max=450&slot=3",
       "schedule": "0 14 13 7 *"
     },
     {
-      "path": "/api/cron/send-batch?campaign=5",
+      "path": "/api/cron/send-batch?campaign=5&max=450&slot=4",
+      "schedule": "0 15 13 7 *"
+    },
+    {
+      "path": "/api/cron/send-batch?campaign=5&max=450&slot=5",
       "schedule": "0 16 13 7 *"
+    },
+    {
+      "path": "/api/cron/send-batch?campaign=5&max=450&slot=6",
+      "schedule": "0 17 13 7 *"
+    },
+    {
+      "path": "/api/cron/send-batch?campaign=5&max=450&slot=7",
+      "schedule": "0 18 13 7 *"
     },
     {
       "path": "/api/cron/send-video",
