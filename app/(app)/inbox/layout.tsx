@@ -1,5 +1,6 @@
 import { getSupabaseServer } from '@/lib/supabase/server';
 import { ConversationList } from '@/components/ConversationList';
+import { getFeniceCampaignIds, excludeFeniceCampaigns } from '@/lib/campagne';
 
 export const dynamic = 'force-dynamic';
 
@@ -7,7 +8,8 @@ export const dynamic = 'force-dynamic';
 // così il filtro selezionato (es. "Non lette") non si resetta.
 export default async function InboxLayout({ children }: { children: React.ReactNode }) {
   const supabase = await getSupabaseServer();
-  const { data } = await supabase
+  const feniceIds = await getFeniceCampaignIds(supabase);
+  let query = supabase
     .from('conversations')
     .select(`
       id, last_message_at, last_inbound_at, unread_count, last_message_preview,
@@ -17,6 +19,8 @@ export default async function InboxLayout({ children }: { children: React.ReactN
     .is('ai_owner', null)
     .order('last_message_at', { ascending: false })
     .limit(200);
+  query = excludeFeniceCampaigns(query, feniceIds);
+  const { data } = await query;
 
   const initial = (data ?? []).map((c: any) => ({ ...c, preview: c.last_message_preview ?? undefined }));
 

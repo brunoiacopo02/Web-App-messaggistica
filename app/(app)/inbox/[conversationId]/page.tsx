@@ -17,7 +17,7 @@ export default async function ConversationPage({
 
   const [convRes, msgsRes, campsRes] = await Promise.all([
     supabase.from('conversations').select(`
-      id, last_inbound_at, last_message_at, ai_owner,
+      id, last_inbound_at, last_message_at, ai_owner, campaign_id,
       lead:leads(id, first_name, last_name, phone_e164, email)
     `).eq('id', id).single(),
     supabase.from('messages').select('*').eq('conversation_id', id).order('created_at', { ascending: true }).limit(500),
@@ -28,6 +28,11 @@ export default async function ConversationPage({
   const conv = (convRes as any).data as any;
   // Le chat di Mario (Fenice) non sono accessibili dal CRM, nemmeno via URL diretto.
   if (conv.ai_owner === 'mario') notFound();
+  // Le chat delle campagne Fenice vivono in /campagne-chat, non nel CRM Serenamente.
+  if (conv.campaign_id != null) {
+    const { data: camp } = await supabase.from('campaigns').select('owner').eq('id', conv.campaign_id).maybeSingle();
+    if ((camp as { owner?: string } | null)?.owner === 'fenice') notFound();
+  }
 
   // Marca tutti gli inbound come letti (server side, fire and forget)
   await supabase.from('messages').update({ read_at: new Date().toISOString() })

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseServer } from '@/lib/supabase/server';
+import { getFeniceCampaignIds, excludeFeniceCampaigns } from '@/lib/campagne';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -13,6 +14,8 @@ export async function GET(req: Request) {
   const filter = url.searchParams.get('filter'); // 'all'|'unread'|'recent'
   const search = url.searchParams.get('q')?.trim() ?? '';
 
+  const feniceIds = await getFeniceCampaignIds(supabase);
+
   let query = supabase
     .from('conversations')
     .select(`
@@ -23,6 +26,7 @@ export async function GET(req: Request) {
     .is('ai_owner', null)
     .order('last_message_at', { ascending: false })
     .limit(200);
+  query = excludeFeniceCampaigns(query, feniceIds);
 
   if (filter === 'unread') query = query.gt('unread_count', 0);
   if (filter === 'recent') query = query.gte('last_message_at', new Date(Date.now() - 7 * 86400_000).toISOString());
