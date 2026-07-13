@@ -20,9 +20,10 @@ export async function isFeniceConversation(client: SupabaseClient, conversationI
  * Esclude da una query PostgREST le conversazioni di campagne Fenice.
  * NB: NOT IN in SQL scarta anche i NULL, quindi serve l'OR esplicito con is.null.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- il tipo esatto del query builder supabase-js
-// (PostgrestFilterBuilder con generics su Database/Schema/Row) non si presta a un generic semplice qui;
-// usiamo `any` mirato coerente con lo stile del codebase.
+// Il tipo esatto del query builder supabase-js (PostgrestFilterBuilder con generics su
+// Database/Schema/Row) non si presta a un generic semplice qui; usiamo `any` mirato
+// coerente con lo stile del codebase.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function excludeFeniceCampaigns(query: any, feniceIds: number[]): any {
   if (feniceIds.length === 0) return query;
   return query.or(`campaign_id.is.null,campaign_id.not.in.(${feniceIds.join(',')})`);
