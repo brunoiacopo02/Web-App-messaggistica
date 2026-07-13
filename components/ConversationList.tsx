@@ -17,7 +17,12 @@ type Conv = {
   preview?: string;
 };
 
-export function ConversationList({ initial }: { initial: Conv[] }) {
+export function ConversationList({ initial, apiPath = '/api/conversations', basePath = '/inbox', channelName = 'inbox-list' }: {
+  initial: Conv[];
+  apiPath?: string;
+  basePath?: string;
+  channelName?: string;
+}) {
   const params = useParams<{ conversationId?: string }>();
   const [items, setItems] = useState<Conv[]>(initial);
   const [filter, setFilter] = useState<'all' | 'unread' | 'recent'>('all');
@@ -28,7 +33,7 @@ export function ConversationList({ initial }: { initial: Conv[] }) {
   // chat appena aperte/lette (badge azzerato), così la lista non collassa sotto di te.
   // merge=false (cambio filtro/ricerca): lista fresca.
   const refresh = useCallback(async (merge = false) => {
-    const url = new URL('/api/conversations', window.location.origin);
+    const url = new URL(apiPath, window.location.origin);
     url.searchParams.set('filter', filter);
     if (q) url.searchParams.set('q', q);
     const res = await fetch(url, { cache: 'no-store' });
@@ -46,7 +51,7 @@ export function ConversationList({ initial }: { initial: Conv[] }) {
     } else {
       setItems(fetched);
     }
-  }, [filter, q]);
+  }, [apiPath, filter, q]);
 
   // Cambio filtro/ricerca → lista fresca.
   useEffect(() => { startTransition(() => refresh(false)); }, [refresh]);
@@ -67,13 +72,13 @@ export function ConversationList({ initial }: { initial: Conv[] }) {
       sb.realtime.setAuth(data.session?.access_token ?? null);
       if (!active) return;
       ch = sb
-        .channel('inbox-list')
+        .channel(channelName)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, () => startTransition(() => refresh(true)))
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, () => startTransition(() => refresh(true)))
         .subscribe();
     })();
     return () => { active = false; if (ch) sb.removeChannel(ch); };
-  }, [refresh]);
+  }, [channelName, refresh]);
 
   return (
     <div className="flex flex-col h-full border-r w-full md:w-96 shrink-0">
@@ -95,7 +100,7 @@ export function ConversationList({ initial }: { initial: Conv[] }) {
             ? [c.lead.first_name, c.lead.last_name].filter(Boolean).join(' ') || c.lead.phone_e164
             : 'Sconosciuto';
           return (
-            <Link key={c.id} href={`/inbox/${c.id}`}
+            <Link key={c.id} href={`${basePath}/${c.id}`}
               className={cn('flex items-center gap-3 p-3 hover:bg-zinc-50 dark:hover:bg-zinc-900 border-b', active && 'bg-zinc-100 dark:bg-zinc-800')}>
               <PhoneAvatar firstName={c.lead?.first_name} lastName={c.lead?.last_name} phone={c.lead?.phone_e164 ?? ''} />
               <div className="flex-1 min-w-0">

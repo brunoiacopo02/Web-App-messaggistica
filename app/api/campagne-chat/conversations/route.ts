@@ -1,9 +1,19 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseServer } from '@/lib/supabase/server';
-import { getFeniceCampaignIds, excludeFeniceCampaigns } from '@/lib/campagne';
+import { getFeniceCampaignIds } from '@/lib/campagne';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+type ConversationRow = {
+  id: number;
+  last_message_at: string | null;
+  last_inbound_at: string | null;
+  unread_count: number | null;
+  campaign_id: number | null;
+  last_message_preview: string | null;
+  lead: { id: number; phone_e164: string | null; first_name: string | null; last_name: string | null; email: string | null } | null;
+};
 
 export async function GET(req: Request) {
   const supabase = await getSupabaseServer();
@@ -15,6 +25,7 @@ export async function GET(req: Request) {
   const search = url.searchParams.get('q')?.trim() ?? '';
 
   const feniceIds = await getFeniceCampaignIds(supabase);
+  if (feniceIds.length === 0) return NextResponse.json({ data: [] });
 
   let query = supabase
     .from('conversations')
@@ -22,11 +33,9 @@ export async function GET(req: Request) {
       id, last_message_at, last_inbound_at, unread_count, campaign_id, last_message_preview,
       lead:leads ( id, phone_e164, first_name, last_name, email )
     `)
-    // Escludi le conversazioni di Mario (Fenice): appartengono solo a /fenice.
-    .is('ai_owner', null)
+    .in('campaign_id', feniceIds)
     .order('last_message_at', { ascending: false })
     .limit(200);
-  query = excludeFeniceCampaigns(query, feniceIds);
 
   if (filter === 'unread') query = query.gt('unread_count', 0);
   if (filter === 'recent') query = query.gte('last_message_at', new Date(Date.now() - 7 * 86400_000).toISOString());
@@ -34,10 +43,9 @@ export async function GET(req: Request) {
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Filter client-side per search (su nome/numero)
   const filtered = !search
-    ? data
-    : (data ?? []).filter((c: any) => {
+    ? (data as ConversationRow[] | null)
+    : ((data ?? []) as ConversationRow[]).filter((c) => {
         const fn = (c.lead?.first_name ?? '').toLowerCase();
         const ln = (c.lead?.last_name ?? '').toLowerCase();
         const ph = (c.lead?.phone_e164 ?? '').toLowerCase();
@@ -45,6 +53,6 @@ export async function GET(req: Request) {
         return fn.includes(s) || ln.includes(s) || ph.includes(s);
       });
 
-  const withPreview = (filtered ?? []).map((c: any) => ({ ...c, preview: c.last_message_preview ?? undefined }));
+  const withPreview = (filtered ?? []).map((c) => ({ ...c, preview: c.last_message_preview ?? undefined }));
   return NextResponse.json({ data: withPreview });
 }

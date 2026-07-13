@@ -3,10 +3,11 @@ import { getSupabaseServer } from '@/lib/supabase/server';
 import { MessageThread } from '@/components/MessageThread';
 import { Composer } from '@/components/Composer';
 import { isWindowOpen } from '@/lib/utils';
+import { isFeniceConversation } from '@/lib/campagne';
 
 export const dynamic = 'force-dynamic';
 
-export default async function ConversationPage({
+export default async function CampagneConversationPage({
   params,
 }: { params: Promise<{ conversationId: string }> }) {
   const { conversationId } = await params;
@@ -14,27 +15,27 @@ export default async function ConversationPage({
   if (Number.isNaN(id)) notFound();
 
   const supabase = await getSupabaseServer();
+  // Guardia fenice: anche via URL diretto, questa sezione mostra solo le chat
+  // delle campagne di proprietà Fenice.
+  if (!(await isFeniceConversation(supabase, id))) notFound();
 
   const [convRes, msgsRes, campsRes] = await Promise.all([
     supabase.from('conversations').select(`
-      id, last_inbound_at, last_message_at, ai_owner, campaign_id,
+      id, last_inbound_at, last_message_at,
       lead:leads(id, first_name, last_name, phone_e164, email)
     `).eq('id', id).single(),
     supabase.from('messages').select('*').eq('conversation_id', id).order('created_at', { ascending: true }).limit(500),
-    supabase.from('campaigns').select('*').order('name'),
+    // `owner` esiste in DB (migration 20260713000001) ma non è ancora nei tipi generati:
+    // stesso workaround di lib/campagne.ts (cast mirato, non tutto il client).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    supabase.from('campaigns').select('*').eq('owner' as any, 'fenice').order('name'),
   ]);
 
   if (!convRes.data) notFound();
-  const conv = (convRes as any).data as any;
-  // Le chat di Mario (Fenice) non sono accessibili dal CRM, nemmeno via URL diretto.
-  if (conv.ai_owner === 'mario') notFound();
-  // Le chat delle campagne Fenice vivono in /campagne-chat, non nel CRM Serenamente.
-  if (conv.campaign_id != null) {
-    const { data: camp } = await supabase.from('campaigns').select('owner').eq('id', conv.campaign_id).maybeSingle();
-    if ((camp as { owner?: string } | null)?.owner === 'fenice') notFound();
-  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const conv = convRes.data as any;
 
-  // Marca tutti gli inbound come letti (server side, fire and forget)
+  // Marca gli inbound come letti (come /inbox)
   await supabase.from('messages').update({ read_at: new Date().toISOString() })
     .eq('conversation_id', id).eq('direction', 'in').is('read_at', null);
   await supabase.from('conversations').update({ unread_count: 0 }).eq('id', id);
@@ -48,8 +49,10 @@ export default async function ConversationPage({
         <div className="text-base font-medium">{fullName}</div>
         <div className="text-xs text-zinc-500">{conv.lead?.phone_e164}</div>
       </header>
-      <MessageThread conversationId={id} initial={(msgsRes.data ?? []) as any} campaignNamesById={{}} />
-      <Composer conversationId={id} windowOpen={open} campaigns={(campsRes.data ?? []) as any} />
+      {/* eslint-disable @typescript-eslint/no-explicit-any -- Row DB (direction: string) vs union stretta di MessageThread/Composer, stesso cast di /inbox */}
+      <MessageThread conversationId={id} initial={(msgsRes.data ?? []) as any} campaignNamesById={{}} apiBase="/api/campagne-chat/conversations" />
+      <Composer conversationId={id} windowOpen={open} campaigns={(campsRes.data ?? []) as any} sendPath="/api/campagne-chat/messages" />
+      {/* eslint-enable @typescript-eslint/no-explicit-any */}
     </div>
   );
 }
