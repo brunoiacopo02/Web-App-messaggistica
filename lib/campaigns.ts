@@ -11,6 +11,7 @@ export type CampaignRow = {
   twilio_template_sid: string;
   template_variables: TemplateVariable[];
   active: boolean;
+  owner: 'serenamente' | 'fenice';
 };
 
 export function matchCampaign(
@@ -31,6 +32,15 @@ const FIELD_MAP: Record<string, keyof AcParsedLead> = {
   email:      'email',
   phone:      'phone',
 };
+
+/**
+ * Sostituisce i placeholder {{key}} nel testo del template con i valori delle
+ * variabili. Usato per salvare a DB il messaggio così come il lead lo riceve
+ * (Twilio fa la sostituzione lato invio, ma il body salvato resterebbe raw).
+ */
+export function renderBodyTemplate(body: string, vars: Record<string, string>): string {
+  return body.replace(/\{\{(\w+)\}\}/g, (match, key: string) => vars[key] ?? match);
+}
 
 export function renderTemplateVariables(
   vars: readonly TemplateVariable[],

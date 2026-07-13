@@ -39,6 +39,7 @@ export type Database = {
           created_at: string
           id: number
           name: string
+          owner: string
           template_variables: Json
           twilio_template_sid: string
           updated_at: string
@@ -49,6 +50,7 @@ export type Database = {
           created_at?: string
           id?: number
           name: string
+          owner?: string
           template_variables?: Json
           twilio_template_sid: string
           updated_at?: string
@@ -59,6 +61,7 @@ export type Database = {
           created_at?: string
           id?: number
           name?: string
+          owner?: string
           template_variables?: Json
           twilio_template_sid?: string
           updated_at?: string
@@ -91,6 +94,7 @@ export type Database = {
           last_message_preview: string | null
           lead_id: number
           unread_count: number
+          wa_number: string | null
         }
         Insert: {
           ai_dropoff_stage?: string | null
@@ -117,6 +121,7 @@ export type Database = {
           last_message_preview?: string | null
           lead_id: number
           unread_count?: number
+          wa_number?: string | null
         }
         Update: {
           ai_dropoff_stage?: string | null
@@ -143,6 +148,7 @@ export type Database = {
           last_message_preview?: string | null
           lead_id?: number
           unread_count?: number
+          wa_number?: string | null
         }
         Relationships: [
           {

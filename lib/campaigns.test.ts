@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { matchCampaign, renderTemplateVariables, type CampaignRow } from './campaigns';
+import { matchCampaign, renderTemplateVariables, renderBodyTemplate, type CampaignRow } from './campaigns';
 import type { AcParsedLead } from './ac';
 
 const lead: AcParsedLead = {
@@ -13,9 +13,9 @@ const lead: AcParsedLead = {
 };
 
 const campaigns: CampaignRow[] = [
-  { id: 1, name: 'A', ac_list_match: 'Webinar Marzo', twilio_template_sid: 'HX1', template_variables: [], active: true },
-  { id: 2, name: 'B', ac_list_match: '7',              twilio_template_sid: 'HX2', template_variables: [], active: true },
-  { id: 3, name: 'C', ac_list_match: 'Inattivo',       twilio_template_sid: 'HX3', template_variables: [], active: false },
+  { id: 1, name: 'A', ac_list_match: 'Webinar Marzo', twilio_template_sid: 'HX1', template_variables: [], active: true,  owner: 'serenamente' },
+  { id: 2, name: 'B', ac_list_match: '7',              twilio_template_sid: 'HX2', template_variables: [], active: true,  owner: 'serenamente' },
+  { id: 3, name: 'C', ac_list_match: 'Inattivo',       twilio_template_sid: 'HX3', template_variables: [], active: false, owner: 'serenamente' },
 ];
 
 describe('matchCampaign', () => {
@@ -57,5 +57,17 @@ describe('renderTemplateVariables', () => {
     ] as const;
     const out = renderTemplateVariables(vars, lead);
     expect(out).toEqual({ '1': 'm@x.it', '2': '+393331234567' });
+  });
+});
+
+describe('renderBodyTemplate', () => {
+  it('sostituisce i placeholder con le variabili', () => {
+    expect(renderBodyTemplate('Ciao {{2}}, benvenuto!', { '2': 'Alina' })).toBe('Ciao Alina, benvenuto!');
+  });
+  it('lascia intatti i placeholder senza variabile', () => {
+    expect(renderBodyTemplate('Ciao {{2}} e {{3}}', { '2': 'Gigi' })).toBe('Ciao Gigi e {{3}}');
+  });
+  it('sostituisce occorrenze multiple', () => {
+    expect(renderBodyTemplate('{{1}} {{1}}', { '1': 'x' })).toBe('x x');
   });
 });

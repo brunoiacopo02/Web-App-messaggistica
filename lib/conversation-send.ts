@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendFreeText, sendTemplate, getTemplateBody } from '@/lib/twilio';
+import { renderBodyTemplate } from '@/lib/campaigns';
 import { isWindowOpen } from '@/lib/utils';
 import type { z } from 'zod';
 import type { SendMessageSchema } from '@/lib/schemas';
@@ -12,7 +13,7 @@ export async function sendConversationMessage(input: SendMessageInput): Promise<
   const admin = getSupabaseAdmin();
   const { data: conv } = await admin
     .from('conversations')
-    .select('id, last_inbound_at, lead:leads(phone_e164)')
+    .select('id, last_inbound_at, wa_number, lead:leads(phone_e164)')
     .eq('id', input.conversation_id)
     .single();
   if (!conv) return NextResponse.json({ error: 'conversation not found' }, { status: 404 });
@@ -20,13 +21,17 @@ export async function sendConversationMessage(input: SendMessageInput): Promise<
   const phone = (conv as any).lead?.phone_e164 as string | undefined;
   if (!phone) return NextResponse.json({ error: 'lead phone missing' }, { status: 422 });
 
+  // Risposta dallo stesso numero aziendale della conversazione (finestra 24h per
+  // coppia numero/utente). Fallback: default env (TWILIO_WHATSAPP_NUMBER).
+  const from = ((conv as any).wa_number as string | null) ?? undefined;
+
   if (input.mode === 'free') {
     if (!isWindowOpen((conv as any).last_inbound_at)) {
       return NextResponse.json({ error: 'window_expired' }, { status: 422 });
     }
     let sent;
     try {
-      sent = await sendFreeText({ to: phone, body: input.body });
+      sent = await sendFreeText({ to: phone, body: input.body, from });
     } catch (err: any) {
       await admin.from('event_log').insert({
         type: 'send_error', message: `UI free send fallito: ${err?.message}`,
@@ -60,6 +65,7 @@ export async function sendConversationMessage(input: SendMessageInput): Promise<
       to: phone,
       contentSid: (campaign as any).twilio_template_sid,
       variables: input.vars,
+      from,
     });
   } catch (err: any) {
     await admin.from('event_log').insert({
@@ -68,7 +74,8 @@ export async function sendConversationMessage(input: SendMessageInput): Promise<
     });
     return NextResponse.json({ error: 'twilio_error', code: err?.code }, { status: 502 });
   }
-  const tplBody = (await getTemplateBody((campaign as any).twilio_template_sid)) ?? `[template] ${(campaign as any).name}`;
+  const tplBodyRaw = (await getTemplateBody((campaign as any).twilio_template_sid)) ?? `[template] ${(campaign as any).name}`;
+  const tplBody = renderBodyTemplate(tplBodyRaw, input.vars);
   const { data: msg } = await admin.from('messages').insert({
     conversation_id: input.conversation_id,
     direction: 'out',

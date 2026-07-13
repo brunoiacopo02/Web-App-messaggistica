@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
-import { renderTemplateVariables, type CampaignRow } from '@/lib/campaigns';
+import { renderTemplateVariables, renderBodyTemplate, type CampaignRow } from '@/lib/campaigns';
 import { fetchListContacts } from '@/lib/ac-api';
 import { planBatch, type PlannedSend } from '@/lib/batch';
 import { sendTemplate, getTemplateBody } from '@/lib/twilio';
@@ -67,6 +67,7 @@ async function sendOne(
   supabase: Supa,
   campaign: CampaignRow,
   planned: PlannedSend,
+  waNumber: string,
 ): Promise<'sent' | 'failed'> {
   const { contact, phone } = planned;
 
@@ -103,7 +104,7 @@ async function sendOne(
   if (!conversationId) {
     const { data: convNew, error: convErr } = await supabase
       .from('conversations')
-      .insert({ lead_id: leadRow.id, campaign_id: campaign.id })
+      .insert({ lead_id: leadRow.id, campaign_id: campaign.id, wa_number: waNumber })
       .select('id')
       .single();
     if (convErr || !convNew) {
@@ -128,9 +129,12 @@ async function sendOne(
     listId: campaign.ac_list_match,
   });
 
-  const tplBody = (await getTemplateBody(campaign.twilio_template_sid)) ?? `[template] ${campaign.name}`;
+  // Body salvato a DB già renderizzato (Twilio sostituisce le variabili all'invio,
+  // ma il testo raw mostrerebbe "{{2}}" nel pannello).
+  const tplBodyRaw = (await getTemplateBody(campaign.twilio_template_sid)) ?? `[template] ${campaign.name}`;
+  const tplBody = renderBodyTemplate(tplBodyRaw, vars);
   try {
-    const sent = await sendTemplate({ to: phone, contentSid: campaign.twilio_template_sid, variables: vars });
+    const sent = await sendTemplate({ to: phone, contentSid: campaign.twilio_template_sid, variables: vars, from: waNumber });
     await supabase.from('messages').insert({
       conversation_id: conversationId,
       direction: 'out',
@@ -143,7 +147,7 @@ async function sendOne(
     });
     await supabase
       .from('conversations')
-      .update({ last_message_at: new Date().toISOString() })
+      .update({ last_message_at: new Date().toISOString(), wa_number: waNumber })
       .eq('id', conversationId);
     return 'sent';
   } catch (err: unknown) {
@@ -207,6 +211,16 @@ export async function GET(req: NextRequest) {
       continue;
     }
 
+    // Mittente: campagne Fenice dal numero Fenice/Mario (senza attivare il bot:
+    // l'autoreply scatta solo su conversazioni ai_owner='mario'); il resto dal principale.
+    const waNumber = campaign.owner === 'fenice'
+      ? process.env.TWILIO_WHATSAPP_NUMBER_FENICE
+      : process.env.TWILIO_WHATSAPP_NUMBER;
+    if (!waNumber) {
+      report.push({ campaign: campaign.name, skipped: `numero mittente mancante per owner '${campaign.owner}'` });
+      continue;
+    }
+
     const contacts = await fetchListContacts(campaign.ac_list_match);
     const sentPhones = await getSentPhones(supabase, campaign);
     const plan = planBatch(contacts, sentPhones);
@@ -229,7 +243,7 @@ export async function GET(req: NextRequest) {
       continue;
     }
 
-    const outcomes = await runPool(target, CONCURRENCY, (p) => sendOne(supabase, campaign, p));
+    const outcomes = await runPool(target, CONCURRENCY, (p) => sendOne(supabase, campaign, p, waNumber));
     const sent = outcomes.filter((o) => o === 'sent').length;
     const failed = outcomes.filter((o) => o === 'failed').length;
 

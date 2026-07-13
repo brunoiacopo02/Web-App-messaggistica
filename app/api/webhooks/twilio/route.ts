@@ -154,6 +154,9 @@ export async function POST(req: NextRequest) {
       last_message_at: now,
       last_inbound_at: now,
       unread_count: (cur?.unread_count ?? 0) + 1,
+      // Numero aziendale su cui il lead ci scrive: le risposte devono partire
+      // dallo stesso numero (la finestra 24h vale per coppia numero/utente).
+      ...(params.To?.startsWith('whatsapp:') ? { wa_number: params.To } : {}),
     }).eq('id', conversationId);
 
     await supabase.from('event_log').insert({
