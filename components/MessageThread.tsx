@@ -24,10 +24,11 @@ function mergeSorted(list: Msg[]): Msg[] {
   return [...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at));
 }
 
-export function MessageThread({ conversationId, initial, campaignNamesById }: {
+export function MessageThread({ conversationId, initial, campaignNamesById, apiBase = '/api/conversations' }: {
   conversationId: number;
   initial: Msg[];
   campaignNamesById: Record<number, string>;
+  apiBase?: string;
 }) {
   const [items, setItems] = useState<Msg[]>(initial);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -38,14 +39,14 @@ export function MessageThread({ conversationId, initial, campaignNamesById }: {
 
   const refetch = useCallback(async () => {
     try {
-      const res = await fetch(`/api/conversations/${conversationId}/messages`, { cache: 'no-store' });
+      const res = await fetch(`${apiBase}/${conversationId}/messages`, { cache: 'no-store' });
       if (!res.ok) return;
       const json = await res.json();
       if (Array.isArray(json.data)) setItems(mergeSorted(json.data as Msg[]));
     } catch {
       /* noop */
     }
-  }, [conversationId]);
+  }, [apiBase, conversationId]);
 
   // Rete di sicurezza: polling ogni 4s (garantisce l'aggiornamento anche senza realtime).
   useEffect(() => {

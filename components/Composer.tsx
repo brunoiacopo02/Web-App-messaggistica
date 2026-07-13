@@ -8,10 +8,11 @@ import { toast } from 'sonner';
 
 type Campaign = { id: number; name: string; twilio_template_sid: string; template_variables: any[]; active: boolean };
 
-export function Composer({ conversationId, windowOpen, campaigns }: {
+export function Composer({ conversationId, windowOpen, campaigns, sendPath = '/api/messages' }: {
   conversationId: number;
   windowOpen: boolean;
   campaigns: Campaign[];
+  sendPath?: string;
 }) {
   const [mode, setMode] = useState<'free' | 'template'>(windowOpen ? 'free' : 'template');
   const [body, setBody] = useState('');
@@ -27,7 +28,7 @@ export function Composer({ conversationId, windowOpen, campaigns }: {
       const payload = mode === 'free'
         ? { conversation_id: conversationId, mode, body }
         : { conversation_id: conversationId, mode, template_id: parseInt(templateId, 10), vars };
-      const res = await fetch('/api/messages', {
+      const res = await fetch(sendPath, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
       });
