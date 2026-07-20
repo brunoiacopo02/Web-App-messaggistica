@@ -32,6 +32,23 @@ describe('decideFollowupAction — mai risposto', () => {
   });
 });
 
+describe('decideFollowupAction — lead terminale (APPUNTAMENTO)', () => {
+  it('già APPUNTAMENTO, risposto poi silente ≥24h → none (mai riclassificare un fissato)', () => {
+    const a = decideFollowupAction({ startedAtMs: hAgo(60), nowMs: NOW, hasInbound: true, lastInboundAtMs: hAgo(30), botOutcome: 'APPUNTAMENTO' });
+    expect(a).toBe('none');
+  });
+
+  it('già APPUNTAMENTO, mai risposto ≥24h → none', () => {
+    const a = decideFollowupAction({ startedAtMs: hAgo(48), nowMs: NOW, hasInbound: false, lastInboundAtMs: null, botOutcome: 'APPUNTAMENTO' });
+    expect(a).toBe('none');
+  });
+
+  it('esito non terminale (NON_RISPOSTO) non blocca la classificazione', () => {
+    const a = decideFollowupAction({ startedAtMs: hAgo(60), nowMs: NOW, hasInbound: true, lastInboundAtMs: hAgo(GIVEUP_H), botOutcome: 'NON_RISPOSTO' });
+    expect(a).toBe('interrotto');
+  });
+});
+
 describe('decideFollowupAction — ha risposto poi silente', () => {
   it('silente < 24h → none', () => {
     const a = decideFollowupAction({ startedAtMs: hAgo(48), nowMs: NOW, followupsSent: 0, hasInbound: true, lastInboundAtMs: hAgo(10) });

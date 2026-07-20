@@ -13,7 +13,12 @@ export function decideFollowupAction(input: {
   followupsSent?: number;
   hasInbound: boolean;
   lastInboundAtMs: number | null;
+  /** Esito CRM già registrato per la conversazione. APPUNTAMENTO è terminale. */
+  botOutcome?: string | null;
 }): FollowupAction {
+  // Lead già fissato: mai riclassificare (il re-invio verrebbe tradotto in un
+  // nuovo POST APPUNTAMENTO al CRM, che lo risegnerebbe da zero).
+  if (input.botOutcome === 'APPUNTAMENTO') return 'none';
   if (input.hasInbound) {
     // Ha risposto almeno una volta poi è rimasto silente: nessun sollecito,
     // chiudi come INTERROTTO dopo 24h di silenzio (= chiusura finestra free-text).

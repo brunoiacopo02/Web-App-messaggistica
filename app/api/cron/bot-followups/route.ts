@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
   // Conversazioni CRM-linked, attive, non chiuse.
   const { data: convs } = await supabase
     .from('conversations')
-    .select('id, ai_status, ai_started_at, crm_lead_id, leads(phone_e164)')
+    .select('id, ai_status, ai_started_at, crm_lead_id, bot_outcome, leads(phone_e164)')
     .not('crm_lead_id', 'is', null)
     .in('ai_status', ['active', 'replying'])
     .limit(500);
@@ -73,6 +73,21 @@ export async function GET(req: NextRequest) {
         continue;
       }
 
+      // 2b. Lead terminale (APPUNTAMENTO) senza inbound in sospeso: mai
+      // riclassificare. La riga è stata riaperta dal webhook: richiudila per
+      // farla uscire dal giro del cron (risana anche le righe già incastrate).
+      if (c.bot_outcome === 'APPUNTAMENTO') {
+        if (c.ai_status === 'active') {
+          await supabase
+            .from('conversations')
+            .update({ ai_status: 'closed' })
+            .eq('id', c.id)
+            .eq('ai_status', 'active');
+          report.push({ id: c.id, action: 'close_terminal' });
+        }
+        continue;
+      }
+
       // 3. Classificazione CRM (NON_RISPOSTO / INTERROTTO).
       const startedAtMs = c.ai_started_at ? Date.parse(c.ai_started_at) : null;
       if (!startedAtMs) continue;
@@ -85,7 +100,7 @@ export async function GET(req: NextRequest) {
         }, null);
 
       // phone non serve qui: sendOutcome fa solo callback CRM, non invia WhatsApp.
-      const action = decideFollowupAction({ startedAtMs, nowMs: now, hasInbound, lastInboundAtMs });
+      const action = decideFollowupAction({ startedAtMs, nowMs: now, hasInbound, lastInboundAtMs, botOutcome: c.bot_outcome });
 
       if (action === 'non_risposto') {
         await sendOutcome(supabase, c.id, { outcome: 'NON_RISPOSTO', note: 'Nessuna risposta.' });

@@ -39,8 +39,19 @@ describe('sendOutcome — guard APPUNTAMENTO terminale', () => {
     expect(body.outcome).toBe('APPUNTAMENTO');
     expect(body.date).toBe(DATE);
     expect(body.note).toContain('annullare');
-    expect(calls.updates).toHaveLength(0);              // riga congelata
+    // La riga viene chiusa (stop al loop del cron) ma l'esito resta congelato.
+    expect(calls.updates).toEqual([{ ai_status: 'closed' }]);
     expect(calls.events.some((e) => e.type === 'bot_outcome_locked')).toBe(true);
+  });
+
+  it('lead già APPUNTAMENTO + POST fallito → riga NON toccata (ritentabile)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, text: async () => 'boom' })));
+    const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE });
+    const res = await sendOutcome(supabase, 1, { outcome: 'INTERROTTO' });
+
+    expect(res.sent).toBe(false);
+    expect(calls.updates).toHaveLength(0);
+    expect(calls.events.some((e) => e.type === 'bot_outcome_error')).toBe(true);
   });
 
   it('lead non ancora deciso + APPUNTAMENTO → comportamento normale (persiste e chiude)', async () => {

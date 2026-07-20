@@ -106,7 +106,10 @@ export async function sendOutcome(
           level: 'info',
         });
       } else {
-        // Lead terminale: NON tocchiamo la riga. Logghiamo l'intercettazione.
+        // Lead terminale: l'esito resta congelato (niente bot_outcome/date), ma la
+        // conversazione va richiusa: se restasse 'active' il cron backstop la
+        // riclassificherebbe a ogni run, ri-inviando l'APPUNTAMENTO al CRM.
+        await supabase.from('conversations').update({ ai_status: 'closed' }).eq('id', conversationId);
         await supabase.from('event_log').insert({
           type: 'bot_outcome_locked',
           payload: { conversationId, crmLeadId, attemptedOutcome: args.outcome, keptOutcome: 'APPUNTAMENTO', note: action.note } as never,
