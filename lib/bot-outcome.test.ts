@@ -71,7 +71,7 @@ describe('sendOutcome — guard APPUNTAMENTO terminale', () => {
     expect(res.sent).toBe(false);
     expect(res.status).toBe(403);
     expect(calls.updates[0]).toMatchObject({ bot_outcome: 'INTERROTTO', ai_status: 'closed' });
-    expect(calls.events.some((e) => e.type === 'bot_outcome_rejected' && e.level === 'warning')).toBe(true);
+    expect(calls.events.some((e) => e.type === 'bot_outcome_rejected' && e.level === 'warn')).toBe(true);
   });
 
   it('CRM 403 su lead già APPUNTAMENTO → chiude senza declassare bot_outcome', async () => {
@@ -91,6 +91,6 @@ describe('sendOutcome — guard APPUNTAMENTO terminale', () => {
     expect(res.sent).toBe(true);
     expect((globalThis.fetch as any).mock.calls).toHaveLength(0);  // nessun POST
     expect(calls.updates).toHaveLength(0);
-    expect(calls.events.some((e) => e.type === 'bot_outcome_locked' && e.level === 'warning')).toBe(true);
+    expect(calls.events.some((e) => e.type === 'bot_outcome_locked' && e.level === 'warn')).toBe(true);
   });
 });

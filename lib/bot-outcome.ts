@@ -47,7 +47,7 @@ export async function sendOutcome(
   if (action.kind === 'locked' && !action.date) {
     await supabase.from('event_log').insert({
       type: 'bot_outcome_locked',
-      level: 'warning',
+      level: 'warn',
       payload: { conversationId, crmLeadId, attemptedOutcome: args.outcome, keptOutcome: 'APPUNTAMENTO' } as never,
       message: `[bot-fissatore] esito ${args.outcome} ignorato: lead ${crmLeadId} già APPUNTAMENTO senza data`,
     });
@@ -140,7 +140,7 @@ export async function sendOutcome(
         type: 'bot_outcome_rejected',
         payload: { conversationId, crmLeadId, outcome: args.outcome, status: res.status, body: text } as never,
         message: `[bot-fissatore] CRM ha rifiutato (403) l'esito ${args.outcome} per lead ${crmLeadId}: chiuso localmente`,
-        level: 'warning',
+        level: 'warn',
       });
       return { sent: false, status: res.status, error: text || 'http_403' };
     }

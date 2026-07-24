@@ -154,7 +154,7 @@ export async function GET(req: NextRequest) {
               type: 'stale_handed_off',
               payload: { conversationId: c.id } as never,
               message: `[bot-fissatore] conv ${c.id} handed_off da >48h senza esito CRM: serve chiusura manuale`,
-              level: 'warning',
+              level: 'warn',
             });
             report.push({ id: c.id, action: 'stale_handed_off' });
           }
