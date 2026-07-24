@@ -5,6 +5,7 @@ import { marioDelayMs } from './mario-latency';
 import { splitMarioMessages } from './mario-split';
 import { generateBotReport } from './bot-report';
 import { sendOutcome } from './bot-outcome';
+import { personaForConversation, PERSONA_NAME } from './persona';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -26,6 +27,22 @@ export function shouldAutoReply(g: AutoReplyGate): boolean {
 }
 
 type MsgRow = { direction: string; body: string };
+// Riga del drain: come MsgRow ma con il template per derivare la persona (Mario/Marta).
+type DrainMsgRow = MsgRow & { template_sid: string | null };
+
+/** SID dei template "Marta" (aperture A/B + sequenza + riaggancio) dalle env.
+ *  Env assenti ⇒ set vuoto ⇒ persona sempre Mario (comportamento identico a oggi). */
+export function martaSidsFromEnv(env: NodeJS.ProcessEnv = process.env): Set<string> {
+  const keys = [
+    'OPENING_SID_C1', 'OPENING_SID_C2',
+    'OPENING_SID_T1', 'OPENING_SID_T2',
+    'OPENING_SID_J1', 'OPENING_SID_J2',
+    'MARTA_SEQ_TEMPLATE_SID_1', 'MARTA_SEQ_TEMPLATE_SID_2',
+    'MARTA_SEQ_TEMPLATE_SID_3', 'MARTA_SEQ_TEMPLATE_SID_4',
+    'MARTA_REENGAGE_TEMPLATE_SID',
+  ];
+  return new Set(keys.map((k) => env[k]).filter((v): v is string => !!v));
+}
 
 /**
  * Pure: dato l'elenco messaggi in ordine cronologico, ritorna l'indice del primo
@@ -102,16 +119,16 @@ export async function drainMarioReplies(
   const crmLeadId = (claimed as { crm_lead_id: string | null }).crm_lead_id;
 
   // Carica i messaggi della conversazione dall'arruolamento in poi (in ordine).
-  async function loadHistory(): Promise<MsgRow[]> {
+  async function loadHistory(): Promise<DrainMsgRow[]> {
     let q = supabase
       .from('messages')
-      .select('direction, body, created_at')
+      .select('direction, body, template_sid, created_at')
       .eq('conversation_id', conversationId)
       .order('created_at', { ascending: true })
       .limit(200);
     if (startedAt) q = q.gte('created_at', startedAt);
     const { data } = await q;
-    return (data ?? []) as MsgRow[];
+    return (data ?? []) as DrainMsgRow[];
   }
 
   let finalStatus = 'active';
@@ -129,7 +146,11 @@ export async function drainMarioReplies(
         role: m.direction === 'in' ? 'user' : 'assistant',
         content: m.body,
       }));
-      const result = await generateMarioReply(history);
+      // Persona dal primo template outbound: aperture Marta ⇒ Marta, legacy ⇒ Mario.
+      // Senza env Marta configurate il set è vuoto ⇒ sempre Mario (zero regressioni).
+      const martaSids = martaSidsFromEnv();
+      const persona = martaSids.size > 0 ? personaForConversation(rows, martaSids) : 'mario';
+      const result = await generateMarioReply(history, { personaName: PERSONA_NAME[persona] });
 
       // Invia ogni a-capo come messaggio separato (più umano), con breve pausa.
       const parts = splitMarioMessages(result.visibleReply);
