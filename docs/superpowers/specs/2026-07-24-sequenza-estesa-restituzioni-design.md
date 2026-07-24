@@ -74,5 +74,14 @@ senza riclassificazioni di comodo. Cap assegnazione alzato a 50 lead/giorno.
 
 ## Stato
 
-- [ ] Piano condiviso col CRM (in attesa di ok su: semantica RICHIAMO, 4 template da approvare, stima impatto)
-- [ ] Implementazione (dopo allineamento)
+- [x] Piano condiviso col CRM; Bruno ha dato il go immediato (24/07)
+- [x] Implementazione completa su feat/sequenza-estesa (lib/sequence.ts, lib/interrotto-note.ts,
+      cron sequence-touches, rework bot-followups, apertura differita in fenice-enroll)
+- [x] 5 template creati via Content API e APPROVATI da Meta (fenice_seq_touch1..4_v1, fenice_reengage_v1)
+- [x] Env produzione: SEQ_TEMPLATE_SID_1..4, REENGAGE_TEMPLATE_SID, SEQUENCE_ENABLED, SEQUENCE_MAX_PER_RUN
+- [ ] RICHIAMO interim a 48h: NON implementato, in attesa di conferma semantica dal team CRM
+- [ ] Onboarding WABA del numero +393399907883 come sender follow-up dedicato (review Meta, manuale)
+
+Decisione sender: i follow-up partono dallo stesso numero dell'apertura (Fenice, +393520413199,
+quality HIGH) — un template da numero diverso aprirebbe una chat nuova scollegata sul telefono
+del lead. Multi-numero solo per ripartire NUOVI lead, mai a metà sequenza.
