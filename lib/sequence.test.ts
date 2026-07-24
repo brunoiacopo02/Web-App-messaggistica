@@ -171,7 +171,8 @@ describe('decideTrackB', () => {
   it('20h ma fuori fascia → wait', () => expect(dec(20, 0, { now: NOW_NIGHT })).toEqual({ kind: 'wait' }));
   it('20h ma kill-switch off → wait', () => expect(dec(20, 0, { enabled: false })).toEqual({ kind: 'wait' }));
   it('24h esatte, 0 nudge → wait (finestra [18,24) chiusa)', () => expect(dec(24, 0)).toEqual({ kind: 'wait' }));
-  it('50h con nudgesSent=0 → wait (free saltato, niente template fuori turno)', () => expect(dec(50, 0)).toEqual({ kind: 'wait' }));
+  it('50h con nudgesSent=0 → nudge_template(1) (recupero finestra free persa)', () =>
+    expect(dec(50, 0)).toEqual({ kind: 'nudge_template', nudgeIndex: 1 }));
   it('50h con nudgesSent=1 → nudge_template(1)', () => expect(dec(50, 1)).toEqual({ kind: 'nudge_template', nudgeIndex: 1 }));
   it('50h con nudgesSent=1 ma fuori fascia → wait', () => expect(dec(50, 1, { now: NOW_NIGHT })).toEqual({ kind: 'wait' }));
   it('100h con nudgesSent=2 → nudge_template(2)', () => expect(dec(100, 2)).toEqual({ kind: 'nudge_template', nudgeIndex: 2 }));
@@ -179,6 +180,19 @@ describe('decideTrackB', () => {
   it('120h → classify, anche fuori fascia e con kill-switch off', () => {
     expect(dec(120, 0)).toEqual({ kind: 'classify' });
     expect(dec(130, 3, { now: NOW_NIGHT, enabled: false })).toEqual({ kind: 'classify' });
+  });
+
+  it('lead notturno che salta il free: progressione 0→template1→template2→classify', () => {
+    // Ultimo inbound alle 23: la finestra [18,24) cade tutta fuori fascia → a 20h il cron gira di notte, wait.
+    expect(dec(20, 0, { now: NOW_NIGHT })).toEqual({ kind: 'wait' });
+    // Primo run utile in fascia è oltre le 24h: free perso, wait fino a 48h.
+    expect(dec(30, 0)).toEqual({ kind: 'wait' });
+    // A 48h scatta il recupero col template (contatore ancora a 0).
+    expect(dec(48, 0)).toEqual({ kind: 'nudge_template', nudgeIndex: 1 });
+    // Il cron incrementa bot_followups_sent → a 96h tocca il secondo template.
+    expect(dec(96, 1)).toEqual({ kind: 'nudge_template', nudgeIndex: 2 });
+    // Infine la resa a 120h.
+    expect(dec(121, 2)).toEqual({ kind: 'classify' });
   });
 });
 

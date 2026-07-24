@@ -111,6 +111,11 @@ export function decideTrackB(input: {
   if (!sequenceEnabled || !inSendWindow(nowMs)) return { kind: 'wait' };
   // Nudge free solo dentro la finestra 24h WhatsApp (silenzio in [18,24)).
   if (nudgesSent === 0 && silH >= NUDGE1_MIN_H && silH < NUDGE1_MAX_H) return { kind: 'nudge_free' };
+  // nudgesSent==0 a 48h = finestra free persa (es. lead notturno): recupero col template.
+  if (nudgesSent === 0 && silH >= NUDGE2_H) return { kind: 'nudge_template', nudgeIndex: 1 };
+  // A 96h il turno è comunque del secondo template, anche se il primo nudge è
+  // stato il recupero (contatore a 1): progressione 0→t1→t2→classify garantita.
+  if (nudgesSent === 1 && silH >= NUDGE3_H) return { kind: 'nudge_template', nudgeIndex: 2 };
   if (nudgesSent === 1 && silH >= NUDGE2_H) return { kind: 'nudge_template', nudgeIndex: 1 };
   if (nudgesSent === 2 && silH >= NUDGE3_H) return { kind: 'nudge_template', nudgeIndex: 2 };
   return { kind: 'wait' };
