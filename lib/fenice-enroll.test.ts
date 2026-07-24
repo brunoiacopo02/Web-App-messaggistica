@@ -9,8 +9,9 @@ vi.mock('./sequence', () => ({
 }));
 
 import { enrollLeadIntoMario } from './fenice-enroll';
-import { sendTemplateAndLog } from './messaging';
+import { findOrCreateLeadConversation, sendTemplateAndLog } from './messaging';
 import { inSendWindow } from './sequence';
+import { openingBody } from './persona';
 
 /** Fake del client Supabase: traccia update su conversations ed insert su event_log. */
 function makeSupabase() {
@@ -92,5 +93,123 @@ describe('enrollLeadIntoMario — apertura differita fuori fascia', () => {
     expect(res.ok).toBe(false);
     expect(res.error).toBe('twilio boom');
     expect(calls.events.some((e) => e.type === 'send_error' && e.level === 'error')).toBe(true);
+  });
+});
+
+describe('enrollLeadIntoMario — selezione apertura per-funnel A/B (NEW_OPENING_ENABLED)', () => {
+  function stubOpeningSids() {
+    vi.stubEnv('OPENING_SID_C1', 'HX_C1');
+    vi.stubEnv('OPENING_SID_C2', 'HX_C2');
+    vi.stubEnv('OPENING_SID_T1', 'HX_T1');
+    vi.stubEnv('OPENING_SID_T2', 'HX_T2');
+    vi.stubEnv('OPENING_SID_J1', 'HX_J1');
+    vi.stubEnv('OPENING_SID_J2', 'HX_J2');
+  }
+
+  beforeEach(() => {
+    vi.mocked(inSendWindow).mockReturnValue(true);
+  });
+
+  it('flag on, CORSO 10 ORE, conv pari (42) → OPENING_SID_C2, variables {1:nome}, body variante 2', async () => {
+    vi.stubEnv('NEW_OPENING_ENABLED', '1');
+    stubOpeningSids();
+    const { supabase, calls } = makeSupabase();
+
+    const res = await enrollLeadIntoMario(supabase, {
+      phone: '+393331234567', firstName: 'Anna', crmFunnel: 'CORSO 10 ORE',
+    });
+
+    expect(res).toMatchObject({ ok: true, conversationId: 42 });
+    const call = vi.mocked(sendTemplateAndLog).mock.calls[0];
+    expect(call.slice(1, 6)).toEqual(
+      [42, '+393331234567', 'HX_C2', 'Apertura OPENING_SID_C2', 'whatsapp:+390000000000'],
+    );
+    expect(call[6]).toEqual({ '1': 'Anna' });
+    expect(call[7]).toBe(openingBody('corso10', 2, 'Anna'));
+    expect(calls.events.some((e) => e.type === 'opening_config_error')).toBe(false);
+  });
+
+  it('flag on, conv dispari (43) → variante 1 (parità id) → OPENING_SID_C1', async () => {
+    vi.stubEnv('NEW_OPENING_ENABLED', '1');
+    stubOpeningSids();
+    vi.mocked(findOrCreateLeadConversation).mockResolvedValueOnce({ leadId: 7, conversationId: 43 } as never);
+    const { supabase } = makeSupabase();
+
+    const res = await enrollLeadIntoMario(supabase, {
+      phone: '+393331234567', firstName: 'Anna', crmFunnel: 'CORSO 10 ORE',
+    });
+
+    expect(res.conversationId).toBe(43);
+    const call = vi.mocked(sendTemplateAndLog).mock.calls[0];
+    expect(call[3]).toBe('HX_C1');
+    expect(call[4]).toBe('Apertura OPENING_SID_C1');
+    expect(call[7]).toBe(openingBody('corso10', 1, 'Anna'));
+  });
+
+  it('flag on, TELEGRAM → SID T*, JOB SIMULATOR → SID J*', async () => {
+    vi.stubEnv('NEW_OPENING_ENABLED', '1');
+    stubOpeningSids();
+    const { supabase } = makeSupabase();
+
+    await enrollLeadIntoMario(supabase, { phone: '+393331234567', firstName: 'Anna', crmFunnel: 'TELEGRAM' });
+    await enrollLeadIntoMario(supabase, { phone: '+393331234567', firstName: 'Anna', crmFunnel: 'JOB SIMULATOR' });
+
+    const calls = vi.mocked(sendTemplateAndLog).mock.calls;
+    expect(calls[0][3]).toBe('HX_T2'); // conv 42 → variante 2
+    expect(calls[0][7]).toBe(openingBody('telegram', 2, 'Anna'));
+    expect(calls[1][3]).toBe('HX_J2');
+    expect(calls[1][7]).toBe(openingBody('jobsim', 2, 'Anna'));
+  });
+
+  it('flag on senza nome → variables {1: benvenuto}', async () => {
+    vi.stubEnv('NEW_OPENING_ENABLED', '1');
+    stubOpeningSids();
+    const { supabase } = makeSupabase();
+
+    await enrollLeadIntoMario(supabase, { phone: '+393331234567', crmFunnel: 'CORSO 10 ORE' });
+
+    const call = vi.mocked(sendTemplateAndLog).mock.calls[0];
+    expect(call[6]).toEqual({ '1': 'benvenuto' });
+    expect(call[7]).toBe(openingBody('corso10', 2, null));
+  });
+
+  it('flag on ma SID env mancante → fallback INTERO al legacy + event opening_config_error (una volta)', async () => {
+    vi.stubEnv('NEW_OPENING_ENABLED', '1');
+    // Nessuna OPENING_SID_* stubbata: la selezione non trova il SID.
+    const { supabase, calls } = makeSupabase();
+
+    const res = await enrollLeadIntoMario(supabase, {
+      phone: '+393331234567', firstName: 'Anna', crmFunnel: 'CORSO 10 ORE',
+    });
+
+    expect(res).toMatchObject({ ok: true, conversationId: 42, sid: 'SM_TEST' });
+    const call = vi.mocked(sendTemplateAndLog).mock.calls[0];
+    // Ramo legacy identico: template Mario, label e variables legacy ({'3': nome}).
+    expect(call.slice(1, 6)).toEqual(
+      [42, '+393331234567', 'HX_OPENING', 'Fenice apertura', 'whatsapp:+390000000000'],
+    );
+    expect(call[6]).toEqual({ '3': 'Anna' });
+    const cfgErrs = calls.events.filter((e) => e.type === 'opening_config_error');
+    expect(cfgErrs).toHaveLength(1);
+    expect(cfgErrs[0].level).toBe('error');
+    expect(calls.events.some((e) => e.type === 'fenice_enroll')).toBe(true);
+  });
+
+  it('flag off → ramo legacy identico anche con le OPENING_SID_* configurate', async () => {
+    // NEW_OPENING_ENABLED non impostata (o !== "1")
+    stubOpeningSids();
+    const { supabase, calls } = makeSupabase();
+
+    const res = await enrollLeadIntoMario(supabase, {
+      phone: '+393331234567', firstName: 'Anna', crmFunnel: 'CORSO 10 ORE',
+    });
+
+    expect(res).toMatchObject({ ok: true, conversationId: 42, sid: 'SM_TEST' });
+    const call = vi.mocked(sendTemplateAndLog).mock.calls[0];
+    expect(call.slice(1, 6)).toEqual(
+      [42, '+393331234567', 'HX_OPENING', 'Fenice apertura', 'whatsapp:+390000000000'],
+    );
+    expect(call[6]).toEqual({ '3': 'Anna' });
+    expect(calls.events.some((e) => e.type === 'opening_config_error')).toBe(false);
   });
 });
