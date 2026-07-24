@@ -2,12 +2,31 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendOutcome } from '@/lib/bot-outcome';
 import { decideFollowupAction } from '@/lib/bot-followups';
-import { drainMarioReplies, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS } from '@/lib/fenice-autoreply';
+import { classifyInterrupted } from '@/lib/interrotto-note';
+import type { MarioTurn } from '@/lib/mario';
+import { drainMarioReplies, lastIsUnansweredInbound, isOrphanedReplyingLock } from '@/lib/fenice-autoreply';
 import { runAgendaFollowups } from '@/lib/agenda-followup';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
+
+const H = 3600_000;
+const D = 24 * H;
+// Oltre questa anzianità dell'ultimo inbound il lead è perso: niente redrive,
+// si prosegue verso la classificazione (fix conv 1251/1462).
+const REDRIVE_MAX_MS = 5 * D;
+const STALE_HANDED_OFF_MS = 48 * H;
+const STALE_BOOKED_MS = 24 * H;
+
+type MsgRow = {
+  direction: string;
+  body: string | null;
+  created_at: string;
+  twilio_status: string | null;
+  template_sid: string | null;
+  is_template?: boolean;
+};
 
 function authorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -23,59 +42,79 @@ export async function GET(req: NextRequest) {
   const supabase = getSupabaseAdmin();
   const now = Date.now();
 
-  // Conversazioni CRM-linked, attive, non chiuse.
-  const { data: convs } = await supabase
-    .from('conversations')
-    .select('id, ai_status, ai_started_at, crm_lead_id, bot_outcome, leads(phone_e164)')
-    .not('crm_lead_id', 'is', null)
-    .in('ai_status', ['active', 'replying'])
-    .limit(500);
+  const sequenceEnabled = process.env.SEQUENCE_ENABLED === '1';
+  const seqSids = [
+    process.env.SEQ_TEMPLATE_SID_1,
+    process.env.SEQ_TEMPLATE_SID_2,
+    process.env.SEQ_TEMPLATE_SID_3,
+    process.env.SEQ_TEMPLATE_SID_4,
+  ].filter((s): s is string => Boolean(s));
+
+  // Conversazioni CRM-linked non chiuse, paginate (capienza 50 lead/giorno →
+  // il vecchio .limit(500) non basta più).
+  const convs: any[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data } = await supabase
+      .from('conversations')
+      .select('id, ai_status, ai_started_at, crm_lead_id, bot_outcome, bot_followups_sent, leads(phone_e164)')
+      .not('crm_lead_id', 'is', null)
+      .in('ai_status', ['active', 'replying', 'handed_off', 'booked'])
+      .order('id', { ascending: true })
+      .range(from, from + 999);
+    const page = (data ?? []) as any[];
+    convs.push(...page);
+    if (page.length < 1000) break;
+  }
 
   const report: Record<string, unknown>[] = [];
 
-  for (const c of (convs ?? []) as any[]) {
+  for (const c of convs) {
     try {
       const phone = c.leads?.phone_e164 as string | undefined;
 
       // 1. Carica la cronologia messaggi dall'arruolamento in poi.
       let q = supabase
         .from('messages')
-        .select('direction, body, created_at')
+        .select('direction, body, created_at, twilio_status, template_sid, is_template')
         .eq('conversation_id', c.id)
         .order('created_at', { ascending: true })
         .limit(200);
       if (c.ai_started_at) q = q.gte('created_at', c.ai_started_at);
       const { data: msgData } = await q;
-      const rows = (msgData ?? []) as { direction: string; body: string; created_at: string }[];
+      const rows = (msgData ?? []) as MsgRow[];
+      const msgsForDecision = rows.map((r) => ({ direction: r.direction, body: r.body ?? '' }));
 
       // 2. Rete di sicurezza: re-drive se c'è un inbound senza risposta.
-      if (lastIsUnansweredInbound(rows)) {
-        if (!phone) {
-          report.push({ id: c.id, action: 'redrive', skipped: true, reason: 'no_from' });
+      // Solo per gli stati guidati dal bot: su handed_off/booked risponde l'umano.
+      if ((c.ai_status === 'active' || c.ai_status === 'replying') && lastIsUnansweredInbound(msgsForDecision)) {
+        // lastIsUnansweredInbound true ⇒ l'ultima riga è un inbound.
+        const lastPendingInboundAtMs = Date.parse(rows[rows.length - 1].created_at);
+
+        if (now - lastPendingInboundAtMs <= REDRIVE_MAX_MS) {
+          if (!phone) {
+            report.push({ id: c.id, action: 'redrive', skipped: true, reason: 'no_from' });
+            continue;
+          }
+          if (isOrphanedReplyingLock(c.ai_status, lastPendingInboundAtMs, now)) {
+            // Lock orfano: reset CAS sicuro. Se nel frattempo un drain reale ha
+            // cambiato stato, il reset non scatta.
+            await supabase
+              .from('conversations')
+              .update({ ai_status: 'active' })
+              .eq('id', c.id)
+              .eq('ai_status', 'replying');
+          }
+          // Il lead ha già aspettato, salta la finestra di accorpamento.
+          await drainMarioReplies(supabase, c.id, phone, () => 0);
+          report.push({ id: c.id, action: 'redrive' });
           continue;
         }
-        // Calcola l'istante dell'ultimo inbound (lastIsUnansweredInbound è true,
-        // quindi rows[rows.length-1] è un inbound).
-        const lastInboundAtMs = Date.parse(rows[rows.length - 1].created_at);
-
-        if (isOrphanedReplyingLock(c.ai_status, lastInboundAtMs, now)) {
-          // Lock orfano: reset CAS sicuro. Se nel frattempo un drain reale ha
-          // cambiato stato, il reset non scatta.
-          await supabase
-            .from('conversations')
-            .update({ ai_status: 'active' })
-            .eq('id', c.id)
-            .eq('ai_status', 'replying');
-        }
-        // Il lead ha già aspettato, salta la finestra di accorpamento.
-        await drainMarioReplies(supabase, c.id, phone, () => 0);
-        report.push({ id: c.id, action: 'redrive' });
-        continue;
+        // Inbound più vecchio di 5 giorni: il lead è già perso, va restituito,
+        // non ri-risposto → fallthrough verso la classificazione.
       }
 
-      // 2b. Lead terminale (APPUNTAMENTO) senza inbound in sospeso: mai
-      // riclassificare. La riga è stata riaperta dal webhook: richiudila per
-      // farla uscire dal giro del cron (risana anche le righe già incastrate).
+      // 2b. Lead terminale (APPUNTAMENTO): mai riclassificare. La riga è stata
+      // riaperta dal webhook: richiudila per farla uscire dal giro del cron.
       if (c.bot_outcome === 'APPUNTAMENTO') {
         if (c.ai_status === 'active') {
           await supabase
@@ -88,26 +127,104 @@ export async function GET(req: NextRequest) {
         continue;
       }
 
-      // 3. Classificazione CRM (NON_RISPOSTO / INTERROTTO).
-      const startedAtMs = c.ai_started_at ? Date.parse(c.ai_started_at) : null;
-      if (!startedAtMs) continue;
+      // Riferimento "ultima attività" per i watchdog: ultimo messaggio, o
+      // ai_started_at in assenza di messaggi.
+      const lastActivityAtMs = rows.length
+        ? Date.parse(rows[rows.length - 1].created_at)
+        : c.ai_started_at
+          ? Date.parse(c.ai_started_at)
+          : now;
 
+      // 2c. Watchdog handed_off: passato all'umano ma mai chiuso col CRM.
+      if (c.ai_status === 'handed_off') {
+        if (!c.bot_outcome && now - lastActivityAtMs > STALE_HANDED_OFF_MS) {
+          // Alert una volta sola per conversazione.
+          const { data: prior } = await supabase
+            .from('event_log')
+            .select('id')
+            .eq('type', 'stale_handed_off')
+            .contains('payload', { conversationId: c.id })
+            .limit(1);
+          if (!prior || prior.length === 0) {
+            await supabase.from('event_log').insert({
+              type: 'stale_handed_off',
+              payload: { conversationId: c.id } as never,
+              message: `[bot-fissatore] conv ${c.id} handed_off da >48h senza esito CRM: serve chiusura manuale`,
+              level: 'warning',
+            });
+            report.push({ id: c.id, action: 'stale_handed_off' });
+          }
+        }
+        continue;
+      }
+
+      // 2d. Watchdog booked: appuntamento preso ma esito CRM mai registrato.
+      // La data appuntamento non è ricostruibile qui: serve intervento, l'alert è il fix.
+      if (c.ai_status === 'booked') {
+        if (!c.bot_outcome && now - lastActivityAtMs > STALE_BOOKED_MS) {
+          await supabase.from('event_log').insert({
+            type: 'stale_booked_no_outcome',
+            payload: { conversationId: c.id } as never,
+            message: `[bot-fissatore] conv ${c.id} booked da >24h senza bot_outcome: esito CRM mai inviato`,
+            level: 'error',
+          });
+          report.push({ id: c.id, action: 'stale_booked_no_outcome' });
+        }
+        continue;
+      }
+
+      // 3. Classificazione finale (fine sequenza / silenzio Track B).
       const hasInbound = rows.some((r) => r.direction === 'in');
-      const lastInboundAtMs =
-        rows.reduceRight<number | null>((acc, r) => {
-          if (acc !== null) return acc;
-          return r.direction === 'in' ? Date.parse(r.created_at) : null;
-        }, null);
+      const lastInboundAtMs = rows.reduceRight<number | null>((acc, r) => {
+        if (acc !== null) return acc;
+        return r.direction === 'in' ? Date.parse(r.created_at) : null;
+      }, null);
 
       // phone non serve qui: sendOutcome fa solo callback CRM, non invia WhatsApp.
-      const action = decideFollowupAction({ startedAtMs, nowMs: now, hasInbound, lastInboundAtMs, botOutcome: c.bot_outcome });
+      const action = decideFollowupAction({
+        nowMs: now,
+        msgs: rows,
+        seqSids,
+        hasInbound,
+        lastInboundAtMs,
+        botOutcome: c.bot_outcome,
+        sequenceEnabled,
+        nudgesSent: (c.bot_followups_sent as number | null) ?? 0,
+      });
 
-      if (action === 'non_risposto') {
-        await sendOutcome(supabase, c.id, { outcome: 'NON_RISPOSTO', note: 'Nessuna risposta.' });
+      if (action === 'discard_dead') {
+        await sendOutcome(supabase, c.id, {
+          outcome: 'DA_SCARTARE',
+          discardReason: 'numero inesistente',
+          note: 'Nessun messaggio consegnato in 14 giorni (verifica Twilio delivery). Numero morto.',
+        });
         report.push({ id: c.id, action });
-      } else if (action === 'interrotto') {
-        await sendOutcome(supabase, c.id, { outcome: 'INTERROTTO', note: 'Chat interrotta senza obiezione, riassegnare a operatore.' });
+      } else if (action === 'non_risposto') {
+        // Quanti messaggi il lead ha DAVVERO ricevuto (delivered/read), non inviati.
+        const nDelivered = rows.filter(
+          (r) => r.direction === 'out' && (r.twilio_status === 'delivered' || r.twilio_status === 'read'),
+        ).length;
+        await sendOutcome(supabase, c.id, {
+          outcome: 'NON_RISPOSTO',
+          note: `Sequenza completa: ${nDelivered} messaggi consegnati in 12 giorni, mai una risposta. Da provare a voce.`,
+        });
         report.push({ id: c.id, action });
+      } else if (action === 'interrotto_classify') {
+        const history: MarioTurn[] = rows.slice(-40).map((r) => ({
+          role: r.direction === 'in' ? ('user' as const) : ('assistant' as const),
+          content: r.body ?? '',
+        }));
+        const v = await classifyInterrupted(history);
+        if (v.discard) {
+          await sendOutcome(supabase, c.id, {
+            outcome: 'DA_SCARTARE',
+            discardReason: v.discardReason,
+            note: v.note,
+          });
+        } else {
+          await sendOutcome(supabase, c.id, { outcome: 'INTERROTTO', note: v.note });
+        }
+        report.push({ id: c.id, action, discard: v.discard });
       }
       // action === 'none': niente da fare
     } catch (e) {
