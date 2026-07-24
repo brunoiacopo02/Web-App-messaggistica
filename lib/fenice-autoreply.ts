@@ -170,7 +170,20 @@ export async function drainMarioReplies(
       }
 
       if (result.passToHuman) { finalStatus = 'handed_off'; break; }
-      if (result.appointmentFixed) { finalStatus = 'booked'; break; }
+      if (result.appointmentFixed) {
+        // Lead CRM con appuntamento fissato ma senza outcome parsato (es. data
+        // mancante): il callback non partirà — segnala subito, il watchdog del
+        // cron farà da rete a 24h. (Caso reale: conv 3061 del 15/07.)
+        if (crmLeadId) {
+          await supabase.from('event_log').insert({
+            type: 'booked_without_outcome',
+            payload: { conversationId, crmLeadId } as never,
+            message: `[bot-fissatore] conv ${conversationId}: appuntamento fissato ma outcome non parsato, callback CRM NON inviata`,
+            level: 'error',
+          });
+        }
+        finalStatus = 'booked'; break;
+      }
     }
   } catch (err) {
     const m = err instanceof Error ? err.message : 'errore';

@@ -19,11 +19,19 @@ export type SendOutcomeArgs = {
  * Invia l'esito al CRM per una conversazione CRM-linked. No-op per lead non-CRM.
  * Su 2xx persiste bot_outcome/at/scheduled/report e chiude la conversazione.
  */
+export type SendOutcomeOpts = {
+  /** RICHIAMO non-terminale: POST al CRM per visibilità, ma la conversazione resta
+   * aperta e bot_outcome non viene toccato (la sequenza continua). */
+  interim?: boolean;
+};
+
 export async function sendOutcome(
   supabase: Supa,
   conversationId: number,
   args: SendOutcomeArgs,
+  opts: SendOutcomeOpts = {},
 ): Promise<{ sent: boolean; status?: number; error?: string }> {
+  const interim = opts.interim === true && args.outcome === 'RICHIAMO';
   const secret = process.env.BOT_WEBHOOK_SECRET;
   if (!secret) return { sent: false, error: 'not_configured' };
 
@@ -41,6 +49,12 @@ export async function sendOutcome(
     args,
     row?.bot_scheduled_at ?? null,
   );
+
+  // RICHIAMO interim: mai su lead già esitati (un RICHIAMO su un APPUNTAMENTO lo
+  // riporterebbe indietro di stato lato CRM — avvertenza esplicita del loro team).
+  if (interim && action.kind !== 'normal') {
+    return { sent: false, error: 'interim_skipped_locked' };
+  }
 
   // Lead già fissato ma senza data originale: non possiamo re-inviare APPUNTAMENTO
   // (la data è obbligatoria). Non declassiamo: logghiamo un warning ed usciamo.
@@ -91,6 +105,17 @@ export async function sendOutcome(
       body: rawBody,
     });
     if (res.ok) {
+      if (interim) {
+        // Visibilità sul cruscotto CRM, ma la lavorazione continua: niente
+        // bot_outcome, niente chiusura.
+        await supabase.from('event_log').insert({
+          type: 'bot_outcome_sent',
+          payload: { conversationId, crmLeadId, outcome: args.outcome, interim: true } as never,
+          message: `[bot-fissatore] RICHIAMO interim inviato per lead ${crmLeadId} (sequenza in corso)`,
+          level: 'info',
+        });
+        return { sent: true, status: res.status };
+      }
       if (action.kind === 'normal') {
         await supabase.from('conversations').update({
           bot_outcome: args.outcome,
@@ -124,7 +149,8 @@ export async function sendOutcome(
       // Il CRM rifiuta l'esito (lead non più assegnato al bot, es. già richiamato
       // nel pool umano): ritentare non può che ridare 403, quindi registra l'esito
       // localmente e chiudi la conversazione per fermare il loop del cron.
-      if (action.kind === 'normal') {
+      // (Per gli interim niente persistenza: RICHIAMO non è un esito nostro.)
+      if (action.kind === 'normal' && !interim) {
         await supabase.from('conversations').update({
           bot_outcome: args.outcome,
           bot_outcome_at: new Date().toISOString(),
@@ -132,7 +158,7 @@ export async function sendOutcome(
           bot_report: (args.report ?? null) as never,
           ai_status: 'closed',
         }).eq('id', conversationId);
-      } else {
+      } else if (!interim) {
         // Lead terminale: mai declassare bot_outcome, chiudi soltanto.
         await supabase.from('conversations').update({ ai_status: 'closed' }).eq('id', conversationId);
       }

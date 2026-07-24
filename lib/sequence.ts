@@ -24,6 +24,21 @@ export function inSendWindow(nowMs: number): boolean {
   return mins >= 8 * 60 + 30 && mins < 20 * 60 + 30;
 }
 
+/** ISO 8601 con offset esplicito Europe/Rome (es. 2026-08-07T09:00:00+02:00): il CRM
+ * rifiuta con 400 le date senza offset. */
+export function toRomeIso(ms: number): string {
+  const d = new Date(ms);
+  const local = new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Europe/Rome',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).format(d).replace(' ', 'T');
+  const tzName = new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Rome', timeZoneName: 'longOffset' })
+    .formatToParts(d).find((p) => p.type === 'timeZoneName')?.value ?? '';
+  const m = tzName.match(/GMT([+-]\d{2}:\d{2})/);
+  return local + (m ? m[1] : '+02:00');
+}
+
 const outs = (msgs: MsgLite[]) => msgs.filter((m) => m.direction === 'out');
 
 export function anyDelivered(msgs: MsgLite[]): boolean {

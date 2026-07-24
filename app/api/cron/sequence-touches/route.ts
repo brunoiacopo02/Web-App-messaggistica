@@ -4,10 +4,14 @@ import {
   decideTrackA,
   decideTrackB,
   pickNudgeText,
+  firstOutboundAtMs,
   lastOutboundAtMs,
+  toRomeIso,
   NUDGE1_MAX_H,
+  SEQUENCE_END_DAYS,
   type MsgLite,
 } from '@/lib/sequence';
+import { sendOutcome } from '@/lib/bot-outcome';
 import { sendTemplate, sendFreeText, getTemplateBody } from '@/lib/twilio';
 import { feniceOpening } from '@/lib/fenice-opening';
 
@@ -204,9 +208,22 @@ export async function GET(req: NextRequest) {
             continue;
           }
           sent++;
-          await sendSequenceTemplate(
+          const touchRes = await sendSequenceTemplate(
             supabase, c.id, phone, sid, `Sequenza touch ${action.touchIndex}`, followupFrom, { '1': firstName ?? 'ciao' },
           );
+          // Dopo il primo follow-up riuscito: RICHIAMO interim (una volta sola,
+          // perché il touch 1 parte una volta sola) con data = fine sequenza, così
+          // il CRM vede il lead "in lavorazione estesa" con la data del termine.
+          if (touchRes.ok && action.touchIndex === 1) {
+            const t0 = firstOutboundAtMs(msgs);
+            if (t0 !== null) {
+              await sendOutcome(supabase, c.id, {
+                outcome: 'RICHIAMO',
+                date: toRomeIso(t0 + SEQUENCE_END_DAYS * 24 * H),
+                note: 'Sequenza WhatsApp estesa in corso: tentativi automatici fino a questa data, poi esito definitivo.',
+              }, { interim: true });
+            }
+          }
         } else {
           // discard_dead / non_risposto li gestisce bot-followups; wait = niente.
           skipped++;

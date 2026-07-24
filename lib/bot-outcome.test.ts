@@ -94,3 +94,36 @@ describe('sendOutcome — guard APPUNTAMENTO terminale', () => {
     expect(calls.events.some((e) => e.type === 'bot_outcome_locked' && e.level === 'warn')).toBe(true);
   });
 });
+
+describe('sendOutcome — RICHIAMO interim', () => {
+  it('interim su lead in lavorazione → POST inviato, nessuna persistenza locale', async () => {
+    const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null });
+    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: '2026-08-07T09:00:00+02:00', note: 'seq' }, { interim: true });
+
+    expect(res.sent).toBe(true);
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(body.outcome).toBe('RICHIAMO');
+    expect(calls.updates).toHaveLength(0);  // conversazione resta aperta
+    expect(calls.events.some((e) => e.type === 'bot_outcome_sent' && e.payload.interim === true)).toBe(true);
+  });
+
+  it('interim su lead già APPUNTAMENTO → nessun POST (mai riportare indietro lo stato)', async () => {
+    const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE });
+    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: '2026-08-07T09:00:00+02:00' }, { interim: true });
+
+    expect(res.sent).toBe(false);
+    expect(res.error).toBe('interim_skipped_locked');
+    expect((globalThis.fetch as any).mock.calls).toHaveLength(0);
+    expect(calls.updates).toHaveLength(0);
+  });
+
+  it('interim con CRM 403 → nessuna persistenza (RICHIAMO non è un esito nostro)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 403, text: async () => 'no' })));
+    const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null });
+    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: '2026-08-07T09:00:00+02:00' }, { interim: true });
+
+    expect(res.sent).toBe(false);
+    expect(calls.updates).toHaveLength(0);
+    expect(calls.events.some((e) => e.type === 'bot_outcome_rejected')).toBe(true);
+  });
+});

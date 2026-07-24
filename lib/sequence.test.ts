@@ -4,6 +4,7 @@ import {
   inSendWindow, anyDelivered, allOutboundDeadNoDelivery, countSequenceTouches,
   firstOutboundAtMs, lastOutboundAtMs, decideTrackA, decideTrackB, pickNudgeText,
   type MsgLite,
+  toRomeIso,
 } from './sequence';
 
 const H = 3600_000;
@@ -212,5 +213,18 @@ describe('pickNudgeText', () => {
       expect(t.length).toBeGreaterThan(10);
       expect(t).not.toMatch(/  |\{|\}|undefined|null/);
     }
+  });
+});
+
+describe('toRomeIso', () => {
+  it('estate: offset +02:00', () => {
+    // 2026-07-24T10:00:00Z = 12:00 a Roma (CEST)
+    const iso = toRomeIso(Date.parse('2026-07-24T10:00:00Z'));
+    expect(iso).toBe('2026-07-24T12:00:00+02:00');
+  });
+  it('inverno: offset +01:00', () => {
+    // 2026-01-15T10:00:00Z = 11:00 a Roma (CET)
+    const iso = toRomeIso(Date.parse('2026-01-15T10:00:00Z'));
+    expect(iso).toBe('2026-01-15T11:00:00+01:00');
   });
 });
