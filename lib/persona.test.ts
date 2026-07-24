@@ -1,0 +1,152 @@
+import { describe, it, expect } from 'vitest';
+import {
+  normalizeFunnel,
+  variantIndexFor,
+  openingEnvKey,
+  openingBody,
+  personaForConversation,
+  PERSONA_NAME,
+  type FunnelKey,
+} from './persona';
+
+describe('normalizeFunnel', () => {
+  it('CORSO 10 ORE → corso10', () => expect(normalizeFunnel('CORSO 10 ORE')).toBe('corso10'));
+  it('TELEGRAM → telegram', () => expect(normalizeFunnel('TELEGRAM')).toBe('telegram'));
+  it('TELEGRAM-TK → telegram', () => expect(normalizeFunnel('TELEGRAM-TK')).toBe('telegram'));
+  it('JOB SIMULATOR → jobsim', () => expect(normalizeFunnel('JOB SIMULATOR')).toBe('jobsim'));
+  it('case-insensitive', () => {
+    expect(normalizeFunnel('corso 10 ore')).toBe('corso10');
+    expect(normalizeFunnel('Telegram-Tk')).toBe('telegram');
+    expect(normalizeFunnel('job simulator')).toBe('jobsim');
+  });
+  it('trim degli spazi', () => {
+    expect(normalizeFunnel('  CORSO 10 ORE  ')).toBe('corso10');
+    expect(normalizeFunnel(' TELEGRAM ')).toBe('telegram');
+  });
+  it('sconosciuto/null/undefined/vuoto → other', () => {
+    expect(normalizeFunnel('QUALCOS ALTRO')).toBe('other');
+    expect(normalizeFunnel(null)).toBe('other');
+    expect(normalizeFunnel(undefined)).toBe('other');
+    expect(normalizeFunnel('')).toBe('other');
+  });
+});
+
+describe('variantIndexFor (parità di conversationId)', () => {
+  it('dispari → 1', () => {
+    expect(variantIndexFor(1)).toBe(1);
+    expect(variantIndexFor(3)).toBe(1);
+    expect(variantIndexFor(1001)).toBe(1);
+  });
+  it('pari → 2', () => {
+    expect(variantIndexFor(0)).toBe(2);
+    expect(variantIndexFor(2)).toBe(2);
+    expect(variantIndexFor(1000)).toBe(2);
+  });
+});
+
+describe('openingEnvKey', () => {
+  it('corso10 → OPENING_SID_C1/C2', () => {
+    expect(openingEnvKey('corso10', 1)).toBe('OPENING_SID_C1');
+    expect(openingEnvKey('corso10', 2)).toBe('OPENING_SID_C2');
+  });
+  it('telegram → OPENING_SID_T1/T2', () => {
+    expect(openingEnvKey('telegram', 1)).toBe('OPENING_SID_T1');
+    expect(openingEnvKey('telegram', 2)).toBe('OPENING_SID_T2');
+  });
+  it('jobsim → OPENING_SID_J1/J2', () => {
+    expect(openingEnvKey('jobsim', 1)).toBe('OPENING_SID_J1');
+    expect(openingEnvKey('jobsim', 2)).toBe('OPENING_SID_J2');
+  });
+  it('other → fallback su C1/C2', () => {
+    expect(openingEnvKey('other', 1)).toBe('OPENING_SID_C1');
+    expect(openingEnvKey('other', 2)).toBe('OPENING_SID_C2');
+  });
+});
+
+describe('openingBody — testi ESATTI della spec', () => {
+  it('C1 con nome', () => {
+    expect(openingBody('corso10', 1, 'Luca')).toBe(
+      'Ciao Luca, sono Marta di Fenice Academy. Le tue 10 ore gratuite arrivano via email a minuti. Intanto dimmi: punti a una seconda entrata o a cambiare proprio lavoro?',
+    );
+  });
+  it('C2 con nome', () => {
+    expect(openingBody('corso10', 2, 'Luca')).toBe(
+      "Ciao Luca, Marta di Fenice Academy: il corso di 10 ore è gratuito davvero, l'accesso ti arriva via email. Tu che obiettivo hai: un'entrata extra o un nuovo lavoro da remoto?",
+    );
+  });
+  it('T1 con nome', () => {
+    expect(openingBody('telegram', 1, 'Luca')).toBe(
+      "Ciao Luca, sono Marta di Fenice Academy. L'accesso al canale Telegram ti arriva via email a breve. Intanto dimmi: ti interessa più un'entrata extra o cambiare proprio lavoro?",
+    );
+  });
+  it('T2 con nome', () => {
+    expect(openingBody('telegram', 2, 'Luca')).toBe(
+      "Ciao Luca, Marta di Fenice Academy: l'ingresso nel canale Telegram è in arrivo via email. Curiosità: hai già una professione digitale in mente o vuoi capire quale fa per te?",
+    );
+  });
+  it('J1 con nome', () => {
+    expect(openingBody('jobsim', 1, 'Luca')).toBe(
+      "Ciao Luca, sono Marta di Fenice Academy. Il simulatore ti dirà quale professione digitale ti si addice di più: tu intanto dimmi, punti a un'entrata extra o a cambiare lavoro?",
+    );
+  });
+  it('J2 con nome', () => {
+    expect(openingBody('jobsim', 2, 'Luca')).toBe(
+      "Ciao Luca, Marta di Fenice Academy. Prima che il simulatore delle professioni digitali ti dia il verdetto: una professione in mente ce l'hai già o parti da zero?",
+    );
+  });
+  it('other → testi di corso10', () => {
+    expect(openingBody('other', 1, 'Luca')).toBe(openingBody('corso10', 1, 'Luca'));
+    expect(openingBody('other', 2, 'Luca')).toBe(openingBody('corso10', 2, 'Luca'));
+  });
+  it("nome mancante → fallback 'benvenuto'", () => {
+    expect(openingBody('corso10', 1)).toContain('Ciao benvenuto,');
+    expect(openingBody('corso10', 1, null)).toContain('Ciao benvenuto,');
+    expect(openingBody('corso10', 1, '')).toContain('Ciao benvenuto,');
+    expect(openingBody('corso10', 1, '   ')).toContain('Ciao benvenuto,');
+  });
+  it('nome con spazi → trim', () => {
+    expect(openingBody('telegram', 2, '  Anna  ')).toContain('Ciao Anna,');
+  });
+  it('nessun placeholder residuo in nessuna variante', () => {
+    const funnels: FunnelKey[] = ['corso10', 'telegram', 'jobsim', 'other'];
+    for (const f of funnels) {
+      for (const v of [1, 2] as const) {
+        const body = openingBody(f, v, 'Luca');
+        expect(body).not.toMatch(/\{|\}|undefined|null/);
+        expect(body.startsWith('Ciao Luca,')).toBe(true);
+      }
+    }
+  });
+});
+
+describe('personaForConversation', () => {
+  const MARTA = new Set(['HXm1', 'HXm2']);
+  const out = (sid: string | null) => ({ direction: 'out', template_sid: sid });
+  const inb = () => ({ direction: 'in', template_sid: null });
+
+  it('primo out templated in martaSids → marta', () => {
+    expect(personaForConversation([out('HXm1'), inb(), out(null)], MARTA)).toBe('marta');
+  });
+  it('primo out templated legacy → mario', () => {
+    expect(personaForConversation([out('HXlegacy'), inb(), out('HXm1')], MARTA)).toBe('mario');
+  });
+  it('nessun out → marta (conversazione nuova, apertura differita)', () => {
+    expect(personaForConversation([], MARTA)).toBe('marta');
+    expect(personaForConversation([inb()], MARTA)).toBe('marta');
+  });
+  it('out free-form (senza template) prima del template marta → ignora i non-template → marta', () => {
+    expect(personaForConversation([out(null), out('HXm2')], MARTA)).toBe('marta');
+  });
+  it('out free-form prima del template legacy → mario', () => {
+    expect(personaForConversation([out(null), out('HXlegacy')], MARTA)).toBe('mario');
+  });
+  it('solo out free-form, nessun template → mario', () => {
+    expect(personaForConversation([out(null), inb(), out(null)], MARTA)).toBe('mario');
+  });
+});
+
+describe('PERSONA_NAME', () => {
+  it('mappa persona → nome visualizzato', () => {
+    expect(PERSONA_NAME).toEqual({ mario: 'Mario', marta: 'Marta' });
+  });
+});

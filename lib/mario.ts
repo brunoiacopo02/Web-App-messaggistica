@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { MARIO_SYSTEM_PROMPT } from './mario-prompt';
+import { buildMarioSystem } from './mario-prompt';
 import { romeNowContext } from './rome-time';
 import { bookingSlotsContext } from './booking-slots';
 
@@ -65,10 +65,11 @@ function getClient(): Anthropic {
   return _client;
 }
 
-/** Genera la prossima risposta di Mario data la cronologia. Inietta l'ora di Roma. */
+/** Genera la prossima risposta del bot data la cronologia. Inietta l'ora di Roma.
+ *  `personaName` (default 'Mario') parametrizza SOLO il nome nel system prompt. */
 export async function generateMarioReply(
   history: MarioTurn[],
-  opts?: { now?: Date },
+  opts?: { now?: Date; personaName?: string },
 ): Promise<MarioResult> {
   const messages =
     history.length > 0
@@ -76,7 +77,7 @@ export async function generateMarioReply(
       : [{ role: 'user' as const, content: 'Inizia la conversazione presentandoti.' }];
 
   const now = opts?.now ?? new Date();
-  const system = `${MARIO_SYSTEM_PROMPT}\n\n${romeNowContext(now)}\n\n${bookingSlotsContext(now)}`;
+  const system = `${buildMarioSystem(opts?.personaName ?? 'Mario')}\n\n${romeNowContext(now)}\n\n${bookingSlotsContext(now)}`;
 
   const response = await getClient().messages.create({
     model: MARIO_MODEL,

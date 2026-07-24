@@ -14,6 +14,14 @@ import {
 import { sendOutcome } from '@/lib/bot-outcome';
 import { sendTemplate, sendFreeText, getTemplateBody } from '@/lib/twilio';
 import { feniceOpening } from '@/lib/fenice-opening';
+import {
+  personaForConversation,
+  normalizeFunnel,
+  variantIndexFor,
+  openingEnvKey,
+  openingBody,
+  PERSONA_NAME,
+} from '@/lib/persona';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -110,8 +118,21 @@ export async function GET(req: NextRequest) {
 
   // SID sequenza Track A: env SEQ_TEMPLATE_SID_1..4 (posizionali sui touch 1..4).
   const seqSidByIndex = [1, 2, 3, 4].map((i) => process.env[`SEQ_TEMPLATE_SID_${i}`]);
+  // Variante Marta (posizionale come i legacy). Possono mancare finché il nuovo
+  // flusso è spento: il config-error a inizio run resta SOLO sui legacy.
+  const martaSeqSidByIndex = [1, 2, 3, 4].map((i) => process.env[`MARTA_SEQ_TEMPLATE_SID_${i}`]);
+  const martaReengageSid = process.env.MARTA_REENGAGE_TEMPLATE_SID;
+  // Tutti i SID "Marta" (aperture A/B + sequenza + riaggancio): servono a derivare
+  // la persona di una conversazione dal primo template outbound.
+  const martaOpeningSids = ['C1', 'C2', 'T1', 'T2', 'J1', 'J2'].map(
+    (k) => process.env[`OPENING_SID_${k}`],
+  );
+  const martaSids = new Set(
+    [...martaOpeningSids, ...martaSeqSidByIndex, martaReengageSid].filter((s): s is string => !!s),
+  );
   const missingSeqIdx = [1, 2, 3, 4].filter((i) => !seqSidByIndex[i - 1]);
-  const seqSids = seqSidByIndex.filter((s): s is string => !!s);
+  // Il CONTEGGIO dei touch considera entrambe le varianti (legacy + Marta).
+  const seqSids = [...seqSidByIndex, ...martaSeqSidByIndex].filter((s): s is string => !!s);
   if (missingSeqIdx.length) {
     // Una volta per run: i send_touch degli indici mancanti verranno saltati.
     await supabase.from('event_log').insert({
@@ -132,13 +153,25 @@ export async function GET(req: NextRequest) {
       level: 'error',
     });
   };
+  const openingLogged = new Set<string>();
+  const logOpeningConfigError = async (key: string) => {
+    if (openingLogged.has(key)) return;
+    openingLogged.add(key);
+    await supabase.from('event_log').insert({
+      type: 'opening_config_error',
+      payload: { missing: [key] } as never,
+      message: `[sequenza] env apertura mancante: ${key} — fallback all'apertura legacy`,
+      level: 'error',
+    });
+  };
+  const newOpeningEnabled = process.env.NEW_OPENING_ENABLED === '1';
 
   // Tutte le conv CRM attive, con paginazione (>1000 possibili a regime 50/g).
   const convs: any[] = [];
   for (let fromRow = 0; ; fromRow += 1000) {
     const { data } = await supabase
       .from('conversations')
-      .select('id, ai_status, ai_started_at, crm_lead_id, bot_outcome, bot_followups_sent, leads(phone_e164, first_name)')
+      .select('id, ai_status, ai_started_at, crm_lead_id, crm_funnel, bot_outcome, bot_followups_sent, leads(phone_e164, first_name)')
       .not('crm_lead_id', 'is', null)
       .in('ai_status', ['active'])
       .range(fromRow, fromRow + 999);
@@ -182,6 +215,10 @@ export async function GET(req: NextRequest) {
       const { data: msgData } = await q;
       const msgs = (msgData ?? []) as MsgLite[];
 
+      // Persona della conversazione (dal primo template outbound): le conv aperte
+      // da Mario restano Mario, quelle aperte con i template Marta restano Marta.
+      const persona = personaForConversation(msgs, martaSids);
+
       const hasInbound = msgs.some((m) => m.direction === 'in');
 
       if (!hasInbound) {
@@ -190,8 +227,31 @@ export async function GET(req: NextRequest) {
         const action = decideTrackA({ nowMs: now, msgs, seqSids, sequenceEnabled: true });
 
         if (action.kind === 'send_opening') {
-          if (!openingSid || !openingFrom) {
-            await logConfigError(!openingSid ? 'FENICE_OPENING_TEMPLATE_SID' : 'TWILIO_WHATSAPP_NUMBER_FENICE');
+          if (!openingFrom) {
+            await logConfigError('TWILIO_WHATSAPP_NUMBER_FENICE');
+            skipped++;
+            continue;
+          }
+          if (newOpeningEnabled) {
+            // Nuove aperture per-funnel A/B (persona Marta), stessa selezione dell'enroll.
+            const funnel = normalizeFunnel(c.crm_funnel as string | null | undefined);
+            const variant = variantIndexFor(c.id);
+            const envKey = openingEnvKey(funnel, variant);
+            const newSid = process.env[envKey];
+            if (newSid) {
+              sent++;
+              await sendSequenceTemplate(
+                supabase, c.id, phone, newSid, `Apertura ${envKey}`, openingFrom,
+                { '1': firstName?.trim() || 'benvenuto' },
+                openingBody(funnel, variant, firstName),
+              );
+              continue;
+            }
+            // SID mancante → una volta per run l'errore, poi fallback all'apertura legacy.
+            await logOpeningConfigError(envKey);
+          }
+          if (!openingSid) {
+            await logConfigError('FENICE_OPENING_TEMPLATE_SID');
             skipped++;
             continue;
           }
@@ -201,9 +261,15 @@ export async function GET(req: NextRequest) {
             supabase, c.id, phone, openingSid, 'Fenice apertura', openingFrom, variables, feniceOpening(firstName),
           );
         } else if (action.kind === 'send_touch') {
-          const sid = seqSidByIndex[action.touchIndex - 1];
+          const sid =
+            persona === 'marta'
+              ? martaSeqSidByIndex[action.touchIndex - 1]
+              : seqSidByIndex[action.touchIndex - 1];
           if (!sid) {
-            // Config error già loggato a inizio run: salta questo indice.
+            // Legacy: config error già loggato a inizio run. Marta: log una volta per run.
+            if (persona === 'marta') {
+              await logConfigError(`MARTA_SEQ_TEMPLATE_SID_${action.touchIndex}`);
+            }
             skipped++;
             continue;
           }
@@ -265,7 +331,7 @@ export async function GET(req: NextRequest) {
           skipped++;
           continue;
         }
-        const body = pickNudgeText(c.id, firstName);
+        const body = pickNudgeText(c.id, firstName, PERSONA_NAME[persona]);
         sent++;
         const res = await sendFreeText({ to: phone, body, from: followupFrom });
         await supabase.from('messages').insert({
@@ -284,14 +350,15 @@ export async function GET(req: NextRequest) {
           })
           .eq('id', c.id);
       } else {
-        if (!reengageSid) {
-          await logConfigError('REENGAGE_TEMPLATE_SID');
+        const rSid = persona === 'marta' ? martaReengageSid : reengageSid;
+        if (!rSid) {
+          await logConfigError(persona === 'marta' ? 'MARTA_REENGAGE_TEMPLATE_SID' : 'REENGAGE_TEMPLATE_SID');
           skipped++;
           continue;
         }
         sent++;
         const res = await sendSequenceTemplate(
-          supabase, c.id, phone, reengageSid, `Riaggancio ${action.nudgeIndex}`, followupFrom, { '1': firstName ?? 'ciao' },
+          supabase, c.id, phone, rSid, `Riaggancio ${action.nudgeIndex}`, followupFrom, { '1': firstName ?? 'ciao' },
         );
         // Contatore nudge SOLO a invio riuscito (63049/errori → si ritenta).
         if (res.ok) {

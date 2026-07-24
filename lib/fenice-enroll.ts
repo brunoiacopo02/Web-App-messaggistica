@@ -2,6 +2,7 @@ import type { getSupabaseAdmin } from './supabase/admin';
 import { findOrCreateLeadConversation, sendTemplateAndLog } from './messaging';
 import { feniceOpening } from './fenice-opening';
 import { inSendWindow } from './sequence';
+import { normalizeFunnel, variantIndexFor, openingEnvKey, openingBody } from './persona';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -62,9 +63,35 @@ export async function enrollLeadIntoMario(
     return { ok: true, conversationId, deferred: true };
   }
 
-  const variables: Record<string, string> = firstName ? { '3': firstName } : {};
+  // Selezione apertura: legacy (Mario) di default; se NEW_OPENING_ENABLED === '1'
+  // apertura per-funnel A/B (Marta) con variante per parità di conversationId.
+  // SID env mancante → fallback INTERO al ramo legacy + event opening_config_error.
+  let sendSid = templateSid;
+  let sendLabel = 'Fenice apertura';
+  let variables: Record<string, string> = firstName ? { '3': firstName } : {};
+  let bodyOverride = feniceOpening(firstName);
+  if (process.env.NEW_OPENING_ENABLED === '1') {
+    const funnel = normalizeFunnel(args.crmFunnel);
+    const variant = variantIndexFor(conversationId);
+    const envKey = openingEnvKey(funnel, variant);
+    const openingSid = process.env[envKey];
+    if (openingSid) {
+      sendSid = openingSid;
+      sendLabel = `Apertura ${envKey}`;
+      variables = { '1': firstName?.trim() || 'benvenuto' };
+      bodyOverride = openingBody(funnel, variant, firstName);
+    } else {
+      await supabase.from('event_log').insert({
+        type: 'opening_config_error',
+        payload: { phone: args.phone, conversationId, envKey, funnel, variant } as never,
+        message: `Apertura A/B: env ${envKey} mancante, fallback al template legacy per ${args.phone}`,
+        level: 'error',
+      });
+    }
+  }
+
   const res = await sendTemplateAndLog(
-    supabase, conversationId, args.phone, templateSid, 'Fenice apertura', from, variables, feniceOpening(firstName),
+    supabase, conversationId, args.phone, sendSid, sendLabel, from, variables, bodyOverride,
   );
 
   await supabase.from('conversations').update(convUpdate).eq('id', conversationId);
