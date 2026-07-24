@@ -214,6 +214,26 @@ describe('pickNudgeText', () => {
       expect(t).not.toMatch(/  |\{|\}|undefined|null/);
     }
   });
+  it("default: firma come Mario (persona omessa = 'Mario')", () => {
+    for (const id of [0, 1, 2]) {
+      expect(pickNudgeText(id, 'Luca')).toContain('Mario');
+      expect(pickNudgeText(id, 'Luca')).toBe(pickNudgeText(id, 'Luca', 'Mario'));
+    }
+  });
+  it("personaName 'Marta': firma come Marta in tutte le varianti, mai Mario", () => {
+    for (const id of [0, 1, 2]) {
+      const t = pickNudgeText(id, 'Luca', 'Marta');
+      expect(t).toContain('Marta');
+      expect(t).not.toContain('Mario');
+      expect(t).toContain('Luca');
+      expect(t).not.toMatch(/  |\{|\}|undefined|null/);
+    }
+  });
+  it('rotazione id % 3 invariata anche con persona esplicita', () => {
+    const [a, b, c] = [0, 1, 2].map((id) => pickNudgeText(id, null, 'Marta'));
+    expect(new Set([a, b, c]).size).toBe(3);
+    expect(pickNudgeText(3, null, 'Marta')).toBe(a);
+  });
 });
 
 describe('toRomeIso', () => {

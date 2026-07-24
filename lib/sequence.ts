@@ -136,14 +136,14 @@ export function decideTrackB(input: {
   return { kind: 'wait' };
 }
 
-// Nudge free-text di Mario: richiamo gentile, mai pressante.
-const NUDGE_VARIANTS: ((name: string) => string)[] = [
-  (n) => `Ciao${n}! Sono ancora qui se ti va di riprendere il discorso da dove eravamo rimasti. Nessuna fretta!`,
-  (n) => `Ehi${n}, ci eravamo persi a metà chiacchierata! Se ti va di continuare, io sono qui.`,
-  (n) => `Ciao${n}! Se ti è rimasto qualche dubbio o vuoi riprendere il discorso, scrivimi pure quando ti è comodo.`,
+// Nudge free-text della persona (Mario/Marta): richiamo gentile, mai pressante.
+const NUDGE_VARIANTS: ((name: string, persona: string) => string)[] = [
+  (n, p) => `Ciao${n}, sono ${p}! Ancora qui se ti va di riprendere il discorso da dove eravamo rimasti. Nessuna fretta!`,
+  (n, p) => `Ehi${n}, sono ${p}: ci eravamo persi a metà chiacchierata! Se ti va di continuare, io sono qui.`,
+  (n, p) => `Ciao${n}, sono ${p}! Se ti è rimasto qualche dubbio o vuoi riprendere il discorso, scrivimi pure quando ti è comodo.`,
 ];
 
-export function pickNudgeText(conversationId: number, firstName: string | null): string {
+export function pickNudgeText(conversationId: number, firstName: string | null, personaName: string = 'Mario'): string {
   const name = firstName ? ` ${firstName}` : '';
-  return NUDGE_VARIANTS[conversationId % 3](name);
+  return NUDGE_VARIANTS[conversationId % 3](name, personaName);
 }
