@@ -10,7 +10,7 @@ if (!sids.length) {
   const res = await fetch('https://content.twilio.com/v1/Content?PageSize=100', { headers: { Authorization: auth } });
   const data = await res.json();
   sids = (data.contents ?? [])
-    .filter((c) => /^fenice_(seq_|reengage)/.test(c.friendly_name ?? ''))
+    .filter((c) => /^fenice_(seq_|reengage|open_)/.test(c.friendly_name ?? ''))
     .map((c) => c.sid);
 }
 for (const sid of sids) {
