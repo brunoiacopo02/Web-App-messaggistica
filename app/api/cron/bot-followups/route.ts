@@ -79,7 +79,11 @@ export async function GET(req: NextRequest) {
         .eq('conversation_id', c.id)
         .order('created_at', { ascending: true })
         .limit(200);
-      if (c.ai_started_at) q = q.gte('created_at', c.ai_started_at);
+      // Buffer 5': l'enroll inserisce l'apertura PRIMA di settare ai_started_at,
+      // senza margine il filtro la escluderebbe dal conteggio outbound.
+      if (c.ai_started_at) {
+        q = q.gte('created_at', new Date(Date.parse(c.ai_started_at) - 5 * 60_000).toISOString());
+      }
       const { data: msgData } = await q;
       const rows = (msgData ?? []) as MsgRow[];
       const msgsForDecision = rows.map((r) => ({ direction: r.direction, body: r.body ?? '' }));

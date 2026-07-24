@@ -120,6 +120,30 @@ export async function sendOutcome(
       return { sent: true, status: res.status };
     }
     const text = await res.text().catch(() => '');
+    if (res.status === 403) {
+      // Il CRM rifiuta l'esito (lead non più assegnato al bot, es. già richiamato
+      // nel pool umano): ritentare non può che ridare 403, quindi registra l'esito
+      // localmente e chiudi la conversazione per fermare il loop del cron.
+      if (action.kind === 'normal') {
+        await supabase.from('conversations').update({
+          bot_outcome: args.outcome,
+          bot_outcome_at: new Date().toISOString(),
+          bot_scheduled_at: args.date ?? null,
+          bot_report: (args.report ?? null) as never,
+          ai_status: 'closed',
+        }).eq('id', conversationId);
+      } else {
+        // Lead terminale: mai declassare bot_outcome, chiudi soltanto.
+        await supabase.from('conversations').update({ ai_status: 'closed' }).eq('id', conversationId);
+      }
+      await supabase.from('event_log').insert({
+        type: 'bot_outcome_rejected',
+        payload: { conversationId, crmLeadId, outcome: args.outcome, status: res.status, body: text } as never,
+        message: `[bot-fissatore] CRM ha rifiutato (403) l'esito ${args.outcome} per lead ${crmLeadId}: chiuso localmente`,
+        level: 'warning',
+      });
+      return { sent: false, status: res.status, error: text || 'http_403' };
+    }
     await supabase.from('event_log').insert({
       type: 'bot_outcome_error',
       payload: { conversationId, crmLeadId, status: res.status, body: text } as never,

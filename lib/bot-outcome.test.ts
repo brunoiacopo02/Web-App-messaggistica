@@ -63,6 +63,27 @@ describe('sendOutcome — guard APPUNTAMENTO terminale', () => {
     expect(calls.events.some((e) => e.type === 'bot_outcome_sent')).toBe(true);
   });
 
+  it('CRM 403 su lead normale → persiste esito localmente, chiude, log rejected (no retry loop)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 403, text: async () => 'lead non assegnato' })));
+    const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null });
+    const res = await sendOutcome(supabase, 1, { outcome: 'INTERROTTO', note: 'nota' });
+
+    expect(res.sent).toBe(false);
+    expect(res.status).toBe(403);
+    expect(calls.updates[0]).toMatchObject({ bot_outcome: 'INTERROTTO', ai_status: 'closed' });
+    expect(calls.events.some((e) => e.type === 'bot_outcome_rejected' && e.level === 'warning')).toBe(true);
+  });
+
+  it('CRM 403 su lead già APPUNTAMENTO → chiude senza declassare bot_outcome', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 403, text: async () => 'no' })));
+    const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE });
+    const res = await sendOutcome(supabase, 1, { outcome: 'DA_SCARTARE', discardReason: 'x' });
+
+    expect(res.sent).toBe(false);
+    expect(calls.updates).toEqual([{ ai_status: 'closed' }]);
+    expect(calls.events.some((e) => e.type === 'bot_outcome_rejected')).toBe(true);
+  });
+
   it('lead APPUNTAMENTO senza data originale → non invia, non declassa, warning', async () => {
     const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: null });
     const res = await sendOutcome(supabase, 1, { outcome: 'INTERROTTO' });
