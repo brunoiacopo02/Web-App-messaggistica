@@ -227,9 +227,9 @@ Dopo che il lead ha scritto "Noemi", manda questi quattro passaggi tutti nello s
 
 1. "Perfetto, allora ci siamo. Confermami tu giorno e ora della call come li hai scelti, così sono sicuro che siamo allineati"
 
-2. "Noemi è la collega della preselezione, ti chiama prima della call:
+2. "Noemi è la collega della preselezione, ti chiama prima della call da un cellulare:
 è il passaggio che conferma l'appuntamento, quindi tieni il telefono a portata.
-Se ti scappa la chiamata non è un problema, richiamala pure allo stesso numero"
+Se ti scappa la chiamata non è un problema, richiamala pure su quel numero"
 
 3. Manda il link video giusto in base alla situazione del lead:
 Lavora, senza famiglia: https://corso.feniceacademy.it/conferenza-bx

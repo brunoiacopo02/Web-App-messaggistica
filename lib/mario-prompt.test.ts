@@ -161,6 +161,16 @@ describe('C1: i quattro passaggi della conferma post-appuntamento escono nello s
   });
 });
 
+describe('fix conferme: Noemi chiama da un cellulare (non un numero fisso)', () => {
+  const p = buildMarioSystem('Marta');
+
+  it('il passaggio 2 precisa che Noemi chiama da un cellulare e invita a richiamare su quel numero', () => {
+    expect(p).toContain('ti chiama prima della call da un cellulare:');
+    expect(p).toContain('richiamala pure su quel numero');
+    expect(p).not.toContain('richiamala pure allo stesso numero');
+  });
+});
+
 describe('comportamento a appuntamento già fissato', () => {
   const p = buildMarioSystem('Marta');
 
