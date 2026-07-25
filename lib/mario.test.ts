@@ -30,7 +30,7 @@ describe('parseMarioReply', () => {
 
   it('testo normale: nessun flag', () => {
     const r = parseMarioReply('Ciao, come stai?');
-    expect(r).toEqual({ visibleReply: 'Ciao, come stai?', appointmentFixed: false, passToHuman: false });
+    expect(r).toEqual({ visibleReply: 'Ciao, come stai?', appointmentFixed: false, passToHuman: false, videoWatched: false });
   });
 });
 
@@ -51,5 +51,26 @@ describe('generateMarioReply', () => {
     expect(messagesCreate.mock.calls[0][0].messages).toEqual([
       { role: 'user', content: 'Inizia la conversazione presentandoti.' },
     ]);
+  });
+});
+
+describe('tag [VIDEO_VISTO]', () => {
+  it('lo rileva e lo rimuove dal testo visibile', () => {
+    const r = parseMarioReply('perfetto, allora ci vediamo in call [VIDEO_VISTO]');
+    expect(r.videoWatched).toBe(true);
+    expect(r.visibleReply).toBe('perfetto, allora ci vediamo in call');
+  });
+
+  it('senza tag resta false e non tocca il testo', () => {
+    const r = parseMarioReply('ciao come va');
+    expect(r.videoWatched).toBe(false);
+    expect(r.visibleReply).toBe('ciao come va');
+  });
+
+  it('non declassa né confonde gli altri tag', () => {
+    const r = parseMarioReply('ok [VIDEO_VISTO] [PASSAGGIO_UMANO]');
+    expect(r.videoWatched).toBe(true);
+    expect(r.passToHuman).toBe(true);
+    expect(r.visibleReply).toBe('ok');
   });
 });

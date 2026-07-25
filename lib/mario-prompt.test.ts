@@ -84,3 +84,20 @@ describe('conferme: anticipo e micro-impegni', () => {
     expect(p).toContain('Se ti scappa la chiamata non è un problema');
   });
 });
+
+describe('comportamento a appuntamento già fissato', () => {
+  const p = buildMarioSystem('Marta');
+
+  it('vieta di ripartire col pitch e di riproporre la call', () => {
+    expect(p).toContain("SE L'APPUNTAMENTO È GIÀ FISSATO");
+    expect(p).toContain('non ripartire col pitch e non riproporre la call');
+  });
+
+  it('istruisce a emettere [VIDEO_VISTO] alla conferma del lead', () => {
+    expect(p).toContain('[VIDEO_VISTO]');
+  });
+
+  it('manda a un umano le richieste di spostamento o disdetta', () => {
+    expect(p).toContain('Se vuole spostare o disdire');
+  });
+});

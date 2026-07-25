@@ -191,6 +191,16 @@ export async function drainMarioReplies(
       }
 
       if (result.passToHuman) { finalStatus = 'handed_off'; break; }
+
+      if (result.videoWatched) {
+        await supabase.from('event_log').insert({
+          type: 'video_watched',
+          payload: { conversationId, crmLeadId } as never,
+          message: `[bot-fissatore] conv ${conversationId}: il lead conferma di aver visto il video pre-call`,
+          level: 'info',
+        });
+      }
+
       if (result.appointmentFixed) {
         // Lead CRM con appuntamento fissato ma senza outcome parsato (es. data
         // mancante): il callback non partirà — segnala subito, il watchdog del

@@ -11,6 +11,7 @@ export type MarioResult = {
   visibleReply: string;
   appointmentFixed: boolean;
   passToHuman: boolean;
+  videoWatched: boolean;
   outcome?: MarioOutcome;
   scheduledAt?: string;
   discardReason?: string;
@@ -23,6 +24,7 @@ const ESITO_RE = /\[ESITO:(APPUNTAMENTO|RICHIAMO|SCARTO|INTERROTTO)\|([^\]]*)\]/
 export function parseMarioReply(raw: string): MarioResult {
   const legacyAppointment = raw.includes('[APPUNTAMENTO_FISSATO]');
   const passToHuman = raw.includes('[PASSAGGIO_UMANO]');
+  const videoWatched = raw.includes('[VIDEO_VISTO]');
 
   let outcome: MarioOutcome | undefined;
   let scheduledAt: string | undefined;
@@ -43,12 +45,14 @@ export function parseMarioReply(raw: string): MarioResult {
     .replace(ESITO_RE, '')
     .replace(/\[APPUNTAMENTO_FISSATO\]/g, '')
     .replace(/\[PASSAGGIO_UMANO\]/g, '')
+    .replace(/\[VIDEO_VISTO\]/g, '')
     .trim();
 
   return {
     visibleReply,
     appointmentFixed: legacyAppointment || outcome === 'APPUNTAMENTO',
     passToHuman,
+    videoWatched,
     outcome,
     scheduledAt,
     discardReason,
