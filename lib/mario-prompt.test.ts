@@ -22,3 +22,38 @@ describe('buildMarioSystem', () => {
     expect(marta.replace(/Marta/g, 'Mario')).toBe(mario);
   });
 });
+
+describe('prezzo', () => {
+  const p = buildMarioSystem('Marta');
+
+  it('dice la quota intera e che si può rateizzare', () => {
+    expect(p).toContain('dai 1.000 ai 3.000 euro a seconda del percorso');
+    expect(p).toContain('si può rateizzare');
+    expect(p).toContain('troviamo una soluzione praticamente con tutti');
+  });
+
+  it('vieta qualunque cifra di rata o numero di rate', () => {
+    expect(p).toContain('MAI CIFRE DI RATA');
+    expect(p).not.toMatch(/\d+\s*rate\b/i);
+    // L'unica cifra "al mese" ammessa nel prompt è la forbice di guadagno
+    // post-corso nella sezione CHI SIAMO. Qualunque altra sarebbe una rata.
+    const alMese = p.match(/[\d.]+\s*(?:euro|€)\s*al mese/gi) ?? [];
+    expect(alMese).toEqual(['5.000 euro al mese']);
+  });
+
+  it('vieta le analogie di frazionamento del prezzo', () => {
+    expect(p).toContain('come un caffè al giorno');
+    expect(p).toContain('meno di un pacchetto di sigarette');
+    expect(p).toMatch(/non fare paragoni tipo/i);
+  });
+
+  it('propone la call subito dopo aver detto la quota', () => {
+    expect(p).toContain('proponi la call nello stesso giro di messaggi');
+  });
+
+  it('lascia fare il conto al lead invece di minimizzare la spesa', () => {
+    expect(p).toContain('quanto vale per te arrivarci?');
+    expect(p).toContain('Il conto lo deve fare lui');
+    expect(p).toMatch(/vietate frasi come "è solo", "è poco", "è un piccolo sacrificio"/);
+  });
+});
