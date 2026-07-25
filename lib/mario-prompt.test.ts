@@ -183,18 +183,39 @@ describe('comportamento a appuntamento già fissato', () => {
     expect(p).toContain('[VIDEO_VISTO]');
   });
 
-  it('manda a un umano le richieste di spostamento o disdetta', () => {
+  it('registra spostamento o disdetta come nota per i colleghi invece di passarli a un umano', () => {
     expect(p).toContain('Se vuole spostare o disdire');
+    expect(p).not.toContain('Se vuole spostare o disdire non gestirlo da solo');
+    expect(p).not.toContain('usa [PASSAGGIO_UMANO]. Se fa una domanda sul percorso');
   });
 });
 
-describe('I1: [PASSAGGIO_UMANO] non è più ristretto alla sola richiesta esplicita di un umano', () => {
+describe('disdette a appuntamento fissato', () => {
   const p = buildMarioSystem('Marta');
 
-  it('REGOLE ASSOLUTE ammette anche lo spostamento/disdetta di un appuntamento già fissato come eccezione', () => {
+  it('chiede di registrare il motivo con le parole del lead invece di passare a un umano', () => {
+    expect(p).toContain('con le parole del lead');
+    expect(p).not.toContain('Se vuole spostare o disdire non gestirlo da solo');
+  });
+
+  it('rassicura il lead che qualcuno lo ricontatta', () => {
+    expect(p).toContain('ti ricontatta una collega');
+  });
+});
+
+describe('I1 (revocato dal Task 3): [PASSAGGIO_UMANO] torna ristretto alla sola richiesta esplicita di un umano', () => {
+  // Spostamento/disdetta di un appuntamento già fissato ora diventano una NOTA al
+  // CRM (vedi describe 'disdette a appuntamento fissato'), non più un passaggio
+  // umano: l'eccezione introdotta in REGOLE ASSOLUTE per quel caso va rimossa,
+  // altrimenti resterebbe in contraddizione con la sezione SE L'APPUNTAMENTO
+  // È GIÀ FISSATO.
+  const p = buildMarioSystem('Marta');
+
+  it('REGOLE ASSOLUTE non ammette più lo spostamento/disdetta come eccezione a [PASSAGGIO_UMANO]', () => {
     expect(p).toContain(
-      '[PASSAGGIO_UMANO] va usato SOLO quando chiede esplicitamente di parlare con una persona o quando vuole spostare o disdire un appuntamento già fissato.'
+      '[PASSAGGIO_UMANO] va usato SOLO quando chiede esplicitamente di parlare con una persona.'
     );
+    expect(p).not.toContain('o quando vuole spostare o disdire un appuntamento già fissato');
   });
 });
 
