@@ -57,3 +57,30 @@ describe('prezzo', () => {
     expect(p).toMatch(/vietate frasi come "è solo", "è poco", "è un piccolo sacrificio"/);
   });
 });
+
+describe('conferme: anticipo e micro-impegni', () => {
+  const p = buildMarioSystem('Marta');
+
+  it('anticipa Noemi e il video PRIMA di mandare il link', () => {
+    expect(p).toContain('Prima di fissare ti dico come funziona');
+    expect(p).toContain('Aspetta il sì, poi manda il link');
+  });
+
+  it('fa riscrivere giorno e ora al lead', () => {
+    expect(p).toContain('Confermami tu giorno e ora della call');
+  });
+
+  it('sul video usa la scelta attiva invece del divieto', () => {
+    expect(p).toContain('Quando riesci a vederlo, stasera o domani?');
+    expect(p).not.toContain('Non è facoltativo');
+    expect(p).not.toContain('non potrà essere effettuato');
+  });
+
+  it('chiede un FATTO scritto come conferma della visione', () => {
+    expect(p).toContain("Scrivimi FATTO qui quando l'hai visto");
+  });
+
+  it('non minaccia il lead sulla chiamata di Noemi', () => {
+    expect(p).toContain('Se ti scappa la chiamata non è un problema');
+  });
+});
