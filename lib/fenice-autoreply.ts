@@ -38,6 +38,18 @@ export function shouldReopen(g: { aiOwner: string | null; aiStatus: string | nul
   return g.aiStatus === 'closed' || g.aiStatus === 'booked';
 }
 
+/**
+ * Pure: possiamo mandare un esito al CRM per questa conversazione?
+ * No su un appuntamento già fissato: `sendOutcome` lo tradurrebbe in una nota
+ * spedita come POST `APPUNTAMENTO`, e il CRM (non idempotente) la registrerebbe
+ * come un appuntamento nuovo, gonfiando il conteggio. Le disdette passano da un
+ * umano finché il CRM non accetta un canale di sola nota.
+ */
+export function canSendOutcome(g: { crmLeadId: string | null; botOutcome: string | null }): boolean {
+  if (!g.crmLeadId) return false;
+  return g.botOutcome !== 'APPUNTAMENTO';
+}
+
 type MsgRow = { direction: string; body: string };
 // Riga del drain: come MsgRow ma con il template per derivare la persona (Mario/Marta).
 type DrainMsgRow = MsgRow & { template_sid: string | null };
@@ -124,11 +136,12 @@ export async function drainMarioReplies(
     .update({ ai_status: 'replying' })
     .eq('id', conversationId)
     .eq('ai_status', 'active')
-    .select('id, ai_started_at, crm_lead_id')
+    .select('id, ai_started_at, crm_lead_id, bot_outcome')
     .single();
   if (!claimed) return;
   const startedAt = (claimed as { ai_started_at: string | null }).ai_started_at;
   const crmLeadId = (claimed as { crm_lead_id: string | null }).crm_lead_id;
+  const botOutcome = (claimed as { bot_outcome: string | null }).bot_outcome;
 
   // Carica i messaggi della conversazione dall'arruolamento in poi (in ordine).
   async function loadHistory(): Promise<DrainMsgRow[]> {
@@ -186,7 +199,16 @@ export async function drainMarioReplies(
         message: `Mario ha risposto a ${phone}`, level: 'info',
       });
 
-      if (crmLeadId && result.outcome) {
+      if (result.outcome && crmLeadId && !canSendOutcome({ crmLeadId, botOutcome })) {
+        await supabase.from('event_log').insert({
+          type: 'bot_outcome_suppressed',
+          payload: { conversationId, crmLeadId, attemptedOutcome: result.outcome } as never,
+          message: `[bot-fissatore] conv ${conversationId}: esito ${result.outcome} NON inviato, appuntamento già fissato`,
+          level: 'info',
+        });
+      }
+
+      if (result.outcome && canSendOutcome({ crmLeadId, botOutcome })) {
         const report = await generateBotReport(history);
         const sent = await sendOutcome(supabase, conversationId, {
           outcome: result.outcome,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shouldAutoReply, shouldReopen, nextUnansweredInboundIndex, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS } from './fenice-autoreply';
+import { shouldAutoReply, shouldReopen, nextUnansweredInboundIndex, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS, canSendOutcome } from './fenice-autoreply';
 
 describe('shouldAutoReply', () => {
   const ok = { toMatchesFenice: true, autoReplyOn: true, aiOwner: 'mario', aiStatus: 'active' };
@@ -124,5 +124,23 @@ describe('shouldReopen', () => {
   it('non riapre conversazioni non arruolate nel bot', () => {
     expect(shouldReopen({ aiOwner: null, aiStatus: 'closed' })).toBe(false);
     expect(shouldReopen({ aiOwner: 'umano', aiStatus: 'booked' })).toBe(false);
+  });
+});
+
+describe('canSendOutcome', () => {
+  it('consente l esito su una conversazione CRM non ancora esitata', () => {
+    expect(canSendOutcome({ crmLeadId: 'crm1', botOutcome: null })).toBe(true);
+  });
+
+  it('consente l esito se l esito corrente non è un appuntamento', () => {
+    expect(canSendOutcome({ crmLeadId: 'crm1', botOutcome: 'RICHIAMO' })).toBe(true);
+  });
+
+  it('BLOCCA qualunque esito su un appuntamento già fissato', () => {
+    expect(canSendOutcome({ crmLeadId: 'crm1', botOutcome: 'APPUNTAMENTO' })).toBe(false);
+  });
+
+  it('non invia nulla senza lead CRM', () => {
+    expect(canSendOutcome({ crmLeadId: null, botOutcome: null })).toBe(false);
   });
 });
