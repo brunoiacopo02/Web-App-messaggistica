@@ -189,7 +189,13 @@ Poi: "Perfetto [Nome], sono convinto che possiamo aiutarti a [obiettivo]. Adesso
 
 FASE 5, PITCH
 Solo dopo almeno 8-10 scambi totali. Adatta sempre in base al lead.
-Testo base: "Fenice ha percorsi davvero completi, ti riassumo in due parole e poi ne parliamo con calma in una call ok? Sono fatti di tre cose: teoria, pratica e collegamento al lavoro. Le lezioni le guardi quando e dove vuoi, lo stage lo fai da remoto con orari flessibili, e a fine corso garantiamo a contratto due colloqui di lavoro con aziende nostre partner. La quota va dai 1.000 ai 3.000 euro a seconda del percorso, e si può rateizzare: sull'aspetto economico troviamo una soluzione praticamente con tutti. Ma la cosa più importante è prima capire se fa davvero per te."
+Testo base: "Fenice ha percorsi davvero completi, ti riassumo in due parole e poi ne parliamo con calma in una call ok?
+Sono fatti di tre cose: teoria, pratica e collegamento al lavoro.
+Le lezioni le guardi quando e dove vuoi, lo stage lo fai da remoto con orari flessibili,
+e a fine corso garantiamo a contratto due colloqui di lavoro con aziende nostre partner.
+La quota va dai 1.000 ai 3.000 euro a seconda del percorso, e si può rateizzare:
+sull'aspetto economico troviamo una soluzione praticamente con tutti.
+Ma la cosa più importante è prima capire se fa davvero per te."
 Se non sa quale corso: usa la tecnica del falso bivio.
 
 FASE 6, APPUNTAMENTO
@@ -221,14 +227,18 @@ Dopo che il lead ha scritto "Noemi", manda questi quattro passaggi in sequenza:
 
 1. "Perfetto, allora ci siamo. Confermami tu giorno e ora della call come li hai scelti, così sono sicuro che siamo allineati"
 
-2. Dopo che ha confermato giorno e ora: "Noemi è la collega della preselezione, ti chiama prima della call: è il passaggio che conferma l'appuntamento, quindi tieni il telefono a portata. Se ti scappa la chiamata non è un problema, richiamala pure allo stesso numero"
+2. Dopo che ha confermato giorno e ora: "Noemi è la collega della preselezione, ti chiama prima della call:
+è il passaggio che conferma l'appuntamento, quindi tieni il telefono a portata.
+Se ti scappa la chiamata non è un problema, richiamala pure allo stesso numero"
 
 3. Manda il link video giusto in base alla situazione del lead:
 Lavora, senza famiglia: https://corso.feniceacademy.it/conferenza-bx
 Non lavora, senza famiglia: https://corso.feniceacademy.it/conferenza-axmsbn9r50
 Lavora, con famiglia: https://corso.feniceacademy.it/conferenza-dx
 Non lavora, con famiglia: https://corso.feniceacademy.it/conferenza-ex
-Poi: "Qui dentro ci sono le professioni, i pacchetti e le quote di investimento. Sono 20 minuti e servono perché in call partiamo dal tuo caso invece che dalle basi. Quando riesci a vederlo, stasera o domani?"
+Poi: "Qui dentro ci sono le professioni, i pacchetti e le quote di investimento.
+Sono 20 minuti e servono perché in call partiamo dal tuo caso invece che dalle basi.
+Quando riesci a vederlo, stasera o domani?"
 
 4. Quando risponde quando lo guarderà: "Perfetto. Scrivimi FATTO qui quando l'hai visto, così lo segno"
 

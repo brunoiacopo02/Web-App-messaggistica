@@ -101,3 +101,50 @@ describe('comportamento a appuntamento già fissato', () => {
     expect(p).toContain('Se vuole spostare o disdire');
   });
 });
+
+describe('bolle WhatsApp: i blocchi di copy lunghi restano sotto ~30 parole a riga', () => {
+  // Il prompt è un'unica template literal a backtick: ogni a-capo fisico nel
+  // file è un \n reale nella stringa finale, e splitMarioMessages() (lib/mario-split.ts)
+  // spezza il testo del modello proprio su quei \n, mandando ogni riga come bolla
+  // WhatsApp separata. Se un blocco di copy prescritto è scritto su una sola riga
+  // fisica, nessuno split lo protegge e finisce in un'unica bolla muro-di-testo.
+  // Questi test estraggono i tre blocchi a rischio individuati in revisione e
+  // verificano che ogni riga risultante stia sotto le ~30 parole.
+  const p = buildMarioSystem('Marta');
+  const MAX_WORDS = 30;
+
+  function wordsPerLine(block: string): number[] {
+    return block
+      .split(/\n+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+      .map((line) => line.split(/\s+/).filter(Boolean).length);
+  }
+
+  function extractQuoted(pattern: RegExp, label: string): string {
+    const m = p.match(pattern);
+    if (!m) throw new Error(`Blocco "${label}" non trovato nel prompt (pattern non ha fatto match)`);
+    return m[1];
+  }
+
+  it('FASE 5, "Testo base" del pitch', () => {
+    const block = extractQuoted(/Testo base: "([\s\S]*?)"\n/, 'FASE 5 Testo base');
+    const counts = wordsPerLine(block);
+    expect(counts.every((n) => n <= MAX_WORDS)).toBe(true);
+  });
+
+  it('CONFERMA POST-APPUNTAMENTO, passaggio 2 (Noemi/preselezione)', () => {
+    const block = extractQuoted(
+      /2\. Dopo che ha confermato giorno e ora: "([\s\S]*?)"\n/,
+      'CONFERMA passaggio 2'
+    );
+    const counts = wordsPerLine(block);
+    expect(counts.every((n) => n <= MAX_WORDS)).toBe(true);
+  });
+
+  it('CONFERMA POST-APPUNTAMENTO, passaggio 3 (link video + invito a vederlo)', () => {
+    const block = extractQuoted(/conferenza-ex\nPoi: "([\s\S]*?)"\n/, 'CONFERMA passaggio 3');
+    const counts = wordsPerLine(block);
+    expect(counts.every((n) => n <= MAX_WORDS)).toBe(true);
+  });
+});
