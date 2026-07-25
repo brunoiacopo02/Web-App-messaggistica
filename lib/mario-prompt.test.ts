@@ -77,11 +77,30 @@ describe('conferme: anticipo e micro-impegni', () => {
   });
 
   it('chiede un FATTO scritto come conferma della visione', () => {
-    expect(p).toContain("Scrivimi FATTO qui quando l'hai visto");
+    expect(p).toContain("scrivimi FATTO qui quando l'hai visto, così lo segno");
   });
 
   it('non minaccia il lead sulla chiamata di Noemi', () => {
     expect(p).toContain('Se ti scappa la chiamata non è un problema');
+  });
+});
+
+describe('C1: i quattro passaggi della conferma post-appuntamento escono nello stesso turno', () => {
+  const p = buildMarioSystem('Marta');
+
+  it('istruisce a mandarli tutti nello stesso turno senza aspettare risposta tra un passaggio e l\'altro', () => {
+    expect(p).toContain('manda questi quattro passaggi tutti nello stesso turno');
+    expect(p).toMatch(/senza aspettare (la )?risposta[^\n]*tra (un passaggio e l'altro|l'uno e l'altro)/);
+    expect(p).not.toContain('manda questi quattro passaggi in sequenza');
+  });
+
+  it('mandano comunque ognuno come bolla WhatsApp separata', () => {
+    expect(p).toMatch(/bolle( WhatsApp)? separate/);
+  });
+
+  it('il passaggio 4 non ripete "Perfetto" (nel turno resta solo la domanda del passaggio 3)', () => {
+    expect(p).toContain("poi scrivimi FATTO qui quando l'hai visto, così lo segno");
+    expect(p).not.toContain('Perfetto. Scrivimi FATTO');
   });
 });
 
@@ -102,16 +121,36 @@ describe('comportamento a appuntamento già fissato', () => {
   });
 });
 
-describe('bolle WhatsApp: i blocchi di copy lunghi restano sotto ~30 parole a riga', () => {
+describe('I1: [PASSAGGIO_UMANO] non è più ristretto alla sola richiesta esplicita di un umano', () => {
+  const p = buildMarioSystem('Marta');
+
+  it('REGOLE ASSOLUTE ammette anche lo spostamento/disdetta di un appuntamento già fissato come eccezione', () => {
+    expect(p).toContain(
+      '[PASSAGGIO_UMANO] va usato SOLO quando chiede esplicitamente di parlare con una persona o quando vuole spostare o disdire un appuntamento già fissato.'
+    );
+  });
+});
+
+describe('I2: FASE 6, anticipo e link hanno trigger diversi (niente doppio invio nello stesso turno)', () => {
+  const p = buildMarioSystem('Marta');
+
+  it('il link parte solo dopo il sì all\'anticipo, non genericamente "quando accetta"', () => {
+    expect(p).toContain('Quando ti ha detto di sì all\'anticipo, manda il link:');
+    expect(p).not.toContain('Quando accetta, manda il link:');
+  });
+});
+
+describe('bolle WhatsApp: i blocchi di copy lunghi restano sotto ~25 parole a riga', () => {
   // Il prompt è un'unica template literal a backtick: ogni a-capo fisico nel
   // file è un \n reale nella stringa finale, e splitMarioMessages() (lib/mario-split.ts)
   // spezza il testo del modello proprio su quei \n, mandando ogni riga come bolla
   // WhatsApp separata. Se un blocco di copy prescritto è scritto su una sola riga
   // fisica, nessuno split lo protegge e finisce in un'unica bolla muro-di-testo.
-  // Questi test estraggono i tre blocchi a rischio individuati in revisione e
-  // verificano che ogni riga risultante stia sotto le ~30 parole.
+  // Questi test estraggono i blocchi a rischio individuati in revisione e
+  // verificano che ogni riga risultante stia sotto le ~25 parole (in linea con la
+  // regola del prompt stesso: max 20-25 parole per messaggio).
   const p = buildMarioSystem('Marta');
-  const MAX_WORDS = 30;
+  const MAX_WORDS = 25;
 
   function wordsPerLine(block: string): number[] {
     return block
@@ -146,5 +185,51 @@ describe('bolle WhatsApp: i blocchi di copy lunghi restano sotto ~30 parole a ri
     const block = extractQuoted(/conferenza-ex\nPoi: "([\s\S]*?)"\n/, 'CONFERMA passaggio 3');
     const counts = wordsPerLine(block);
     expect(counts.every((n) => n <= MAX_WORDS)).toBe(true);
+  });
+
+  it('FASE 6, blocco anticipo ("Perfetto. Prima di fissare ti dico come funziona")', () => {
+    const block = extractQuoted(
+      /"(Perfetto\. Prima di fissare ti dico come funziona[\s\S]*?)"\n/,
+      'FASE 6 anticipo'
+    );
+    const counts = wordsPerLine(block);
+    expect(counts.every((n) => n <= MAX_WORDS)).toBe(true);
+  });
+});
+
+describe('M1: FASE 5, i tagli del pitch cadono su confine di frase, non a metà', () => {
+  const p = buildMarioSystem('Marta');
+
+  function extractQuoted(pattern: RegExp, label: string): string {
+    const m = p.match(pattern);
+    if (!m) throw new Error(`Blocco "${label}" non trovato nel prompt (pattern non ha fatto match)`);
+    return m[1];
+  }
+
+  const block = extractQuoted(/Testo base: "([\s\S]*?)"\n/, 'FASE 5 Testo base');
+  const lines = block
+    .split(/\n+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
+  it('nessuna riga finisce con due punti, e nessuna riga che finisce con virgola è seguita da una riga che continua con "e"', () => {
+    for (let i = 0; i < lines.length - 1; i++) {
+      expect(lines[i]).not.toMatch(/:$/);
+      if (/,$/.test(lines[i])) {
+        expect(lines[i + 1]).not.toMatch(/^e\s/i);
+      }
+    }
+  });
+
+  it('ogni riga resta sotto le 25 parole', () => {
+    const counts = lines.map((line) => line.split(/\s+/).filter(Boolean).length);
+    expect(counts.every((n) => n <= 25)).toBe(true);
+  });
+
+  it('nessuna parola cambia: riunendo le righe con uno spazio il testo torna identico a quello attuale', () => {
+    const joined = lines.join(' ');
+    expect(joined).toBe(
+      "Fenice ha percorsi davvero completi, ti riassumo in due parole e poi ne parliamo con calma in una call ok? Sono fatti di tre cose: teoria, pratica e collegamento al lavoro. Le lezioni le guardi quando e dove vuoi, lo stage lo fai da remoto con orari flessibili, e a fine corso garantiamo a contratto due colloqui di lavoro con aziende nostre partner. La quota va dai 1.000 ai 3.000 euro a seconda del percorso, e si può rateizzare: sull'aspetto economico troviamo una soluzione praticamente con tutti. Ma la cosa più importante è prima capire se fa davvero per te."
+    );
   });
 });
