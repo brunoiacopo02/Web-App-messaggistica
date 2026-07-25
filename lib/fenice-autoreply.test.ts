@@ -141,23 +141,19 @@ describe('shouldReopen', () => {
 
 describe('canSendOutcome', () => {
   it('consente l esito su una conversazione CRM non ancora esitata', () => {
-    expect(canSendOutcome({ crmLeadId: 'crm1', botOutcome: null, aiStatus: 'active' })).toBe(true);
+    expect(canSendOutcome({ crmLeadId: 'crm1', aiStatus: 'active' })).toBe(true);
   });
 
-  it('consente l esito se l esito corrente non è un appuntamento', () => {
-    expect(canSendOutcome({ crmLeadId: 'crm1', botOutcome: 'RICHIAMO', aiStatus: 'active' })).toBe(true);
-  });
-
-  it('BLOCCA qualunque esito su un appuntamento già fissato (bot_outcome)', () => {
-    expect(canSendOutcome({ crmLeadId: 'crm1', botOutcome: 'APPUNTAMENTO', aiStatus: 'closed' })).toBe(false);
+  it('consente l esito su un appuntamento fissato: diventerà una NOTA, non un duplicato', () => {
+    expect(canSendOutcome({ crmLeadId: 'crm1', aiStatus: 'active' })).toBe(true);
   });
 
   it('non invia nulla senza lead CRM', () => {
-    expect(canSendOutcome({ crmLeadId: null, botOutcome: null, aiStatus: 'active' })).toBe(false);
+    expect(canSendOutcome({ crmLeadId: null, aiStatus: 'active' })).toBe(false);
   });
 
-  it('BLOCCA su aiStatus booked anche se bot_outcome è null (appuntamento fissato ma outcome non parsato)', () => {
-    expect(canSendOutcome({ crmLeadId: 'crm1', botOutcome: null, aiStatus: 'booked' })).toBe(false);
+  it('continua a bloccare su booked, che è un problema diverso', () => {
+    expect(canSendOutcome({ crmLeadId: 'crm1', aiStatus: 'booked' })).toBe(false);
   });
 });
 
@@ -232,9 +228,9 @@ describe('drainMarioReplies — guardia canSendOutcome dal vivo', () => {
   // Scenario reale e raggiungibile: bot_outcome='APPUNTAMENTO' già persistito (l'esito
   // è stato inviato con successo, ai_status='closed'). shouldReopen riapre 'closed'->
   // 'active' su un nuovo inbound (es. richiesta di spostare), drainMarioReplies claima
-  // 'active' con botOutcome ancora 'APPUNTAMENTO' in memoria: canSendOutcome deve
-  // bloccare comunque il nuovo tentativo di invio.
-  it('conversazione riaperta con bot_outcome=APPUNTAMENTO già persistito: sendOutcome NON viene mai chiamata', async () => {
+  // 'active' con un nuovo esito CRM: canSendOutcome ora lascia passare l'invio, che
+  // sendOutcome traduce in una NOTA (non un duplicato di APPUNTAMENTO).
+  it('conversazione riaperta con bot_outcome=APPUNTAMENTO già persistito: sendOutcome viene chiamata (diventa una NOTA)', async () => {
     const claimedRow: ClaimedRow = { id: 42, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO' };
     const rows: FakeMsgRow[] = [
       OPENING,
@@ -249,9 +245,9 @@ describe('drainMarioReplies — guardia canSendOutcome dal vivo', () => {
 
     await drainMarioReplies(supabase, 42, '+391234567890', () => 0);
 
-    expect(sendOutcome).not.toHaveBeenCalled();
-    expect(calls.events.some((e) => e.type === 'bot_outcome_suppressed' && e.payload.attemptedOutcome === 'APPUNTAMENTO')).toBe(true);
-    expect(calls.finalStatusWrites).toEqual(['active']); // nessun branch tocca finalStatus: resta l'init
+    expect(sendOutcome).toHaveBeenCalledTimes(1);
+    expect(calls.events.some((e) => e.type === 'bot_outcome_suppressed')).toBe(false);
+    expect(calls.finalStatusWrites).toEqual(['closed']); // sendOutcome mock risolve { sent: true }
   });
 
   it('conversazione active con nuovo esito CRM legittimo: sendOutcome viene chiamata normalmente (controllo di non-regressione)', async () => {

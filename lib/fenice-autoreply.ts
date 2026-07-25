@@ -53,19 +53,16 @@ export function shouldReopen(g: { aiOwner: string | null; aiStatus: string | nul
 
 /**
  * Pure: possiamo mandare un esito al CRM per questa conversazione?
- * No su `botOutcome === 'APPUNTAMENTO'` già persistito: `sendOutcome` tradurrebbe
- * comunque il nuovo esito in una nota spedita come POST `APPUNTAMENTO`, e il CRM
- * (non idempotente) la registrerebbe come un appuntamento nuovo, gonfiando il
- * conteggio. Le disdette passano da un umano finché il CRM non accetta un canale
- * di sola nota.
- * Il blocco su `aiStatus === 'booked'` non è oggi raggiungibile (drainMarioReplies
- * non claima mai 'booked', vedi `shouldAutoReply`): è una rete a costo zero che
- * documenta l'invariante e protegge se in futuro 'booked' tornasse claimabile.
+ * 'booked' non è un veto sul CRM ma sul lucchetto: ai_status fa anche da lock del
+ * drain, quindi una conv booked non viene mai claimata e qui non arriva. Resta per
+ * sicurezza (rete a costo zero, vedi `shouldAutoReply`). Gli esiti su un appuntamento
+ * già fissato invece passano: `sendOutcome` li traduce in una NOTA, che il CRM
+ * registra senza toccare lo stato del lead e notifica alle Conferme — non è più un
+ * POST `APPUNTAMENTO` duplicato (vedi `sendOutcome`).
  */
-export function canSendOutcome(g: { crmLeadId: string | null; botOutcome: string | null; aiStatus: string | null }): boolean {
+export function canSendOutcome(g: { crmLeadId: string | null; aiStatus: string | null }): boolean {
   if (!g.crmLeadId) return false;
-  if (g.aiStatus === 'booked') return false;
-  return g.botOutcome !== 'APPUNTAMENTO';
+  return g.aiStatus !== 'booked';
 }
 
 type MsgRow = { direction: string; body: string };
@@ -154,12 +151,11 @@ export async function drainMarioReplies(
     .update({ ai_status: 'replying' })
     .eq('id', conversationId)
     .eq('ai_status', 'active')
-    .select('id, ai_started_at, crm_lead_id, bot_outcome')
+    .select('id, ai_started_at, crm_lead_id')
     .single();
   if (!claimed) return;
   const startedAt = (claimed as { ai_started_at: string | null }).ai_started_at;
   const crmLeadId = (claimed as { crm_lead_id: string | null }).crm_lead_id;
-  const botOutcome = (claimed as { bot_outcome: string | null }).bot_outcome;
 
   // Carica i messaggi della conversazione dall'arruolamento in poi (in ordine).
   async function loadHistory(): Promise<DrainMsgRow[]> {
@@ -221,7 +217,7 @@ export async function drainMarioReplies(
         // Il drain claima solo da 'active' (vedi il lock CAS sopra): aiStatus qui è
         // sempre 'active'. Il ramo 'booked' di canSendOutcome resta comunque la rete
         // a costo zero descritta nel suo commento.
-        const canSend = canSendOutcome({ crmLeadId, botOutcome, aiStatus: 'active' });
+        const canSend = canSendOutcome({ crmLeadId, aiStatus: 'active' });
         if (canSend) {
           const report = await generateBotReport(history);
           const sent = await sendOutcome(supabase, conversationId, {
