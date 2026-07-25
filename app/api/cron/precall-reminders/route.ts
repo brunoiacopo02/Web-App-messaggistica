@@ -72,17 +72,23 @@ export async function GET(req: NextRequest) {
 
   let sent = 0;
   let skipped = 0;
+  let failed = 0; // solo per decidere se loggare il summary (come send-video), non esposto in risposta
 
   if (convs.length > 0) {
     const convIds = convs.map((c) => c.id as number);
 
     // Un'unica query per sapere quali promemoria sono già stati inviati su queste
-    // conversazioni: idempotenza derivata da messages.template_sid.
+    // conversazioni: idempotenza derivata da messages.template_sid. Le righe
+    // 'failed'/'undelivered' NON contano come "già inviato" (stesso filtro di
+    // send-video, stesso raggruppamento di allOutboundDeadNoDelivery in
+    // lib/sequence.ts): un fallimento transitorio va ritentato al run successivo,
+    // non perso per sempre — qui non c'è un domani dopo la finestra dei 15'.
     const { data: sentMsgs } = await supabase
       .from('messages')
       .select('conversation_id, template_sid')
       .in('conversation_id', convIds)
-      .in('template_sid', [sid24, sid3]);
+      .in('template_sid', [sid24, sid3])
+      .not('twilio_status', 'in', '(failed,undelivered)');
 
     const sentByConv = new Map<number, ReminderKind[]>();
     for (const m of (sentMsgs ?? []) as any[]) {
@@ -119,16 +125,22 @@ export async function GET(req: NextRequest) {
         '2': slotLabel(scheduledAt, now),
       });
       if (res.ok) sent++;
-      else skipped++;
+      else {
+        skipped++;
+        failed++;
+      }
     }
   }
 
-  await supabase.from('event_log').insert({
-    type: 'precall_reminders',
-    payload: { sent, skipped } as never,
-    message: `[precall] run: ${sent} invii, ${skipped} skip`,
-    level: 'info',
-  });
+  // Come send-video: nessun event_log se il run non ha fatto nulla.
+  if (sent > 0 || failed > 0) {
+    await supabase.from('event_log').insert({
+      type: 'precall_reminders',
+      payload: { sent, skipped } as never,
+      message: `[precall] run: ${sent} invii, ${skipped} skip`,
+      level: 'info',
+    });
+  }
 
   return NextResponse.json({ ok: true, sent, skipped });
 }
