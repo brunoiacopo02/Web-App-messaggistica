@@ -174,9 +174,9 @@ export async function POST(req: NextRequest) {
         .eq('id', conversationId)
         .single();
 
-      if (shouldReopen({ aiOwner: conv?.ai_owner ?? null, aiStatus: conv?.ai_status ?? null })) {
+      if (conv && shouldReopen({ aiOwner: conv.ai_owner, aiStatus: conv.ai_status })) {
         await supabase.from('conversations').update({ ai_status: 'active' }).eq('id', conversationId);
-        conv!.ai_status = 'active';
+        conv.ai_status = 'active';
       }
 
       const autoReplyOn = await getAutoReply(supabase);

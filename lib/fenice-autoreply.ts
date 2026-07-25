@@ -19,34 +19,40 @@ export type AutoReplyGate = {
 /**
  * Pure: la conversazione è candidata all'auto-risposta di Mario? Vero per gli stati
  * 'active' e 'replying' (il lock CAS in drainMarioReplies serializza le esecuzioni
- * concorrenti). Falso per stati terminali ('handed_off' / 'booked') o non arruolati.
+ * concorrenti) e per 'booked': un appuntamento già fissato resta rispondibile (il
+ * lead scrive ancora — conferma il video, chiede di spostare) ma NON viene mai
+ * riaperto (vedi `shouldReopen`), quindi lo stato 'booked' non si perde mai.
+ * Falso per lo stato terminale 'handed_off' o non arruolati.
  */
 export function shouldAutoReply(g: AutoReplyGate): boolean {
   if (!(g.toMatchesFenice && g.autoReplyOn && g.aiOwner === 'mario')) return false;
-  return g.aiStatus === 'active' || g.aiStatus === 'replying';
+  return g.aiStatus === 'active' || g.aiStatus === 'replying' || g.aiStatus === 'booked';
 }
 
 /**
- * Pure: la conversazione va riaperta all'arrivo di un messaggio del lead?
- * Vero per gli stati in cui il bot ha finito il suo giro ('closed' dopo l'esito,
- * 'booked' dopo il fissaggio): dopo l'appuntamento il lead scrive ancora (conferma
- * di aver visto il video, chiede di spostare) e il bot deve poter rispondere.
- * Falso per 'handed_off': se un umano ha preso in carico la chat, il bot non rientra.
+ * Pure: la conversazione va riaperta (portata a 'active') all'arrivo di un messaggio
+ * del lead? Vero solo per 'closed' (dopo un esito non-appuntamento). 'booked' NON
+ * si riapre più: resta 'booked' (unico segnale che dice "qui c'è già un appuntamento
+ * fissato") mentre diventa comunque rispondibile via `shouldAutoReply`. Falso per
+ * 'handed_off': se un umano ha preso in carico la chat, il bot non rientra.
  */
 export function shouldReopen(g: { aiOwner: string | null; aiStatus: string | null }): boolean {
   if (g.aiOwner !== 'mario') return false;
-  return g.aiStatus === 'closed' || g.aiStatus === 'booked';
+  return g.aiStatus === 'closed';
 }
 
 /**
  * Pure: possiamo mandare un esito al CRM per questa conversazione?
- * No su un appuntamento già fissato: `sendOutcome` lo tradurrebbe in una nota
+ * No se lo stato è già 'booked' (appuntamento fissato, anche se l'outcome non è
+ * stato parsato — vedi `booked_without_outcome`) e no su `botOutcome === 'APPUNTAMENTO'`
+ * già persistito: `sendOutcome` tradurrebbe comunque il nuovo esito in una nota
  * spedita come POST `APPUNTAMENTO`, e il CRM (non idempotente) la registrerebbe
  * come un appuntamento nuovo, gonfiando il conteggio. Le disdette passano da un
  * umano finché il CRM non accetta un canale di sola nota.
  */
-export function canSendOutcome(g: { crmLeadId: string | null; botOutcome: string | null }): boolean {
+export function canSendOutcome(g: { crmLeadId: string | null; botOutcome: string | null; aiStatus: string | null }): boolean {
   if (!g.crmLeadId) return false;
+  if (g.aiStatus === 'booked') return false;
   return g.botOutcome !== 'APPUNTAMENTO';
 }
 
@@ -110,7 +116,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * Best-effort: ACCORPA i messaggi del lead. Attende la finestra di latenza (5-40s) e poi
  * risponde UNA volta a tutti i messaggi arrivati (cronologia dall'arruolamento in poi,
  * via ai_started_at). Se durante l'attesa/elaborazione arrivano altri messaggi, fa un altro
- * round. Serializzato tramite lock CAS (ai_status 'active' -> 'replying'). Non lancia.
+ * round. Serializzato tramite lock CAS (ai_status 'active'|'booked' -> 'replying',
+ * ripristinato a fine turno). Non lancia.
  * `delayMs` è iniettabile: il cron passa `() => 0` per saltare la finestra di accorpamento
  * (il lead ha già aspettato).
  */
@@ -131,17 +138,33 @@ export async function drainMarioReplies(
 
   // Lock: claim del turno. Se un'altra esecuzione sta già rispondendo, esci:
   // quel drain ricontrolla i messaggi e gestirà anche questo inbound.
-  const { data: claimed } = await supabase
-    .from('conversations')
-    .update({ ai_status: 'replying' })
-    .eq('id', conversationId)
-    .eq('ai_status', 'active')
-    .select('id, ai_started_at, crm_lead_id, bot_outcome')
-    .single();
+  // Claimabili sia 'active' che 'booked' (un appuntamento fissato resta rispondibile,
+  // vedi shouldAutoReply). Due tentativi CAS separati — anziché un `.in()` unico —
+  // perché serve sapere DA QUALE stato si parte: un UPDATE...RETURNING restituisce
+  // sempre la riga POST-update ('replying'), quindi non c'è modo di recuperare lo
+  // stato originale da un'unica query combinata. `originalStatus` è la base per
+  // `finalStatus`: una conversazione 'booked' a fine drain deve restare 'booked'.
+  type ClaimedRow = { id: number; ai_started_at: string | null; crm_lead_id: string | null; bot_outcome: string | null };
+  async function tryClaim(status: 'active' | 'booked'): Promise<ClaimedRow | null> {
+    const { data } = await supabase
+      .from('conversations')
+      .update({ ai_status: 'replying' })
+      .eq('id', conversationId)
+      .eq('ai_status', status)
+      .select('id, ai_started_at, crm_lead_id, bot_outcome')
+      .single();
+    return (data as ClaimedRow | null) ?? null;
+  }
+  let originalStatus: 'active' | 'booked' = 'active';
+  let claimed = await tryClaim('active');
+  if (!claimed) {
+    claimed = await tryClaim('booked');
+    originalStatus = 'booked';
+  }
   if (!claimed) return;
-  const startedAt = (claimed as { ai_started_at: string | null }).ai_started_at;
-  const crmLeadId = (claimed as { crm_lead_id: string | null }).crm_lead_id;
-  const botOutcome = (claimed as { bot_outcome: string | null }).bot_outcome;
+  const startedAt = claimed.ai_started_at;
+  const crmLeadId = claimed.crm_lead_id;
+  const botOutcome = claimed.bot_outcome;
 
   // Carica i messaggi della conversazione dall'arruolamento in poi (in ordine).
   async function loadHistory(): Promise<DrainMsgRow[]> {
@@ -156,7 +179,10 @@ export async function drainMarioReplies(
     return (data ?? []) as DrainMsgRow[];
   }
 
-  let finalStatus = 'active';
+  // Inizializzato con lo stato claimato (non un fisso 'active'): se il round non
+  // cambia nulla — o esplode e finisce nel catch — la conversazione torna esattamente
+  // com'era, 'booked' incluso. Questo è il punto che impedisce la perdita dello stato.
+  let finalStatus: string = originalStatus;
   try {
     for (let round = 0; round < MAX_ROUNDS_PER_DRAIN; round++) {
       const before = await loadHistory();
@@ -199,29 +225,30 @@ export async function drainMarioReplies(
         message: `Mario ha risposto a ${phone}`, level: 'info',
       });
 
-      if (result.outcome && crmLeadId && !canSendOutcome({ crmLeadId, botOutcome })) {
-        await supabase.from('event_log').insert({
-          type: 'bot_outcome_suppressed',
-          payload: { conversationId, crmLeadId, attemptedOutcome: result.outcome } as never,
-          message: `[bot-fissatore] conv ${conversationId}: esito ${result.outcome} NON inviato, appuntamento già fissato`,
-          level: 'info',
-        });
-      }
-
-      if (result.outcome && canSendOutcome({ crmLeadId, botOutcome })) {
-        const report = await generateBotReport(history);
-        const sent = await sendOutcome(supabase, conversationId, {
-          outcome: result.outcome,
-          date: result.scheduledAt,
-          discardReason: result.discardReason,
-          note: result.note,
-          report,
-        });
-        // Esito CRM: chiudiamo solo se il callback è andato a buon fine; altrimenti
-        // restiamo 'active' (ritentabile). In ogni caso usciamo: i rami legacy
-        // (booked/handed_off) non valgono per i lead CRM.
-        if (sent.sent) finalStatus = 'closed';
-        break;
+      if (result.outcome) {
+        const canSend = canSendOutcome({ crmLeadId, botOutcome, aiStatus: originalStatus });
+        if (canSend) {
+          const report = await generateBotReport(history);
+          const sent = await sendOutcome(supabase, conversationId, {
+            outcome: result.outcome,
+            date: result.scheduledAt,
+            discardReason: result.discardReason,
+            note: result.note,
+            report,
+          });
+          // Esito CRM: chiudiamo solo se il callback è andato a buon fine; altrimenti
+          // restiamo 'active' (ritentabile). In ogni caso usciamo: i rami legacy
+          // (booked/handed_off) non valgono per i lead CRM.
+          if (sent.sent) finalStatus = 'closed';
+          break;
+        } else if (crmLeadId) {
+          await supabase.from('event_log').insert({
+            type: 'bot_outcome_suppressed',
+            payload: { conversationId, crmLeadId, attemptedOutcome: result.outcome } as never,
+            message: `[bot-fissatore] conv ${conversationId}: esito ${result.outcome} NON inviato, appuntamento già fissato`,
+            level: 'info',
+          });
+        }
       }
 
       if (result.passToHuman) { finalStatus = 'handed_off'; break; }
@@ -256,7 +283,10 @@ export async function drainMarioReplies(
       type: 'fenice_ai_error', payload: { conversationId, phone, error: m } as never,
       message: `Auto-risposta Mario fallita per ${phone}: ${m}`, level: 'error',
     });
-    finalStatus = 'active';
+    // Su errore torniamo allo stato di partenza (non un fisso 'active'): forzare
+    // 'active' qui riaprirebbe silenziosamente un 'booked' esattamente come faceva
+    // il bug che questa correzione elimina.
+    finalStatus = originalStatus;
   } finally {
     await supabase.from('conversations').update({ ai_status: finalStatus }).eq('id', conversationId);
   }
