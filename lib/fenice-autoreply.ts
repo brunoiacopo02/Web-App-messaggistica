@@ -19,22 +19,32 @@ export type AutoReplyGate = {
 /**
  * Pure: la conversazione è candidata all'auto-risposta di Mario? Vero per gli stati
  * 'active' e 'replying' (il lock CAS in drainMarioReplies serializza le esecuzioni
- * concorrenti) e per 'booked': un appuntamento già fissato resta rispondibile (il
- * lead scrive ancora — conferma il video, chiede di spostare) ma NON viene mai
- * riaperto (vedi `shouldReopen`), quindi lo stato 'booked' non si perde mai.
- * Falso per lo stato terminale 'handed_off' o non arruolati.
+ * concorrenti). Falso per stati terminali ('handed_off' / 'booked') o non arruolati.
+ *
+ * 'booked' è escluso NON per scelta di prodotto ma per un vincolo strutturale:
+ * `ai_status` qui fa doppio uso, sia stato di prodotto che lucchetto del drain
+ * (claim CAS -> 'replying', poi ripristino a fine turno). Se claimassimo 'booked',
+ * per tutta la durata del drain lo stato "appuntamento già fissato" non esisterebbe
+ * più da nessuna parte: un crash prima del `finally` (lo stesso scenario per cui
+ * esiste `isOrphanedReplyingLock`) lascerebbe la riga 'replying' per sempre, oppure
+ * il reset orfano del cron la riporterebbe ad 'active' — e da 'active' rientra nei
+ * solleciti/nella classificazione del cron, che può generare un POST al CRM. La
+ * soluzione corretta è un lucchetto su una colonna dedicata che lasci `ai_status`
+ * intatto; è una migrazione + intervento sulla concorrenza, non fatta qui apposta.
  */
 export function shouldAutoReply(g: AutoReplyGate): boolean {
   if (!(g.toMatchesFenice && g.autoReplyOn && g.aiOwner === 'mario')) return false;
-  return g.aiStatus === 'active' || g.aiStatus === 'replying' || g.aiStatus === 'booked';
+  return g.aiStatus === 'active' || g.aiStatus === 'replying';
 }
 
 /**
  * Pure: la conversazione va riaperta (portata a 'active') all'arrivo di un messaggio
- * del lead? Vero solo per 'closed' (dopo un esito non-appuntamento). 'booked' NON
- * si riapre più: resta 'booked' (unico segnale che dice "qui c'è già un appuntamento
- * fissato") mentre diventa comunque rispondibile via `shouldAutoReply`. Falso per
- * 'handed_off': se un umano ha preso in carico la chat, il bot non rientra.
+ * del lead? Vero solo per 'closed' (dopo un esito non-appuntamento) — copre anche i
+ * lead arruolati a mano, senza `crm_lead_id`, che con la vecchia condizione inline
+ * (`crm_lead_id && ai_status === 'closed'`) restavano fuori del tutto. 'booked' NON
+ * si riapre (vedi il commento su `shouldAutoReply`: `ai_status` fa anche da lucchetto
+ * del drain, claimarlo perderebbe lo stato "appuntamento fissato" durante il turno).
+ * Falso per 'handed_off': se un umano ha preso in carico la chat, il bot non rientra.
  */
 export function shouldReopen(g: { aiOwner: string | null; aiStatus: string | null }): boolean {
   if (g.aiOwner !== 'mario') return false;
@@ -43,12 +53,14 @@ export function shouldReopen(g: { aiOwner: string | null; aiStatus: string | nul
 
 /**
  * Pure: possiamo mandare un esito al CRM per questa conversazione?
- * No se lo stato è già 'booked' (appuntamento fissato, anche se l'outcome non è
- * stato parsato — vedi `booked_without_outcome`) e no su `botOutcome === 'APPUNTAMENTO'`
- * già persistito: `sendOutcome` tradurrebbe comunque il nuovo esito in una nota
- * spedita come POST `APPUNTAMENTO`, e il CRM (non idempotente) la registrerebbe
- * come un appuntamento nuovo, gonfiando il conteggio. Le disdette passano da un
- * umano finché il CRM non accetta un canale di sola nota.
+ * No su `botOutcome === 'APPUNTAMENTO'` già persistito: `sendOutcome` tradurrebbe
+ * comunque il nuovo esito in una nota spedita come POST `APPUNTAMENTO`, e il CRM
+ * (non idempotente) la registrerebbe come un appuntamento nuovo, gonfiando il
+ * conteggio. Le disdette passano da un umano finché il CRM non accetta un canale
+ * di sola nota.
+ * Il blocco su `aiStatus === 'booked'` non è oggi raggiungibile (drainMarioReplies
+ * non claima mai 'booked', vedi `shouldAutoReply`): è una rete a costo zero che
+ * documenta l'invariante e protegge se in futuro 'booked' tornasse claimabile.
  */
 export function canSendOutcome(g: { crmLeadId: string | null; botOutcome: string | null; aiStatus: string | null }): boolean {
   if (!g.crmLeadId) return false;
@@ -116,8 +128,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * Best-effort: ACCORPA i messaggi del lead. Attende la finestra di latenza (5-40s) e poi
  * risponde UNA volta a tutti i messaggi arrivati (cronologia dall'arruolamento in poi,
  * via ai_started_at). Se durante l'attesa/elaborazione arrivano altri messaggi, fa un altro
- * round. Serializzato tramite lock CAS (ai_status 'active'|'booked' -> 'replying',
- * ripristinato a fine turno). Non lancia.
+ * round. Serializzato tramite lock CAS (ai_status 'active' -> 'replying'). Non lancia.
  * `delayMs` è iniettabile: il cron passa `() => 0` per saltare la finestra di accorpamento
  * (il lead ha già aspettato).
  */
@@ -138,33 +149,17 @@ export async function drainMarioReplies(
 
   // Lock: claim del turno. Se un'altra esecuzione sta già rispondendo, esci:
   // quel drain ricontrolla i messaggi e gestirà anche questo inbound.
-  // Claimabili sia 'active' che 'booked' (un appuntamento fissato resta rispondibile,
-  // vedi shouldAutoReply). Due tentativi CAS separati — anziché un `.in()` unico —
-  // perché serve sapere DA QUALE stato si parte: un UPDATE...RETURNING restituisce
-  // sempre la riga POST-update ('replying'), quindi non c'è modo di recuperare lo
-  // stato originale da un'unica query combinata. `originalStatus` è la base per
-  // `finalStatus`: una conversazione 'booked' a fine drain deve restare 'booked'.
-  type ClaimedRow = { id: number; ai_started_at: string | null; crm_lead_id: string | null; bot_outcome: string | null };
-  async function tryClaim(status: 'active' | 'booked'): Promise<ClaimedRow | null> {
-    const { data } = await supabase
-      .from('conversations')
-      .update({ ai_status: 'replying' })
-      .eq('id', conversationId)
-      .eq('ai_status', status)
-      .select('id, ai_started_at, crm_lead_id, bot_outcome')
-      .single();
-    return (data as ClaimedRow | null) ?? null;
-  }
-  let originalStatus: 'active' | 'booked' = 'active';
-  let claimed = await tryClaim('active');
-  if (!claimed) {
-    claimed = await tryClaim('booked');
-    originalStatus = 'booked';
-  }
+  const { data: claimed } = await supabase
+    .from('conversations')
+    .update({ ai_status: 'replying' })
+    .eq('id', conversationId)
+    .eq('ai_status', 'active')
+    .select('id, ai_started_at, crm_lead_id, bot_outcome')
+    .single();
   if (!claimed) return;
-  const startedAt = claimed.ai_started_at;
-  const crmLeadId = claimed.crm_lead_id;
-  const botOutcome = claimed.bot_outcome;
+  const startedAt = (claimed as { ai_started_at: string | null }).ai_started_at;
+  const crmLeadId = (claimed as { crm_lead_id: string | null }).crm_lead_id;
+  const botOutcome = (claimed as { bot_outcome: string | null }).bot_outcome;
 
   // Carica i messaggi della conversazione dall'arruolamento in poi (in ordine).
   async function loadHistory(): Promise<DrainMsgRow[]> {
@@ -179,10 +174,7 @@ export async function drainMarioReplies(
     return (data ?? []) as DrainMsgRow[];
   }
 
-  // Inizializzato con lo stato claimato (non un fisso 'active'): se il round non
-  // cambia nulla — o esplode e finisce nel catch — la conversazione torna esattamente
-  // com'era, 'booked' incluso. Questo è il punto che impedisce la perdita dello stato.
-  let finalStatus: string = originalStatus;
+  let finalStatus = 'active';
   try {
     for (let round = 0; round < MAX_ROUNDS_PER_DRAIN; round++) {
       const before = await loadHistory();
@@ -226,7 +218,10 @@ export async function drainMarioReplies(
       });
 
       if (result.outcome) {
-        const canSend = canSendOutcome({ crmLeadId, botOutcome, aiStatus: originalStatus });
+        // Il drain claima solo da 'active' (vedi il lock CAS sopra): aiStatus qui è
+        // sempre 'active'. Il ramo 'booked' di canSendOutcome resta comunque la rete
+        // a costo zero descritta nel suo commento.
+        const canSend = canSendOutcome({ crmLeadId, botOutcome, aiStatus: 'active' });
         if (canSend) {
           const report = await generateBotReport(history);
           const sent = await sendOutcome(supabase, conversationId, {
@@ -283,10 +278,7 @@ export async function drainMarioReplies(
       type: 'fenice_ai_error', payload: { conversationId, phone, error: m } as never,
       message: `Auto-risposta Mario fallita per ${phone}: ${m}`, level: 'error',
     });
-    // Su errore torniamo allo stato di partenza (non un fisso 'active'): forzare
-    // 'active' qui riaprirebbe silenziosamente un 'booked' esattamente come faceva
-    // il bug che questa correzione elimina.
-    finalStatus = originalStatus;
+    finalStatus = 'active';
   } finally {
     await supabase.from('conversations').update({ ai_status: finalStatus }).eq('id', conversationId);
   }

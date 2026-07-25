@@ -26,11 +26,9 @@ describe('shouldAutoReply', () => {
   it('falso se non è gestita da Mario', () => {
     expect(shouldAutoReply({ ...ok, aiOwner: null })).toBe(false);
   });
-  it('vero anche se booked — appuntamento fissato ma conversazione rispondibile', () => {
-    expect(shouldAutoReply({ ...ok, aiStatus: 'booked' })).toBe(true);
-  });
-  it('falso se handed_off', () => {
+  it('falso se handed_off o booked', () => {
     expect(shouldAutoReply({ ...ok, aiStatus: 'handed_off' })).toBe(false);
+    expect(shouldAutoReply({ ...ok, aiStatus: 'booked' })).toBe(false);
   });
 });
 
@@ -118,7 +116,7 @@ describe('shouldReopen', () => {
     expect(shouldReopen({ aiOwner: 'mario', aiStatus: 'closed' })).toBe(true);
   });
 
-  it('NON riapre più una conversazione booked: resta booked ma diventa rispondibile via shouldAutoReply', () => {
+  it('NON riapre una conversazione booked: resta booked (shouldAutoReply non la riprende, ai_status è anche lucchetto)', () => {
     expect(shouldReopen({ aiOwner: 'mario', aiStatus: 'booked' })).toBe(false);
   });
 
@@ -167,11 +165,11 @@ type ClaimedRow = { id: number; ai_started_at: string | null; crm_lead_id: strin
 type FakeMsgRow = { direction: string; body: string; template_sid: string | null; created_at: string };
 
 /**
- * Fake del client Supabase per drainMarioReplies: simula il claim CAS ('active'|'booked'
- * -> 'replying' — solo il tentativo sullo stato in `originalStatus` restituisce la riga),
- * la history messaggi e traccia gli insert su event_log/messages e l'update finale su ai_status.
+ * Fake del client Supabase per drainMarioReplies: simula il claim CAS singolo
+ * ('active' -> 'replying', unico stato claimabile), la history messaggi e traccia
+ * gli insert su event_log/messages e l'update finale su ai_status.
  */
-function makeDrainSupabase(originalStatus: 'active' | 'booked', claimedRow: ClaimedRow, initialRows: FakeMsgRow[]) {
+function makeDrainSupabase(claimedRow: ClaimedRow, initialRows: FakeMsgRow[]) {
   const messagesRows = [...initialRows];
   const calls = { events: [] as any[], finalStatusWrites: [] as string[], messageInserts: [] as any[] };
 
@@ -185,7 +183,7 @@ function makeDrainSupabase(originalStatus: 'active' | 'booked', claimedRow: Clai
               const stub: any = {
                 eq(col: string, val: string) { if (col === 'ai_status') filterStatus = val; return stub; },
                 select() { return stub; },
-                single() { return Promise.resolve({ data: filterStatus === originalStatus ? claimedRow : null }); },
+                single() { return Promise.resolve({ data: filterStatus === 'active' ? claimedRow : null }); },
               };
               return stub;
             }
@@ -231,13 +229,18 @@ describe('drainMarioReplies — guardia canSendOutcome dal vivo', () => {
   });
   afterEach(() => { vi.unstubAllEnvs(); });
 
-  it('conversazione booked (bot_outcome ancora null): sendOutcome NON viene mai chiamata, l esito resta booked', async () => {
-    const claimedRow: ClaimedRow = { id: 42, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+  // Scenario reale e raggiungibile: bot_outcome='APPUNTAMENTO' già persistito (l'esito
+  // è stato inviato con successo, ai_status='closed'). shouldReopen riapre 'closed'->
+  // 'active' su un nuovo inbound (es. richiesta di spostare), drainMarioReplies claima
+  // 'active' con botOutcome ancora 'APPUNTAMENTO' in memoria: canSendOutcome deve
+  // bloccare comunque il nuovo tentativo di invio.
+  it('conversazione riaperta con bot_outcome=APPUNTAMENTO già persistito: sendOutcome NON viene mai chiamata', async () => {
+    const claimedRow: ClaimedRow = { id: 42, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO' };
     const rows: FakeMsgRow[] = [
       OPENING,
       { direction: 'in', body: 'posso spostare l appuntamento a venerdì?', template_sid: null, created_at: '2026-07-25T09:00:00Z' },
     ];
-    const { supabase, calls } = makeDrainSupabase('booked', claimedRow, rows);
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
     vi.mocked(generateMarioReply).mockResolvedValueOnce({
       visibleReply: 'Certo, controllo l agenda e ti confermo il nuovo orario.',
       appointmentFixed: false, passToHuman: false, videoWatched: false,
@@ -248,7 +251,7 @@ describe('drainMarioReplies — guardia canSendOutcome dal vivo', () => {
 
     expect(sendOutcome).not.toHaveBeenCalled();
     expect(calls.events.some((e) => e.type === 'bot_outcome_suppressed' && e.payload.attemptedOutcome === 'APPUNTAMENTO')).toBe(true);
-    expect(calls.finalStatusWrites).toEqual(['booked']); // mai 'active': lo stato non si perde
+    expect(calls.finalStatusWrites).toEqual(['active']); // nessun branch tocca finalStatus: resta l'init
   });
 
   it('conversazione active con nuovo esito CRM legittimo: sendOutcome viene chiamata normalmente (controllo di non-regressione)', async () => {
@@ -257,7 +260,7 @@ describe('drainMarioReplies — guardia canSendOutcome dal vivo', () => {
       OPENING,
       { direction: 'in', body: 'richiamatemi la prossima settimana', template_sid: null, created_at: '2026-07-25T09:00:00Z' },
     ];
-    const { supabase, calls } = makeDrainSupabase('active', claimedRow, rows);
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
     vi.mocked(generateMarioReply).mockResolvedValueOnce({
       visibleReply: 'Va bene, ti richiamiamo la prossima settimana.',
       appointmentFixed: false, passToHuman: false, videoWatched: false,
