@@ -54,8 +54,11 @@ describe('prezzo', () => {
 
   it('vieta qualunque cifra di rata o numero di rate', () => {
     expect(p).toContain('MAI CIFRE DI RATA');
-    expect(p).not.toMatch(/\d+\s*(euro|€)\s*al mese/i);
     expect(p).not.toMatch(/\d+\s*rate\b/i);
+    // L'unica cifra "al mese" ammessa nel prompt è la forbice di guadagno
+    // post-corso nella sezione CHI SIAMO. Qualunque altra sarebbe una rata.
+    const alMese = p.match(/[\d.]+\s*(?:euro|€)\s*al mese/gi) ?? [];
+    expect(alMese).toEqual(['5.000 euro al mese']);
   });
 
   it('vieta le analogie di frazionamento del prezzo', () => {
