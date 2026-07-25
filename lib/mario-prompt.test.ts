@@ -238,6 +238,12 @@ describe('glossario esiti: eccezione esplicita per l\'appuntamento già fissato 
   it('sospende esplicitamente la regola "nel dubbio non chiudere" per quel caso', () => {
     expect(p).toContain('la regola "nel dubbio NON chiudere" NON vale');
   });
+
+  it('l\'antecedente di "in quel caso" è esplicito: non basta che l\'appuntamento sia fissato, il lead deve dire che non ce la fa o che vuole spostare/disdire (altrimenti un "ok grazie" qualsiasi rischierebbe un tag SCARTO)', () => {
+    expect(p).toContain(
+      "ECCEZIONE quando l'appuntamento è GIÀ FISSATO e il lead ti dice che non ce la fa più o che vuole spostare/disdire"
+    );
+  });
 });
 
 describe('I2: FASE 6, anticipo e link hanno trigger diversi (niente doppio invio nello stesso turno)', () => {

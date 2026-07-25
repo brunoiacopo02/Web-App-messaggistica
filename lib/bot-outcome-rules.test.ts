@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { resolveOutcomeAction, buildLockedNote } from './bot-outcome-rules';
+import { formatRomeDateTime } from './rome-time';
 
 const DATE = '2026-06-29T17:00:00Z';
+const DATE_HUMAN = formatRomeDateTime(DATE); // "lunedì 29 giugno alle 19:00"
+const DIFF = '2026-07-01T10:00:00Z';
+const DIFF_HUMAN = formatRomeDateTime(DIFF); // "mercoledì 1 luglio alle 12:00"
 
 describe('resolveOutcomeAction', () => {
   it('non-APPUNTAMENTO corrente → normal', () => {
@@ -29,10 +33,11 @@ describe('resolveOutcomeAction', () => {
 });
 
 describe('buildLockedNote', () => {
-  it('SCARTO → motivo annullamento e data dell\'appuntamento originale (unico modo per le Conferme di sapere quale appuntamento è in gioco, ora che la data non è più inviata al CRM)', () => {
+  it('SCARTO → motivo annullamento e data dell\'appuntamento originale, leggibile in ora di Roma (unico modo per le Conferme di sapere quale appuntamento è in gioco, ora che la data non è più inviata al CRM)', () => {
     const n = buildLockedNote({ outcome: 'DA_SCARTARE', discardReason: 'no budget' }, DATE);
     expect(n).toContain('no budget');
-    expect(n).toContain(DATE);
+    expect(n).toContain(DATE_HUMAN);
+    expect(n).not.toContain(DATE); // niente ISO grezzo nella nota
   });
   it('INTERROTTO → nota interruzione, appuntamento mantenuto', () => {
     expect(buildLockedNote({ outcome: 'INTERROTTO' }, DATE).toLowerCase())
@@ -42,10 +47,11 @@ describe('buildLockedNote', () => {
     expect(buildLockedNote({ outcome: 'APPUNTAMENTO', date: DATE }, DATE).toLowerCase())
       .toContain('riconfermato');
   });
-  it('APPUNTAMENTO data diversa → richiesta di spostamento, originale mantenuto', () => {
-    const n = buildLockedNote({ outcome: 'APPUNTAMENTO', date: '2026-07-01T10:00:00Z' }, DATE);
+  it('APPUNTAMENTO data diversa → richiesta di spostamento, entrambe le date leggibili in ora di Roma', () => {
+    const n = buildLockedNote({ outcome: 'APPUNTAMENTO', date: DIFF }, DATE);
     expect(n).toContain('spostare');
-    expect(n).toContain(DATE);
+    expect(n).toContain(DIFF_HUMAN);
+    expect(n).toContain(DATE_HUMAN);
   });
 });
 
@@ -53,27 +59,71 @@ describe('buildLockedNote', () => {
 // "vuole essere richiamato"): la nota letta dalle Conferme deve dirlo esplicitamente,
 // riportare la data indicata dal lead SOLO se ne ha data una davvero, e indicare in
 // ogni caso la data che resta in agenda (unico posto dove sopravvive, ora che il campo
-// data non viene più inviato al CRM).
+// data non viene più inviato al CRM). Tutte le date vanno scritte leggibili in ora di
+// Roma, non come ISO grezzo.
 describe('buildLockedNote — RICHIAMO (richiesta di spostamento)', () => {
-  it('con una data indicata dal lead diversa da quella fissata → dice chiaramente "spostare", riporta la data indicata e quella in agenda', () => {
-    const n = buildLockedNote({ outcome: 'RICHIAMO', date: '2026-07-01T10:00:00Z' }, DATE);
+  it('con una data indicata dal lead diversa da quella fissata → dice chiaramente "spostare", riporta la data indicata e quella in agenda, entrambe leggibili', () => {
+    const n = buildLockedNote({ outcome: 'RICHIAMO', date: DIFF }, DATE);
     expect(n).toContain('spostare');
-    expect(n).toContain('2026-07-01T10:00:00Z');
-    expect(n).toContain(DATE);
+    expect(n).toContain(DIFF_HUMAN);
+    expect(n).toContain(DATE_HUMAN);
     expect(n.toLowerCase()).toContain('mantenuto');
   });
 
   it('senza data indicata dal lead → dice "spostare" ma non inventa una data, riporta solo quella in agenda', () => {
     const n = buildLockedNote({ outcome: 'RICHIAMO' }, DATE);
     expect(n).toContain('spostare');
-    expect(n).toContain(DATE);
+    expect(n).toContain(DATE_HUMAN);
     // Una sola occorrenza della data: quella in agenda, non una finta "data indicata".
-    expect(n.split(DATE).length - 1).toBe(1);
+    expect(n.split(DATE_HUMAN).length - 1).toBe(1);
   });
 
-  it('quando il tag riporta la stessa data dell\'appuntamento (il prompt la usa come fallback quando il lead non ne dà una) → NON la presenta come data indicata dal lead, resta solo la data in agenda una volta sola', () => {
+  it('quando il tag riporta la stessa data dell\'appuntamento, stessa stringa ISO (il prompt la usa come fallback quando il lead non ne dà una) → NON la presenta come data indicata dal lead, resta solo la data in agenda una volta sola', () => {
     const n = buildLockedNote({ outcome: 'RICHIAMO', date: DATE }, DATE);
     expect(n).toContain('spostare');
-    expect(n.split(DATE).length - 1).toBe(1);
+    expect(n.split(DATE_HUMAN).length - 1).toBe(1);
+  });
+});
+
+// Bug di revisione: existingDate arriva da bot_scheduled_at, una colonna timestamptz
+// che Postgres normalizza in UTC nel round-trip (es. "...T13:00:00+00:00"), mentre
+// args.date arriva dal tag del modello nel fuso locale imposto dal prompt (es.
+// "...T15:00:00+02:00"): stesso istante, stringhe sempre diverse. Un confronto
+// testuale (args.date !== existingDate) non scatta mai in questo caso reale, quindi
+// il caso più frequente — spostamento senza nuova data, con la data dell'appuntamento
+// usata come fallback dal prompt — ricadrebbe nel difetto che dovevamo eliminare,
+// mostrando due date "diverse" che in realtà sono la stessa. Il confronto va fatto
+// per istante (Date.parse), non per stringa.
+describe('buildLockedNote — confronto date per istante, non per stringa (round-trip Postgres UTC vs tag in fuso locale)', () => {
+  const existingUtc = '2026-08-01T13:00:00+00:00'; // come torna da Postgres
+  const leadSameInstantLocal = '2026-08-01T15:00:00+02:00'; // stesso istante, fuso locale del tag
+  const leadGenuinelyDifferent = '2026-08-05T09:00:00+02:00'; // istante realmente diverso
+  const existingHuman = formatRomeDateTime(existingUtc); // "sabato 1 agosto alle 15:00"
+  const diffHuman = formatRomeDateTime(leadGenuinelyDifferent);
+
+  it('RICHIAMO: stesso istante scritto con offset diversi (UTC dal DB vs locale dal tag) → NON è una nuova data indicata dal lead', () => {
+    const n = buildLockedNote({ outcome: 'RICHIAMO', date: leadSameInstantLocal }, existingUtc);
+    expect(n).toContain('nessuna nuova data indicata dal lead');
+    expect(n).toContain(existingHuman);
+    expect(n.split(existingHuman).length - 1).toBe(1);
+  });
+
+  it('RICHIAMO: istante realmente diverso (offset diversi) → continua a comparire come data indicata dal lead', () => {
+    const n = buildLockedNote({ outcome: 'RICHIAMO', date: leadGenuinelyDifferent }, existingUtc);
+    expect(n).toContain(`alla data indicata (${diffHuman})`);
+    expect(n).toContain(existingHuman);
+  });
+
+  it('APPUNTAMENTO: stesso istante scritto con offset diversi → riconferma, non uno spostamento', () => {
+    const n = buildLockedNote({ outcome: 'APPUNTAMENTO', date: leadSameInstantLocal }, existingUtc);
+    expect(n.toLowerCase()).toContain('riconfermato');
+    expect(n).not.toContain('spostare');
+  });
+
+  it('APPUNTAMENTO: istante realmente diverso → continua a essere trattato come spostamento', () => {
+    const n = buildLockedNote({ outcome: 'APPUNTAMENTO', date: leadGenuinelyDifferent }, existingUtc);
+    expect(n).toContain('spostare');
+    expect(n).toContain(diffHuman);
+    expect(n).toContain(existingHuman);
   });
 });

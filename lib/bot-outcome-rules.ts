@@ -1,4 +1,5 @@
 import type { BotOutcome } from './bot-contract';
+import { formatRomeDateTime, sameInstant } from './rome-time';
 
 export type OutcomeArgs = {
   outcome: BotOutcome;
@@ -20,7 +21,7 @@ export function buildLockedNote(args: OutcomeArgs, existingDate: string | null):
   let base: string;
   switch (args.outcome) {
     case 'DA_SCARTARE': {
-      const when = existingDate ? ` (fissato per ${existingDate})` : '';
+      const when = existingDate ? ` (fissato per ${formatRomeDateTime(existingDate)})` : '';
       base = `Il lead vuole annullare l'appuntamento${when}. Motivo: ${args.discardReason?.trim() || 'non specificato'}.`;
       break;
     }
@@ -33,10 +34,13 @@ export function buildLockedNote(args: OutcomeArgs, existingDate: string | null):
       // dell'appuntamento stesso come fallback: se la riportassimo sempre come "data
       // indicata dal lead" le Conferme leggerebbero una richiesta di spostamento verso
       // la data già in agenda, che non ha senso. La mostriamo come "data indicata"
-      // solo quando è davvero diversa da quella in agenda.
-      const leadDate = args.date && args.date !== existingDate ? args.date : null;
-      const datePart = leadDate ? ` alla data indicata (${leadDate})` : ' (nessuna nuova data indicata dal lead)';
-      const kept = existingDate ? `Appuntamento mantenuto: ${existingDate}.` : 'Appuntamento mantenuto.';
+      // solo quando è davvero un istante diverso da quello in agenda: un confronto
+      // testuale fallirebbe qui, perché existingDate arriva da Postgres normalizzato in
+      // UTC mentre args.date arriva dal tag del modello nel fuso locale imposto dal
+      // prompt, quindi lo stesso istante avrebbe quasi sempre due stringhe diverse.
+      const leadDate = args.date && !sameInstant(args.date, existingDate) ? args.date : null;
+      const datePart = leadDate ? ` alla data indicata (${formatRomeDateTime(leadDate)})` : ' (nessuna nuova data indicata dal lead)';
+      const kept = existingDate ? `Appuntamento mantenuto: ${formatRomeDateTime(existingDate)}.` : 'Appuntamento mantenuto.';
       base = `Il lead ha chiesto di spostare l'appuntamento${datePart}. ${kept}`;
       break;
     }
@@ -44,8 +48,8 @@ export function buildLockedNote(args: OutcomeArgs, existingDate: string | null):
       base = `Nessuna risposta successiva. Appuntamento mantenuto.`;
       break;
     case 'APPUNTAMENTO':
-      if (args.date && existingDate && args.date !== existingDate) {
-        base = `Il lead ha chiesto di spostare a ${args.date}. Appuntamento originale mantenuto: ${existingDate}.`;
+      if (args.date && existingDate && !sameInstant(args.date, existingDate)) {
+        base = `Il lead ha chiesto di spostare a ${formatRomeDateTime(args.date)}. Appuntamento originale mantenuto: ${formatRomeDateTime(existingDate)}.`;
       } else {
         base = `Il lead ha riconfermato l'appuntamento.`;
       }
