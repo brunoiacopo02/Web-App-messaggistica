@@ -1,6 +1,7 @@
 import type { getSupabaseAdmin } from './supabase/admin';
 import { sendFreeText } from './twilio';
 import { romeHour } from './rome-time';
+import { firstNameOf } from './name';
 
 const H = 3600_000;
 
@@ -46,7 +47,8 @@ export function decideAgendaFollowup(input: AgendaFollowupInput): 'send' | 'none
 
 /** Testo fisso del follow-up, in voce Mario. */
 export function agendaFollowupText(firstName: string | null): string {
-  const hi = firstName && firstName.trim() ? `Ciao ${firstName.trim()}` : 'Ciao';
+  const name = firstNameOf(firstName);
+  const hi = name ? `Ciao ${name}` : 'Ciao';
   return `${hi} 🙂 ti avevo mandato gli orari per la videocall ma non ho ancora visto la conferma. Vuoi che ti tenga uno slot? Dimmi pure giorno e ora che preferisci.`;
 }
 

@@ -1,6 +1,8 @@
 // Persona e aperture per-funnel (A/B) — modulo puro, nessun accesso a env/DB.
 // Spec: docs/superpowers/specs/2026-07-24-apertura-marta-ab-design.md (§2: testi ESATTI).
 
+import { templateName } from './name';
+
 export type Persona = 'mario' | 'marta';
 export type FunnelKey = 'corso10' | 'telegram' | 'jobsim' | 'other';
 
@@ -55,10 +57,10 @@ const OPENING_TEXTS: Record<'C' | 'T' | 'J', Record<1 | 2, (n: string) => string
   },
 };
 
-/** Corpo dell'apertura con il nome sostituito (fallback 'benvenuto' se assente/vuoto). */
+/** Corpo dell'apertura con la variabile {{1}} sostituita: solo il nome proprio
+ * (il CRM manda nome+cognome), vocativo neutro se non c'è un nome usabile. */
 export function openingBody(funnel: FunnelKey, variant: 1 | 2, name?: string | null): string {
-  const n = name?.trim() || 'benvenuto';
-  return OPENING_TEXTS[FUNNEL_LETTER[funnel]][variant](n);
+  return OPENING_TEXTS[FUNNEL_LETTER[funnel]][variant](templateName(name));
 }
 
 /** Persona di una conversazione, derivata dai messaggi (ordine cronologico):

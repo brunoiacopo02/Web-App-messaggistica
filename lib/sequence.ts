@@ -1,3 +1,5 @@
+import { firstNameOf } from './name';
+
 const H = 3600_000;
 const D = 24 * H;
 
@@ -144,6 +146,7 @@ const NUDGE_VARIANTS: ((name: string, persona: string) => string)[] = [
 ];
 
 export function pickNudgeText(conversationId: number, firstName: string | null, personaName: string = 'Mario'): string {
-  const name = firstName ? ` ${firstName}` : '';
+  const clean = firstNameOf(firstName);
+  const name = clean ? ` ${clean}` : '';
   return NUDGE_VARIANTS[conversationId % 3](name, personaName);
 }

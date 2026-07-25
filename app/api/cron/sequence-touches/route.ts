@@ -22,6 +22,7 @@ import {
   openingBody,
   PERSONA_NAME,
 } from '@/lib/persona';
+import { firstNameOf, templateName } from '@/lib/name';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -242,7 +243,7 @@ export async function GET(req: NextRequest) {
               sent++;
               await sendSequenceTemplate(
                 supabase, c.id, phone, newSid, `Apertura ${envKey}`, openingFrom,
-                { '1': firstName?.trim() || 'benvenuto' },
+                { '1': templateName(firstName) },
                 openingBody(funnel, variant, firstName),
               );
               continue;
@@ -255,7 +256,8 @@ export async function GET(req: NextRequest) {
             skipped++;
             continue;
           }
-          const variables: Record<string, string> = firstName ? { '3': firstName } : {};
+          const cleanName = firstNameOf(firstName);
+          const variables: Record<string, string> = cleanName ? { '3': cleanName } : {};
           sent++;
           await sendSequenceTemplate(
             supabase, c.id, phone, openingSid, 'Fenice apertura', openingFrom, variables, feniceOpening(firstName),
@@ -275,7 +277,7 @@ export async function GET(req: NextRequest) {
           }
           sent++;
           const touchRes = await sendSequenceTemplate(
-            supabase, c.id, phone, sid, `Sequenza touch ${action.touchIndex}`, followupFrom, { '1': firstName ?? 'ciao' },
+            supabase, c.id, phone, sid, `Sequenza touch ${action.touchIndex}`, followupFrom, { '1': templateName(firstName) },
           );
           // Dopo il primo follow-up riuscito: RICHIAMO interim (una volta sola,
           // perché il touch 1 parte una volta sola) con data = fine sequenza, così
@@ -358,7 +360,7 @@ export async function GET(req: NextRequest) {
         }
         sent++;
         const res = await sendSequenceTemplate(
-          supabase, c.id, phone, rSid, `Riaggancio ${action.nudgeIndex}`, followupFrom, { '1': firstName ?? 'ciao' },
+          supabase, c.id, phone, rSid, `Riaggancio ${action.nudgeIndex}`, followupFrom, { '1': templateName(firstName) },
         );
         // Contatore nudge SOLO a invio riuscito (63049/errori → si ritenta).
         if (res.ok) {

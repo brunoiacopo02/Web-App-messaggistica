@@ -3,6 +3,7 @@ import { findOrCreateLeadConversation, sendTemplateAndLog } from './messaging';
 import { feniceOpening } from './fenice-opening';
 import { inSendWindow } from './sequence';
 import { normalizeFunnel, variantIndexFor, openingEnvKey, openingBody } from './persona';
+import { firstNameOf, templateName } from './name';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -68,7 +69,9 @@ export async function enrollLeadIntoMario(
   // SID env mancante → fallback INTERO al ramo legacy + event opening_config_error.
   let sendSid = templateSid;
   let sendLabel = 'Fenice apertura';
-  let variables: Record<string, string> = firstName ? { '3': firstName } : {};
+  // Il CRM manda nome+cognome in un campo solo: negli invii va solo il nome proprio.
+  const cleanName = firstNameOf(firstName);
+  let variables: Record<string, string> = cleanName ? { '3': cleanName } : {};
   let bodyOverride = feniceOpening(firstName);
   if (process.env.NEW_OPENING_ENABLED === '1') {
     const funnel = normalizeFunnel(args.crmFunnel);
@@ -78,7 +81,7 @@ export async function enrollLeadIntoMario(
     if (openingSid) {
       sendSid = openingSid;
       sendLabel = `Apertura ${envKey}`;
-      variables = { '1': firstName?.trim() || 'benvenuto' };
+      variables = { '1': templateName(firstName) };
       bodyOverride = openingBody(funnel, variant, firstName);
     } else {
       await supabase.from('event_log').insert({

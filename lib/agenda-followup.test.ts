@@ -55,4 +55,9 @@ describe('agendaFollowupText', () => {
     expect(t.length).toBeGreaterThan(0);
     expect(t).not.toContain('null');
   });
+  it('usa solo il nome quando dal CRM arriva anche il cognome', () => {
+    const t = agendaFollowupText('LUCA VERDI');
+    expect(t).toContain('Ciao Luca');
+    expect(t).not.toContain('VERDI');
+  });
 });

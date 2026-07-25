@@ -161,7 +161,7 @@ describe('enrollLeadIntoMario — selezione apertura per-funnel A/B (NEW_OPENING
     expect(calls[1][7]).toBe(openingBody('jobsim', 2, 'Anna'));
   });
 
-  it('flag on senza nome → variables {1: benvenuto}', async () => {
+  it('flag on senza nome → variables {1: a te}', async () => {
     vi.stubEnv('NEW_OPENING_ENABLED', '1');
     stubOpeningSids();
     const { supabase } = makeSupabase();
@@ -169,8 +169,33 @@ describe('enrollLeadIntoMario — selezione apertura per-funnel A/B (NEW_OPENING
     await enrollLeadIntoMario(supabase, { phone: '+393331234567', crmFunnel: 'CORSO 10 ORE' });
 
     const call = vi.mocked(sendTemplateAndLog).mock.calls[0];
-    expect(call[6]).toEqual({ '1': 'benvenuto' });
+    expect(call[6]).toEqual({ '1': 'a te' });
     expect(call[7]).toBe(openingBody('corso10', 2, null));
+  });
+
+  it('il CRM manda nome e cognome → nel template va solo il nome', async () => {
+    vi.stubEnv('NEW_OPENING_ENABLED', '1');
+    stubOpeningSids();
+    const { supabase } = makeSupabase();
+
+    await enrollLeadIntoMario(supabase, {
+      phone: '+393331234567', firstName: 'ANNA BIANCHI', crmFunnel: 'CORSO 10 ORE',
+    });
+
+    const call = vi.mocked(sendTemplateAndLog).mock.calls[0];
+    expect(call[6]).toEqual({ '1': 'Anna' });
+    expect(call[7]).toContain('Ciao Anna,');
+    expect(call[7]).not.toContain('BIANCHI');
+  });
+
+  it('apertura legacy: nome e cognome → solo il nome anche nel template vecchio', async () => {
+    const { supabase } = makeSupabase();
+
+    await enrollLeadIntoMario(supabase, { phone: '+393331234567', firstName: 'mario rossi' });
+
+    const call = vi.mocked(sendTemplateAndLog).mock.calls[0];
+    expect(call[6]).toEqual({ '3': 'Mario' });
+    expect(call[7]).toContain('Buongiorno Mario,');
   });
 
   it('flag on ma SID env mancante → fallback INTERO al legacy + event opening_config_error (una volta)', async () => {

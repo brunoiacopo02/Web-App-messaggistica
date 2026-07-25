@@ -98,11 +98,17 @@ describe('openingBody — testi ESATTI della spec', () => {
     expect(openingBody('other', 1, 'Luca')).toBe(openingBody('corso10', 1, 'Luca'));
     expect(openingBody('other', 2, 'Luca')).toBe(openingBody('corso10', 2, 'Luca'));
   });
-  it("nome mancante → fallback 'benvenuto'", () => {
-    expect(openingBody('corso10', 1)).toContain('Ciao benvenuto,');
-    expect(openingBody('corso10', 1, null)).toContain('Ciao benvenuto,');
-    expect(openingBody('corso10', 1, '')).toContain('Ciao benvenuto,');
-    expect(openingBody('corso10', 1, '   ')).toContain('Ciao benvenuto,');
+  it('nome mancante o inutilizzabile → vocativo neutro, mai un genere sbagliato', () => {
+    expect(openingBody('corso10', 1)).toContain('Ciao a te,');
+    expect(openingBody('corso10', 1, null)).toContain('Ciao a te,');
+    expect(openingBody('corso10', 1, '')).toContain('Ciao a te,');
+    expect(openingBody('corso10', 1, '   ')).toContain('Ciao a te,');
+    expect(openingBody('corso10', 1, 'mario.rossi@gmail.com')).toContain('Ciao a te,');
+  });
+
+  it('nome e cognome dal CRM → nel messaggio va solo il nome', () => {
+    expect(openingBody('corso10', 1, 'Mario Rossi')).toContain('Ciao Mario,');
+    expect(openingBody('telegram', 2, 'MARIA GRAZIA DE LUCA')).toContain('Ciao Maria,');
   });
   it('nome con spazi → trim', () => {
     expect(openingBody('telegram', 2, '  Anna  ')).toContain('Ciao Anna,');
