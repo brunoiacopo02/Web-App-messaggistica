@@ -102,6 +102,29 @@ describe('C1: i quattro passaggi della conferma post-appuntamento escono nello s
     expect(p).toContain("poi scrivimi FATTO qui quando l'hai visto, così lo segno");
     expect(p).not.toContain('Perfetto. Scrivimi FATTO');
   });
+
+  it('nessun preambolo condizionale dentro i singoli passaggi contraddice l\'istruzione "stesso turno"', () => {
+    // Un'istruzione globale "non aspettare" seguita da preamboli locali "dopo che ha
+    // confermato" / "quando risponde" vince sulla globale (le istruzioni più specifiche
+    // prevalgono): il modello si fermerebbe comunque ad aspettare tra un passaggio e l'altro.
+    expect(p).not.toContain('Dopo che ha confermato giorno e ora');
+    expect(p).not.toContain('Quando risponde quando lo guarderà');
+    expect(p).toContain('2. "Noemi è la collega della preselezione');
+    expect(p).toContain('4. "poi scrivimi FATTO qui quando l\'hai visto, così lo segno"');
+  });
+
+  it('nel blocco CONFERMA POST-APPUNTAMENTO ogni passaggio numerato (tranne il 3, che sceglie il link) inizia subito con le virgolette, senza preamboli', () => {
+    const block = p.slice(
+      p.indexOf('CONFERMA POST-APPUNTAMENTO'),
+      p.indexOf("SE L'APPUNTAMENTO È GIÀ FISSATO")
+    );
+    const numberedLines = block.match(/^\d\.\s.*/gm) ?? [];
+    expect(numberedLines.length).toBeGreaterThan(0);
+    for (const line of numberedLines) {
+      if (/^3\./.test(line)) continue; // il passaggio 3 introduce la scelta del link, non una citazione
+      expect(line).toMatch(/^\d\.\s"/);
+    }
+  });
 });
 
 describe('comportamento a appuntamento già fissato', () => {
@@ -174,7 +197,7 @@ describe('bolle WhatsApp: i blocchi di copy lunghi restano sotto ~25 parole a ri
 
   it('CONFERMA POST-APPUNTAMENTO, passaggio 2 (Noemi/preselezione)', () => {
     const block = extractQuoted(
-      /2\. Dopo che ha confermato giorno e ora: "([\s\S]*?)"\n/,
+      /2\. "(Noemi è la collega della preselezione[\s\S]*?)"\n/,
       'CONFERMA passaggio 2'
     );
     const counts = wordsPerLine(block);

@@ -227,7 +227,7 @@ Dopo che il lead ha scritto "Noemi", manda questi quattro passaggi tutti nello s
 
 1. "Perfetto, allora ci siamo. Confermami tu giorno e ora della call come li hai scelti, così sono sicuro che siamo allineati"
 
-2. Dopo che ha confermato giorno e ora: "Noemi è la collega della preselezione, ti chiama prima della call:
+2. "Noemi è la collega della preselezione, ti chiama prima della call:
 è il passaggio che conferma l'appuntamento, quindi tieni il telefono a portata.
 Se ti scappa la chiamata non è un problema, richiamala pure allo stesso numero"
 
@@ -240,7 +240,7 @@ Poi: "Qui dentro ci sono le professioni, i pacchetti e le quote di investimento.
 Sono 20 minuti e servono perché in call partiamo dal tuo caso invece che dalle basi.
 Quando riesci a vederlo, stasera o domani?"
 
-4. Quando risponde quando lo guarderà: "poi scrivimi FATTO qui quando l'hai visto, così lo segno"
+4. "poi scrivimi FATTO qui quando l'hai visto, così lo segno"
 
 ---
 
