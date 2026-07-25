@@ -144,10 +144,6 @@ describe('canSendOutcome', () => {
     expect(canSendOutcome({ crmLeadId: 'crm1', aiStatus: 'active' })).toBe(true);
   });
 
-  it('consente l esito su un appuntamento fissato: diventerà una NOTA, non un duplicato', () => {
-    expect(canSendOutcome({ crmLeadId: 'crm1', aiStatus: 'active' })).toBe(true);
-  });
-
   it('non invia nulla senza lead CRM', () => {
     expect(canSendOutcome({ crmLeadId: null, aiStatus: 'active' })).toBe(false);
   });
@@ -246,7 +242,6 @@ describe('drainMarioReplies — guardia canSendOutcome dal vivo', () => {
     await drainMarioReplies(supabase, 42, '+391234567890', () => 0);
 
     expect(sendOutcome).toHaveBeenCalledTimes(1);
-    expect(calls.events.some((e) => e.type === 'bot_outcome_suppressed')).toBe(false);
     expect(calls.finalStatusWrites).toEqual(['closed']); // sendOutcome mock risolve { sent: true }
   });
 
@@ -266,7 +261,6 @@ describe('drainMarioReplies — guardia canSendOutcome dal vivo', () => {
     await drainMarioReplies(supabase, 43, '+391234567890', () => 0);
 
     expect(sendOutcome).toHaveBeenCalledTimes(1);
-    expect(calls.events.some((e) => e.type === 'bot_outcome_suppressed')).toBe(false);
     expect(calls.finalStatusWrites).toEqual(['closed']); // sendOutcome mock risolve { sent: true }
   });
 });

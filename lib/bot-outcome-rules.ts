@@ -19,15 +19,27 @@ export function buildLockedNote(args: OutcomeArgs, existingDate: string | null):
   const extra = args.note && args.note.trim() ? ` ${args.note.trim()}` : '';
   let base: string;
   switch (args.outcome) {
-    case 'DA_SCARTARE':
-      base = `Il lead vuole annullare l'appuntamento. Motivo: ${args.discardReason?.trim() || 'non specificato'}.`;
+    case 'DA_SCARTARE': {
+      const when = existingDate ? ` (fissato per ${existingDate})` : '';
+      base = `Il lead vuole annullare l'appuntamento${when}. Motivo: ${args.discardReason?.trim() || 'non specificato'}.`;
       break;
+    }
     case 'INTERROTTO':
       base = `Conversazione interrotta dopo l'appuntamento. Appuntamento mantenuto.`;
       break;
-    case 'RICHIAMO':
-      base = `Il lead ha chiesto di essere ricontattato${args.date ? ` (${args.date})` : ''}. Appuntamento mantenuto.`;
+    case 'RICHIAMO': {
+      // RICHIAMO qui significa "il lead vuole spostare l'appuntamento già fissato".
+      // Il prompt, quando il lead non indica una data, mette nel tag la data
+      // dell'appuntamento stesso come fallback: se la riportassimo sempre come "data
+      // indicata dal lead" le Conferme leggerebbero una richiesta di spostamento verso
+      // la data già in agenda, che non ha senso. La mostriamo come "data indicata"
+      // solo quando è davvero diversa da quella in agenda.
+      const leadDate = args.date && args.date !== existingDate ? args.date : null;
+      const datePart = leadDate ? ` alla data indicata (${leadDate})` : ' (nessuna nuova data indicata dal lead)';
+      const kept = existingDate ? `Appuntamento mantenuto: ${existingDate}.` : 'Appuntamento mantenuto.';
+      base = `Il lead ha chiesto di spostare l'appuntamento${datePart}. ${kept}`;
       break;
+    }
     case 'NON_RISPOSTO':
       base = `Nessuna risposta successiva. Appuntamento mantenuto.`;
       break;

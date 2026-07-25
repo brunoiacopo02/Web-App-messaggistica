@@ -219,6 +219,27 @@ describe('I1 (revocato dal Task 3): [PASSAGGIO_UMANO] torna ristretto alla sola 
   });
 });
 
+describe('glossario esiti: eccezione esplicita per l\'appuntamento già fissato (mai INTERROTTO su una disdetta/spostamento)', () => {
+  // Il glossario in fondo al prompt definisce INTERROTTO proprio con le parole di una
+  // disdetta ("adesso non posso", "lascia stare per ora", "ti faccio sapere io") e
+  // chiude con "nel dubbio NON chiudere": letto da solo, un modello davanti a "devo
+  // annullare, non ce la faccio in questo periodo" su un appuntamento già fissato
+  // sceglierebbe INTERROTTO, che produce una nota "conversazione interrotta" e nessuno
+  // chiama per gestire la disdetta. Serve un'eccezione esplicita che rimandi alla
+  // sezione SE L'APPUNTAMENTO È GIÀ FISSATO e disattivi lì la regola del dubbio.
+  const p = buildMarioSystem('Marta');
+
+  it('vieta INTERROTTO quando l\'appuntamento è già fissato, rimandando alla sezione dedicata', () => {
+    expect(p).toContain("ECCEZIONE quando l'appuntamento è GIÀ FISSATO");
+    expect(p).toContain("SE L'APPUNTAMENTO È GIÀ FISSATO");
+    expect(p).toContain('usa SOLO SCARTO o RICHIAMO, MAI INTERROTTO');
+  });
+
+  it('sospende esplicitamente la regola "nel dubbio non chiudere" per quel caso', () => {
+    expect(p).toContain('la regola "nel dubbio NON chiudere" NON vale');
+  });
+});
+
 describe('I2: FASE 6, anticipo e link hanno trigger diversi (niente doppio invio nello stesso turno)', () => {
   const p = buildMarioSystem('Marta');
 

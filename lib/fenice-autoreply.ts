@@ -232,13 +232,6 @@ export async function drainMarioReplies(
           // (booked/handed_off) non valgono per i lead CRM.
           if (sent.sent) finalStatus = 'closed';
           break;
-        } else if (crmLeadId) {
-          await supabase.from('event_log').insert({
-            type: 'bot_outcome_suppressed',
-            payload: { conversationId, crmLeadId, attemptedOutcome: result.outcome } as never,
-            message: `[bot-fissatore] conv ${conversationId}: esito ${result.outcome} NON inviato, appuntamento già fissato`,
-            level: 'info',
-          });
         }
       }
 
