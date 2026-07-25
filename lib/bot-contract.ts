@@ -7,7 +7,7 @@ export interface BotIntakePayload {
   companyId: string;
 }
 
-export type BotOutcome = 'APPUNTAMENTO' | 'DA_SCARTARE' | 'RICHIAMO' | 'NON_RISPOSTO' | 'INTERROTTO';
+export type BotOutcome = 'APPUNTAMENTO' | 'DA_SCARTARE' | 'RICHIAMO' | 'NON_RISPOSTO' | 'INTERROTTO' | 'NOTA';
 
 export interface BotReport {
   summary?: string;
@@ -27,7 +27,7 @@ export interface BotOutcomeBody {
   report?: BotReport;
 }
 
-const OUTCOMES: BotOutcome[] = ['APPUNTAMENTO', 'DA_SCARTARE', 'RICHIAMO', 'NON_RISPOSTO', 'INTERROTTO'];
+const OUTCOMES: BotOutcome[] = ['APPUNTAMENTO', 'DA_SCARTARE', 'RICHIAMO', 'NON_RISPOSTO', 'INTERROTTO', 'NOTA'];
 const DATE_REQUIRED: BotOutcome[] = ['APPUNTAMENTO', 'RICHIAMO'];
 
 /** True solo se ISO 8601 con offset di fuso (`Z` oppure `±HH:MM`). */
@@ -68,6 +68,9 @@ export function validateOutcomeBody(
   if (!OUTCOMES.includes(b.outcome)) return { ok: false, reason: 'bad_request' };
   if (DATE_REQUIRED.includes(b.outcome)) {
     if (!b.date || !isoWithOffset(b.date)) return { ok: false, reason: 'bad_request' };
+  }
+  if (b.outcome === 'NOTA' && (!b.note || !b.note.trim())) {
+    return { ok: false, reason: 'note_required' };
   }
   return { ok: true };
 }

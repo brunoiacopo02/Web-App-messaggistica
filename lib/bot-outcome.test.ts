@@ -29,17 +29,32 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
 describe('sendOutcome — guard APPUNTAMENTO terminale', () => {
-  it('lead già APPUNTAMENTO + SCARTO → invia APPUNTAMENTO+note, riga NON toccata, log locked', async () => {
+  it('lead già APPUNTAMENTO + SCARTO → invia NOTA (mai APPUNTAMENTO), senza date, riga NON toccata, log locked', async () => {
     const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE });
     const res = await sendOutcome(supabase, 1, { outcome: 'DA_SCARTARE', discardReason: 'la madre non paga' });
 
     expect(res.sent).toBe(true);
     const fetchMock = (globalThis.fetch as any);
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body.outcome).toBe('APPUNTAMENTO');
-    expect(body.date).toBe(DATE);
+    expect(body.outcome).toBe('NOTA');
+    expect(body.outcome).not.toBe('APPUNTAMENTO');
+    expect(body.date).toBeUndefined();
     expect(body.note).toContain('annullare');
     // La riga viene chiusa (stop al loop del cron) ma l'esito resta congelato.
+    expect(calls.updates).toEqual([{ ai_status: 'closed' }]);
+    expect(calls.events.some((e) => e.type === 'bot_outcome_locked' && e.payload.sentAs === 'NOTA')).toBe(true);
+  });
+
+  it('lead già APPUNTAMENTO senza data originale → invia comunque NOTA (la data non serve più)', async () => {
+    const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: null });
+    const res = await sendOutcome(supabase, 1, { outcome: 'INTERROTTO' });
+
+    expect(res.sent).toBe(true);
+    const fetchMock = (globalThis.fetch as any);
+    expect(fetchMock.mock.calls).toHaveLength(1);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.outcome).toBe('NOTA');
+    expect(body.date).toBeUndefined();
     expect(calls.updates).toEqual([{ ai_status: 'closed' }]);
     expect(calls.events.some((e) => e.type === 'bot_outcome_locked')).toBe(true);
   });
@@ -74,24 +89,18 @@ describe('sendOutcome — guard APPUNTAMENTO terminale', () => {
     expect(calls.events.some((e) => e.type === 'bot_outcome_rejected' && e.level === 'warn')).toBe(true);
   });
 
-  it('CRM 403 su lead già APPUNTAMENTO → chiude senza declassare bot_outcome', async () => {
+  it('CRM 403 su lead già APPUNTAMENTO → chiude senza declassare bot_outcome, body inviato è NOTA', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 403, text: async () => 'no' })));
     const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE });
     const res = await sendOutcome(supabase, 1, { outcome: 'DA_SCARTARE', discardReason: 'x' });
 
     expect(res.sent).toBe(false);
+    const fetchMock = (globalThis.fetch as any);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.outcome).toBe('NOTA');
+    expect(body.outcome).not.toBe('APPUNTAMENTO');
     expect(calls.updates).toEqual([{ ai_status: 'closed' }]);
     expect(calls.events.some((e) => e.type === 'bot_outcome_rejected')).toBe(true);
-  });
-
-  it('lead APPUNTAMENTO senza data originale → non invia, non declassa, warning', async () => {
-    const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: null });
-    const res = await sendOutcome(supabase, 1, { outcome: 'INTERROTTO' });
-
-    expect(res.sent).toBe(true);
-    expect((globalThis.fetch as any).mock.calls).toHaveLength(0);  // nessun POST
-    expect(calls.updates).toHaveLength(0);
-    expect(calls.events.some((e) => e.type === 'bot_outcome_locked' && e.level === 'warn')).toBe(true);
   });
 });
 

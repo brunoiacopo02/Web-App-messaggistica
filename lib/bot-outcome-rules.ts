@@ -9,7 +9,7 @@ export type OutcomeArgs = {
 
 export type OutcomeAction =
   | { kind: 'normal' }
-  | { kind: 'locked'; note: string; date: string | null };
+  | { kind: 'locked'; outcome: 'NOTA'; note: string; date: null };
 
 /**
  * Costruisce la nota da inviare al CRM quando un lead GIÀ fissato genera un esito
@@ -38,6 +38,12 @@ export function buildLockedNote(args: OutcomeArgs, existingDate: string | null):
         base = `Il lead ha riconfermato l'appuntamento.`;
       }
       break;
+    case 'NOTA':
+      // Non dovrebbe mai arrivare qui come esito IN INGRESSO (NOTA è solo l'esito
+      // prodotto in USCITA da resolveOutcomeAction per il ramo locked). Caso incluso
+      // solo per l'esaustività dello switch dopo l'aggiunta di 'NOTA' a BotOutcome.
+      base = `Appuntamento mantenuto.`;
+      break;
   }
   return `${base}${extra}`.trim();
 }
@@ -53,7 +59,7 @@ export function resolveOutcomeAction(
   existingDate: string | null,
 ): OutcomeAction {
   if (current === 'APPUNTAMENTO') {
-    return { kind: 'locked', note: buildLockedNote(args, existingDate), date: existingDate };
+    return { kind: 'locked', outcome: 'NOTA', note: buildLockedNote(args, existingDate), date: null };
   }
   return { kind: 'normal' };
 }

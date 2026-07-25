@@ -56,23 +56,10 @@ export async function sendOutcome(
     return { sent: false, error: 'interim_skipped_locked' };
   }
 
-  // Lead già fissato ma senza data originale: non possiamo re-inviare APPUNTAMENTO
-  // (la data è obbligatoria). Non declassiamo: logghiamo un warning ed usciamo.
-  if (action.kind === 'locked' && !action.date) {
-    await supabase.from('event_log').insert({
-      type: 'bot_outcome_locked',
-      level: 'warn',
-      payload: { conversationId, crmLeadId, attemptedOutcome: args.outcome, keptOutcome: 'APPUNTAMENTO' } as never,
-      message: `[bot-fissatore] esito ${args.outcome} ignorato: lead ${crmLeadId} già APPUNTAMENTO senza data`,
-    });
-    return { sent: true };
-  }
-
   const body: BotOutcomeBody = action.kind === 'locked'
     ? {
         leadId: crmLeadId,
-        outcome: 'APPUNTAMENTO',
-        date: action.date as string,
+        outcome: 'NOTA',
         note: action.note,
         ...(args.report ? { report: args.report } : {}),
       }
@@ -133,11 +120,11 @@ export async function sendOutcome(
       } else {
         // Lead terminale: l'esito resta congelato (niente bot_outcome/date), ma la
         // conversazione va richiusa: se restasse 'active' il cron backstop la
-        // riclassificherebbe a ogni run, ri-inviando l'APPUNTAMENTO al CRM.
+        // riclassificherebbe a ogni run, reinviando una NOTA al CRM ad ogni giro.
         await supabase.from('conversations').update({ ai_status: 'closed' }).eq('id', conversationId);
         await supabase.from('event_log').insert({
           type: 'bot_outcome_locked',
-          payload: { conversationId, crmLeadId, attemptedOutcome: args.outcome, keptOutcome: 'APPUNTAMENTO', note: action.note } as never,
+          payload: { conversationId, crmLeadId, attemptedOutcome: args.outcome, keptOutcome: 'APPUNTAMENTO', sentAs: 'NOTA', note: action.note } as never,
           message: `[bot-fissatore] esito ${args.outcome} intercettato (lead ${crmLeadId} già APPUNTAMENTO) → nota CRM`,
           level: 'info',
         });

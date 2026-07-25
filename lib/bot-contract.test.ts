@@ -50,3 +50,20 @@ describe('validateOutcomeBody', () => {
     expect(validateOutcomeBody({ leadId: 'u1', outcome: 'BOH' as never })).toEqual({ ok: false, reason: 'bad_request' });
   });
 });
+
+describe('esito NOTA', () => {
+  it('accetta NOTA con una nota e senza data', () => {
+    const r = validateOutcomeBody({ leadId: 'x', outcome: 'NOTA', note: 'il lead ha disdetto' });
+    expect(r.ok).toBe(true);
+  });
+
+  it('rifiuta NOTA senza nota', () => {
+    expect(validateOutcomeBody({ leadId: 'x', outcome: 'NOTA' }).ok).toBe(false);
+    expect(validateOutcomeBody({ leadId: 'x', outcome: 'NOTA', note: '   ' }).ok).toBe(false);
+  });
+
+  it('NOTA non richiede la data', () => {
+    const r = validateOutcomeBody({ leadId: 'x', outcome: 'NOTA', note: 'ok' });
+    expect(r.ok).toBe(true);
+  });
+});

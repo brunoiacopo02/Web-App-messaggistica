@@ -11,11 +11,12 @@ describe('resolveOutcomeAction', () => {
       .toBe('normal');
   });
 
-  it('APPUNTAMENTO corrente + qualsiasi esito → locked con data originale', () => {
+  it('APPUNTAMENTO corrente + qualsiasi esito → locked con NOTA, data sempre null (la data originale resta nel testo della nota)', () => {
     const a = resolveOutcomeAction('APPUNTAMENTO', { outcome: 'DA_SCARTARE', discardReason: 'la madre non paga' }, DATE);
     expect(a.kind).toBe('locked');
     if (a.kind === 'locked') {
-      expect(a.date).toBe(DATE);
+      expect(a.outcome).toBe('NOTA');
+      expect(a.date).toBeNull();
       expect(a.note).toContain('annullare');
       expect(a.note).toContain('la madre non paga');
     }
@@ -24,6 +25,18 @@ describe('resolveOutcomeAction', () => {
   it('APPUNTAMENTO corrente senza data originale → locked con date null', () => {
     const a = resolveOutcomeAction('APPUNTAMENTO', { outcome: 'INTERROTTO' }, null);
     expect(a).toMatchObject({ kind: 'locked', date: null });
+  });
+});
+
+describe('resolveOutcomeAction su appuntamento fissato', () => {
+  it('produce una NOTA, mai un APPUNTAMENTO', () => {
+    const a = resolveOutcomeAction('APPUNTAMENTO', { outcome: 'DA_SCARTARE', discardReason: 'ha disdetto' }, '2026-08-01T15:00:00+02:00');
+    expect(a.kind).toBe('locked');
+    if (a.kind === 'locked') {
+      expect(a.outcome).toBe('NOTA');
+      expect(a.date).toBeNull();
+      expect(a.note).toContain('annullare');
+    }
   });
 });
 
