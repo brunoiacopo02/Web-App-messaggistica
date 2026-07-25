@@ -26,6 +26,18 @@ export function shouldAutoReply(g: AutoReplyGate): boolean {
   return g.aiStatus === 'active' || g.aiStatus === 'replying';
 }
 
+/**
+ * Pure: la conversazione va riaperta all'arrivo di un messaggio del lead?
+ * Vero per gli stati in cui il bot ha finito il suo giro ('closed' dopo l'esito,
+ * 'booked' dopo il fissaggio): dopo l'appuntamento il lead scrive ancora (conferma
+ * di aver visto il video, chiede di spostare) e il bot deve poter rispondere.
+ * Falso per 'handed_off': se un umano ha preso in carico la chat, il bot non rientra.
+ */
+export function shouldReopen(g: { aiOwner: string | null; aiStatus: string | null }): boolean {
+  if (g.aiOwner !== 'mario') return false;
+  return g.aiStatus === 'closed' || g.aiStatus === 'booked';
+}
+
 type MsgRow = { direction: string; body: string };
 // Riga del drain: come MsgRow ma con il template per derivare la persona (Mario/Marta).
 type DrainMsgRow = MsgRow & { template_sid: string | null };

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shouldAutoReply, nextUnansweredInboundIndex, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS } from './fenice-autoreply';
+import { shouldAutoReply, shouldReopen, nextUnansweredInboundIndex, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS } from './fenice-autoreply';
 
 describe('shouldAutoReply', () => {
   const ok = { toMatchesFenice: true, autoReplyOn: true, aiOwner: 'mario', aiStatus: 'active' };
@@ -100,5 +100,29 @@ describe('isOrphanedReplyingLock', () => {
   });
   it('(d) replying + lastInboundAtMs null → false', () => {
     expect(isOrphanedReplyingLock('replying', null, NOW)).toBe(false);
+  });
+});
+
+describe('shouldReopen', () => {
+  it('riapre una conversazione chiusa dopo l esito', () => {
+    expect(shouldReopen({ aiOwner: 'mario', aiStatus: 'closed' })).toBe(true);
+  });
+
+  it('riapre anche una conversazione booked: è il caso del post-appuntamento', () => {
+    expect(shouldReopen({ aiOwner: 'mario', aiStatus: 'booked' })).toBe(true);
+  });
+
+  it('NON riapre una conversazione presa in carico da un umano', () => {
+    expect(shouldReopen({ aiOwner: 'mario', aiStatus: 'handed_off' })).toBe(false);
+  });
+
+  it('non tocca le conversazioni già vive', () => {
+    expect(shouldReopen({ aiOwner: 'mario', aiStatus: 'active' })).toBe(false);
+    expect(shouldReopen({ aiOwner: 'mario', aiStatus: 'replying' })).toBe(false);
+  });
+
+  it('non riapre conversazioni non arruolate nel bot', () => {
+    expect(shouldReopen({ aiOwner: null, aiStatus: 'closed' })).toBe(false);
+    expect(shouldReopen({ aiOwner: 'umano', aiStatus: 'booked' })).toBe(false);
   });
 });

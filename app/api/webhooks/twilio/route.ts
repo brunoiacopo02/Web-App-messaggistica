@@ -4,7 +4,7 @@ import { validateTwilioSignature } from '@/lib/twilio';
 import { toE164 } from '@/lib/phone';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getAutoReply } from '@/lib/fenice-settings';
-import { shouldAutoReply, drainMarioReplies } from '@/lib/fenice-autoreply';
+import { shouldAutoReply, shouldReopen, drainMarioReplies } from '@/lib/fenice-autoreply';
 import { isAudioInbound, transcribeTwilioAudio } from '@/lib/transcribe';
 
 export const runtime = 'nodejs';
@@ -174,9 +174,9 @@ export async function POST(req: NextRequest) {
         .eq('id', conversationId)
         .single();
 
-      if (conv?.crm_lead_id && conv.ai_status === 'closed') {
+      if (shouldReopen({ aiOwner: conv?.ai_owner ?? null, aiStatus: conv?.ai_status ?? null })) {
         await supabase.from('conversations').update({ ai_status: 'active' }).eq('id', conversationId);
-        conv.ai_status = 'active';
+        conv!.ai_status = 'active';
       }
 
       const autoReplyOn = await getAutoReply(supabase);
