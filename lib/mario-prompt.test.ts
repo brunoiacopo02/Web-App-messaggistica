@@ -113,17 +113,51 @@ describe('C1: i quattro passaggi della conferma post-appuntamento escono nello s
     expect(p).toContain('4. "poi scrivimi FATTO qui quando l\'hai visto, così lo segno"');
   });
 
-  it('nel blocco CONFERMA POST-APPUNTAMENTO ogni passaggio numerato (tranne il 3, che sceglie il link) inizia subito con le virgolette, senza preamboli', () => {
+  it('nel blocco CONFERMA POST-APPUNTAMENTO ogni passaggio numerato inizia subito con le virgolette, salvo l\'unica eccezione nota (instradamento del link nel passaggio 3)', () => {
+    // L'unica riga numerata ammessa a non iniziare con le virgolette è quella esatta,
+    // nota e già approvata, che instrada quale link mandare in base al lead: non un
+    // "tranne il 3" generico, altrimenti un preambolo di attesa reintrodotto nel
+    // passaggio 3 (es. "3. Quando conferma di aver ricevuto:") passerebbe inosservato.
+    const KNOWN_ROUTING_LINE = '3. Manda il link video giusto in base alla situazione del lead:';
+    // Ancorato al solo titolo di sezione (preceduto e seguito da un a-capo), non a
+    // una qualunque menzione della stringa "CONFERMA POST-APPUNTAMENTO": ora che la
+    // regola tassativa e il tag [APPUNTAMENTO_FISSATO] la citano anche loro (fuori dal
+    // blocco), un indexOf generico prenderebbe la prima occorrenza sbagliata.
     const block = p.slice(
-      p.indexOf('CONFERMA POST-APPUNTAMENTO'),
+      p.indexOf('\nCONFERMA POST-APPUNTAMENTO\n'),
       p.indexOf("SE L'APPUNTAMENTO È GIÀ FISSATO")
     );
     const numberedLines = block.match(/^\d\.\s.*/gm) ?? [];
     expect(numberedLines.length).toBeGreaterThan(0);
+    expect(numberedLines).toContain(KNOWN_ROUTING_LINE);
     for (const line of numberedLines) {
-      if (/^3\./.test(line)) continue; // il passaggio 3 introduce la scelta del link, non una citazione
+      if (line === KNOWN_ROUTING_LINE) continue;
       expect(line).toMatch(/^\d\.\s"/);
     }
+  });
+
+  it('[APPUNTAMENTO_FISSATO] va nello stesso messaggio dei quattro passaggi, mai da solo', () => {
+    expect(p).toContain(
+      'scrivi [APPUNTAMENTO_FISSATO] insieme ai quattro passaggi della CONFERMA POST-APPUNTAMENTO qui sotto, nello stesso messaggio'
+    );
+    expect(p).toContain('non scriverlo mai da solo, senza altro testo visibile');
+    expect(p).not.toContain('Quando risponde, scrivi: [APPUNTAMENTO_FISSATO]');
+  });
+
+  it('la riga introduttiva della CONFERMA dichiara di essere l\'unica eccezione alla regola dell\'attesa fra un messaggio e l\'altro', () => {
+    expect(p).toContain(
+      "È l'unico punto del flusso in cui non vale la regola dell'attesa fra un messaggio e l'altro."
+    );
+  });
+
+  it('REGOLE TASSATIVE, punto 4 (UNA SOLA DOMANDA): nomina esplicitamente l\'eccezione della CONFERMA POST-APPUNTAMENTO', () => {
+    // Senza questa eccezione una regola "non violarle MAI" ("aspetta sempre la
+    // risposta prima di continuare") confligge con l'istruzione di mandare i quattro
+    // passaggi della conferma nello stesso turno: il modello risolverebbe il conflitto
+    // fermandosi dopo il primo passaggio, riaprendo il bug di C1.
+    expect(p).toContain(
+      "Aspetta sempre la risposta prima di continuare. Unica eccezione: i quattro passaggi della CONFERMA POST-APPUNTAMENTO, che escono tutti insieme nello stesso turno."
+    );
   });
 });
 
