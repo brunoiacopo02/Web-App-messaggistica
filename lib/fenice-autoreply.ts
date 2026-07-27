@@ -248,10 +248,14 @@ export async function drainMarioReplies(
             note: result.note,
             report,
           });
-          // Esito CRM: chiudiamo solo se il callback è andato a buon fine; altrimenti
+          // Esito CRM: chiudiamo se il callback è andato a buon fine; altrimenti
           // restiamo 'active' (ritentabile). In ogni caso usciamo: i rami legacy
           // (booked/handed_off) non valgono per i lead CRM.
-          if (sent.sent) finalStatus = 'closed';
+          // 'note_duplicate' non è un fallimento ritentabile: la nota non è partita
+          // perché era già partita prima, quindi l'esito è terminale e la
+          // conversazione va chiusa qui (sendOutcome la chiude già a DB, ma il
+          // `finally` di questo drain riscriverebbe finalStatus sopra).
+          if (sent.sent || sent.error === 'note_duplicate') finalStatus = 'closed';
           break;
         }
       }

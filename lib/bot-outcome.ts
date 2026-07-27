@@ -69,6 +69,19 @@ export async function sendOutcome(
       .eq('payload->>noteFingerprint', fp)
       .limit(1);
     if ((gia ?? []).length > 0) {
+      // Questa è l'unica guardia che fa sparire un dato diretto al CRM: senza una
+      // traccia esplicita una soppressione sbagliata sarebbe invisibile.
+      await supabase.from('event_log').insert({
+        type: 'bot_outcome_note_duplicate',
+        payload: { conversationId, crmLeadId, attemptedOutcome: args.outcome, noteFingerprint: fp, note: action.note } as never,
+        message: `[bot-fissatore] nota identica già inviata per lead ${crmLeadId} (esito ${args.outcome}): non rimandata al CRM`,
+        level: 'info',
+      });
+      // La nota non parte perché era già partita: l'esito resta terminale, quindi la
+      // conversazione va chiusa come nel ramo di invio riuscito. Se restasse 'active'
+      // il cron backstop la riclassificherebbe al run successivo (finestra fino a
+      // un'ora con una riga aperta che ha già un esito terminale).
+      await supabase.from('conversations').update({ ai_status: 'closed' }).eq('id', conversationId);
       return { sent: false, error: 'note_duplicate' };
     }
   }

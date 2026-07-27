@@ -263,6 +263,46 @@ describe('drainMarioReplies — guardia canSendOutcome dal vivo', () => {
     expect(sendOutcome).toHaveBeenCalledTimes(1);
     expect(calls.finalStatusWrites).toEqual(['closed']); // sendOutcome mock risolve { sent: true }
   });
+
+  // La nota non e partita perche era gia partita: l'esito e terminale lo stesso, la
+  // riga non deve restare 'active' in attesa che il cron la richiuda fino a un'ora dopo.
+  it('nota duplicata: la conversazione viene comunque chiusa, non lasciata active', async () => {
+    vi.mocked(sendOutcome).mockResolvedValueOnce({ sent: false, error: 'note_duplicate' });
+    const claimedRow: ClaimedRow = { id: 44, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO' };
+    const rows: FakeMsgRow[] = [
+      OPENING,
+      { direction: 'in', body: 'non ce la faccio piu, lasciamo stare', template_sid: null, created_at: '2026-07-25T09:00:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Mi dispiace, mi segno tutto e ti ricontatta una collega.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+      outcome: 'DA_SCARTARE', discardReason: 'ci ha ripensato',
+    });
+
+    await drainMarioReplies(supabase, 44, '+391234567890', () => 0);
+
+    expect(calls.finalStatusWrites).toEqual(['closed']);
+  });
+
+  it('esito CRM davvero fallito: la conversazione resta active e ritentabile', async () => {
+    vi.mocked(sendOutcome).mockResolvedValueOnce({ sent: false, error: 'http_500' });
+    const claimedRow: ClaimedRow = { id: 45, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const rows: FakeMsgRow[] = [
+      OPENING,
+      { direction: 'in', body: 'richiamatemi la prossima settimana', template_sid: null, created_at: '2026-07-25T09:00:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Va bene, ti richiamiamo.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+      outcome: 'RICHIAMO', scheduledAt: '2026-08-03T10:00:00+02:00',
+    });
+
+    await drainMarioReplies(supabase, 45, '+391234567890', () => 0);
+
+    expect(calls.finalStatusWrites).toEqual(['active']);
+  });
 });
 
 describe('drainMarioReplies — il blocco conferma si completa solo nel turno del video', () => {
