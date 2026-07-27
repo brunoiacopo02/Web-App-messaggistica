@@ -84,4 +84,19 @@ describe('ensureConfirmationBlock: il blocco post-appuntamento esce sempre compl
     expect(r.added).toContain('videoPitch');
     expect(r.parts[2]).toBe(`${VIDEO_PITCH_TEXT} https://corso.feniceacademy.it/conferenza-ex`);
   });
+
+  it('non scambia le quote del pagamento per il pitch del video', () => {
+    const pagamento = 'Confermiamo le quote del pagamento domani?';
+    const r = ensureConfirmationBlock([step1, step2, pagamento, 'https://corso.feniceacademy.it/conferenza-ex']);
+    expect(r.added).toContain('videoPitch');
+    expect(r.parts[3]).toBe(`${VIDEO_PITCH_TEXT} https://corso.feniceacademy.it/conferenza-ex`);
+  });
+
+  it('riconosce il pitch riformulato con "venti minuti" in lettere', () => {
+    const riformulata =
+      'Dentro trovi le professioni e le quote, sono venti minuti, quando riesci a guardarlo? https://corso.feniceacademy.it/conferenza-ex';
+    const r = ensureConfirmationBlock([step1, step2, riformulata]);
+    expect(r.added).not.toContain('videoPitch');
+    expect(r.parts[2]).toBe(riformulata);
+  });
 });

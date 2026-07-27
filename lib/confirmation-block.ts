@@ -26,7 +26,10 @@ const isStep4 = (p: string) => /\bFATTO\b/.test(p);
  * "dacci un'occhiata 👉 <link>" invece NON è un pitch, anche se non è "nuda".
  */
 const PITCH_MARKERS: RegExp[] = [
-  /professioni|pacchetti|quote\b|investimento/i, // di cosa parla il video
+  // Di cosa parla il video. "quote" da sola e ambigua in italiano (puo indicare le
+  // rate di un pagamento, es. "confermiamo le quote del pagamento"): serve un ancoraggio
+  // specifico al pitch, non la sola parola.
+  /professioni|pacchetti[\s\S]{0,60}?quote|quote[\s\S]{0,60}?pacchetti|quote\s+di\s+investimento/i,
   /20\s*minuti/i, // durata
   /quando\s+(riesci|puoi)|stasera|domani/i, // invito a guardarlo
 ];
