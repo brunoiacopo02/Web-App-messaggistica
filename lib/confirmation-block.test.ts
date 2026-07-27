@@ -50,4 +50,38 @@ describe('ensureConfirmationBlock: il blocco post-appuntamento esce sempre compl
     expect(r.added).toEqual(['videoPitch', 'step4']);
     expect(r.parts).toHaveLength(4);
   });
+
+  it('riconosce il pitch anche se è distribuito su più bolle attorno al link (conv 3312)', () => {
+    const bolle = [
+      'Qui dentro ci sono le professioni, i pacchetti e le quote di investimento.',
+      'https://corso.feniceacademy.it/conferenza-dx',
+      'Sono 20 minuti e servono perché in call partiamo dal tuo caso invece che dalle basi.',
+      'Quando riesci a vederlo, stasera o domani mattina prima del lavoro?',
+      STEP4_TEXT,
+    ];
+    const r = ensureConfirmationBlock(bolle);
+    expect(r.added).toEqual([]);
+    expect(r.parts).toEqual(bolle);
+  });
+
+  it('riconosce il pitch quando è fuso col link in un unica bolla (conv 3349)', () => {
+    const fusa =
+      "Qui dentro ci sono le professioni, i pacchetti e le quote di investimento. Sono 20 minuti e servono perché in call partiamo dal tuo caso invece che dalle basi. Quando riesci a vederlo, stasera o domani? 👉 https://corso.feniceacademy.it/conferenza-axmsbn9r50";
+    const r = ensureConfirmationBlock([step1, step2, fusa, STEP4_TEXT]);
+    expect(r.added).toEqual([]);
+    expect(r.parts[2]).toBe(fusa);
+  });
+
+  it('aggiunge il pitch quando il link e accompagnato solo da parole di riempimento', () => {
+    const riempimento = "Dacci un'occhiata quando puoi 👉 https://corso.feniceacademy.it/conferenza-ex";
+    const r = ensureConfirmationBlock([step1, step2, riempimento]);
+    expect(r.added).toContain('videoPitch');
+    expect(r.parts[2]).toBe(`${VIDEO_PITCH_TEXT} ${riempimento}`);
+  });
+
+  it('aggiunge il pitch quando il link e nudo in una bolla propria e nessun altra bolla lo contiene', () => {
+    const r = ensureConfirmationBlock([step1, step2, 'https://corso.feniceacademy.it/conferenza-ex']);
+    expect(r.added).toContain('videoPitch');
+    expect(r.parts[2]).toBe(`${VIDEO_PITCH_TEXT} https://corso.feniceacademy.it/conferenza-ex`);
+  });
 });
