@@ -329,6 +329,22 @@ describe('niente promesse di telefonate: Mario non puo chiamare nessuno', () => 
     expect(p).toContain('ti faccio richiamare da una collega');
   });
 
+  it('la promessa della richiamata da parte di una collega chiude col tag [PASSAGGIO_UMANO], cosi non resta una promessa vuota come "ti chiamo subito"', () => {
+    // Senza instradamento reale a un umano, "ti faccio richiamare da una collega"
+    // sarebbe la stessa identica falsa promessa di "ti chiamo subito": nessuno
+    // avviserebbe davvero una collega, e il lead resterebbe comunque ad aspettare.
+    expect(p).toMatch(/ti faccio richiamare da una collega["'\s\S]{0,80}\[PASSAGGIO_UMANO\]/);
+  });
+
+  it('non entra in conflitto col percorso di disdetta/spostamento su un appuntamento gia fissato, che usa gia i tag [ESITO:...]', () => {
+    // Quel percorso (sezione "SE L'APPUNTAMENTO È GIÀ FISSATO") promette anch'esso
+    // "ti ricontatta una collega", ma instrada già col tag ESITO verso il CRM: la
+    // nuova regola su [PASSAGGIO_UMANO] deve esplicitamente farsi da parte lì,
+    // altrimenti il modello si troverebbe davanti a due tag diversi per lo stesso
+    // messaggio e potrebbe scegliere quello sbagliato.
+    expect(p).toMatch(/ECCEZIONE.{0,40}GIÀ FISSATO.{0,60}NON usare \[PASSAGGIO_UMANO\]/i);
+  });
+
   it('la regola sta nelle REGOLE ASSOLUTE, non in una fase specifica', () => {
     // "FASE 1" precede REGOLE ASSOLUTE in questo prompt (non la segue), quindi non è
     // un marcatore di fine blocco valido qui: si usa il primo titolo di sezione che
