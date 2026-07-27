@@ -99,4 +99,12 @@ describe('ensureConfirmationBlock: il blocco post-appuntamento esce sempre compl
     expect(r.added).not.toContain('videoPitch');
     expect(r.parts[2]).toBe(riformulata);
   });
+
+  it('riconosce "investimento" da solo come marcatore del pitch, senza pretendere quote o pacchetti', () => {
+    const riformulata =
+      "Il video spiega bene l'investimento necessario, dura 20 minuti, quando lo guardi mi dici https://corso.feniceacademy.it/conferenza-ex";
+    const r = ensureConfirmationBlock([step1, step2, riformulata]);
+    expect(r.added).not.toContain('videoPitch');
+    expect(r.parts[2]).toBe(riformulata);
+  });
 });

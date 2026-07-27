@@ -27,9 +27,11 @@ const isStep4 = (p: string) => /\bFATTO\b/.test(p);
  */
 const PITCH_MARKERS: RegExp[] = [
   // Di cosa parla il video. "quote" da sola e ambigua in italiano (puo indicare le
-  // rate di un pagamento, es. "confermiamo le quote del pagamento"): serve un ancoraggio
-  // specifico al pitch, non la sola parola.
-  /professioni|pacchetti[\s\S]{0,60}?quote|quote[\s\S]{0,60}?pacchetti|quote\s+di\s+investimento/i,
+  // rate di un pagamento, es. "confermiamo le quote del pagamento"): per lei serve un
+  // ancoraggio specifico al pitch (vicino a "pacchetti", o nella forma "quote di
+  // investimento"), non la sola parola. "investimento" invece non e ambigua in questo
+  // contesto e resta un trigger isolato valido.
+  /professioni|investimento|pacchetti[\s\S]{0,60}?quote|quote[\s\S]{0,60}?pacchetti|quote\s+di\s+investimento/i,
   /20\s*minuti/i, // durata
   /quando\s+(riesci|puoi)|stasera|domani/i, // invito a guardarlo
 ];
