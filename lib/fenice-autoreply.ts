@@ -3,6 +3,7 @@ import { generateMarioReply, type MarioTurn } from './mario';
 import { sendFreeText } from './twilio';
 import { marioDelayMs } from './mario-latency';
 import { splitMarioMessages } from './mario-split';
+import { ensureConfirmationBlock } from './confirmation-block';
 import { generateBotReport } from './bot-report';
 import { sendOutcome } from './bot-outcome';
 import { personaForConversation, PERSONA_NAME } from './persona';
@@ -192,7 +193,19 @@ export async function drainMarioReplies(
       const result = await generateMarioReply(history, { personaName: PERSONA_NAME[persona] });
 
       // Invia ogni a-capo come messaggio separato (più umano), con breve pausa.
-      const parts = splitMarioMessages(result.visibleReply);
+      let parts = splitMarioMessages(result.visibleReply);
+      if (result.appointmentFixed) {
+        const block = ensureConfirmationBlock(parts);
+        parts = block.parts;
+        if (block.added.length > 0 || block.missingVideoLink) {
+          await supabase.from('event_log').insert({
+            type: 'confirmation_block_patched',
+            payload: { conversationId, added: block.added, missingVideoLink: block.missingVideoLink } as never,
+            message: `[bot-fissatore] blocco conferma incompleto sulla conversazione ${conversationId}: aggiunti [${block.added.join(', ')}]${block.missingVideoLink ? ', link video assente' : ''}`,
+            level: block.missingVideoLink ? 'warn' : 'info',
+          });
+        }
+      }
       for (let i = 0; i < parts.length; i++) {
         if (i > 0) await sleep(Math.min(3000, 800 + parts[i].length * 25));
         const sent = await sendFreeText({ to: phone, body: parts[i], from });
