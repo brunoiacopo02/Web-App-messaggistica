@@ -305,6 +305,56 @@ describe('drainMarioReplies — guardia canSendOutcome dal vivo', () => {
   });
 });
 
+describe('drainMarioReplies — link Fenice inventati dal modello', () => {
+  const OPENING: FakeMsgRow = { direction: 'out', body: 'apertura', template_sid: null, created_at: '2026-07-01T10:00:00Z' };
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(sendOutcome).mockClear();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('registra a warn un link Fenice fuori dalla lista ufficiale, senza bloccare l invio', async () => {
+    const claimedRow: ClaimedRow = { id: 60, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const rows: FakeMsgRow[] = [
+      OPENING,
+      { direction: 'in', body: 'mandami il video', template_sid: null, created_at: '2026-07-25T09:00:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Eccolo https://corso.feniceacademy.it/conferenza-zx',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 60, '+391234567890', () => 0);
+
+    const evento = calls.events.find((e: { type: string }) => e.type === 'unknown_fenice_link');
+    expect(evento).toBeDefined();
+    expect(evento.level).toBe('warn');
+    expect(evento.payload).toMatchObject({ conversationId: 60, links: ['https://corso.feniceacademy.it/conferenza-zx'] });
+    // Segnale diagnostico, non un filtro: il messaggio parte comunque.
+    expect(calls.messageInserts).toHaveLength(1);
+  });
+
+  it('non registra nulla quando i link sono quelli ufficiali', async () => {
+    const claimedRow: ClaimedRow = { id: 61, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const rows: FakeMsgRow[] = [
+      OPENING,
+      { direction: 'in', body: 'mandami il video', template_sid: null, created_at: '2026-07-25T09:00:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Eccolo https://corso.feniceacademy.it/conferenza-bx',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 61, '+391234567890', () => 0);
+
+    expect(calls.events.some((e: { type: string }) => e.type === 'unknown_fenice_link')).toBe(false);
+  });
+});
+
 describe('drainMarioReplies — il blocco conferma si completa solo nel turno del video', () => {
   const VIDEO = 'https://corso.feniceacademy.it/conferenza-dx';
   const OPENING: FakeMsgRow = { direction: 'out', body: 'apertura', template_sid: null, created_at: '2026-07-01T10:00:00Z' };

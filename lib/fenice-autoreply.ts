@@ -4,6 +4,7 @@ import { sendFreeText } from './twilio';
 import { marioDelayMs } from './mario-latency';
 import { splitMarioMessages } from './mario-split';
 import { ensureConfirmationBlock, containsVideoLink } from './confirmation-block';
+import { unknownFeniceLinks } from './outbound-sanitize';
 import { generateBotReport } from './bot-report';
 import { sendOutcome } from './bot-outcome';
 import { personaForConversation, PERSONA_NAME } from './persona';
@@ -194,6 +195,20 @@ export async function drainMarioReplies(
 
       // Invia ogni a-capo come messaggio separato (più umano), con breve pausa.
       let parts = splitMarioMessages(result.visibleReply);
+
+      // Link Fenice che il modello si è inventato (es. `conferenza-zx`): il lead lo
+      // riceverebbe senza che ne resti traccia da nessuna parte. Non blocchiamo
+      // l'invio — è un segnale diagnostico, non un filtro — ma l'URL fasullo va
+      // registrato per poterlo ritrovare.
+      const linkInventati = parts.flatMap((p) => unknownFeniceLinks(p));
+      if (linkInventati.length > 0) {
+        await supabase.from('event_log').insert({
+          type: 'unknown_fenice_link',
+          payload: { conversationId, links: linkInventati } as never,
+          message: `[bot-fissatore] conv ${conversationId}: link Fenice non ufficiale in uscita: ${linkInventati.join(', ')}`,
+          level: 'warn',
+        });
+      }
 
       // `appointmentFixed` è vero anche quando il modello RI-emette il tag su una
       // conversazione già fissata (il lead riconferma giorno e ora dopo la riapertura):
