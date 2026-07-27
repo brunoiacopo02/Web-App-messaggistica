@@ -52,4 +52,19 @@ describe('unknownFeniceLinks: segnala i link Fenice non riconosciuti', () => {
     const t = sanitizeOutbound('https://corso.feniceacademy.it/conferenza-ax msbn9r50');
     expect(unknownFeniceLinks(t)).toEqual([]);
   });
+
+  it('non segnala un link ufficiale seguito da un punto di fine frase', () => {
+    const t = 'guarda qui: https://corso.feniceacademy.it/conferenza-bx.';
+    expect(unknownFeniceLinks(t)).toEqual([]);
+  });
+
+  it('non segnala un link ufficiale seguito da virgola o parentesi chiusa', () => {
+    expect(unknownFeniceLinks('video (https://corso.feniceacademy.it/conferenza-dx), guardalo')).toEqual([]);
+    expect(unknownFeniceLinks('ecco https://corso.feniceacademy.it/conferenza-ex, a presto')).toEqual([]);
+  });
+
+  it('segnala comunque un link davvero sconosciuto seguito da un punto, senza il punto in coda', () => {
+    const t = 'guarda https://corso.feniceacademy.it/conferenza-zz9.';
+    expect(unknownFeniceLinks(t)).toEqual(['https://corso.feniceacademy.it/conferenza-zz9']);
+  });
 });

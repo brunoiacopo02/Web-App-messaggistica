@@ -1,7 +1,6 @@
 // Modulo puro e client-safe: nessun import da supabase/twilio (lo usa anche il simulatore).
 
-/** Gli unici link che il bot deve mai mandare. Ordine: piu lungo prima, cosi
- * un URL non viene riparato usando il prefisso di un altro. */
+/** Gli unici link che il bot deve mai mandare. */
 export const KNOWN_LINKS = [
   'https://corso.feniceacademy.it/conferenza-axmsbn9r50',
   'https://corso.feniceacademy.it/conferenza-bx',
@@ -28,9 +27,14 @@ export function sanitizeOutbound(text: string): string {
 
 const FENICE_LINK_RE = /https:\/\/corso\.feniceacademy\.it\/\S+/g;
 
+/** Punteggiatura di chiusura frase che il testo puo attaccare in coda a un URL
+ * (mai in mezzo: `corso.feniceacademy.it` ha punti legittimi). */
+const TRAILING_PUNCT_RE = /[.,;:!?)\]}'"]+$/;
+
 /** URL del dominio dei video che non sono nella lista ufficiale: vanno loggati,
  * significa che il modello si e inventato un link. */
 export function unknownFeniceLinks(text: string): string[] {
   const found = text.match(FENICE_LINK_RE) ?? [];
-  return found.filter((u) => !(KNOWN_LINKS as readonly string[]).includes(u));
+  const cleaned = found.map((u) => u.replace(TRAILING_PUNCT_RE, ''));
+  return cleaned.filter((u) => !(KNOWN_LINKS as readonly string[]).includes(u));
 }
