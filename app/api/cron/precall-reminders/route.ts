@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendTemplateAndLog } from '@/lib/messaging';
-import { dueReminder, slotLabel, type ReminderKind } from '@/lib/precall-reminders';
+import { dueReminder, slotLabel, pickReminder24Template, type ReminderKind } from '@/lib/precall-reminders';
 import { templateName } from '@/lib/name';
 
 export const runtime = 'nodejs';
@@ -35,6 +35,10 @@ export async function GET(req: NextRequest) {
 
   const sid24 = process.env.REMINDER_24H_TEMPLATE_SID;
   const sid3 = process.env.REMINDER_3H_TEMPLATE_SID;
+  // Variante "senza domanda sul video" del promemoria T-24h (Task 6): opzionale,
+  // la sua assenza non blocca il cron. Finché non è configurata si comporta
+  // esattamente come oggi (pickReminder24Template ricade sempre su sid24).
+  const novideoSid = process.env.REMINDER_24H_NOVIDEO_TEMPLATE_SID ?? null;
   const supabase = getSupabaseAdmin();
 
   if (!sid24 || !sid3) {
@@ -83,17 +87,21 @@ export async function GET(req: NextRequest) {
     // send-video, stesso raggruppamento di allOutboundDeadNoDelivery in
     // lib/sequence.ts): un fallimento transitorio va ritentato al run successivo,
     // non perso per sempre — qui non c'è un domani dopo la finestra dei 15'.
+    // L'R24 ha due possibili SID (standard e "senza domanda sul video", Task 6):
+    // entrambi contano come "R24 già inviato", altrimenti un lead a cui è già
+    // partita la variante novideo si ritroverebbe anche lo standard.
+    const r24Sids = [sid24, ...(novideoSid ? [novideoSid] : [])];
     const { data: sentMsgs } = await supabase
       .from('messages')
       .select('conversation_id, template_sid')
       .in('conversation_id', convIds)
-      .in('template_sid', [sid24, sid3])
+      .in('template_sid', [...r24Sids, sid3])
       .not('twilio_status', 'in', '(failed,undelivered)');
 
     const sentByConv = new Map<number, ReminderKind[]>();
     for (const m of (sentMsgs ?? []) as any[]) {
       const kind: ReminderKind | null =
-        m.template_sid === sid24 ? 'r24' : m.template_sid === sid3 ? 'r3' : null;
+        r24Sids.includes(m.template_sid) ? 'r24' : m.template_sid === sid3 ? 'r3' : null;
       if (!kind) continue;
       const list = sentByConv.get(m.conversation_id) ?? [];
       list.push(kind);
@@ -116,7 +124,49 @@ export async function GET(req: NextRequest) {
         continue;
       }
 
-      const sid = kind === 'r24' ? sid24 : sid3;
+      let sid = sid3;
+      if (kind === 'r24') {
+        // Due segnali che il lead ha già visto il video (Task 6): il tag
+        // [VIDEO_VISTO] persistito in event_log, oppure — più grossolano ma
+        // affidabile quando il tag non è stato emesso — un inbound arrivato
+        // dopo l'ultimo link del video mandato in conversazione.
+        const { data: vw } = await supabase
+          .from('event_log')
+          .select('id')
+          .eq('type', 'video_watched')
+          .eq('payload->>conversationId', String(c.id))
+          .limit(1);
+
+        const { data: videoMsg } = await supabase
+          .from('messages')
+          .select('created_at')
+          .eq('conversation_id', c.id)
+          .eq('direction', 'out')
+          .ilike('body', '%corso.feniceacademy.it/conferenza-%')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        let inboundAfterVideoMs: number | null = null;
+        if (videoMsg?.created_at) {
+          const { data: dopo } = await supabase
+            .from('messages')
+            .select('created_at')
+            .eq('conversation_id', c.id)
+            .eq('direction', 'in')
+            .gt('created_at', videoMsg.created_at)
+            .limit(1)
+            .maybeSingle();
+          if (dopo?.created_at) inboundAfterVideoMs = Date.parse(dopo.created_at);
+        }
+
+        sid = pickReminder24Template({
+          hasVideoWatchedEvent: (vw ?? []).length > 0,
+          inboundAfterVideoMs,
+          novideoSid,
+          defaultSid: sid24,
+        });
+      }
       const label = kind === 'r24' ? 'Promemoria T-24h' : 'Promemoria T-3h';
       const firstName = (c.leads?.first_name as string | null | undefined) ?? null;
 
