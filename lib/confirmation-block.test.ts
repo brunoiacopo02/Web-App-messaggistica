@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ensureConfirmationBlock, STEP4_TEXT, VIDEO_PITCH_TEXT } from './confirmation-block';
+import { MARIO_SYSTEM_PROMPT } from './mario-prompt';
 
 const step1 = 'Perfetto, allora ci siamo. Confermami tu giorno e ora della call come li hai scelti, così sono sicura che siamo allineati';
 const step2 = 'Noemi è la collega della preselezione, ti chiama prima della call da un cellulare: è il passaggio che conferma l\'appuntamento, quindi tieni il telefono a portata';
@@ -110,5 +111,27 @@ describe('ensureConfirmationBlock: il blocco post-appuntamento esce sempre compl
     const r = ensureConfirmationBlock([step1, step2, riformulata]);
     expect(r.added).not.toContain('videoPitch');
     expect(r.parts[2]).toBe(riformulata);
+  });
+});
+
+/**
+ * Questo modulo INIETTA copy nelle chat con i lead: se qualcuno riscrive il blocco
+ * CONFERMA POST-APPUNTAMENTO nel prompt e non tocca le costanti qui, il bot
+ * continuerebbe a completare i blocchi con la copy vecchia, e nessuno se ne
+ * accorgerebbe. Questi test legano le due cose.
+ */
+describe('le costanti del blocco restano allineate al prompt di Mario', () => {
+  // Nel prompt il pitch è spezzato su tre righe (tre bolle separate), nella costante
+  // è una stringa unica: la differenza è di sola formattazione, quindi il confronto
+  // avviene a spaziatura normalizzata.
+  const normalizza = (s: string) => s.replace(/\s+/g, ' ').trim();
+  const prompt = normalizza(MARIO_SYSTEM_PROMPT);
+
+  it('il passaggio FATTO iniettato e quello scritto nel prompt', () => {
+    expect(prompt).toContain(normalizza(STEP4_TEXT));
+  });
+
+  it('il pitch del video iniettato e quello scritto nel prompt', () => {
+    expect(prompt).toContain(normalizza(VIDEO_PITCH_TEXT));
   });
 });
