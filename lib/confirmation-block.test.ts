@@ -26,11 +26,15 @@ describe('ensureConfirmationBlock: il blocco post-appuntamento esce sempre compl
     expect(r.missingVideoLink).toBe(false);
   });
 
-  it('segnala il link video mancante senza inventarne uno', () => {
+  it('segnala il link video mancante senza inventarne uno e senza chiedere di confermare un video mai ricevuto', () => {
     const r = ensureConfirmationBlock([step1, step2]);
     expect(r.missingVideoLink).toBe(true);
     expect(r.parts.join(' ')).not.toContain('conferenza-');
-    expect(r.parts).toContain(STEP4_TEXT);
+    // Il passaggio FATTO chiede al lead di confermare di aver visto un video che
+    // non gli e mai arrivato: senza link non va aggiunto.
+    expect(r.parts).not.toContain(STEP4_TEXT);
+    expect(r.parts.join(' ')).not.toContain('FATTO');
+    expect(r.added).toEqual([]);
   });
 
   it('riconosce il passaggio FATTO anche se il modello lo ha riformulato', () => {

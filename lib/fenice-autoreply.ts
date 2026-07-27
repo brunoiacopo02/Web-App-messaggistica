@@ -3,7 +3,7 @@ import { generateMarioReply, type MarioTurn } from './mario';
 import { sendFreeText } from './twilio';
 import { marioDelayMs } from './mario-latency';
 import { splitMarioMessages } from './mario-split';
-import { ensureConfirmationBlock } from './confirmation-block';
+import { ensureConfirmationBlock, containsVideoLink } from './confirmation-block';
 import { generateBotReport } from './bot-report';
 import { sendOutcome } from './bot-outcome';
 import { personaForConversation, PERSONA_NAME } from './persona';
@@ -194,7 +194,15 @@ export async function drainMarioReplies(
 
       // Invia ogni a-capo come messaggio separato (più umano), con breve pausa.
       let parts = splitMarioMessages(result.visibleReply);
-      if (result.appointmentFixed) {
+
+      // `appointmentFixed` è vero anche quando il modello RI-emette il tag su una
+      // conversazione già fissata (il lead riconferma giorno e ora dopo la riapertura):
+      // in quel turno il blocco non va toccato, altrimenti il passaggio FATTO uscirebbe
+      // una seconda volta staccato da qualsiasi video. Il video già inviato in un turno
+      // precedente è il segnale che il blocco è già stato mandato; se invece il link
+      // esce proprio adesso, la cronologia non lo contiene ancora e la patch si applica.
+      const videoGiaInviato = rows.some((m) => m.direction === 'out' && containsVideoLink(m.body));
+      if (result.appointmentFixed && !videoGiaInviato) {
         const block = ensureConfirmationBlock(parts);
         parts = block.parts;
         if (block.added.length > 0 || block.missingVideoLink) {

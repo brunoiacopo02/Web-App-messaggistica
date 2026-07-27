@@ -264,3 +264,62 @@ describe('drainMarioReplies — guardia canSendOutcome dal vivo', () => {
     expect(calls.finalStatusWrites).toEqual(['closed']); // sendOutcome mock risolve { sent: true }
   });
 });
+
+describe('drainMarioReplies — il blocco conferma si completa solo nel turno del video', () => {
+  const VIDEO = 'https://corso.feniceacademy.it/conferenza-dx';
+  const OPENING: FakeMsgRow = { direction: 'out', body: 'apertura', template_sid: null, created_at: '2026-07-01T10:00:00Z' };
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(sendOutcome).mockClear();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  // Caso reale: il blocco a 4 passaggi e gia uscito, sendOutcome ha chiuso la conv, il
+  // lead ha risposto "lunedi alle 13", shouldReopen l'ha riportata ad 'active' e il
+  // modello riconferma ri-emettendo il tag appuntamento. Senza guardia il lead si
+  // vedrebbe arrivare il passaggio FATTO una seconda volta, staccato da ogni video.
+  it('non ripete il passaggio FATTO quando il video e gia uscito in un turno precedente', async () => {
+    const claimedRow: ClaimedRow = { id: 50, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO' };
+    const rows: FakeMsgRow[] = [
+      OPENING,
+      { direction: 'out', body: `Sono 20 minuti, guardalo qui ${VIDEO}`, template_sid: null, created_at: '2026-07-25T09:00:00Z' },
+      { direction: 'in', body: 'lunedì alle 13', template_sid: null, created_at: '2026-07-25T09:05:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto, confermato, ci vediamo lunedì alle 13',
+      appointmentFixed: true, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 50, '+391234567890', () => 0);
+
+    const inviati = calls.messageInserts.map((m: { body: string }) => m.body);
+    expect(inviati).toEqual(['Perfetto, confermato, ci vediamo lunedì alle 13']);
+    expect(inviati.join(' ')).not.toContain('FATTO');
+    expect(calls.events.some((e: { type: string }) => e.type === 'confirmation_block_patched')).toBe(false);
+  });
+
+  // Il turno che manda davvero il video: la patch DEVE applicarsi.
+  it('completa il blocco nel turno in cui il video esce per la prima volta', async () => {
+    const claimedRow: ClaimedRow = { id: 51, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const rows: FakeMsgRow[] = [
+      OPENING,
+      { direction: 'in', body: 'Noemi', template_sid: null, created_at: '2026-07-25T09:00:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: `Perfetto, allora ci siamo\nNoemi ti chiama prima della call\n${VIDEO}`,
+      appointmentFixed: true, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 51, '+391234567890', () => 0);
+
+    const inviati = calls.messageInserts.map((m: { body: string }) => m.body);
+    expect(inviati.join(' ')).toContain('FATTO');
+    expect(calls.events.some((e: { type: string }) => e.type === 'confirmation_block_patched')).toBe(true);
+    // Timeout largo: il drain mette una pausa "umana" (fino a 3s) fra una bolla e
+    // l'altra e qui le bolle sono quattro.
+  }, 20_000);
+});

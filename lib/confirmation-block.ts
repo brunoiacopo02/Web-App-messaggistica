@@ -14,7 +14,11 @@ export const VIDEO_PITCH_TEXT =
 
 const VIDEO_LINKS = (KNOWN_LINKS as readonly string[]).filter((l) => l.includes('conferenza-'));
 
-const hasVideoLink = (p: string) => VIDEO_LINKS.some((l) => p.includes(l));
+/** Vero se il testo contiene uno dei link video ufficiali. Esportata perché il drain
+ * la usa sulla cronologia per capire se il video è già uscito in un turno precedente. */
+export const containsVideoLink = (p: string) => VIDEO_LINKS.some((l) => p.includes(l));
+
+const hasVideoLink = containsVideoLink;
 const isStep4 = (p: string) => /\bFATTO\b/.test(p);
 
 /**
@@ -50,7 +54,8 @@ const pitchPresent = (parts: string[]) => {
 /**
  * Garantisce che il blocco di conferma post-appuntamento arrivi completo:
  * il pitch del video presente da qualche parte nel blocco, e il passaggio FATTO in coda.
- * Non inventa mai il link: se manca lo segnala e basta.
+ * Non inventa mai il link: se manca lo segnala e basta, e in quel caso non aggiunge
+ * nemmeno il passaggio FATTO (chiederebbe conferma di un video mai inviato).
  */
 export function ensureConfirmationBlock(
   parts: string[],
@@ -64,7 +69,10 @@ export function ensureConfirmationBlock(
     added.push('videoPitch');
   }
 
-  if (!out.some(isStep4)) {
+  // Il passaggio 4 chiede al lead di scrivere FATTO "quando l'hai visto": ha senso
+  // solo se il video è davvero uscito. Senza link chiederebbe conferma di qualcosa
+  // che il lead non ha mai ricevuto, quindi si limita a segnalare il link mancante.
+  if (videoIdx >= 0 && !out.some(isStep4)) {
     out.push(STEP4_TEXT);
     added.push('step4');
   }
