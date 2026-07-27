@@ -11,14 +11,18 @@ export const KNOWN_LINKS = [
 
 const escapeRe = (c: string) => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** Per ogni link noto, una regex che tollera spazi e tab (mai a-capo: non
- * dobbiamo mai fondere due bolle) tra un carattere e l'altro. */
+/** Per ogni link noto, una regex che tollera qualunque spaziatura — spazi, tab e
+ * a-capo — tra un carattere e l'altro. L'a-capo è incluso perché la regex matcha
+ * SOLO quando la ricomposizione è esattamente un link noto: non può fondere due
+ * bolle non correlate, può soltanto ricongiungere un link che il modello ha spezzato
+ * a metà (`conferenza-\nbx`), caso probabile quanto lo spazio dato che il blocco di
+ * copy del video è pieno di a-capo. */
 const REPAIR = KNOWN_LINKS.map((link) => ({
   link,
-  re: new RegExp(link.split('').map(escapeRe).join('[ \\t]*'), 'g'),
+  re: new RegExp(link.split('').map(escapeRe).join('[ \\t\\r\\n]*'), 'g'),
 }));
 
-/** Rimette a posto i link noti che il modello ha spezzato con spazi o tab. */
+/** Rimette a posto i link noti che il modello ha spezzato con spazi, tab o a-capo. */
 export function sanitizeOutbound(text: string): string {
   let out = text;
   for (const { link, re } of REPAIR) out = out.replace(re, link);

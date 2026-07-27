@@ -23,9 +23,18 @@ describe('sanitizeOutbound: ripara i link noti spezzati dal modello', () => {
     }
   });
 
-  it('non unisce due bolle diverse: non attraversa gli a-capo', () => {
-    const t = 'https://corso.feniceacademy.it/conferenza-\nbx';
-    expect(sanitizeOutbound(t)).toBe('https://corso.feniceacademy.it/conferenza-\nbx');
+  it('ricompone un link noto che il modello ha spezzato con un a-capo', () => {
+    const t = 'Guardalo qui https://corso.feniceacademy.it/conferenza-\nbx';
+    expect(sanitizeOutbound(t)).toBe('Guardalo qui https://corso.feniceacademy.it/conferenza-bx');
+  });
+
+  it('non fonde due bolle che non ricompongono un link noto', () => {
+    // La ricomposizione darebbe conferenza-zz, che non e nella lista: resta spezzato.
+    const sconosciuto = 'https://corso.feniceacademy.it/conferenza-\nzz';
+    expect(sanitizeOutbound(sconosciuto)).toBe(sconosciuto);
+    // Due bolle di testo normale non vengono mai unite.
+    const testo = 'Ti mando il video\nquando riesci a vederlo?';
+    expect(sanitizeOutbound(testo)).toBe(testo);
   });
 
   it('lascia intatto un testo senza link', () => {
