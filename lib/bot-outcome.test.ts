@@ -3,8 +3,13 @@ import { sendOutcome } from './bot-outcome';
 
 const DATE = '2026-06-29T17:00:00Z';
 
-/** Fake del client Supabase: traccia update ed event_log, restituisce una riga fissa. */
-function makeSupabase(convRow: any) {
+/**
+ * Fake del client Supabase: traccia update ed event_log, restituisce una riga fissa.
+ * `eventLogHits` simula il risultato della select anti-duplicato su event_log
+ * (guardia nota-identica): di default nessun precedente trovato.
+ */
+function makeSupabase(convRow: any, opts: { eventLogHits?: any[] } = {}) {
+  const eventLogHits = opts.eventLogHits ?? [];
   const calls = { updates: [] as any[], events: [] as any[] };
   const supabase: any = {
     from(table: string) {
@@ -16,7 +21,15 @@ function makeSupabase(convRow: any) {
           update(payload: any) { calls.updates.push(payload); return { eq() { return Promise.resolve({}); } }; },
         };
       }
-      return { insert(payload: any) { calls.events.push(payload); return Promise.resolve({}); } };
+      return {
+        insert(payload: any) { calls.events.push(payload); return Promise.resolve({}); },
+        select() {
+          return {
+            eq() { return this; },
+            limit() { return Promise.resolve({ data: eventLogHits }); },
+          };
+        },
+      };
     },
   };
   return { supabase, calls };
@@ -134,5 +147,43 @@ describe('sendOutcome — RICHIAMO interim', () => {
     expect(res.sent).toBe(false);
     expect(calls.updates).toHaveLength(0);
     expect(calls.events.some((e) => e.type === 'bot_outcome_rejected')).toBe(true);
+  });
+});
+
+describe('sendOutcome — nota duplicata non rimandata', () => {
+  it('non rimanda al CRM una nota identica gia inviata', async () => {
+    const { supabase, calls } = makeSupabase(
+      { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE },
+      { eventLogHits: [{ id: 1 }] },
+    );
+    const res = await sendOutcome(supabase, 42, { outcome: 'DA_SCARTARE', discardReason: 'non ha budget' });
+
+    expect(res).toEqual({ sent: false, error: 'note_duplicate' });
+    expect((globalThis.fetch as any)).not.toHaveBeenCalled();
+    expect(calls.updates).toHaveLength(0);
+    expect(calls.events).toHaveLength(0);
+  });
+
+  it('invia la nota quando non ce n\'e una identica', async () => {
+    const { supabase } = makeSupabase(
+      { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE },
+      { eventLogHits: [] },
+    );
+    const res = await sendOutcome(supabase, 42, { outcome: 'DA_SCARTARE', discardReason: 'non ha budget' });
+
+    expect(res.sent).toBe(true);
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(body.outcome).toBe('NOTA');
+  });
+
+  it('registra l\'impronta della nota nell\'evento locked', async () => {
+    const { supabase, calls } = makeSupabase(
+      { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE },
+      { eventLogHits: [] },
+    );
+    await sendOutcome(supabase, 42, { outcome: 'DA_SCARTARE', discardReason: 'non ha budget' });
+
+    const locked = calls.events.find((e: { type: string }) => e.type === 'bot_outcome_locked');
+    expect(locked.payload.noteFingerprint).toMatch(/^[0-9a-f]{16}$/);
   });
 });

@@ -2,6 +2,7 @@ import type { getSupabaseAdmin } from './supabase/admin';
 import { signPayload } from './bot-hmac';
 import { validateOutcomeBody, type BotOutcome, type BotOutcomeBody, type BotReport } from './bot-contract';
 import { resolveOutcomeAction } from './bot-outcome-rules';
+import { noteFingerprint } from './note-dedup';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -54,6 +55,22 @@ export async function sendOutcome(
   // riporterebbe indietro di stato lato CRM — avvertenza esplicita del loro team).
   if (interim && action.kind !== 'normal') {
     return { sent: false, error: 'interim_skipped_locked' };
+  }
+
+  // Una nota identica a una gia inviata su questa conversazione non aggiunge
+  // informazione: il commerciale la vedrebbe solo duplicata sul CRM.
+  if (action.kind === 'locked') {
+    const fp = noteFingerprint(action.note);
+    const { data: gia } = await supabase
+      .from('event_log')
+      .select('id')
+      .eq('type', 'bot_outcome_locked')
+      .eq('payload->>conversationId', String(conversationId))
+      .eq('payload->>noteFingerprint', fp)
+      .limit(1);
+    if ((gia ?? []).length > 0) {
+      return { sent: false, error: 'note_duplicate' };
+    }
   }
 
   const body: BotOutcomeBody = action.kind === 'locked'
@@ -124,7 +141,7 @@ export async function sendOutcome(
         await supabase.from('conversations').update({ ai_status: 'closed' }).eq('id', conversationId);
         await supabase.from('event_log').insert({
           type: 'bot_outcome_locked',
-          payload: { conversationId, crmLeadId, attemptedOutcome: args.outcome, keptOutcome: 'APPUNTAMENTO', sentAs: 'NOTA', note: action.note } as never,
+          payload: { conversationId, crmLeadId, attemptedOutcome: args.outcome, keptOutcome: 'APPUNTAMENTO', sentAs: 'NOTA', note: action.note, noteFingerprint: noteFingerprint(action.note) } as never,
           message: `[bot-fissatore] esito ${args.outcome} intercettato (lead ${crmLeadId} già APPUNTAMENTO) → nota CRM`,
           level: 'info',
         });
