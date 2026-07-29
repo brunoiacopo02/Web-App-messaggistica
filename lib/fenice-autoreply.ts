@@ -23,16 +23,12 @@ export type AutoReplyGate = {
  * 'active' e 'replying' (il lock CAS in drainMarioReplies serializza le esecuzioni
  * concorrenti). Falso per stati terminali ('handed_off' / 'booked') o non arruolati.
  *
- * 'booked' è escluso NON per scelta di prodotto ma per un vincolo strutturale:
- * `ai_status` qui fa doppio uso, sia stato di prodotto che lucchetto del drain
- * (claim CAS -> 'replying', poi ripristino a fine turno). Se claimassimo 'booked',
- * per tutta la durata del drain lo stato "appuntamento già fissato" non esisterebbe
- * più da nessuna parte: un crash prima del `finally` (lo stesso scenario per cui
- * esiste `isOrphanedReplyingLock`) lascerebbe la riga 'replying' per sempre, oppure
- * il reset orfano del cron la riporterebbe ad 'active' — e da 'active' rientra nei
- * solleciti/nella classificazione del cron, che può generare un POST al CRM. La
- * soluzione corretta è un lucchetto su una colonna dedicata che lasci `ai_status`
- * intatto; è una migrazione + intervento sulla concorrenza, non fatta qui apposta.
+ * Il lucchetto del drain vive su `ai_lock_at`, non più dentro `ai_status`: durante
+ * un turno lo stato di prodotto resta leggibile, e un crash prima del `finally` non
+ * lascia la riga bloccata (ci pensa il TTL, vedi `isLockStale`).
+ *
+ * 'replying' resta fra gli stati ammessi perché in produzione esistono righe ferme
+ * su quel valore dal vecchio meccanismo: devono restare gestibili.
  */
 export function shouldAutoReply(g: AutoReplyGate): boolean {
   if (!(g.toMatchesFenice && g.autoReplyOn && g.aiOwner === 'mario')) return false;
@@ -103,6 +99,20 @@ export function lastIsUnansweredInbound(rows: MsgRow[]): boolean {
   return nextUnansweredInboundIndex(rows) !== -1;
 }
 
+/** Dopo questo tempo un lucchetto è considerato abbandonato (processo morto). */
+export const LOCK_TTL_MS = 10 * 60_000;
+
+/**
+ * Pure: il lucchetto va forzato? Assente no (è libero), illeggibile sì — meglio
+ * riprovare che restare bloccati per sempre su un valore corrotto.
+ */
+export function isLockStale(lockAt: string | null, nowMs: number, ttlMs: number = LOCK_TTL_MS): boolean {
+  if (lockAt === null) return false;
+  const t = Date.parse(lockAt);
+  if (Number.isNaN(t)) return true;
+  return nowMs - t >= ttlMs;
+}
+
 export const REPLYING_ORPHAN_MS = 10 * 60_000;
 
 /**
@@ -127,7 +137,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * Best-effort: ACCORPA i messaggi del lead. Attende la finestra di latenza (5-40s) e poi
  * risponde UNA volta a tutti i messaggi arrivati (cronologia dall'arruolamento in poi,
  * via ai_started_at). Se durante l'attesa/elaborazione arrivano altri messaggi, fa un altro
- * round. Serializzato tramite lock CAS (ai_status 'active' -> 'replying'). Non lancia.
+ * round. Serializzato tramite lock CAS su `ai_lock_at` (con TTL). Non lancia.
  * `delayMs` è iniettabile: il cron passa `() => 0` per saltare la finestra di accorpamento
  * (il lead ha già aspettato).
  */
@@ -148,11 +158,18 @@ export async function drainMarioReplies(
 
   // Lock: claim del turno. Se un'altra esecuzione sta già rispondendo, esci:
   // quel drain ricontrolla i messaggi e gestirà anche questo inbound.
+  // Il lucchetto vive su ai_lock_at: ai_status resta lo stato di prodotto, così una
+  // conversazione ammissibile non viene esclusa dal claim solo perché un'altra
+  // esecuzione le aveva riscritto lo stato. Un lucchetto più vecchio di LOCK_TTL_MS
+  // è di un processo morto e si può scavalcare.
+  const nowIso = new Date().toISOString();
+  const staleCutoff = new Date(Date.now() - LOCK_TTL_MS).toISOString();
   const { data: claimed } = await supabase
     .from('conversations')
-    .update({ ai_status: 'replying' })
+    .update({ ai_lock_at: nowIso })
     .eq('id', conversationId)
     .eq('ai_status', 'active')
+    .or(`ai_lock_at.is.null,ai_lock_at.lt.${staleCutoff}`)
     .select('id, ai_started_at, crm_lead_id')
     .single();
   if (!claimed) return;
@@ -309,6 +326,11 @@ export async function drainMarioReplies(
     });
     finalStatus = 'active';
   } finally {
-    await supabase.from('conversations').update({ ai_status: finalStatus }).eq('id', conversationId);
+    // Rilascio del lucchetto insieme allo stato finale: se il drain muore prima,
+    // ci pensa il TTL (isLockStale) invece di lasciare la riga bloccata per sempre.
+    await supabase
+      .from('conversations')
+      .update({ ai_status: finalStatus, ai_lock_at: null })
+      .eq('id', conversationId);
   }
 }

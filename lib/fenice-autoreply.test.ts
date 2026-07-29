@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { shouldAutoReply, shouldReopen, nextUnansweredInboundIndex, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS, canSendOutcome, drainMarioReplies } from './fenice-autoreply';
+import { shouldAutoReply, shouldReopen, nextUnansweredInboundIndex, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS, canSendOutcome, drainMarioReplies, isLockStale, LOCK_TTL_MS } from './fenice-autoreply';
 
 vi.mock('./mario', () => ({ generateMarioReply: vi.fn() }));
 vi.mock('./twilio', () => ({ sendFreeText: vi.fn(async () => ({ sid: 'SM_fake', status: 'queued' })) }));
@@ -111,6 +111,38 @@ describe('isOrphanedReplyingLock', () => {
   });
 });
 
+describe('isLockStale: un lucchetto vecchio non blocca il bot per sempre', () => {
+  const now = Date.UTC(2026, 6, 27, 12, 0, 0);
+
+  it('nessun lucchetto: non e stale, e proprio libero', () => {
+    expect(isLockStale(null, now)).toBe(false);
+  });
+
+  it('lucchetto preso adesso: non e stale', () => {
+    expect(isLockStale(new Date(now - 1000).toISOString(), now)).toBe(false);
+  });
+
+  it('lucchetto di 9 minuti fa: non e ancora stale', () => {
+    expect(isLockStale(new Date(now - 9 * 60_000).toISOString(), now)).toBe(false);
+  });
+
+  it('lucchetto di 11 minuti fa: e stale e va forzato', () => {
+    expect(isLockStale(new Date(now - 11 * 60_000).toISOString(), now)).toBe(true);
+  });
+
+  it('rispetta un TTL passato esplicitamente', () => {
+    expect(isLockStale(new Date(now - 2 * 60_000).toISOString(), now, 60_000)).toBe(true);
+  });
+
+  it('una data illeggibile e trattata come stale, non come lucchetto eterno', () => {
+    expect(isLockStale('non-una-data', now)).toBe(true);
+  });
+
+  it('LOCK_TTL_MS e 10 minuti', () => {
+    expect(LOCK_TTL_MS).toBe(10 * 60_000);
+  });
+});
+
 describe('shouldReopen', () => {
   it('riapre una conversazione chiusa dopo l esito', () => {
     expect(shouldReopen({ aiOwner: 'mario', aiStatus: 'closed' })).toBe(true);
@@ -157,29 +189,36 @@ type ClaimedRow = { id: number; ai_started_at: string | null; crm_lead_id: strin
 type FakeMsgRow = { direction: string; body: string; template_sid: string | null; created_at: string };
 
 /**
- * Fake del client Supabase per drainMarioReplies: simula il claim CAS singolo
- * ('active' -> 'replying', unico stato claimabile), la history messaggi e traccia
- * gli insert su event_log/messages e l'update finale su ai_status.
+ * Fake del client Supabase per drainMarioReplies: simula il claim CAS sul lucchetto
+ * dedicato (`ai_lock_at`, ammesso solo su ai_status='active'), la history messaggi e
+ * traccia gli insert su event_log/messages, l'update finale su ai_status e il
+ * rilascio del lucchetto.
  */
 function makeDrainSupabase(claimedRow: ClaimedRow, initialRows: FakeMsgRow[]) {
   const messagesRows = [...initialRows];
-  const calls = { events: [] as any[], finalStatusWrites: [] as string[], messageInserts: [] as any[] };
+  const calls = { events: [] as any[], finalStatusWrites: [] as string[], messageInserts: [] as any[], lockReleases: [] as any[] };
 
   const supabase: any = {
     from(table: string) {
       if (table === 'conversations') {
         return {
           update(payload: any) {
-            if (payload.ai_status === 'replying') {
+            // Claim: valorizza solo il lucchetto, ai_status non viene toccato.
+            if (payload.ai_lock_at && !('ai_status' in payload)) {
               let filterStatus: string | null = null;
               const stub: any = {
                 eq(col: string, val: string) { if (col === 'ai_status') filterStatus = val; return stub; },
+                or() { return stub; },
                 select() { return stub; },
                 single() { return Promise.resolve({ data: filterStatus === 'active' ? claimedRow : null }); },
               };
               return stub;
             }
-            if ('ai_status' in payload) calls.finalStatusWrites.push(payload.ai_status);
+            if ('ai_status' in payload) {
+              calls.finalStatusWrites.push(payload.ai_status);
+              // null = rilasciato; qualunque altro valore sarebbe un lucchetto lasciato appeso.
+              calls.lockReleases.push(payload.ai_lock_at);
+            }
             return { eq() { return Promise.resolve({ data: null }); } };
           },
         };
@@ -302,6 +341,58 @@ describe('drainMarioReplies — guardia canSendOutcome dal vivo', () => {
     await drainMarioReplies(supabase, 45, '+391234567890', () => 0);
 
     expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+});
+
+describe('drainMarioReplies — il lucchetto viene sempre rilasciato', () => {
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(sendOutcome).mockClear();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  // Se il drain finisse senza azzerare ai_lock_at, la conversazione resterebbe
+  // bloccata fino allo scadere del TTL: dieci minuti di silenzio del bot.
+  it('a fine turno ai_lock_at torna null insieme allo stato finale', async () => {
+    const claimedRow: ClaimedRow = { id: 77, ai_started_at: null, crm_lead_id: null, bot_outcome: null };
+    const rows: FakeMsgRow[] = [
+      { direction: 'out', body: 'apertura', template_sid: null, created_at: '2026-07-01T10:00:00Z' },
+      { direction: 'in', body: 'ciao', template_sid: null, created_at: '2026-07-25T09:00:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Ciao! Come va?',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 77, '+391234567890', () => 0);
+
+    expect(calls.lockReleases.length).toBeGreaterThan(0);
+    expect(calls.lockReleases.every((v: any) => v === null)).toBe(true);
+  });
+
+  // Un secondo drain concorrente non deve poter entrare: il claim passa solo se
+  // ai_status e 'active', quindi il fake restituisce null e la funzione esce subito.
+  it('se il claim non passa, non tocca nulla', async () => {
+    const claimedRow: ClaimedRow = { id: 78, ai_started_at: null, crm_lead_id: null, bot_outcome: null };
+    const { supabase, calls } = makeDrainSupabase(claimedRow, []);
+    // Nessun messaggio e claim che fallisce: la history non viene nemmeno caricata.
+    const originale = supabase.from;
+    supabase.from = (t: string) => {
+      if (t !== 'conversations') return originale(t);
+      return { update: () => ({
+        eq(col: string, val: string) { return this; },
+        or() { return this; },
+        select() { return this; },
+        single() { return Promise.resolve({ data: null }); },
+      }) };
+    };
+
+    await drainMarioReplies(supabase, 78, '+391234567890', () => 0);
+
+    expect(calls.finalStatusWrites).toEqual([]);
+    expect(vi.mocked(generateMarioReply)).not.toHaveBeenCalled();
   });
 });
 

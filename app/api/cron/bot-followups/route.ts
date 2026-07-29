@@ -4,7 +4,7 @@ import { sendOutcome } from '@/lib/bot-outcome';
 import { decideFollowupAction } from '@/lib/bot-followups';
 import { classifyInterrupted } from '@/lib/interrotto-note';
 import type { MarioTurn } from '@/lib/mario';
-import { drainMarioReplies, lastIsUnansweredInbound, isOrphanedReplyingLock } from '@/lib/fenice-autoreply';
+import { drainMarioReplies, lastIsUnansweredInbound, isOrphanedReplyingLock, isLockStale, LOCK_TTL_MS } from '@/lib/fenice-autoreply';
 import { runAgendaFollowups } from '@/lib/agenda-followup';
 
 export const runtime = 'nodejs';
@@ -56,7 +56,7 @@ export async function GET(req: NextRequest) {
   for (let from = 0; ; from += 1000) {
     const { data } = await supabase
       .from('conversations')
-      .select('id, ai_status, ai_started_at, crm_lead_id, bot_outcome, bot_followups_sent, leads(phone_e164)')
+      .select('id, ai_status, ai_lock_at, ai_started_at, crm_lead_id, bot_outcome, bot_followups_sent, leads(phone_e164)')
       .not('crm_lead_id', 'is', null)
       .in('ai_status', ['active', 'replying', 'handed_off', 'booked'])
       .order('id', { ascending: true })
@@ -99,9 +99,18 @@ export async function GET(req: NextRequest) {
             report.push({ id: c.id, action: 'redrive', skipped: true, reason: 'no_from' });
             continue;
           }
+          if (isLockStale(c.ai_lock_at ?? null, now)) {
+            // Lucchetto abbandonato: liberalo senza toccare ai_status. Il CAS sul
+            // cutoff evita di rubare il turno a un drain che l'ha appena preso.
+            await supabase
+              .from('conversations')
+              .update({ ai_lock_at: null })
+              .eq('id', c.id)
+              .lt('ai_lock_at', new Date(now - LOCK_TTL_MS).toISOString());
+          }
+          // Reset legacy: recupera le righe rimaste appese al vecchio meccanismo,
+          // quando il lucchetto era il valore 'replying' dentro ai_status.
           if (isOrphanedReplyingLock(c.ai_status, lastPendingInboundAtMs, now)) {
-            // Lock orfano: reset CAS sicuro. Se nel frattempo un drain reale ha
-            // cambiato stato, il reset non scatta.
             await supabase
               .from('conversations')
               .update({ ai_status: 'active' })
