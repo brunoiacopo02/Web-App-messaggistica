@@ -6,6 +6,8 @@ export const KNOWN_LINKS = [
   'https://corso.feniceacademy.it/conferenza-bx',
   'https://corso.feniceacademy.it/conferenza-dx',
   'https://corso.feniceacademy.it/conferenza-ex',
+  // Offerta del mese (invii per conto dei GDO): prevale sulle altre varianti.
+  'https://corso.feniceacademy.it/conferenza-black-summer',
   'https://form.jotform.com/240755654585063',
 ] as const;
 

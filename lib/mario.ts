@@ -72,11 +72,24 @@ function getClient(): Anthropic {
   return _client;
 }
 
+/**
+ * Contesto per i lead arruolati per conto di un GDO: l'appuntamento l'ha già preso il
+ * commerciale al telefono e il video è già partito, quindi il bot non deve ripartire
+ * col pitch. La sezione del prompt che descrive già questo comportamento è
+ * "SE L'APPUNTAMENTO È GIÀ FISSATO": qui la si attiva, non la si riscrive.
+ */
+export const GDO_CONTEXT_NOTE =
+  "CONTESTO DI QUESTA CONVERSAZIONE: l'appuntamento di questo lead è GIÀ FISSATO — l'ha preso " +
+  'un tuo collega al telefono, e tu gli hai già mandato il link per scegliere giorno e ora e il ' +
+  "video da vedere prima della call. Applica la sezione \"SE L'APPUNTAMENTO È GIÀ FISSATO\": non " +
+  'ripartire col pitch, non riproporre la call e non rimandare il video. Il collega non si nomina mai.';
+
 /** Genera la prossima risposta del bot data la cronologia. Inietta l'ora di Roma.
- *  `personaName` (default 'Mario') parametrizza SOLO il nome nel system prompt. */
+ *  `personaName` (default 'Mario') parametrizza SOLO il nome nel system prompt.
+ *  `contextNote` aggiunge in coda al system un contesto specifico della conversazione. */
 export async function generateMarioReply(
   history: MarioTurn[],
-  opts?: { now?: Date; personaName?: string },
+  opts?: { now?: Date; personaName?: string; contextNote?: string },
 ): Promise<MarioResult> {
   const messages =
     history.length > 0
@@ -84,7 +97,8 @@ export async function generateMarioReply(
       : [{ role: 'user' as const, content: 'Inizia la conversazione presentandoti.' }];
 
   const now = opts?.now ?? new Date();
-  const system = `${buildMarioSystem(opts?.personaName ?? 'Mario')}\n\n${romeNowContext(now)}\n\n${bookingSlotsContext(now)}`;
+  const contextNote = opts?.contextNote ? `\n\n${opts.contextNote}` : '';
+  const system = `${buildMarioSystem(opts?.personaName ?? 'Mario')}\n\n${romeNowContext(now)}\n\n${bookingSlotsContext(now)}${contextNote}`;
 
   const response = await getClient().messages.create({
     model: MARIO_MODEL,

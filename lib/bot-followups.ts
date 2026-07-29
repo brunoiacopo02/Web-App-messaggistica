@@ -22,7 +22,13 @@ export function decideFollowupAction(input: {
   sequenceEnabled?: boolean;
   /** conversations.bot_followups_sent (contatore nudge Track B). */
   nudgesSent?: number;
+  /** Lead di proprietà di un GDO (`gdo_agenda_at`): il bot fa solo da canale. */
+  gdoPostino?: boolean;
 }): FollowupAction {
+  // Lead del GDO: l'esito non è nostro da decidere. Una classificazione automatica
+  // arriverebbe al CRM come esito su un lead che sta lavorando un commerciale.
+  if (input.gdoPostino === true) return 'none';
+
   // Lead già fissato: mai riclassificare (il re-invio verrebbe tradotto in un
   // nuovo POST APPUNTAMENTO al CRM, che lo risegnerebbe da zero).
   if (input.botOutcome === 'APPUNTAMENTO') return 'none';

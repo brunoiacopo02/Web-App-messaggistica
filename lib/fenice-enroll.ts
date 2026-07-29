@@ -4,6 +4,8 @@ import { feniceOpening } from './fenice-opening';
 import { inSendWindow } from './sequence';
 import { normalizeFunnel, variantIndexFor, openingEnvKey, openingBody } from './persona';
 import { firstNameOf, templateName } from './name';
+import type { GdoVariant } from './bot-contract';
+import { gdoAgendaText, videoLinkForVariant } from './gdo-agenda';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -103,6 +105,89 @@ export async function enrollLeadIntoMario(
     type: res.ok ? 'fenice_enroll' : 'send_error',
     payload: { phone: args.phone, conversationId, sid: res.sid, error: res.error, crmLeadId: args.crmLeadId ?? null } as never,
     message: res.ok ? `Lead arruolato (Mario): ${args.phone}` : `Arruolamento fallito ${args.phone}: ${res.error}`,
+    level: res.ok ? 'info' : 'error',
+  });
+
+  return { ok: res.ok, conversationId, sid: res.sid, error: res.error };
+}
+
+export type GdoEnrollArgs = {
+  phone: string; // già E.164
+  name?: string | null;
+  email?: string | null;
+  crmLeadId: string;
+  crmFunnel?: string | null;
+  variant: GdoVariant;
+};
+
+/**
+ * Arruola in modalità POSTINO un lead che resta di proprietà del GDO: manda il
+ * template agenda e prepara la conversazione per il video, che partirà alla prima
+ * risposta del lead (vedi `drainMarioReplies`).
+ *
+ * Tre differenze dall'arruolamento normale, tutte volute:
+ * - si invia SEMPRE, anche fuori dalla fascia 08:30–20:30: il GDO è al telefono col
+ *   lead proprio adesso, un'apertura differita gli farebbe dire una cosa falsa;
+ * - la conversazione viene RIAPERTA anche se era chiusa/booked con un esito nostro:
+ *   sui lead già passati dal bot, all'arrivo dell'agenda vince il GDO;
+ * - `ai_started_at` riparte da adesso, così Mario legge solo la parte postino della
+ *   cronologia e non ricomincia il vecchio pitch.
+ *
+ * `gdo_agenda_at` è anche il marcatore che tiene questi lead fuori dalla sequenza,
+ * dal follow-up agenda e dalla classificazione a 14 giorni.
+ */
+export async function enrollGdoLeadAsPostino(
+  supabase: Supa,
+  args: GdoEnrollArgs,
+): Promise<{ ok: boolean; conversationId: number; sid?: string; error?: string }> {
+  const templateSid = process.env.AGENDA_GDO_TEMPLATE_SID;
+  const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
+  if (!templateSid) throw new Error('AGENDA_GDO_TEMPLATE_SID non configurato');
+  if (!from) throw new Error('TWILIO_WHATSAPP_NUMBER_FENICE non configurato');
+
+  const { conversationId } = await findOrCreateLeadConversation(supabase, {
+    phone: args.phone,
+    firstName: args.name ?? undefined,
+    email: args.email ?? undefined,
+  });
+
+  const res = await sendTemplateAndLog(
+    supabase,
+    conversationId,
+    args.phone,
+    templateSid,
+    'Agenda GDO',
+    from,
+    { '1': templateName(args.name) },
+    gdoAgendaText(args.name),
+  );
+
+  const now = new Date().toISOString();
+  await supabase
+    .from('conversations')
+    .update({
+      ai_owner: 'mario',
+      ai_status: 'active',
+      ai_started_at: now,
+      ai_lock_at: null,
+      crm_lead_id: args.crmLeadId,
+      crm_funnel: args.crmFunnel ?? null,
+      gdo_agenda_at: now,
+      // Esito provvisorio: la route lo aggiorna dopo l'attesa di consegna. Se il
+      // processo muore prima, la deduplica trova comunque un esito coerente.
+      gdo_agenda_esito: res.ok ? 'inviato' : 'fallito',
+      gdo_video_url: videoLinkForVariant(args.variant),
+      // Nuova agenda = nuovo appuntamento: il video deve poter ripartire.
+      gdo_video_sent_at: null,
+    })
+    .eq('id', conversationId);
+
+  await supabase.from('event_log').insert({
+    type: res.ok ? 'gdo_agenda_sent' : 'send_error',
+    payload: { phone: args.phone, conversationId, sid: res.sid, error: res.error, crmLeadId: args.crmLeadId } as never,
+    message: res.ok
+      ? `[gdo] agenda inviata per conto del GDO a ${args.phone}`
+      : `[gdo] agenda fallita per ${args.phone}: ${res.error}`,
     level: res.ok ? 'info' : 'error',
   });
 

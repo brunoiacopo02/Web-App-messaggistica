@@ -56,7 +56,7 @@ export async function GET(req: NextRequest) {
   for (let from = 0; ; from += 1000) {
     const { data } = await supabase
       .from('conversations')
-      .select('id, ai_status, ai_lock_at, ai_started_at, crm_lead_id, bot_outcome, bot_followups_sent, leads(phone_e164)')
+      .select('id, ai_status, ai_lock_at, ai_started_at, crm_lead_id, bot_outcome, bot_followups_sent, gdo_agenda_at, leads(phone_e164)')
       .not('crm_lead_id', 'is', null)
       .in('ai_status', ['active', 'replying', 'handed_off', 'booked'])
       .order('id', { ascending: true })
@@ -124,6 +124,14 @@ export async function GET(req: NextRequest) {
         }
         // Inbound più vecchio di 5 giorni: il lead è già perso, va restituito,
         // non ri-risposto → fallthrough verso la classificazione.
+      }
+
+      // 2a. Lead di un GDO (modalità postino): il re-drive sopra vale — il bot resta
+      // il canale della chat — ma da qui in poi no. L'appuntamento è già preso, il
+      // lead non è nostro: niente watchdog, niente chiusure, niente classificazione.
+      if (c.gdo_agenda_at) {
+        report.push({ id: c.id, action: 'gdo_postino_skip' });
+        continue;
       }
 
       // 2b. Lead terminale (APPUNTAMENTO): mai riclassificare. La riga è stata
@@ -203,6 +211,7 @@ export async function GET(req: NextRequest) {
         botOutcome: c.bot_outcome,
         sequenceEnabled,
         nudgesSent: (c.bot_followups_sent as number | null) ?? 0,
+        gdoPostino: c.gdo_agenda_at != null,
       });
 
       if (action === 'discard_dead') {

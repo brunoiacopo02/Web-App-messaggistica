@@ -89,6 +89,10 @@ export type Database = {
           created_at: string
           crm_funnel: string | null
           crm_lead_id: string | null
+          gdo_agenda_at: string | null
+          gdo_agenda_esito: string | null
+          gdo_video_sent_at: string | null
+          gdo_video_url: string | null
           id: number
           last_inbound_at: string | null
           last_message_at: string
@@ -117,6 +121,10 @@ export type Database = {
           created_at?: string
           crm_funnel?: string | null
           crm_lead_id?: string | null
+          gdo_agenda_at?: string | null
+          gdo_agenda_esito?: string | null
+          gdo_video_sent_at?: string | null
+          gdo_video_url?: string | null
           id?: number
           last_inbound_at?: string | null
           last_message_at?: string
@@ -145,6 +153,10 @@ export type Database = {
           created_at?: string
           crm_funnel?: string | null
           crm_lead_id?: string | null
+          gdo_agenda_at?: string | null
+          gdo_agenda_esito?: string | null
+          gdo_video_sent_at?: string | null
+          gdo_video_url?: string | null
           id?: number
           last_inbound_at?: string | null
           last_message_at?: string

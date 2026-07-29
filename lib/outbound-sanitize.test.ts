@@ -77,3 +77,15 @@ describe('unknownFeniceLinks: segnala i link Fenice non riconosciuti', () => {
     expect(unknownFeniceLinks(t)).toEqual(['https://corso.feniceacademy.it/conferenza-zz9']);
   });
 });
+
+describe('link Black Summer (offerta del mese, invii per conto GDO)', () => {
+  const BS = 'https://corso.feniceacademy.it/conferenza-black-summer';
+
+  it('non è un link inventato: non va segnalato', () => {
+    expect(unknownFeniceLinks(`Eccolo 👉 ${BS}`)).toEqual([]);
+  });
+
+  it('spezzato dal modello viene ricomposto come gli altri', () => {
+    expect(sanitizeOutbound(`Eccolo 👉 https://corso.feniceacademy.it/conferenza-black-\nsummer`)).toContain(BS);
+  });
+});

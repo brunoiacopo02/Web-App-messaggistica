@@ -7,6 +7,18 @@ export interface BotIntakePayload {
   companyId: string;
 }
 
+/** Profilo del lead raccolto dal GDO al telefono: decide quale video mandare. */
+export interface GdoVariant {
+  lavora: boolean;
+  haFamiglia: boolean;
+  offertaDelMese: boolean;
+}
+
+/** Payload di `POST /api/send-agenda`: come l'intake, più la variante del video. */
+export interface SendAgendaPayload extends BotIntakePayload {
+  variant: GdoVariant;
+}
+
 export type BotOutcome = 'APPUNTAMENTO' | 'DA_SCARTARE' | 'RICHIAMO' | 'NON_RISPOSTO' | 'INTERROTTO' | 'NOTA';
 
 export interface BotReport {
@@ -57,6 +69,32 @@ export function parseIntakePayload(
       name: typeof o.name === 'string' ? o.name : null,
       email: typeof o.email === 'string' ? o.email : null,
       funnel: typeof o.funnel === 'string' ? o.funnel : null,
+    },
+  };
+}
+
+/**
+ * Come `parseIntakePayload`, più la variante del video. I flag non booleani non sono
+ * un errore: il GDO è al telefono col lead e un `variant` sporco non deve impedire
+ * l'invio dell'agenda — al massimo il lead riceve il video di default.
+ */
+export function parseSendAgendaPayload(
+  raw: unknown,
+): { ok: true; value: SendAgendaPayload } | { ok: false; reason: string } {
+  const base = parseIntakePayload(raw);
+  if (!base.ok) return base;
+  const v = (raw as Record<string, unknown>).variant;
+  const flag = (k: keyof GdoVariant): boolean =>
+    !!v && typeof v === 'object' && (v as Record<string, unknown>)[k] === true;
+  return {
+    ok: true,
+    value: {
+      ...base.value,
+      variant: {
+        lavora: flag('lavora'),
+        haFamiglia: flag('haFamiglia'),
+        offertaDelMese: flag('offertaDelMese'),
+      },
     },
   };
 }

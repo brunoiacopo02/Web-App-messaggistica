@@ -1,12 +1,110 @@
 import type { getSupabaseAdmin } from './supabase/admin';
 import { signPayload } from './bot-hmac';
 import { validateOutcomeBody, type BotOutcome, type BotOutcomeBody, type BotReport } from './bot-contract';
-import { resolveOutcomeAction } from './bot-outcome-rules';
+import { buildLockedNote, resolveOutcomeAction } from './bot-outcome-rules';
 import { noteFingerprint } from './note-dedup';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
 const DEFAULT_CRM_URL = 'https://crm-sales-fenice.vercel.app/api/bot/outcome';
+
+/** Una nota con la stessa impronta è già partita per questa conversazione? */
+async function notaGiaInviata(
+  supabase: Supa,
+  type: string,
+  conversationId: number,
+  fingerprint: string,
+): Promise<boolean> {
+  const { data } = await supabase
+    .from('event_log')
+    .select('id')
+    .eq('type', type)
+    .eq('payload->>conversationId', String(conversationId))
+    .eq('payload->>noteFingerprint', fingerprint)
+    .limit(1);
+  return (data ?? []).length > 0;
+}
+
+/**
+ * Canale solo-NOTA: per i lead che restano di proprietà di un GDO (vedi
+ * `enrollGdoLeadAsPostino`). Manda al CRM una NOTA e basta — mai un esito, mai una
+ * data — e non tocca né lo stato del lead né la conversazione: il bot qui fa il
+ * postino, l'appuntamento l'ha preso il commerciale al telefono.
+ */
+async function sendCrmNoteOnly(
+  supabase: Supa,
+  conversationId: number,
+  crmLeadId: string,
+  args: SendOutcomeArgs,
+  existingDate: string | null,
+  secret: string,
+): Promise<{ sent: boolean; status?: number; error?: string }> {
+  const note = buildLockedNote(args, existingDate);
+  const fp = noteFingerprint(note);
+  if (await notaGiaInviata(supabase, 'bot_note_sent', conversationId, fp)) {
+    await supabase.from('event_log').insert({
+      type: 'bot_outcome_note_duplicate',
+      payload: { conversationId, crmLeadId, attemptedOutcome: args.outcome, noteFingerprint: fp, note, noteOnly: true } as never,
+      message: `[gdo] nota identica già inviata per lead ${crmLeadId} (esito ${args.outcome}): non rimandata al CRM`,
+      level: 'info',
+    });
+    return { sent: false, error: 'note_duplicate' };
+  }
+
+  const body: BotOutcomeBody = {
+    leadId: crmLeadId,
+    outcome: 'NOTA',
+    note,
+    ...(args.report ? { report: args.report } : {}),
+  };
+  const valid = validateOutcomeBody(body);
+  if (!valid.ok) {
+    await supabase.from('event_log').insert({
+      type: 'bot_outcome_error',
+      payload: { conversationId, crmLeadId, reason: valid.reason, noteOnly: true } as never,
+      message: `[gdo] nota non valida per lead ${crmLeadId}: ${valid.reason}`,
+      level: 'error',
+    });
+    return { sent: false, error: valid.reason };
+  }
+
+  const rawBody = JSON.stringify(body);
+  const url = process.env.CRM_OUTCOME_URL ?? DEFAULT_CRM_URL;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-bot-signature': signPayload(rawBody, secret) },
+      body: rawBody,
+    });
+    if (res.ok) {
+      await supabase.from('event_log').insert({
+        type: 'bot_note_sent',
+        payload: { conversationId, crmLeadId, attemptedOutcome: args.outcome, note, noteFingerprint: fp } as never,
+        message: `[gdo] nota inviata al CRM per lead ${crmLeadId} (esito ${args.outcome} non applicato: lead del GDO)`,
+        level: 'info',
+      });
+      return { sent: true, status: res.status };
+    }
+    const text = await res.text().catch(() => '');
+    // Anche il 403 qui è solo informativo: non c'è nessuno stato locale da
+    // congelare, la conversazione va avanti comunque.
+    await supabase.from('event_log').insert({
+      type: res.status === 403 ? 'bot_outcome_rejected' : 'bot_outcome_error',
+      payload: { conversationId, crmLeadId, outcome: args.outcome, status: res.status, body: text, noteOnly: true } as never,
+      message: `[gdo] il CRM ha risposto ${res.status} alla nota per lead ${crmLeadId}`,
+      level: res.status === 403 ? 'warn' : 'error',
+    });
+    return { sent: false, status: res.status, error: text || `http_${res.status}` };
+  } catch (e) {
+    await supabase.from('event_log').insert({
+      type: 'bot_outcome_error',
+      payload: { conversationId, crmLeadId, error: e instanceof Error ? e.message : 'errore', noteOnly: true } as never,
+      message: `[gdo] invio nota al CRM fallito (rete) per lead ${crmLeadId}`,
+      level: 'error',
+    });
+    return { sent: false, error: e instanceof Error ? e.message : 'errore' };
+  }
+}
 
 export type SendOutcomeArgs = {
   outcome: BotOutcome;
@@ -24,6 +122,9 @@ export type SendOutcomeOpts = {
   /** RICHIAMO non-terminale: POST al CRM per visibilità, ma la conversazione resta
    * aperta e bot_outcome non viene toccato (la sequenza continua). */
   interim?: boolean;
+  /** Lead di proprietà di un GDO: al CRM va solo una NOTA, mai un esito. Non tocca
+   * lo stato del lead, non tocca l'appuntamento, non chiude la conversazione. */
+  noteOnly?: boolean;
 };
 
 export async function sendOutcome(
@@ -45,6 +146,10 @@ export async function sendOutcome(
   const crmLeadId = row?.crm_lead_id ?? null;
   if (!crmLeadId) return { sent: false, error: 'not_crm_lead' };
 
+  if (opts.noteOnly === true) {
+    return sendCrmNoteOnly(supabase, conversationId, crmLeadId, args, row?.bot_scheduled_at ?? null, secret);
+  }
+
   const action = resolveOutcomeAction(
     (row?.bot_outcome ?? null) as BotOutcome | null,
     args,
@@ -61,14 +166,7 @@ export async function sendOutcome(
   // informazione: il commerciale la vedrebbe solo duplicata sul CRM.
   if (action.kind === 'locked') {
     const fp = noteFingerprint(action.note);
-    const { data: gia } = await supabase
-      .from('event_log')
-      .select('id')
-      .eq('type', 'bot_outcome_locked')
-      .eq('payload->>conversationId', String(conversationId))
-      .eq('payload->>noteFingerprint', fp)
-      .limit(1);
-    if ((gia ?? []).length > 0) {
+    if (await notaGiaInviata(supabase, 'bot_outcome_locked', conversationId, fp)) {
       // Questa è l'unica guardia che fa sparire un dato diretto al CRM: senza una
       // traccia esplicita una soppressione sbagliata sarebbe invisibile.
       await supabase.from('event_log').insert({

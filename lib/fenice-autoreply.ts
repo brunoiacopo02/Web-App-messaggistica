@@ -1,5 +1,6 @@
 import type { getSupabaseAdmin } from './supabase/admin';
-import { generateMarioReply, type MarioTurn } from './mario';
+import { generateMarioReply, GDO_CONTEXT_NOTE, type MarioTurn } from './mario';
+import { gdoVideoText } from './gdo-agenda';
 import { sendFreeText } from './twilio';
 import { marioDelayMs } from './mario-latency';
 import { splitMarioMessages } from './mario-split';
@@ -130,6 +131,22 @@ export function isOrphanedReplyingLock(
   return nowMs - lastInboundAtMs >= thresholdMs;
 }
 
+/**
+ * Pure: questo turno è il turno del video? Vero solo per una conversazione in
+ * modalità postino (`gdo_agenda_at` valorizzato) che ha il link del video e non
+ * l'ha ancora mandato. È la risposta alla PRIMA risposta del lead: il video deve
+ * essere quel messaggio, non aggiungersi a una risposta del modello.
+ */
+export function shouldSendGdoVideo(g: {
+  gdoAgendaAt: string | null;
+  gdoVideoUrl: string | null;
+  gdoVideoSentAt: string | null;
+}): boolean {
+  if (!g.gdoAgendaAt) return false;
+  if (!g.gdoVideoUrl) return false;
+  return !g.gdoVideoSentAt;
+}
+
 const MAX_ROUNDS_PER_DRAIN = 5; // anti-runaway: round di accorpamento per esecuzione
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -170,11 +187,25 @@ export async function drainMarioReplies(
     .eq('id', conversationId)
     .eq('ai_status', 'active')
     .or(`ai_lock_at.is.null,ai_lock_at.lt.${staleCutoff}`)
-    .select('id, ai_started_at, crm_lead_id')
+    .select('id, ai_started_at, crm_lead_id, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, leads(first_name)')
     .single();
   if (!claimed) return;
   const startedAt = (claimed as { ai_started_at: string | null }).ai_started_at;
   const crmLeadId = (claimed as { crm_lead_id: string | null }).crm_lead_id;
+
+  // Modalità postino: lead di un GDO, arruolato da `enrollGdoLeadAsPostino`.
+  // Il bot fa da canale ma il lead non è nostro: niente esiti, niente stati terminali.
+  const gdo = claimed as {
+    gdo_agenda_at?: string | null;
+    gdo_video_url?: string | null;
+    gdo_video_sent_at?: string | null;
+    leads?: { first_name?: string | null } | null;
+  };
+  const gdoAgendaAt = gdo.gdo_agenda_at ?? null;
+  const gdoVideoUrl = gdo.gdo_video_url ?? null;
+  const postino = gdoAgendaAt !== null;
+  let gdoVideoSentAt = gdo.gdo_video_sent_at ?? null;
+  let gdoVideoMissingLogged = false;
 
   // Carica i messaggi della conversazione dall'arruolamento in poi (in ordine).
   async function loadHistory(): Promise<DrainMsgRow[]> {
@@ -200,6 +231,41 @@ export async function drainMarioReplies(
       const rows = await loadHistory();
       if (nextUnansweredInboundIndex(rows) === -1) break;
 
+      // Turno del video (lead del GDO che risponde per la prima volta): il video È la
+      // risposta a quel messaggio. Se qui girasse anche il modello il lead riceverebbe
+      // due messaggi per una sola sua riga.
+      if (shouldSendGdoVideo({ gdoAgendaAt, gdoVideoUrl, gdoVideoSentAt })) {
+        const body = gdoVideoText(gdo.leads?.first_name ?? null, gdoVideoUrl as string);
+        const sent = await sendFreeText({ to: phone, body, from });
+        await supabase.from('messages').insert({
+          conversation_id: conversationId, direction: 'out', body,
+          twilio_sid: sent.sid, twilio_status: sent.status,
+        });
+        const sentAt = new Date().toISOString();
+        await supabase.from('conversations')
+          .update({ gdo_video_sent_at: sentAt, last_message_at: sentAt })
+          .eq('id', conversationId);
+        await supabase.from('event_log').insert({
+          type: 'gdo_video_sent',
+          payload: { conversationId, phone, crmLeadId, video: gdoVideoUrl } as never,
+          message: `[gdo] video inviato a ${phone} dopo la risposta del lead`,
+          level: 'info',
+        });
+        gdoVideoSentAt = sentAt;
+        continue; // eventuali altri messaggi del lead li gestisce il round successivo
+      }
+      if (postino && !gdoVideoUrl && !gdoVideoMissingLogged) {
+        // Non si inventa un link: si segnala e si lascia rispondere il modello,
+        // meglio una risposta senza video che il silenzio del bot.
+        gdoVideoMissingLogged = true;
+        await supabase.from('event_log').insert({
+          type: 'gdo_video_missing',
+          payload: { conversationId, crmLeadId } as never,
+          message: `[gdo] conv ${conversationId}: modalità postino senza link video, il lead non lo riceverà`,
+          level: 'error',
+        });
+      }
+
       const history: MarioTurn[] = rows.map((m) => ({
         role: m.direction === 'in' ? 'user' : 'assistant',
         content: m.body,
@@ -207,8 +273,18 @@ export async function drainMarioReplies(
       // Persona dal primo template outbound: aperture Marta ⇒ Marta, legacy ⇒ Mario.
       // Senza env Marta configurate il set è vuoto ⇒ sempre Mario (zero regressioni).
       const martaSids = martaSidsFromEnv();
-      const persona = martaSids.size > 0 ? personaForConversation(rows, martaSids) : 'mario';
-      const result = await generateMarioReply(history, { personaName: PERSONA_NAME[persona] });
+      // I lead dei GDO ricevono l'agenda firmata Marta: la conversazione prosegue con
+      // quel nome, altrimenti il lead si vedrebbe rispondere da qualcun altro.
+      const persona = postino
+        ? 'marta'
+        : martaSids.size > 0
+          ? personaForConversation(rows, martaSids)
+          : 'mario';
+      const result = await generateMarioReply(history, {
+        personaName: PERSONA_NAME[persona],
+        // Il lead ha già l'appuntamento: il modello non deve ripartire col pitch.
+        ...(postino ? { contextNote: GDO_CONTEXT_NOTE } : {}),
+      });
 
       // Invia ogni a-capo come messaggio separato (più umano), con breve pausa.
       let parts = splitMarioMessages(result.visibleReply);
@@ -272,14 +348,16 @@ export async function drainMarioReplies(
         // a costo zero descritta nel suo commento.
         const canSend = canSendOutcome({ crmLeadId, aiStatus: 'active' });
         if (canSend) {
-          const report = await generateBotReport(history);
+          // Sui lead del GDO niente report: al CRM va solo la nota, e il report
+          // popolerebbe campi di un lead che non è nostro.
+          const report = postino ? undefined : await generateBotReport(history);
           const sent = await sendOutcome(supabase, conversationId, {
             outcome: result.outcome,
             date: result.scheduledAt,
             discardReason: result.discardReason,
             note: result.note,
             report,
-          });
+          }, postino ? { noteOnly: true } : {});
           // Esito CRM: chiudiamo se il callback è andato a buon fine; altrimenti
           // restiamo 'active' (ritentabile). In ogni caso usciamo: i rami legacy
           // (booked/handed_off) non valgono per i lead CRM.
@@ -287,7 +365,9 @@ export async function drainMarioReplies(
           // perché era già partita prima, quindi l'esito è terminale e la
           // conversazione va chiusa qui (sendOutcome la chiude già a DB, ma il
           // `finally` di questo drain riscriverebbe finalStatus sopra).
-          if (sent.sent || sent.error === 'note_duplicate') finalStatus = 'closed';
+          // Postino: la conversazione non si chiude mai per un esito. Il lead è del
+          // GDO, il bot resta il suo canale su questa chat.
+          if (!postino && (sent.sent || sent.error === 'note_duplicate')) finalStatus = 'closed';
           break;
         }
       }
@@ -304,6 +384,9 @@ export async function drainMarioReplies(
       }
 
       if (result.appointmentFixed) {
+        // Postino: l'appuntamento l'ha preso il GDO, non è un esito nostro da
+        // registrare — e 'booked' non è claimabile, il bot resterebbe muto.
+        if (postino) break;
         // Lead CRM con appuntamento fissato ma senza outcome parsato (es. data
         // mancante): il callback non partirà — segnala subito, il watchdog del
         // cron farà da rete a 24h. (Caso reale: conv 3061 del 15/07.)
