@@ -3,9 +3,24 @@ import { sendOutcome } from './bot-outcome';
 
 const DATE = '2026-06-29T17:00:00Z';
 
-/** Fake del client Supabase: traccia update ed event_log, restituisce una riga fissa. */
-function makeSupabase(convRow: any) {
-  const calls = { updates: [] as any[], events: [] as any[] };
+/** Valore di una colonna secondo il filtro passato a `.eq()`. Riproduce la sintassi
+ *  Postgres `payload->>chiave` che la guardia anti-duplicato usa sul JSON. */
+function valoreColonna(riga: any, colonna: string): string | undefined {
+  const json = colonna.match(/^payload->>(.+)$/);
+  const v = json ? riga?.payload?.[json[1]] : riga?.[colonna];
+  return v == null ? undefined : String(v);
+}
+
+/**
+ * Fake del client Supabase: traccia update ed event_log, restituisce una riga fissa
+ * per `conversations`.
+ * `eventLogRows` sono le righe gia presenti su event_log: la select le filtra davvero
+ * applicando gli `.eq()` ricevuti, cosi la guardia anti-duplicato deve interrogare il
+ * tipo, la conversazione e l'impronta giusti per trovarle.
+ */
+function makeSupabase(convRow: any, opts: { eventLogRows?: any[] } = {}) {
+  const eventLogRows = opts.eventLogRows ?? [];
+  const calls = { updates: [] as any[], events: [] as any[], eventLogQueries: [] as [string, string][][] };
   const supabase: any = {
     from(table: string) {
       if (table === 'conversations') {
@@ -16,10 +31,34 @@ function makeSupabase(convRow: any) {
           update(payload: any) { calls.updates.push(payload); return { eq() { return Promise.resolve({}); } }; },
         };
       }
-      return { insert(payload: any) { calls.events.push(payload); return Promise.resolve({}); } };
+      return {
+        insert(payload: any) { calls.events.push(payload); return Promise.resolve({}); },
+        select() {
+          const filtri: [string, string][] = [];
+          const stub: any = {
+            eq(colonna: string, valore: string) { filtri.push([colonna, valore]); return stub; },
+            limit() {
+              calls.eventLogQueries.push([...filtri]);
+              const data = eventLogRows.filter((r) =>
+                filtri.every(([colonna, valore]) => valoreColonna(r, colonna) === valore));
+              return Promise.resolve({ data });
+            },
+          };
+          return stub;
+        },
+      };
     },
   };
   return { supabase, calls };
+}
+
+/** Nota gia inviata: fa girare sendOutcome una prima volta e restituisce l'evento
+ *  `bot_outcome_locked` che avrebbe lasciato su event_log, da riusare come precedente. */
+async function eventoLockedGiaScritto(convRow: any, conversationId: number, args: any) {
+  const { supabase, calls } = makeSupabase(convRow);
+  await sendOutcome(supabase, conversationId, args);
+  const locked = calls.events.find((e: { type: string }) => e.type === 'bot_outcome_locked');
+  return { id: 1, ...locked };
 }
 
 beforeEach(() => {
@@ -134,5 +173,108 @@ describe('sendOutcome — RICHIAMO interim', () => {
     expect(res.sent).toBe(false);
     expect(calls.updates).toHaveLength(0);
     expect(calls.events.some((e) => e.type === 'bot_outcome_rejected')).toBe(true);
+  });
+});
+
+describe('sendOutcome — nota duplicata non rimandata', () => {
+  const CONV = { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE };
+  const ARGS = { outcome: 'DA_SCARTARE' as const, discardReason: 'non ha budget' };
+
+  it('non rimanda al CRM una nota identica gia inviata', async () => {
+    const precedente = await eventoLockedGiaScritto(CONV, 42, ARGS);
+    (globalThis.fetch as any).mockClear();
+    const { supabase, calls } = makeSupabase(CONV, { eventLogRows: [precedente] });
+
+    const res = await sendOutcome(supabase, 42, ARGS);
+
+    expect(res).toEqual({ sent: false, error: 'note_duplicate' });
+    expect((globalThis.fetch as any)).not.toHaveBeenCalled();
+    // La query deve cercare il tipo, LA conversazione e L'impronta giusti.
+    expect(calls.eventLogQueries[0]).toEqual([
+      ['type', 'bot_outcome_locked'],
+      ['payload->>conversationId', '42'],
+      ['payload->>noteFingerprint', precedente.payload.noteFingerprint],
+    ]);
+  });
+
+  it('la soppressione della nota duplicata lascia traccia su event_log', async () => {
+    const precedente = await eventoLockedGiaScritto(CONV, 42, ARGS);
+    const { supabase, calls } = makeSupabase(CONV, { eventLogRows: [precedente] });
+
+    await sendOutcome(supabase, 42, ARGS);
+
+    const evento = calls.events.find((e: { type: string }) => e.type === 'bot_outcome_note_duplicate');
+    expect(evento).toBeDefined();
+    expect(evento.level).toBe('info');
+    expect(evento.payload).toMatchObject({
+      conversationId: 42,
+      crmLeadId: 'crm1',
+      attemptedOutcome: 'DA_SCARTARE',
+      noteFingerprint: precedente.payload.noteFingerprint,
+    });
+    expect(evento.message).toContain('crm1');
+  });
+
+  it('chiude comunque la conversazione: la nota duplicata resta un esito terminale', async () => {
+    const precedente = await eventoLockedGiaScritto(CONV, 42, ARGS);
+    const { supabase, calls } = makeSupabase(CONV, { eventLogRows: [precedente] });
+
+    await sendOutcome(supabase, 42, ARGS);
+
+    // Stesso trattamento dell'invio riuscito: nessun declassamento di bot_outcome,
+    // ma la riga non resta 'active' con un esito terminale in attesa del cron.
+    expect(calls.updates).toEqual([{ ai_status: 'closed' }]);
+  });
+
+  it('la stessa nota su un\'altra conversazione viene inviata', async () => {
+    const precedente = await eventoLockedGiaScritto(CONV, 42, ARGS);
+    (globalThis.fetch as any).mockClear();
+    const { supabase } = makeSupabase(CONV, { eventLogRows: [precedente] });
+
+    const res = await sendOutcome(supabase, 99, ARGS);
+
+    expect(res.sent).toBe(true);
+    expect((globalThis.fetch as any).mock.calls).toHaveLength(1);
+  });
+
+  it('una nota diversa sulla stessa conversazione viene inviata', async () => {
+    const precedente = await eventoLockedGiaScritto(CONV, 42, ARGS);
+    (globalThis.fetch as any).mockClear();
+    const { supabase } = makeSupabase(CONV, { eventLogRows: [precedente] });
+
+    const res = await sendOutcome(supabase, 42, { outcome: 'DA_SCARTARE', discardReason: 'ci ha ripensato' });
+
+    expect(res.sent).toBe(true);
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(body.outcome).toBe('NOTA');
+  });
+
+  it('un evento di tipo diverso con la stessa impronta non blocca l\'invio', async () => {
+    const precedente = await eventoLockedGiaScritto(CONV, 42, ARGS);
+    (globalThis.fetch as any).mockClear();
+    const { supabase } = makeSupabase(CONV, {
+      eventLogRows: [{ ...precedente, type: 'bot_outcome_sent' }],
+    });
+
+    const res = await sendOutcome(supabase, 42, ARGS);
+
+    expect(res.sent).toBe(true);
+  });
+
+  it('invia la nota quando non ce n\'e una identica', async () => {
+    const { supabase } = makeSupabase(CONV);
+    const res = await sendOutcome(supabase, 42, ARGS);
+
+    expect(res.sent).toBe(true);
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(body.outcome).toBe('NOTA');
+  });
+
+  it('registra l\'impronta della nota nell\'evento locked', async () => {
+    const { supabase, calls } = makeSupabase(CONV);
+    await sendOutcome(supabase, 42, ARGS);
+
+    const locked = calls.events.find((e: { type: string }) => e.type === 'bot_outcome_locked');
+    expect(locked.payload.noteFingerprint).toMatch(/^[0-9a-f]{16}$/);
   });
 });

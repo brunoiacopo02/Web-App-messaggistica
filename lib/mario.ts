@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { buildMarioSystem } from './mario-prompt';
 import { romeNowContext } from './rome-time';
 import { bookingSlotsContext } from './booking-slots';
+import { sanitizeOutbound } from './outbound-sanitize';
 
 export const MARIO_MODEL = 'claude-sonnet-4-6';
 
@@ -41,12 +42,14 @@ export function parseMarioReply(raw: string): MarioResult {
     else if (kind === 'INTERROTTO') { outcome = 'INTERROTTO'; note = arg || undefined; }
   }
 
-  const visibleReply = raw
-    .replace(ESITO_RE, '')
-    .replace(/\[APPUNTAMENTO_FISSATO\]/g, '')
-    .replace(/\[PASSAGGIO_UMANO\]/g, '')
-    .replace(/\[VIDEO_VISTO\]/g, '')
-    .trim();
+  const visibleReply = sanitizeOutbound(
+    raw
+      .replace(ESITO_RE, '')
+      .replace(/\[APPUNTAMENTO_FISSATO\]/g, '')
+      .replace(/\[PASSAGGIO_UMANO\]/g, '')
+      .replace(/\[VIDEO_VISTO\]/g, '')
+      .trim(),
+  );
 
   return {
     visibleReply,

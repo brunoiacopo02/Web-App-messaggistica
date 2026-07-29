@@ -3,6 +3,8 @@ import { generateMarioReply, type MarioTurn } from './mario';
 import { sendFreeText } from './twilio';
 import { marioDelayMs } from './mario-latency';
 import { splitMarioMessages } from './mario-split';
+import { ensureConfirmationBlock, containsVideoLink } from './confirmation-block';
+import { unknownFeniceLinks } from './outbound-sanitize';
 import { generateBotReport } from './bot-report';
 import { sendOutcome } from './bot-outcome';
 import { personaForConversation, PERSONA_NAME } from './persona';
@@ -21,16 +23,12 @@ export type AutoReplyGate = {
  * 'active' e 'replying' (il lock CAS in drainMarioReplies serializza le esecuzioni
  * concorrenti). Falso per stati terminali ('handed_off' / 'booked') o non arruolati.
  *
- * 'booked' è escluso NON per scelta di prodotto ma per un vincolo strutturale:
- * `ai_status` qui fa doppio uso, sia stato di prodotto che lucchetto del drain
- * (claim CAS -> 'replying', poi ripristino a fine turno). Se claimassimo 'booked',
- * per tutta la durata del drain lo stato "appuntamento già fissato" non esisterebbe
- * più da nessuna parte: un crash prima del `finally` (lo stesso scenario per cui
- * esiste `isOrphanedReplyingLock`) lascerebbe la riga 'replying' per sempre, oppure
- * il reset orfano del cron la riporterebbe ad 'active' — e da 'active' rientra nei
- * solleciti/nella classificazione del cron, che può generare un POST al CRM. La
- * soluzione corretta è un lucchetto su una colonna dedicata che lasci `ai_status`
- * intatto; è una migrazione + intervento sulla concorrenza, non fatta qui apposta.
+ * Il lucchetto del drain vive su `ai_lock_at`, non più dentro `ai_status`: durante
+ * un turno lo stato di prodotto resta leggibile, e un crash prima del `finally` non
+ * lascia la riga bloccata (ci pensa il TTL, vedi `isLockStale`).
+ *
+ * 'replying' resta fra gli stati ammessi perché in produzione esistono righe ferme
+ * su quel valore dal vecchio meccanismo: devono restare gestibili.
  */
 export function shouldAutoReply(g: AutoReplyGate): boolean {
   if (!(g.toMatchesFenice && g.autoReplyOn && g.aiOwner === 'mario')) return false;
@@ -101,6 +99,20 @@ export function lastIsUnansweredInbound(rows: MsgRow[]): boolean {
   return nextUnansweredInboundIndex(rows) !== -1;
 }
 
+/** Dopo questo tempo un lucchetto è considerato abbandonato (processo morto). */
+export const LOCK_TTL_MS = 10 * 60_000;
+
+/**
+ * Pure: il lucchetto va forzato? Assente no (è libero), illeggibile sì — meglio
+ * riprovare che restare bloccati per sempre su un valore corrotto.
+ */
+export function isLockStale(lockAt: string | null, nowMs: number, ttlMs: number = LOCK_TTL_MS): boolean {
+  if (lockAt === null) return false;
+  const t = Date.parse(lockAt);
+  if (Number.isNaN(t)) return true;
+  return nowMs - t >= ttlMs;
+}
+
 export const REPLYING_ORPHAN_MS = 10 * 60_000;
 
 /**
@@ -125,7 +137,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * Best-effort: ACCORPA i messaggi del lead. Attende la finestra di latenza (5-40s) e poi
  * risponde UNA volta a tutti i messaggi arrivati (cronologia dall'arruolamento in poi,
  * via ai_started_at). Se durante l'attesa/elaborazione arrivano altri messaggi, fa un altro
- * round. Serializzato tramite lock CAS (ai_status 'active' -> 'replying'). Non lancia.
+ * round. Serializzato tramite lock CAS su `ai_lock_at` (con TTL). Non lancia.
  * `delayMs` è iniettabile: il cron passa `() => 0` per saltare la finestra di accorpamento
  * (il lead ha già aspettato).
  */
@@ -146,11 +158,18 @@ export async function drainMarioReplies(
 
   // Lock: claim del turno. Se un'altra esecuzione sta già rispondendo, esci:
   // quel drain ricontrolla i messaggi e gestirà anche questo inbound.
+  // Il lucchetto vive su ai_lock_at: ai_status resta lo stato di prodotto, così una
+  // conversazione ammissibile non viene esclusa dal claim solo perché un'altra
+  // esecuzione le aveva riscritto lo stato. Un lucchetto più vecchio di LOCK_TTL_MS
+  // è di un processo morto e si può scavalcare.
+  const nowIso = new Date().toISOString();
+  const staleCutoff = new Date(Date.now() - LOCK_TTL_MS).toISOString();
   const { data: claimed } = await supabase
     .from('conversations')
-    .update({ ai_status: 'replying' })
+    .update({ ai_lock_at: nowIso })
     .eq('id', conversationId)
     .eq('ai_status', 'active')
+    .or(`ai_lock_at.is.null,ai_lock_at.lt.${staleCutoff}`)
     .select('id, ai_started_at, crm_lead_id')
     .single();
   if (!claimed) return;
@@ -192,7 +211,41 @@ export async function drainMarioReplies(
       const result = await generateMarioReply(history, { personaName: PERSONA_NAME[persona] });
 
       // Invia ogni a-capo come messaggio separato (più umano), con breve pausa.
-      const parts = splitMarioMessages(result.visibleReply);
+      let parts = splitMarioMessages(result.visibleReply);
+
+      // Link Fenice che il modello si è inventato (es. `conferenza-zx`): il lead lo
+      // riceverebbe senza che ne resti traccia da nessuna parte. Non blocchiamo
+      // l'invio — è un segnale diagnostico, non un filtro — ma l'URL fasullo va
+      // registrato per poterlo ritrovare.
+      const linkInventati = parts.flatMap((p) => unknownFeniceLinks(p));
+      if (linkInventati.length > 0) {
+        await supabase.from('event_log').insert({
+          type: 'unknown_fenice_link',
+          payload: { conversationId, links: linkInventati } as never,
+          message: `[bot-fissatore] conv ${conversationId}: link Fenice non ufficiale in uscita: ${linkInventati.join(', ')}`,
+          level: 'warn',
+        });
+      }
+
+      // `appointmentFixed` è vero anche quando il modello RI-emette il tag su una
+      // conversazione già fissata (il lead riconferma giorno e ora dopo la riapertura):
+      // in quel turno il blocco non va toccato, altrimenti il passaggio FATTO uscirebbe
+      // una seconda volta staccato da qualsiasi video. Il video già inviato in un turno
+      // precedente è il segnale che il blocco è già stato mandato; se invece il link
+      // esce proprio adesso, la cronologia non lo contiene ancora e la patch si applica.
+      const videoGiaInviato = rows.some((m) => m.direction === 'out' && containsVideoLink(m.body));
+      if (result.appointmentFixed && !videoGiaInviato) {
+        const block = ensureConfirmationBlock(parts);
+        parts = block.parts;
+        if (block.added.length > 0 || block.missingVideoLink) {
+          await supabase.from('event_log').insert({
+            type: 'confirmation_block_patched',
+            payload: { conversationId, added: block.added, missingVideoLink: block.missingVideoLink } as never,
+            message: `[bot-fissatore] blocco conferma incompleto sulla conversazione ${conversationId}: aggiunti [${block.added.join(', ')}]${block.missingVideoLink ? ', link video assente' : ''}`,
+            level: block.missingVideoLink ? 'warn' : 'info',
+          });
+        }
+      }
       for (let i = 0; i < parts.length; i++) {
         if (i > 0) await sleep(Math.min(3000, 800 + parts[i].length * 25));
         const sent = await sendFreeText({ to: phone, body: parts[i], from });
@@ -227,10 +280,14 @@ export async function drainMarioReplies(
             note: result.note,
             report,
           });
-          // Esito CRM: chiudiamo solo se il callback è andato a buon fine; altrimenti
+          // Esito CRM: chiudiamo se il callback è andato a buon fine; altrimenti
           // restiamo 'active' (ritentabile). In ogni caso usciamo: i rami legacy
           // (booked/handed_off) non valgono per i lead CRM.
-          if (sent.sent) finalStatus = 'closed';
+          // 'note_duplicate' non è un fallimento ritentabile: la nota non è partita
+          // perché era già partita prima, quindi l'esito è terminale e la
+          // conversazione va chiusa qui (sendOutcome la chiude già a DB, ma il
+          // `finally` di questo drain riscriverebbe finalStatus sopra).
+          if (sent.sent || sent.error === 'note_duplicate') finalStatus = 'closed';
           break;
         }
       }
@@ -269,6 +326,11 @@ export async function drainMarioReplies(
     });
     finalStatus = 'active';
   } finally {
-    await supabase.from('conversations').update({ ai_status: finalStatus }).eq('id', conversationId);
+    // Rilascio del lucchetto insieme allo stato finale: se il drain muore prima,
+    // ci pensa il TTL (isLockStale) invece di lasciare la riga bloccata per sempre.
+    await supabase
+      .from('conversations')
+      .update({ ai_status: finalStatus, ai_lock_at: null })
+      .eq('id', conversationId);
   }
 }

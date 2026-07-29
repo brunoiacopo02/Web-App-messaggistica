@@ -312,6 +312,56 @@ describe('bolle WhatsApp: i blocchi di copy lunghi restano sotto ~25 parole a ri
   });
 });
 
+describe('niente promesse di telefonate: Mario non puo chiamare nessuno', () => {
+  // Il 27/07 una lead ha scritto "se vuole mi chiami ora" e il bot ha risposto
+  // "Certo, ti chiamo subito!": Mario è un'IA su WhatsApp, non può telefonare, e la
+  // lead è rimasta ad aspettare una chiamata che nessuno le aveva promesso. Stessa
+  // famiglia della regola "non fingersi umano": non promettere un'azione che non
+  // sei in grado di compiere. La regola va nel blocco REGOLE ASSOLUTE (non in una
+  // FASE specifica), perché vale sempre, indipendentemente dal punto del funnel.
+  const p = buildMarioSystem('Marta');
+
+  it('il prompt vieta esplicitamente di promettere una chiamata propria', () => {
+    expect(p).toMatch(/non (puoi|devi) mai (promettere|dire).{0,60}(chiam)/i);
+  });
+
+  it('indica l alternativa corretta: fa richiamare una collega', () => {
+    expect(p).toContain('ti faccio richiamare da una collega');
+  });
+
+  it('la promessa della richiamata da parte di una collega chiude col tag [PASSAGGIO_UMANO], cosi non resta una promessa vuota come "ti chiamo subito"', () => {
+    // Senza instradamento reale a un umano, "ti faccio richiamare da una collega"
+    // sarebbe la stessa identica falsa promessa di "ti chiamo subito": nessuno
+    // avviserebbe davvero una collega, e il lead resterebbe comunque ad aspettare.
+    expect(p).toMatch(/ti faccio richiamare da una collega["'\s\S]{0,80}\[PASSAGGIO_UMANO\]/);
+  });
+
+  it('non entra in conflitto col percorso di disdetta/spostamento su un appuntamento gia fissato, che usa gia i tag [ESITO:...]', () => {
+    // Quel percorso (sezione "SE L'APPUNTAMENTO È GIÀ FISSATO") promette anch'esso
+    // "ti ricontatta una collega", ma instrada già col tag ESITO verso il CRM: la
+    // nuova regola su [PASSAGGIO_UMANO] deve esplicitamente farsi da parte lì,
+    // altrimenti il modello si troverebbe davanti a due tag diversi per lo stesso
+    // messaggio e potrebbe scegliere quello sbagliato.
+    expect(p).toMatch(/ECCEZIONE.{0,40}GIÀ FISSATO.{0,60}NON usare \[PASSAGGIO_UMANO\]/i);
+  });
+
+  it('la regola sta nelle REGOLE ASSOLUTE, non in una fase specifica', () => {
+    // "FASE 1" precede REGOLE ASSOLUTE in questo prompt (non la segue), quindi non è
+    // un marcatore di fine blocco valido qui: si usa il primo titolo di sezione che
+    // segue davvero REGOLE ASSOLUTE, cioè il glossario dei tag di esito.
+    // Ancorato a "\nREGOLE ASSOLUTE\n" (il titolo di sezione su riga propria), non a
+    // una qualunque occorrenza della stringa: FASE 6 contiene già un rimando testuale
+    // "(vedi REGOLE ASSOLUTE)" prima del vero blocco, e un indexOf generico
+    // prenderebbe quello, includendo nella slice tutta la CONFERMA POST-APPUNTAMENTO
+    // (che parla di Noemi che "chiama" il lead) e facendo passare il test a vuoto.
+    const regole = p.slice(
+      p.indexOf('\nREGOLE ASSOLUTE\n'),
+      p.indexOf('QUANDO LA CONVERSAZIONE ARRIVA A UN ESITO')
+    );
+    expect(regole).toMatch(/chiamare|telefon/i);
+  });
+});
+
 describe('M1: FASE 5, i tagli del pitch cadono su confine di frase, non a metà', () => {
   const p = buildMarioSystem('Marta');
 

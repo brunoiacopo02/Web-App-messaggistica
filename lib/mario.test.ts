@@ -32,6 +32,13 @@ describe('parseMarioReply', () => {
     const r = parseMarioReply('Ciao, come stai?');
     expect(r).toEqual({ visibleReply: 'Ciao, come stai?', appointmentFixed: false, passToHuman: false, videoWatched: false });
   });
+
+  it('ripara il link video spezzato prima di consegnare il testo visibile', () => {
+    const r = parseMarioReply('Eccolo https://corso.feniceacademy.it/conferenza-ax msbn9r50 [APPUNTAMENTO_FISSATO]');
+    expect(r.visibleReply).toContain('https://corso.feniceacademy.it/conferenza-axmsbn9r50');
+    expect(r.visibleReply).not.toContain('conferenza-ax msbn9r50');
+    expect(r.appointmentFixed).toBe(true);
+  });
 });
 
 describe('generateMarioReply', () => {

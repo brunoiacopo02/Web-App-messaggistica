@@ -78,3 +78,17 @@ export function slotLabel(scheduledAtMs: number, nowMs: number): string {
   const dayName = romeWeekdayFmt.format(new Date(scheduledAtMs)).toLowerCase();
   return `${dayName} alle ${time}`;
 }
+
+/** Il promemoria a 24h chiede "hai visto il video?". Se il lead l'ha gia visto,
+ * o comunque ha scritto qualcosa dopo aver ricevuto il link, quella domanda e
+ * rumore: si usa la variante senza domanda, quando e configurata. */
+export function pickReminder24Template(input: {
+  hasVideoWatchedEvent: boolean;
+  inboundAfterVideoMs: number | null;
+  novideoSid: string | null;
+  defaultSid: string;
+}): string {
+  const giaVisto = input.hasVideoWatchedEvent || input.inboundAfterVideoMs !== null;
+  if (giaVisto && input.novideoSid) return input.novideoSid;
+  return input.defaultSid;
+}
