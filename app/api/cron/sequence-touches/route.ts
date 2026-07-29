@@ -175,6 +175,10 @@ export async function GET(req: NextRequest) {
       .select('id, ai_status, ai_started_at, crm_lead_id, crm_funnel, bot_outcome, bot_followups_sent, leads(phone_e164, first_name)')
       .not('crm_lead_id', 'is', null)
       .in('ai_status', ['active'])
+      // Lead dei GDO (modalità postino): hanno già l'appuntamento, la sequenza di
+      // riaggancio non li riguarda — e il riaggancio arriverebbe dal nostro bot su un
+      // lead che sta lavorando un commerciale.
+      .is('gdo_agenda_at', null)
       .range(fromRow, fromRow + 999);
     const batch = data ?? [];
     convs.push(...batch);

@@ -278,3 +278,66 @@ describe('sendOutcome — nota duplicata non rimandata', () => {
     expect(locked.payload.noteFingerprint).toMatch(/^[0-9a-f]{16}$/);
   });
 });
+
+describe('sendOutcome — canale solo-NOTA per i lead dei GDO (noteOnly)', () => {
+  // Lead di proprietà del GDO: nessun esito nostro, nessun appuntamento nostro.
+  const CONV_GDO = { crm_lead_id: 'gdo1', bot_outcome: null, bot_scheduled_at: null };
+
+  it('manda NOTA al posto dell\'esito e non tocca la riga', async () => {
+    const { supabase, calls } = makeSupabase(CONV_GDO);
+    const res = await sendOutcome(supabase, 7, { outcome: 'DA_SCARTARE', discardReason: 'non gli serve più' }, { noteOnly: true });
+
+    expect(res.sent).toBe(true);
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(body.outcome).toBe('NOTA');
+    expect(body.leadId).toBe('gdo1');
+    expect(body.note).toContain('non gli serve più');
+    expect(body.date).toBeUndefined();
+    // Niente bot_outcome, niente ai_status: il lead non è nostro e la chat continua.
+    expect(calls.updates).toHaveLength(0);
+  });
+
+  it('un APPUNTAMENTO del modello non diventa mai un esito: resta una nota', async () => {
+    const { supabase, calls } = makeSupabase(CONV_GDO);
+    const res = await sendOutcome(supabase, 7, { outcome: 'APPUNTAMENTO', date: DATE }, { noteOnly: true });
+
+    expect(res.sent).toBe(true);
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(body.outcome).toBe('NOTA');
+    expect(body.outcome).not.toBe('APPUNTAMENTO');
+    expect(calls.updates).toHaveLength(0);
+    expect(calls.events.some((e) => e.type === 'bot_note_sent')).toBe(true);
+  });
+
+  it('lead senza crm_lead_id → nessun POST', async () => {
+    const { supabase } = makeSupabase({ crm_lead_id: null, bot_outcome: null, bot_scheduled_at: null });
+    const res = await sendOutcome(supabase, 7, { outcome: 'INTERROTTO' }, { noteOnly: true });
+
+    expect(res).toEqual({ sent: false, error: 'not_crm_lead' });
+    expect((globalThis.fetch as any)).not.toHaveBeenCalled();
+  });
+
+  it('nota identica già inviata → non rimandata, e la conversazione resta aperta', async () => {
+    const { supabase: s1, calls: c1 } = makeSupabase(CONV_GDO);
+    await sendOutcome(s1, 7, { outcome: 'INTERROTTO' }, { noteOnly: true });
+    const precedente = { id: 1, ...c1.events.find((e: { type: string }) => e.type === 'bot_note_sent') };
+    (globalThis.fetch as any).mockClear();
+
+    const { supabase, calls } = makeSupabase(CONV_GDO, { eventLogRows: [precedente] });
+    const res = await sendOutcome(supabase, 7, { outcome: 'INTERROTTO' }, { noteOnly: true });
+
+    expect(res).toEqual({ sent: false, error: 'note_duplicate' });
+    expect((globalThis.fetch as any)).not.toHaveBeenCalled();
+    expect(calls.updates).toHaveLength(0);
+  });
+
+  it('CRM che rifiuta (403) → nessuna persistenza locale, solo la traccia', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 403, text: async () => 'lead non assegnato al bot' })));
+    const { supabase, calls } = makeSupabase(CONV_GDO);
+    const res = await sendOutcome(supabase, 7, { outcome: 'RICHIAMO', date: DATE }, { noteOnly: true });
+
+    expect(res.sent).toBe(false);
+    expect(calls.updates).toHaveLength(0);
+    expect(calls.events.some((e) => e.type === 'bot_outcome_rejected')).toBe(true);
+  });
+});

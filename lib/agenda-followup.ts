@@ -28,10 +28,16 @@ export interface AgendaFollowupInput {
   lastInboundAtMs: number | null;
   lastMessageIsInbound: boolean;
   romeHour: number;
+  /** Lead arruolato per conto di un GDO (`gdo_agenda_at` valorizzato). */
+  gdoPostino: boolean;
 }
 
 /** Decide se mandare il singolo follow-up agenda. Puro, niente effetti. */
 export function decideAgendaFollowup(input: AgendaFollowupInput): 'send' | 'none' {
+  // Lead del GDO: l'appuntamento l'ha già preso al telefono col commerciale, e il
+  // link di prenotazione è lo stesso del bot. Il sollecito "non ho ancora visto la
+  // conferma" arriverebbe proprio a chi ha già prenotato.
+  if (input.gdoPostino) return 'none';
   if (input.terminal) return 'none';
   if (input.followupAlreadySent) return 'none';
   // Se l'ultimo messaggio è un inbound non ancora risposto, il backstop cron
@@ -93,7 +99,7 @@ export async function runAgendaFollowups(
   // 2. Stato delle conversazioni candidate.
   const { data: convs } = await supabase
     .from('conversations')
-    .select('id, lead_id, ai_status, bot_outcome, bot_followups_sent')
+    .select('id, lead_id, ai_status, bot_outcome, bot_followups_sent, gdo_agenda_at')
     .in('id', convIds);
 
   const leadIds = [...new Set((convs ?? []).map((c) => c.lead_id))];
@@ -144,6 +150,7 @@ export async function runAgendaFollowups(
       lastInboundAtMs,
       lastMessageIsInbound,
       romeHour: hour,
+      gdoPostino: c.gdo_agenda_at != null,
     });
 
     if (decision === 'none' || !phone) { skipped++; continue; }

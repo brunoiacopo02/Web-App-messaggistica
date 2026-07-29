@@ -7,7 +7,8 @@ vi.mock('@anthropic-ai/sdk', () => ({
   },
 }));
 
-import { parseMarioReply, generateMarioReply } from './mario';
+import { parseMarioReply, generateMarioReply, GDO_CONTEXT_NOTE } from './mario';
+import { MARIO_SYSTEM_PROMPT } from './mario-prompt';
 
 beforeEach(() => {
   messagesCreate.mockReset();
@@ -79,5 +80,34 @@ describe('tag [VIDEO_VISTO]', () => {
     expect(r.videoWatched).toBe(true);
     expect(r.passToHuman).toBe(true);
     expect(r.visibleReply).toBe('ok');
+  });
+});
+
+describe('generateMarioReply — contesto extra (lead con appuntamento già fissato dal GDO)', () => {
+  it('appende il contesto al system prompt senza toccare la cronologia', async () => {
+    messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'Ok!' }] });
+    await generateMarioReply([{ role: 'user', content: 'ok' }], { contextNote: 'CONTESTO: appuntamento già fissato.' });
+
+    const arg = messagesCreate.mock.calls[0][0];
+    expect(arg.system).toContain('CONTESTO: appuntamento già fissato.');
+    expect(arg.messages).toEqual([{ role: 'user', content: 'ok' }]);
+  });
+
+  it('senza contesto il system prompt resta quello di sempre', async () => {
+    messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'Ok!' }] });
+    await generateMarioReply([{ role: 'user', content: 'ok' }]);
+    expect(messagesCreate.mock.calls[0][0].system).not.toContain('CONTESTO:');
+  });
+});
+
+describe('contesto Mario per i lead dei GDO', () => {
+  it('dice che l\'appuntamento c\'è già e che il video è partito, rimandando alla sezione del prompt', () => {
+    expect(GDO_CONTEXT_NOTE).toContain('appuntamento');
+    expect(GDO_CONTEXT_NOTE).toContain("SE L'APPUNTAMENTO È GIÀ FISSATO");
+    expect(GDO_CONTEXT_NOTE).toContain('collega');
+  });
+
+  it('la sezione richiamata esiste davvero nel prompt', () => {
+    expect(MARIO_SYSTEM_PROMPT).toContain("SE L'APPUNTAMENTO È GIÀ FISSATO");
   });
 });

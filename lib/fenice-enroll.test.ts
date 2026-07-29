@@ -8,7 +8,7 @@ vi.mock('./sequence', () => ({
   inSendWindow: vi.fn(() => true),
 }));
 
-import { enrollLeadIntoMario } from './fenice-enroll';
+import { enrollGdoLeadAsPostino, enrollLeadIntoMario } from './fenice-enroll';
 import { findOrCreateLeadConversation, sendTemplateAndLog } from './messaging';
 import { inSendWindow } from './sequence';
 import { openingBody } from './persona';
@@ -236,5 +236,94 @@ describe('enrollLeadIntoMario — selezione apertura per-funnel A/B (NEW_OPENING
     );
     expect(call[6]).toEqual({ '3': 'Anna' });
     expect(calls.events.some((e) => e.type === 'opening_config_error')).toBe(false);
+  });
+});
+
+describe('enrollGdoLeadAsPostino — arruolamento in modalità postino', () => {
+  const PAYLOAD = {
+    phone: '+393331234567',
+    name: 'MARIO ROSSI',
+    email: 'mario@esempio.it',
+    crmLeadId: 'gdo-1',
+    crmFunnel: 'Nome funnel',
+    variant: { lavora: true, haFamiglia: false, offertaDelMese: false },
+  };
+
+  beforeEach(() => {
+    vi.stubEnv('AGENDA_GDO_TEMPLATE_SID', 'HX_AGENDA_GDO');
+  });
+
+  it('manda il template agenda dal numero Fenice, col solo nome proprio', async () => {
+    const { supabase } = makeSupabase();
+
+    const res = await enrollGdoLeadAsPostino(supabase, PAYLOAD);
+
+    expect(res).toMatchObject({ ok: true, conversationId: 42, sid: 'SM_TEST' });
+    const call = vi.mocked(sendTemplateAndLog).mock.calls[0];
+    expect(call.slice(1, 6)).toEqual(
+      [42, '+393331234567', 'HX_AGENDA_GDO', 'Agenda GDO', 'whatsapp:+390000000000'],
+    );
+    expect(call[6]).toEqual({ '1': 'Mario' });
+    expect(call[7]).toContain('il mio collega');
+  });
+
+  it('fuori fascia invia comunque: il GDO è al telefono col lead', async () => {
+    vi.mocked(inSendWindow).mockReturnValue(false);
+    const { supabase, calls } = makeSupabase();
+
+    const res = await enrollGdoLeadAsPostino(supabase, PAYLOAD);
+
+    expect(res.ok).toBe(true);
+    expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+    expect(calls.events.some((e) => e.type === 'fenice_enroll_deferred')).toBe(false);
+  });
+
+  it('marca la conversazione come postino: modalità, video della variante, esito iniziale', async () => {
+    const { supabase, calls } = makeSupabase();
+
+    await enrollGdoLeadAsPostino(supabase, PAYLOAD);
+
+    expect(calls.updates).toHaveLength(1);
+    expect(calls.updates[0]).toMatchObject({
+      ai_owner: 'mario',
+      ai_status: 'active',
+      crm_lead_id: 'gdo-1',
+      crm_funnel: 'Nome funnel',
+      gdo_agenda_esito: 'inviato',
+      gdo_video_url: 'https://corso.feniceacademy.it/conferenza-bx',
+      gdo_video_sent_at: null,
+    });
+    expect(calls.updates[0].gdo_agenda_at).toBeTruthy();
+    expect(calls.updates[0].ai_started_at).toBeTruthy();
+  });
+
+  it('offerta del mese → video Black Summer', async () => {
+    const { supabase, calls } = makeSupabase();
+
+    await enrollGdoLeadAsPostino(supabase, {
+      ...PAYLOAD,
+      variant: { lavora: true, haFamiglia: true, offertaDelMese: true },
+    });
+
+    expect(calls.updates[0].gdo_video_url).toBe('https://corso.feniceacademy.it/conferenza-black-summer');
+  });
+
+  it('invio fallito → ok:false, esito fallito sulla riga (il GDO può ritentare), event send_error', async () => {
+    vi.mocked(sendTemplateAndLog).mockResolvedValueOnce({ ok: false, error: 'twilio 63024' });
+    const { supabase, calls } = makeSupabase();
+
+    const res = await enrollGdoLeadAsPostino(supabase, PAYLOAD);
+
+    expect(res).toMatchObject({ ok: false, error: 'twilio 63024' });
+    expect(calls.updates[0].gdo_agenda_esito).toBe('fallito');
+    expect(calls.events.some((e) => e.type === 'send_error' && e.level === 'error')).toBe(true);
+  });
+
+  it('template agenda non configurato → errore esplicito, nessun invio', async () => {
+    vi.stubEnv('AGENDA_GDO_TEMPLATE_SID', '');
+    const { supabase } = makeSupabase();
+
+    await expect(enrollGdoLeadAsPostino(supabase, PAYLOAD)).rejects.toThrow(/AGENDA_GDO_TEMPLATE_SID/);
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
   });
 });

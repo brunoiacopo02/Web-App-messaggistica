@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { shouldAutoReply, shouldReopen, nextUnansweredInboundIndex, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS, canSendOutcome, drainMarioReplies, isLockStale, LOCK_TTL_MS } from './fenice-autoreply';
+import { shouldAutoReply, shouldReopen, nextUnansweredInboundIndex, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS, canSendOutcome, drainMarioReplies, isLockStale, LOCK_TTL_MS, shouldSendGdoVideo } from './fenice-autoreply';
 
-vi.mock('./mario', () => ({ generateMarioReply: vi.fn() }));
+vi.mock('./mario', () => ({ generateMarioReply: vi.fn(), GDO_CONTEXT_NOTE: 'CONTESTO-GDO' }));
 vi.mock('./twilio', () => ({ sendFreeText: vi.fn(async () => ({ sid: 'SM_fake', status: 'queued' })) }));
 vi.mock('./bot-report', () => ({ generateBotReport: vi.fn(async () => ({})) }));
 vi.mock('./bot-outcome', () => ({ sendOutcome: vi.fn(async () => ({ sent: true })) }));
 
-import { generateMarioReply } from './mario';
+import { generateMarioReply, GDO_CONTEXT_NOTE } from './mario';
 import { sendOutcome } from './bot-outcome';
 
 describe('shouldAutoReply', () => {
@@ -185,7 +185,15 @@ describe('canSendOutcome', () => {
   });
 });
 
-type ClaimedRow = { id: number; ai_started_at: string | null; crm_lead_id: string | null; bot_outcome: string | null };
+type ClaimedRow = {
+  id: number;
+  ai_started_at: string | null;
+  crm_lead_id: string | null;
+  bot_outcome: string | null;
+  gdo_agenda_at?: string | null;
+  gdo_video_url?: string | null;
+  gdo_video_sent_at?: string | null;
+};
 type FakeMsgRow = { direction: string; body: string; template_sid: string | null; created_at: string };
 
 /**
@@ -196,7 +204,7 @@ type FakeMsgRow = { direction: string; body: string; template_sid: string | null
  */
 function makeDrainSupabase(claimedRow: ClaimedRow, initialRows: FakeMsgRow[]) {
   const messagesRows = [...initialRows];
-  const calls = { events: [] as any[], finalStatusWrites: [] as string[], messageInserts: [] as any[], lockReleases: [] as any[] };
+  const calls = { events: [] as any[], finalStatusWrites: [] as string[], messageInserts: [] as any[], lockReleases: [] as any[], convUpdates: [] as any[] };
 
   const supabase: any = {
     from(table: string) {
@@ -214,6 +222,7 @@ function makeDrainSupabase(claimedRow: ClaimedRow, initialRows: FakeMsgRow[]) {
               };
               return stub;
             }
+            calls.convUpdates.push(payload);
             if ('ai_status' in payload) {
               calls.finalStatusWrites.push(payload.ai_status);
               // null = rilasciato; qualunque altro valore sarebbe un lucchetto lasciato appeso.
@@ -503,4 +512,175 @@ describe('drainMarioReplies — il blocco conferma si completa solo nel turno de
     // Timeout largo: il drain mette una pausa "umana" (fino a 3s) fra una bolla e
     // l'altra e qui le bolle sono quattro.
   }, 20_000);
+});
+
+describe('shouldSendGdoVideo', () => {
+  const base = { gdoAgendaAt: '2026-07-29T10:00:00Z', gdoVideoUrl: 'https://corso.feniceacademy.it/conferenza-bx', gdoVideoSentAt: null };
+
+  it('lead del GDO che ha appena risposto e non ha ancora il video → sì', () => {
+    expect(shouldSendGdoVideo(base)).toBe(true);
+  });
+  it('video già mandato → no, tocca a Mario rispondere', () => {
+    expect(shouldSendGdoVideo({ ...base, gdoVideoSentAt: '2026-07-29T10:05:00Z' })).toBe(false);
+  });
+  it('conversazione normale (non postino) → no', () => {
+    expect(shouldSendGdoVideo({ ...base, gdoAgendaAt: null })).toBe(false);
+  });
+  it('modalità postino senza link video → no (si segnala, non si inventa un link)', () => {
+    expect(shouldSendGdoVideo({ ...base, gdoVideoUrl: null })).toBe(false);
+  });
+});
+
+describe('drainMarioReplies — modalità postino (lead dei GDO)', () => {
+  const VIDEO = 'https://corso.feniceacademy.it/conferenza-bx';
+  const AGENDA: FakeMsgRow = { direction: 'out', body: 'Ciao Mario, sono Marta... il mio collega...', template_sid: 'HX_AGENDA_GDO', created_at: '2026-07-29T10:00:00Z' };
+  const RISPOSTA: FakeMsgRow = { direction: 'in', body: 'ok', template_sid: null, created_at: '2026-07-29T10:02:00Z' };
+
+  const postino = (over: Partial<ClaimedRow> = {}): ClaimedRow => ({
+    id: 90, ai_started_at: null, crm_lead_id: 'gdo1', bot_outcome: null,
+    gdo_agenda_at: '2026-07-29T10:00:00Z', gdo_video_url: VIDEO, gdo_video_sent_at: null,
+    ...over,
+  });
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(sendOutcome).mockClear();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('la prima risposta del lead riceve IL VIDEO, non una risposta del modello', async () => {
+    const { supabase, calls } = makeDrainSupabase(postino(), [AGENDA, RISPOSTA]);
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    // Il video È la risposta a quel messaggio, non si aggiunge a un'altra.
+    expect(generateMarioReply).not.toHaveBeenCalled();
+    expect(calls.messageInserts).toHaveLength(1);
+    expect(calls.messageInserts[0].body).toContain(VIDEO);
+    expect(calls.messageInserts[0].body).toContain('FATTO');
+    expect(calls.events.some((e: any) => e.type === 'gdo_video_sent')).toBe(true);
+  });
+
+  it('segna il video come inviato, così non riparte al messaggio dopo', async () => {
+    const { supabase, calls } = makeDrainSupabase(postino(), [AGENDA, RISPOSTA]);
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    const marcato = calls.convUpdates.find((u: any) => u.gdo_video_sent_at);
+    expect(marcato).toBeTruthy();
+    expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+
+  it('dal secondo messaggio in poi risponde Mario, sapendo che l’appuntamento c’è già', async () => {
+    const rows: FakeMsgRow[] = [
+      AGENDA, RISPOSTA,
+      { direction: 'out', body: `ecco il video ${VIDEO}`, template_sid: null, created_at: '2026-07-29T10:03:00Z' },
+      { direction: 'in', body: 'ma quanto costa?', template_sid: null, created_at: '2026-07-29T10:10:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(postino({ gdo_video_sent_at: '2026-07-29T10:03:00Z' }), rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Te lo spiega il tutor in call 🙂',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    expect(generateMarioReply).toHaveBeenCalledTimes(1);
+    // L'agenda l'ha firmata Marta: il lead non deve vedersi rispondere da un altro nome.
+    expect(vi.mocked(generateMarioReply).mock.calls[0][1]).toMatchObject({
+      contextNote: GDO_CONTEXT_NOTE,
+      personaName: 'Marta',
+    });
+    expect(calls.messageInserts.map((m: any) => m.body)).toEqual(['Te lo spiega il tutor in call 🙂']);
+  });
+
+  it('un esito del modello diventa una NOTA e non chiude la conversazione: il lead è del GDO', async () => {
+    const rows: FakeMsgRow[] = [
+      AGENDA, RISPOSTA,
+      { direction: 'out', body: `ecco il video ${VIDEO}`, template_sid: null, created_at: '2026-07-29T10:03:00Z' },
+      { direction: 'in', body: 'non ce la faccio più, lasciamo stare', template_sid: null, created_at: '2026-07-29T10:10:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(postino({ gdo_video_sent_at: '2026-07-29T10:03:00Z' }), rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Mi dispiace, mi segno tutto e ti ricontatta una collega.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+      outcome: 'DA_SCARTARE', discardReason: 'ci ha ripensato',
+    });
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    expect(sendOutcome).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendOutcome).mock.calls[0][3]).toEqual({ noteOnly: true });
+    // Niente chiusura: il bot resta il canale del GDO su questa chat.
+    expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+
+  it('un appuntamento riconfermato non congela la conversazione su booked', async () => {
+    const rows: FakeMsgRow[] = [
+      AGENDA, RISPOSTA,
+      { direction: 'out', body: `ecco il video ${VIDEO}`, template_sid: null, created_at: '2026-07-29T10:03:00Z' },
+      { direction: 'in', body: 'confermo giovedì alle 15', template_sid: null, created_at: '2026-07-29T10:10:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(postino({ gdo_video_sent_at: '2026-07-29T10:03:00Z' }), rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto, confermato 🙂',
+      appointmentFixed: true, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    // 'booked' non è claimabile: il postino resterebbe muto ai messaggi successivi.
+    expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+
+  it('se il lead chiede una persona il passaggio umano funziona come sempre', async () => {
+    const rows: FakeMsgRow[] = [
+      AGENDA, RISPOSTA,
+      { direction: 'out', body: `ecco il video ${VIDEO}`, template_sid: null, created_at: '2026-07-29T10:03:00Z' },
+      { direction: 'in', body: 'voglio parlare con una persona', template_sid: null, created_at: '2026-07-29T10:10:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(postino({ gdo_video_sent_at: '2026-07-29T10:03:00Z' }), rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Certo, ti faccio ricontattare da una collega.',
+      appointmentFixed: false, passToHuman: true, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    expect(calls.finalStatusWrites).toEqual(['handed_off']);
+  });
+
+  it('modalità postino senza link video: lo segnala e lascia rispondere Mario, niente silenzio', async () => {
+    const { supabase, calls } = makeDrainSupabase(postino({ gdo_video_url: null }), [AGENDA, RISPOSTA]);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Ciao! Ti mando tutto tra poco.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    expect(calls.events.some((e: any) => e.type === 'gdo_video_missing' && e.level === 'error')).toBe(true);
+    expect(generateMarioReply).toHaveBeenCalledTimes(1);
+  });
+
+  it('una conversazione normale non è toccata: nessun video, risposta del modello senza contesto GDO', async () => {
+    const rows: FakeMsgRow[] = [
+      { direction: 'out', body: 'apertura', template_sid: null, created_at: '2026-07-01T10:00:00Z' },
+      { direction: 'in', body: 'ciao', template_sid: null, created_at: '2026-07-25T09:00:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(
+      { id: 91, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null, gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null },
+      rows,
+    );
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Ciao! Come va?', appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 91, '+391234567890', () => 0);
+
+    expect(generateMarioReply).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(generateMarioReply).mock.calls[0][1]?.contextNote).toBeUndefined();
+    expect(calls.events.some((e: any) => e.type === 'gdo_video_sent')).toBe(false);
+  });
 });

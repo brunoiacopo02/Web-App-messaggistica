@@ -29,6 +29,28 @@ const decide = (over: Partial<Parameters<typeof decideFollowupAction>[0]>) =>
     ...over,
   });
 
+describe('decideFollowupAction — lead dei GDO (modalità postino)', () => {
+  // Il lead non è nostro: l'esito lo decide il commerciale che ha in mano la trattativa.
+  // Una classificazione automatica arriverebbe al CRM come esito su un lead altrui.
+  it('mai NON_RISPOSTO su un lead del GDO, nemmeno a 14 giorni di silenzio', () => {
+    expect(decide({ msgs: [out(14 * D, 'delivered')], gdoPostino: true })).toBe('none');
+  });
+
+  it('mai la classificazione INTERROTTO su un lead del GDO', () => {
+    const msgs = [out(130 * H, 'delivered'), inb(125 * H)];
+    expect(decide({ msgs, hasInbound: true, lastInboundAtMs: NOW - 125 * H, gdoPostino: true })).toBe('none');
+  });
+
+  it('mai DA_SCARTARE per numero morto su un lead del GDO', () => {
+    const msgs = [out(15 * D, 'failed'), out(14 * D, 'undelivered')];
+    expect(decide({ msgs, gdoPostino: true })).toBe('none');
+  });
+
+  it('senza il flag la classificazione resta quella di sempre', () => {
+    expect(decide({ msgs: [out(14 * D, 'delivered')] })).toBe('non_risposto');
+  });
+});
+
 describe('decideFollowupAction — APPUNTAMENTO terminale', () => {
   it('APPUNTAMENTO → none anche a 14g consegnato senza risposta', () => {
     const a = decide({ msgs: [out(14 * D, 'delivered')], botOutcome: 'APPUNTAMENTO' });

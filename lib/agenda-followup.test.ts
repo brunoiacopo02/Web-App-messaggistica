@@ -10,6 +10,7 @@ const base = {
   lastInboundAtMs: 2.5 * H, // inbound recente → finestra 24h aperta
   lastMessageIsInbound: false,
   romeHour: 15,             // orario buono
+  gdoPostino: false,        // conversazione normale, non un lead del GDO
 };
 
 describe('decideAgendaFollowup', () => {
@@ -42,6 +43,15 @@ describe('decideAgendaFollowup', () => {
   });
   it('la costante di ritardo è 2h', () => {
     expect(AGENDA_FOLLOWUP_DELAY_MS).toBe(2 * H);
+  });
+});
+
+describe('decideAgendaFollowup — lead dei GDO', () => {
+  // Il link di prenotazione è LO STESSO del bot: senza questa guardia il follow-up
+  // "non ho ancora visto la conferma" arriverebbe a chi ha appena preso l'appuntamento
+  // al telefono col commerciale. È esattamente ciò che il CRM ci ha chiesto di evitare.
+  it('mai il follow-up "prenota" a un lead che ha già l’appuntamento col GDO', () => {
+    expect(decideAgendaFollowup({ ...base, gdoPostino: true })).toBe('none');
   });
 });
 

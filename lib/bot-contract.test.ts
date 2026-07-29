@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isoWithOffset, parseIntakePayload, validateOutcomeBody } from './bot-contract';
+import { isoWithOffset, parseIntakePayload, parseSendAgendaPayload, validateOutcomeBody } from './bot-contract';
 
 describe('isoWithOffset', () => {
   it('accetta offset esplicito', () => {
@@ -65,5 +65,57 @@ describe('esito NOTA', () => {
   it('NOTA non richiede la data', () => {
     const r = validateOutcomeBody({ leadId: 'x', outcome: 'NOTA', note: 'ok' });
     expect(r.ok).toBe(true);
+  });
+});
+
+describe('parseSendAgendaPayload', () => {
+  const base = {
+    leadId: 'gdo-1',
+    name: 'Mario Rossi',
+    phone: '333 123 4567',
+    email: 'mario@esempio.it',
+    funnel: 'Nome funnel',
+    companyId: 'fenice',
+    variant: { lavora: true, haFamiglia: false, offertaDelMese: false },
+  };
+
+  it('accetta il payload del CRM e conserva la variante', () => {
+    const r = parseSendAgendaPayload(base);
+    expect(r).toEqual({
+      ok: true,
+      value: {
+        leadId: 'gdo-1',
+        name: 'Mario Rossi',
+        phone: '333 123 4567',
+        email: 'mario@esempio.it',
+        funnel: 'Nome funnel',
+        companyId: 'fenice',
+        variant: { lavora: true, haFamiglia: false, offertaDelMese: false },
+      },
+    });
+  });
+
+  it('variante assente → tutte le opzioni false (il video di default)', () => {
+    const { variant, ...senzaVariant } = base;
+    const r = parseSendAgendaPayload(senzaVariant);
+    expect(r.ok && r.value.variant).toEqual({ lavora: false, haFamiglia: false, offertaDelMese: false });
+  });
+
+  it('flag della variante non booleani → trattati come false, non come errore', () => {
+    const r = parseSendAgendaPayload({ ...base, variant: { lavora: 'si', haFamiglia: 1, offertaDelMese: null } });
+    expect(r.ok && r.value.variant).toEqual({ lavora: false, haFamiglia: false, offertaDelMese: false });
+  });
+
+  it('rifiuta companyId diverso da fenice', () => {
+    expect(parseSendAgendaPayload({ ...base, companyId: 'altro' })).toEqual({ ok: false, reason: 'forbidden' });
+  });
+
+  it('rifiuta leadId o telefono mancanti', () => {
+    expect(parseSendAgendaPayload({ ...base, leadId: '  ' })).toEqual({ ok: false, reason: 'bad_request' });
+    expect(parseSendAgendaPayload({ ...base, phone: '' })).toEqual({ ok: false, reason: 'bad_request' });
+  });
+
+  it('rifiuta un payload che non è un oggetto', () => {
+    expect(parseSendAgendaPayload(null)).toEqual({ ok: false, reason: 'bad_request' });
   });
 });
