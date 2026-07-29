@@ -57,10 +57,22 @@ const VIDEO = {
   'NON LAVORA + NO FIGLI': 'https://corso.feniceacademy.it/conferenza-axmsbn9r50',
 };
 
-// Template parametrico approvato (fenice_video_preparazione_v1): {{1}} nome, {{2}} data,
-// {{3}} url. Un template solo copre tutte le varianti, anche quelle senza un template
-// per-slug dedicato (es. "NON LAVORA + NO FIGLI").
-const TEMPLATE = process.env.VIDEO_PREP_TEMPLATE_SID ?? 'HX34d9a93bf8d2a8d91382c644106f6699';
+// Un template UTILITY per variante, con il link fisso dentro al testo ({{1}} = nome).
+// SEMPRE questi: il parametrico HX34d9a93b… ({{1}} nome, {{2}} data, {{3}} url) è
+// comodo perché ne basta uno per tutte le varianti, ma Meta l'ha riclassificato
+// MARKETING — pesa sul quality rating del numero e cade sotto i limiti marketing
+// per-utente. Usato per sbaglio nel giro del 29/07 sera: non rifarlo.
+const TEMPLATE_PER_VARIANTE = {
+  'OFFERTA DEL MESE': 'HX4c41710aede255de338a88c1b9f0cac2', // fenice_video_gdo_offerta_v3
+  'LAVORA + FAMIGLIA': 'HX47cd8c6248050867fed62dda2e138693', // fenice_video_gdo_lavora_famiglia_v2
+  'LAVORA + NO FIGLI': 'HX1dbf9d306d986456a42a73dbd101b7c8', // fenice_video_gdo_lavora_v2
+  'NON LAVORA + FAMIGLIA': 'HX9d466fa6f2e282ba47fdbf905468922b', // fenice_video_gdo_nonlavora_famiglia_v2
+  'NON LAVORA + NO FIGLI': 'HX5215dc8f3bd44c26cbb291f368231f8a', // fenice_video_gdo_nonlavora_v2
+};
+// Via d'uscita se un template UTILITY viene sospeso da Meta e serve partire comunque:
+// va deciso da un umano, caso per caso, sapendo che si spende quality rating.
+const PARAMETRICO = process.env.VIDEO_PREP_TEMPLATE_SID;
+if (PARAMETRICO) console.log(`ATTENZIONE: template parametrico forzato (${PARAMETRICO.slice(0, 12)}…). Se è HX34d9a93b… è MARKETING.\n`);
 
 const h = { apikey: KEY, Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json' };
 const enc = encodeURIComponent;
@@ -129,6 +141,7 @@ const scartati = [];
 const tieni = [];
 for (const r of righe) {
   if (!VIDEO[r.variante]) scartati.push({ ...r, perche: `variante non riconosciuta (${r.variante})` });
+  else if (!PARAMETRICO && !TEMPLATE_PER_VARIANTE[r.variante]) scartati.push({ ...r, perche: `nessun template UTILITY per "${r.variante}"` });
   else if (!r.phone) scartati.push({ ...r, perche: `telefono non valido (${r.telefono})` });
   else if (!Number.isFinite(quando(r.appuntamento))) scartati.push({ ...r, perche: `data illeggibile (${r.appuntamento})` });
   else if (quando(r.appuntamento) < Date.now() && process.env.INCLUDI_PASSATI !== '1') scartati.push({ ...r, perche: `appuntamento già passato (${r.appuntamento})` });
@@ -159,7 +172,7 @@ const finali = target.filter((r) => !gia.has(r.phone));
 console.log(`già serviti da noi (saltati): ${target.length - finali.length}`);
 const perVariante = finali.reduce((a, r) => ({ ...a, [r.variante]: (a[r.variante] ?? 0) + 1 }), {});
 console.log(`DA INVIARE: ${finali.length} -> ${Object.entries(perVariante).map(([k, v]) => `${k}: ${v}`).join(' | ')}`);
-console.log(`${LIVE ? '*** INVIO REALE ***' : 'DRY RUN'} | mittente ...${FROM.slice(-4)} | template ${TEMPLATE.slice(0, 12)}…\n`);
+console.log(`${LIVE ? '*** INVIO REALE ***' : 'DRY RUN'} | mittente ...${FROM.slice(-4)} | template ${PARAMETRICO ? 'parametrico MARKETING' : 'per-variante UTILITY'}\n`);
 
 // Finestra oraria: non si scrive a nessuno alle 3 di notte per un errore di lancio.
 if (LIVE && (oraRoma() < 9 * 60 || oraRoma() >= 20 * 60 + 30) && process.env.FORZA_ORARIO !== '1') {
@@ -174,10 +187,12 @@ const daFare = finali.slice(0, LIMITE);
 for (const [i, r] of daFare.entries()) {
   const nome = soloNome(r.nome);
   const url = VIDEO[r.variante];
-  const vars = { 1: nome, 2: dataUmana(r.appuntamento), 3: url };
+  // Nel per-variante il link e la data non sono variabili: stanno nel testo approvato.
+  const sid = PARAMETRICO ?? TEMPLATE_PER_VARIANTE[r.variante];
+  const vars = PARAMETRICO ? { 1: nome, 2: dataUmana(r.appuntamento), 3: url } : { 1: nome };
 
   if (!LIVE) {
-    console.log(`[dry] ${String(i + 1).padStart(2)} ${nome.padEnd(14)} ${r.phone.padEnd(14)} ${r.appuntamento.padEnd(12)} ${r.gdo.padEnd(8)} ${r.variante.padEnd(22)} ${url}`);
+    console.log(`[dry] ${String(i + 1).padStart(2)} ${nome.padEnd(14)} ${r.phone.padEnd(14)} ${r.appuntamento.padEnd(12)} ${r.gdo.padEnd(8)} ${r.variante.padEnd(22)} ${sid.slice(0, 12)}… ${url}`);
     continue;
   }
 
@@ -186,7 +201,7 @@ for (const [i, r] of daFare.entries()) {
     const body = new URLSearchParams({
       To: `whatsapp:${r.phone}`,
       From: FROM,
-      ContentSid: TEMPLATE,
+      ContentSid: sid,
       ContentVariables: JSON.stringify(vars),
     });
     const tw = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TW_SID}/Messages.json`, {
@@ -203,7 +218,7 @@ for (const [i, r] of daFare.entries()) {
         conversation_id: conversationId, direction: 'out',
         body: `Video di preparazione (${r.variante}) ${url}`,
         twilio_sid: msg.sid, twilio_status: msg.status,
-        template_sid: TEMPLATE, is_template: true,
+        template_sid: sid, is_template: true,
       }),
       headers: { Prefer: 'return=minimal' },
     });
