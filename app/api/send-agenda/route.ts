@@ -61,6 +61,8 @@ export async function POST(req: NextRequest) {
       esito: res.esito,
       message: MESSAGGIO[res.esito],
       deduplicato: res.deduplicato ?? false,
+      varianteAggiornata: res.varianteAggiornata ?? false,
+      videoGiaInviato: res.videoGiaInviato ?? false,
       conversationId: res.conversationId,
       sid: res.sid,
       error: res.error,

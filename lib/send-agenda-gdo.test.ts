@@ -4,7 +4,7 @@ vi.mock('./fenice-enroll', () => ({
   enrollGdoLeadAsPostino: vi.fn(async () => ({ ok: true, conversationId: 42, sid: 'SM_AGENDA' })),
 }));
 
-import { runSendAgenda } from './send-agenda-gdo';
+import { runSendAgenda, handleGdoDeliveryUpdate } from './send-agenda-gdo';
 import { enrollGdoLeadAsPostino } from './fenice-enroll';
 
 const PAYLOAD = {
@@ -196,5 +196,177 @@ describe('runSendAgenda — il CRM aspetta al massimo 10 secondi', () => {
 
     expect(res.esito).toBe('inviato');
     expect(t).toBeLessThanOrEqual(8_000);
+  });
+});
+
+describe('runSendAgenda — correzione della variante entro la finestra di deduplica', () => {
+  const ORA = Date.parse('2026-07-29T10:00:00Z');
+  const conOrologio = () => {
+    let t = ORA;
+    return { now: () => t, sleep: async (ms: number) => { t += ms; } };
+  };
+  const treMinutiFa = new Date(ORA - 3 * 60_000).toISOString();
+  const BX = 'https://corso.feniceacademy.it/conferenza-bx';
+  const DX = 'https://corso.feniceacademy.it/conferenza-dx';
+
+  it('stessa variante → deduplica secca, niente da correggere', async () => {
+    const { supabase, calls } = makeSupabase({
+      convPrecedente: { id: 42, gdo_agenda_at: treMinutiFa, gdo_agenda_esito: 'consegnato', gdo_video_url: BX, gdo_video_sent_at: null },
+    });
+
+    const res = await runSendAgenda(supabase, PAYLOAD, conOrologio());
+
+    expect(res).toMatchObject({ deduplicato: true, varianteAggiornata: false });
+    expect(calls.updates).toHaveLength(0);
+  });
+
+  // Il GDO sbaglia lavora/famiglia e corregge subito: l'agenda NON si rimanda (il lead
+  // riceverebbe due volte lo stesso testo) ma il video che partirà dev'essere quello giusto.
+  it('variante corretta prima che il video parta → si aggiorna il video, non si rimanda l\'agenda', async () => {
+    const { supabase, calls } = makeSupabase({
+      convPrecedente: { id: 42, gdo_agenda_at: treMinutiFa, gdo_agenda_esito: 'consegnato', gdo_video_url: BX, gdo_video_sent_at: null },
+    });
+
+    const res = await runSendAgenda(
+      supabase,
+      { ...PAYLOAD, variant: { lavora: true, haFamiglia: true, offertaDelMese: false } },
+      conOrologio(),
+    );
+
+    expect(res).toMatchObject({ ok: true, deduplicato: true, varianteAggiornata: true, esito: 'consegnato' });
+    expect(enrollGdoLeadAsPostino).not.toHaveBeenCalled();
+    expect(calls.updates.at(-1)).toMatchObject({ gdo_video_url: DX });
+    expect(calls.events.some((e) => e.type === 'gdo_variante_corretta')).toBe(true);
+  });
+
+  it('variante corretta troppo tardi, video già partito → lo dice al GDO invece di fingere', async () => {
+    const { supabase, calls } = makeSupabase({
+      convPrecedente: { id: 42, gdo_agenda_at: treMinutiFa, gdo_agenda_esito: 'consegnato', gdo_video_url: BX, gdo_video_sent_at: new Date(ORA - 60_000).toISOString() },
+    });
+
+    const res = await runSendAgenda(
+      supabase,
+      { ...PAYLOAD, variant: { lavora: true, haFamiglia: true, offertaDelMese: false } },
+      conOrologio(),
+    );
+
+    expect(res).toMatchObject({ deduplicato: true, varianteAggiornata: false, videoGiaInviato: true });
+    // Il video sbagliato è già dal lead: non si riscrive la colonna come se nulla fosse.
+    expect(calls.updates).toHaveLength(0);
+    expect(calls.events.some((e) => e.type === 'gdo_variante_tardiva' && e.level === 'warn')).toBe(true);
+  });
+});
+
+describe('handleGdoDeliveryUpdate — l\'inviato che poi arriva davvero', () => {
+  const AGENDA_SID = 'HX_AGENDA_GDO';
+
+  /** Fake Supabase per il percorso delle status callback di Twilio. */
+  function makeDeliverySupabase(opts: { msg?: any; conv?: any } = {}) {
+    const calls = { updates: [] as any[], events: [] as any[] };
+    const supabase: any = {
+      from(table: string) {
+        if (table === 'messages') {
+          return {
+            select() {
+              const stub: any = { eq() { return stub; }, maybeSingle: () => Promise.resolve({ data: opts.msg ?? null }) };
+              return stub;
+            },
+          };
+        }
+        if (table === 'conversations') {
+          return {
+            select() {
+              const stub: any = { eq() { return stub; }, maybeSingle: () => Promise.resolve({ data: opts.conv ?? null }) };
+              return stub;
+            },
+            update(payload: any) { calls.updates.push(payload); return { eq() { return Promise.resolve({}); } }; },
+          };
+        }
+        return { insert(payload: any) { calls.events.push(payload); return Promise.resolve({}); } };
+      },
+    };
+    return { supabase, calls };
+  }
+
+  const MSG = { conversation_id: 42, template_sid: AGENDA_SID };
+  const CONV = { id: 42, crm_lead_id: 'gdo-1', gdo_agenda_esito: 'inviato' };
+
+  beforeEach(() => {
+    vi.stubEnv('AGENDA_GDO_TEMPLATE_SID', AGENDA_SID);
+    vi.stubEnv('BOT_WEBHOOK_SECRET', 'test-secret');
+    vi.stubEnv('CRM_AGENDA_DELIVERED_URL', 'https://crm.example/api/bot/agenda-delivered');
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, text: async () => '' })));
+  });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('agenda finita in inviato che arriva → esito a consegnato e avviso firmato al CRM', async () => {
+    const { supabase, calls } = makeDeliverySupabase({ msg: MSG, conv: CONV });
+
+    const res = await handleGdoDeliveryUpdate(supabase, { sid: 'SM1', status: 'delivered' });
+
+    expect(res).toMatchObject({ updated: true, notified: true });
+    expect(calls.updates).toEqual([{ gdo_agenda_esito: 'consegnato' }]);
+    const [url, init] = (globalThis.fetch as any).mock.calls[0];
+    expect(url).toBe('https://crm.example/api/bot/agenda-delivered');
+    expect(init.headers['x-bot-signature']).toMatch(/^sha256=[0-9a-f]{64}$/);
+    expect(JSON.parse(init.body)).toMatchObject({ leadId: 'gdo-1', esito: 'consegnato', sid: 'SM1' });
+    expect(calls.events.some((e) => e.type === 'gdo_agenda_consegna_tardiva')).toBe(true);
+  });
+
+  it('anche la lettura vale come consegna', async () => {
+    const { supabase } = makeDeliverySupabase({ msg: MSG, conv: CONV });
+    expect(await handleGdoDeliveryUpdate(supabase, { sid: 'SM1', status: 'read' })).toMatchObject({ updated: true });
+  });
+
+  it('stato intermedio → non si annuncia niente', async () => {
+    const { supabase, calls } = makeDeliverySupabase({ msg: MSG, conv: CONV });
+
+    const res = await handleGdoDeliveryUpdate(supabase, { sid: 'SM1', status: 'sent' });
+
+    expect(res).toMatchObject({ updated: false });
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(calls.updates).toHaveLength(0);
+  });
+
+  it('esito già consegnato → nessun secondo avviso (le callback di Twilio si ripetono)', async () => {
+    const { supabase, calls } = makeDeliverySupabase({ msg: MSG, conv: { ...CONV, gdo_agenda_esito: 'consegnato' } });
+
+    const res = await handleGdoDeliveryUpdate(supabase, { sid: 'SM1', status: 'read' });
+
+    expect(res).toMatchObject({ updated: false });
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(calls.updates).toHaveLength(0);
+  });
+
+  it('messaggio che non è l\'agenda GDO → non ci riguarda', async () => {
+    const { supabase } = makeDeliverySupabase({ msg: { conversation_id: 42, template_sid: 'HX_ALTRO' }, conv: CONV });
+    expect(await handleGdoDeliveryUpdate(supabase, { sid: 'SM1', status: 'delivered' })).toMatchObject({ updated: false });
+  });
+
+  it('messaggio sconosciuto → nessun errore, nessuna azione', async () => {
+    const { supabase } = makeDeliverySupabase({ msg: null, conv: null });
+    expect(await handleGdoDeliveryUpdate(supabase, { sid: 'ignoto', status: 'delivered' })).toMatchObject({ updated: false });
+  });
+
+  it('senza URL del CRM configurato: l\'esito nostro si aggiorna comunque', async () => {
+    vi.stubEnv('CRM_AGENDA_DELIVERED_URL', '');
+    const { supabase, calls } = makeDeliverySupabase({ msg: MSG, conv: CONV });
+
+    const res = await handleGdoDeliveryUpdate(supabase, { sid: 'SM1', status: 'delivered' });
+
+    expect(res).toMatchObject({ updated: true, notified: false });
+    expect(calls.updates).toEqual([{ gdo_agenda_esito: 'consegnato' }]);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('CRM irraggiungibile: il nostro esito resta corretto e l\'errore resta scritto', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('rete'); }));
+    const { supabase, calls } = makeDeliverySupabase({ msg: MSG, conv: CONV });
+
+    const res = await handleGdoDeliveryUpdate(supabase, { sid: 'SM1', status: 'delivered' });
+
+    expect(res).toMatchObject({ updated: true, notified: false });
+    expect(calls.updates).toEqual([{ gdo_agenda_esito: 'consegnato' }]);
+    expect(calls.events.some((e) => e.type === 'gdo_agenda_notifica_fallita' && e.level === 'error')).toBe(true);
   });
 });

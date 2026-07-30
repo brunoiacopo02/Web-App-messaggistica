@@ -25,6 +25,7 @@
 //   crm_lead_id: i cron (sequence-touches, bot-followups) li ignorano e il bot non
 //   risponde in automatico. Le risposte restano in inbox per un umano.
 import fs from 'node:fs';
+import { assertApprovedUtility } from './lib/template-guard.mjs';
 
 const CSV = process.argv.find((a) => a.toLowerCase().endsWith('.csv'));
 if (!CSV) throw new Error('manca il CSV: node ... scripts/invio-video-agenda-gdo.mjs <file.csv> [--invia]');
@@ -180,6 +181,18 @@ if (LIVE && (oraRoma() < 9 * 60 || oraRoma() >= 20 * 60 + 30) && process.env.FOR
 }
 
 const twAuth = 'Basic ' + Buffer.from(`${TW_SID}:${TW_TOK}`).toString('base64');
+
+// Presidio: prima di spedire, si chiede a Meta come ha classificato DAVVERO ogni
+// template che useremo. Il 29/07 il controllo non c'era e sono partiti 69 messaggi con
+// un template MARKETING già scartato la mattina. Vale anche in dry run: l'errore va
+// visto prima di lanciare l'invio, non dopo. Fail-closed, override per singolo SID.
+const sidDaUsare = [...new Set(finali.map((r) => PARAMETRICO ?? TEMPLATE_PER_VARIANTE[r.variante]).filter(Boolean))];
+for (const sid of sidDaUsare) {
+  const a = await assertApprovedUtility(sid, { auth: twAuth });
+  console.log(`   template ${sid.slice(0, 12)}… ${a.name ?? ''} → ${a.status} ${a.category}${a.override ? ' (override)' : ''}`);
+}
+console.log('');
+
 const pausa = (ms) => new Promise((r) => setTimeout(r, ms));
 const esiti = { csv: CSV, inviati: 0, falliti: 0, saltati: target.length - finali.length, scartati, errori: [] };
 const daFare = finali.slice(0, LIMITE);

@@ -6,6 +6,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { getAutoReply } from '@/lib/fenice-settings';
 import { shouldAutoReply, shouldReopen, drainMarioReplies } from '@/lib/fenice-autoreply';
 import { isAudioInbound, transcribeTwilioAudio } from '@/lib/transcribe';
+import { handleGdoDeliveryUpdate } from '@/lib/send-agenda-gdo';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -60,6 +61,11 @@ export async function POST(req: NextRequest) {
       message: `Status ${params.MessageStatus} per ${params.MessageSid}`,
       level: params.MessageStatus === 'failed' || params.MessageStatus === 'undelivered' ? 'warn' : 'info',
     });
+
+    // Agenda GDO finita in "inviato" e poi consegnata davvero: il CRM va avvisato,
+    // altrimenti quel lead resta per sempre in uno stato ambiguo col reinvio bloccato.
+    // Dopo la risposta a Twilio: la callback non deve aspettare il loro endpoint.
+    after(handleGdoDeliveryUpdate(supabase, { sid: params.MessageSid, status: params.MessageStatus }));
     return new NextResponse(TWIML_OK, { status: 200, headers: TWIML_HEADERS });
   }
 
