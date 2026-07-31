@@ -193,6 +193,9 @@ type ClaimedRow = {
   gdo_agenda_at?: string | null;
   gdo_video_url?: string | null;
   gdo_video_sent_at?: string | null;
+  gdo_video_watched_at?: string | null;
+  gdo_video_followups_sent?: number | null;
+  gdo_noemi_reminded_at?: string | null;
 };
 type FakeMsgRow = { direction: string; body: string; template_sid: string | null; created_at: string };
 
@@ -623,8 +626,10 @@ describe('drainMarioReplies — modalità postino (lead dei GDO)', () => {
 
     expect(generateMarioReply).toHaveBeenCalledTimes(1);
     // L'agenda l'ha firmata Marta: il lead non deve vedersi rispondere da un altro nome.
+    // Il video è stato mandato ma non ancora confermato: la nota porta anche il
+    // promemoria video (comportamento coperto da gdo-context-note.test.ts).
     expect(vi.mocked(generateMarioReply).mock.calls[0][1]).toMatchObject({
-      contextNote: GDO_CONTEXT_NOTE,
+      contextNote: expect.stringContaining(GDO_CONTEXT_NOTE),
       personaName: 'Marta',
     });
     expect(calls.messageInserts.map((m: any) => m.body)).toEqual(['Te lo spiega il tutor in call 🙂']);
@@ -684,6 +689,48 @@ describe('drainMarioReplies — modalità postino (lead dei GDO)', () => {
     await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
 
     expect(calls.finalStatusWrites).toEqual(['handed_off']);
+  });
+
+  it('marca gdo_noemi_reminded_at solo se la risposta nomina davvero Noemi', async () => {
+    const claimedRow: ClaimedRow = {
+      id: 61, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null,
+      gdo_agenda_at: '2026-08-01T14:00:00Z', gdo_video_url: 'https://corso.feniceacademy.it/conferenza-bx',
+      gdo_video_sent_at: '2026-08-01T15:00:00Z',
+    };
+    const rows: FakeMsgRow[] = [
+      AGENDA,
+      { direction: 'in', body: 'sì l\'ho visto', template_sid: null, created_at: '2026-08-01T18:00:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto. Ti ricordo che prima della call ti chiama Noemi, sono 5-10 minuti.',
+      appointmentFixed: false, passToHuman: false, videoWatched: true,
+    });
+
+    await drainMarioReplies(supabase, 61, '+391234567890', () => 0);
+
+    expect(calls.convUpdates.some((u) => typeof u.gdo_noemi_reminded_at === 'string')).toBe(true);
+  });
+
+  it('non marca Noemi se il modello non l\'ha nominata', async () => {
+    const claimedRow: ClaimedRow = {
+      id: 62, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null,
+      gdo_agenda_at: '2026-08-01T14:00:00Z', gdo_video_url: 'https://corso.feniceacademy.it/conferenza-bx',
+      gdo_video_sent_at: '2026-08-01T15:00:00Z',
+    };
+    const rows: FakeMsgRow[] = [
+      AGENDA,
+      { direction: 'in', body: 'ok grazie', template_sid: null, created_at: '2026-08-01T18:00:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Figurati, a presto.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 62, '+391234567890', () => 0);
+
+    expect(calls.convUpdates.some((u) => 'gdo_noemi_reminded_at' in u)).toBe(false);
   });
 
   it('modalità postino senza link video: lo segnala e lascia rispondere Mario, niente silenzio', async () => {

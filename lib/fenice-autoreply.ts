@@ -1,5 +1,6 @@
 import type { getSupabaseAdmin } from './supabase/admin';
-import { generateMarioReply, GDO_CONTEXT_NOTE, type MarioTurn } from './mario';
+import { generateMarioReply, type MarioTurn } from './mario';
+import { gdoContextNote } from './gdo-context-note';
 import { gdoVideoText } from './gdo-agenda';
 import { sendFreeText } from './twilio';
 import { marioDelayMs } from './mario-latency';
@@ -187,7 +188,7 @@ export async function drainMarioReplies(
     .eq('id', conversationId)
     .eq('ai_status', 'active')
     .or(`ai_lock_at.is.null,ai_lock_at.lt.${staleCutoff}`)
-    .select('id, ai_started_at, crm_lead_id, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, leads(first_name)')
+    .select('id, ai_started_at, crm_lead_id, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, leads(first_name)')
     .single();
   if (!claimed) return;
   const startedAt = (claimed as { ai_started_at: string | null }).ai_started_at;
@@ -199,12 +200,19 @@ export async function drainMarioReplies(
     gdo_agenda_at?: string | null;
     gdo_video_url?: string | null;
     gdo_video_sent_at?: string | null;
+    gdo_video_watched_at?: string | null;
+    gdo_video_followups_sent?: number | null;
+    gdo_noemi_reminded_at?: string | null;
     leads?: { first_name?: string | null } | null;
   };
   const gdoAgendaAt = gdo.gdo_agenda_at ?? null;
   const gdoVideoUrl = gdo.gdo_video_url ?? null;
   const postino = gdoAgendaAt !== null;
   let gdoVideoSentAt = gdo.gdo_video_sent_at ?? null;
+  let gdoVideoWatchedAt = gdo.gdo_video_watched_at ?? null;
+  // Non incrementato qui: il contatore dei solleciti lo muove solo il cron dedicato.
+  const gdoFollowupsSent = gdo.gdo_video_followups_sent ?? 0;
+  let gdoNoemiRemindedAt = gdo.gdo_noemi_reminded_at ?? null;
   let gdoVideoMissingLogged = false;
 
   // Carica i messaggi della conversazione dall'arruolamento in poi (in ordine).
@@ -283,8 +291,20 @@ export async function drainMarioReplies(
           : 'mario';
       const result = await generateMarioReply(history, {
         personaName: PERSONA_NAME[persona],
-        // Il lead ha già l'appuntamento: il modello non deve ripartire col pitch.
-        ...(postino ? { contextNote: GDO_CONTEXT_NOTE } : {}),
+        // I promemoria pendenti (video non confermato, Noemi non ancora spiegata)
+        // viaggiano dentro il contesto: il modello li integra nel discorso invece di
+        // farli arrivare come un messaggio programmato addosso.
+        ...(postino
+          ? {
+              contextNote: gdoContextNote({
+                gdoVideoSentAt: gdoVideoSentAt,
+                gdoVideoWatchedAt: gdoVideoWatchedAt,
+                gdoNoemiRemindedAt: gdoNoemiRemindedAt,
+                followupsSent: gdoFollowupsSent,
+                videoAppenaConfermato: false,
+              }),
+            }
+          : {}),
       });
 
       // Invia ogni a-capo come messaggio separato (più umano), con breve pausa.
@@ -379,9 +399,11 @@ export async function drainMarioReplies(
       if (result.videoWatched) {
         // Il log non si interroga per decidere: la conferma serve al cron dei solleciti,
         // che deve smettere di scrivere a chi il video l'ha già visto.
+        const watchedAt = new Date().toISOString();
         await supabase.from('conversations')
-          .update({ gdo_video_watched_at: new Date().toISOString() })
+          .update({ gdo_video_watched_at: watchedAt })
           .eq('id', conversationId);
+        gdoVideoWatchedAt = watchedAt;
 
         await supabase.from('event_log').insert({
           type: 'video_watched',
@@ -389,6 +411,16 @@ export async function drainMarioReplies(
           message: `[bot-fissatore] conv ${conversationId}: il lead conferma di aver visto il video pre-call`,
           level: 'info',
         });
+      }
+
+      // Si segna il promemoria solo se è davvero uscito: iniettare la nota non
+      // garantisce che il modello l'abbia detto, e segnarlo a vuoto significherebbe
+      // non ripeterlo mai più.
+      if (postino && !gdoNoemiRemindedAt && /\bNoemi\b/i.test(result.visibleReply ?? '')) {
+        gdoNoemiRemindedAt = new Date().toISOString();
+        await supabase.from('conversations')
+          .update({ gdo_noemi_reminded_at: gdoNoemiRemindedAt })
+          .eq('id', conversationId);
       }
 
       if (result.appointmentFixed) {
