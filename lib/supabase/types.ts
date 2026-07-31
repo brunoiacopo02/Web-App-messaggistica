@@ -68,6 +68,9 @@ export type Database = {
         }
         Relationships: []
       }
+      // NB: le colonne gdo_video_* e gdo_appuntamento_at (migration 20260801000001)
+      // sono aggiunte a mano in attesa del prossimo `npm run supabase:gen-types`, che
+      // le riprodurrà identiche. Stesso trattamento già dato a `messages.sender`.
       conversations: {
         Row: {
           ai_dropoff_stage: string | null
@@ -91,8 +94,12 @@ export type Database = {
           crm_lead_id: string | null
           gdo_agenda_at: string | null
           gdo_agenda_esito: string | null
+          gdo_appuntamento_at: string | null
+          gdo_noemi_reminded_at: string | null
+          gdo_video_followups_sent: number
           gdo_video_sent_at: string | null
           gdo_video_url: string | null
+          gdo_video_watched_at: string | null
           id: number
           last_inbound_at: string | null
           last_message_at: string
@@ -123,8 +130,12 @@ export type Database = {
           crm_lead_id?: string | null
           gdo_agenda_at?: string | null
           gdo_agenda_esito?: string | null
+          gdo_appuntamento_at?: string | null
+          gdo_noemi_reminded_at?: string | null
+          gdo_video_followups_sent?: number
           gdo_video_sent_at?: string | null
           gdo_video_url?: string | null
+          gdo_video_watched_at?: string | null
           id?: number
           last_inbound_at?: string | null
           last_message_at?: string
@@ -155,8 +166,12 @@ export type Database = {
           crm_lead_id?: string | null
           gdo_agenda_at?: string | null
           gdo_agenda_esito?: string | null
+          gdo_appuntamento_at?: string | null
+          gdo_noemi_reminded_at?: string | null
+          gdo_video_followups_sent?: number
           gdo_video_sent_at?: string | null
           gdo_video_url?: string | null
+          gdo_video_watched_at?: string | null
           id?: number
           last_inbound_at?: string | null
           last_message_at?: string
