@@ -84,8 +84,17 @@ gli orari (`precall-reminders`, `sequence-touches`) ed è a prova di cambio d'or
 italiane sono le 19:30 UTC d'estate e le 20:30 d'inverno. Il codice agisce solo se
 `romeHour:romeMinute` è `21:30` o `10:00`, altrimenti esce subito.
 
-**Perimetro:** conversazioni con `gdo_agenda_at` negli ultimi 7 giorni. Il limite dei 7
-giorni evita che il cron ripeschi lead vecchi se qualcosa resta indietro.
+**I due slot sono ancorati all'agenda, non al video** (decisione di Bruno, 31/07):
+
+- **slot sera** = le 21:30 del giorno stesso in cui il lead ha ricevuto l'agenda;
+- **slot mattina** = le 10:00 del giorno dopo.
+
+Quindi la sequenza si apre e si chiude entro ~19 ore dall'agenda, sempre, qualunque cosa
+faccia il lead. Se l'agenda arriva dopo le 21:30 lo slot serale è già passato e ne resta
+solo uno: è il comportamento voluto, non un caso da recuperare.
+
+**Perimetro:** conversazioni con `gdo_agenda_at` di **oggi o ieri** (giorno di Roma). Non
+serve guardare più indietro: oltre quella finestra non c'è nessuno slot da servire.
 
 Non è un ramo dentro `bot-followups` perché quello gira a `:00` — le 21:30 non
 esisterebbero — ed è il watchdog della classificazione, da cui i lead GDO sono esclusi
@@ -117,18 +126,21 @@ export function decideGdoVideoFollowup(input: GdoFollowupInput): GdoFollowupActi
 Regole, in quest'ordine (la prima che risponde vince):
 
 1. `gdoAgendaAt` nullo → `none` (non è un lead postino)
-2. `appointmentAt` valorizzato e già passato → `none` — **un sollecito dopo la call è solo
-   danno**. Se `appointmentAt` è nullo vale il ripiego: `none` oltre 48h dall'agenda
-3. `gdoVideoWatchedAt` valorizzato → `none`
-4. `followupsSent >= 2` → `none`
-5. **conversazione viva**: il lead ha scritto nelle ultime `CONVERSAZIONE_VIVA_MS` (6 ore)
+2. lo slot non appartiene a questa agenda → `none`. Sera = giorno di `gdoAgendaAt`,
+   mattina = giorno dopo: un'agenda di tre giorni fa non ha più slot da servire
+3. `appointmentAt` valorizzato e già passato → `none` — **un sollecito dopo la call è solo
+   danno**. Finché il campo non arriva dal CRM vale il ripiego dello slot serale (§ Il
+   buco della data d'appuntamento)
+4. `gdoVideoWatchedAt` valorizzato → `none`
+5. `followupsSent >= 2` → `none`
+6. **conversazione viva**: il lead ha scritto nelle ultime `CONVERSAZIONE_VIVA_MS` (6 ore)
    → `none`. Si sta parlando: il promemoria lo porta la chat (§4), non un messaggio
    programmato addosso.
-6. `lastMessageIsInbound` → `none`: c'è una sua domanda senza risposta, ci pensa il
+7. `lastMessageIsInbound` → `none`: c'è una sua domanda senza risposta, ci pensa il
    re-drive di `bot-followups`; due nostri messaggi di fila sarebbero maleducati
-7. `gdoVideoSentAt` nullo → `video-template`
-8. finestra 24h aperta (ultimo inbound < 24h) → `sollecito-libero`
-9. altrimenti → `sollecito-template`
+8. `gdoVideoSentAt` nullo → `video-template`
+9. finestra 24h aperta (ultimo inbound < 24h) → `sollecito-libero`
+10. altrimenti → `sollecito-template`
 
 **Il buco della data d'appuntamento.** Verificato il 31/07 su `lib/bot-contract.ts`:
 `SendAgendaPayload` è l'intake più la sola `variant` — anagrafica, funnel, companyId,
@@ -144,9 +156,10 @@ Due mosse, in quest'ordine:
 
 - **Chiedere al CRM di aggiungere `appointmentAt` al payload.** Ce l'hanno (sta già nei
   CSV che ci mandano), è un campo, e rende la regola 2 esatta. È la soluzione vera.
-- **Nel frattempo il ripiego:** nessun sollecito oltre 48h dall'agenda, e nessun sollecito
-  serale se l'agenda è arrivata **oggi dopo le 18:00** (una call fissata a ridosso è
-  probabilmente già avvenuta o sta per avvenire). Copre male ma non fa danni evidenti.
+- **Nel frattempo il ripiego:** nessun sollecito serale se l'agenda è arrivata **dopo le
+  18:00** — una call fissata a ridosso è probabilmente già avvenuta o sta per avvenire.
+  Copre male ma non fa figuracce. Il limite temporale generale non serve: l'ancoraggio
+  degli slot al giorno dell'agenda chiude già tutto entro ~19 ore.
 
 `gdo_appuntamento_at` si aggiunge già ora alla migration e si valorizza appena il campo
 arriva: la colonna vuota non costa niente, la migration successiva sì.
