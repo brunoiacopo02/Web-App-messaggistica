@@ -88,12 +88,26 @@ export async function GET(req: NextRequest) {
       const phone = c.leads?.phone_e164 as string | undefined;
       if (!phone) { report.push({ id: c.id, action: 'skip', reason: 'no_phone' }); continue; }
 
-      const { data: msgs } = await supabase
+      // Cronologia dall'arruolamento in poi (stesso pattern di bot-followups e
+      // sequence-touches): il cutoff sta nella query, non dopo in JS, perché
+      // `lastInboundAtMs`/`lastMessageIsInbound` — che alimentano la decisione —
+      // devono guardare la coda della sola conversazione col GDO, non quella di
+      // un eventuale funnel Mario precedente sullo stesso numero.
+      let msgsQuery = supabase
         .from('messages')
         .select('direction, body, created_at')
         .eq('conversation_id', c.id)
         .order('created_at', { ascending: true })
         .limit(200);
+      // Buffer 5': l'enroll inserisce l'apertura PRIMA di settare ai_started_at,
+      // senza margine il filtro la escluderebbe.
+      if (c.ai_started_at) {
+        msgsQuery = msgsQuery.gte(
+          'created_at',
+          new Date(Date.parse(c.ai_started_at) - 5 * 60_000).toISOString(),
+        );
+      }
+      const { data: msgs } = await msgsQuery;
       const rows = (msgs ?? []) as { direction: string; body: string; created_at: string }[];
       const inbound = rows.filter((m) => m.direction === 'in');
       const lastInboundAtMs = inbound.length ? Date.parse(inbound[inbound.length - 1].created_at) : null;
@@ -168,8 +182,9 @@ export async function GET(req: NextRequest) {
       if (action === 'sollecito-libero') {
         // Il sollecito lo scrive il modello dentro il contesto della chat: se il lead
         // stava parlando d'altro, Marta risponde a quello e aggancia il video.
+        // `rows` è già tagliata dall'arruolamento in poi (query sopra): niente da
+        // rifiltrare qui.
         const history: MarioTurn[] = rows
-          .filter((m) => !c.ai_started_at || m.created_at >= c.ai_started_at)
           .map((m) => ({ role: m.direction === 'in' ? 'user' : 'assistant', content: m.body }));
         const result = await generateMarioReply(history, {
           personaName: 'Marta',
