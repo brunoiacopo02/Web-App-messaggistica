@@ -48,3 +48,34 @@ describe('area campagne', () => {
     expect(canAccess('brunoiacopo02@gmail.com', '/campagne-chat')).toBe(true);
   });
 });
+
+describe('area chat', () => {
+  it('fenice@academy.com vede solo /chat', () => {
+    expect(areaForEmail('fenice@academy.com')).toBe('chat');
+    expect(canAccess('fenice@academy.com', '/chat')).toBe(true);
+    expect(canAccess('fenice@academy.com', '/chat/42')).toBe(true);
+    expect(canAccess('fenice@academy.com', '/api/chat/conversations')).toBe(true);
+    expect(canAccess('fenice@academy.com', '/api/chat/conversations/42/messages')).toBe(true);
+    expect(landingPath('fenice@academy.com')).toBe('/chat');
+  });
+
+  it('fenice@academy.com non vede il resto', () => {
+    expect(canAccess('fenice@academy.com', '/inbox')).toBe(false);
+    expect(canAccess('fenice@academy.com', '/fenice')).toBe(false);
+    expect(canAccess('fenice@academy.com', '/campagne-chat')).toBe(false);
+    expect(canAccess('fenice@academy.com', '/api/conversations')).toBe(false);
+    expect(canAccess('fenice@academy.com', '/api/messages')).toBe(false);
+    expect(canAccess('fenice@academy.com', '/campagne')).toBe(false);
+  });
+
+  it('blocca route sibling con prefisso simile', () => {
+    expect(canAccess('fenice@academy.com', '/chat-admin')).toBe(false);
+    expect(canAccess('fenice@academy.com', '/api/chatbot')).toBe(false);
+  });
+
+  it('le altre aree non vedono /chat, gli account all sì', () => {
+    expect(canAccess('campagne@fenice.com', '/chat')).toBe(false);
+    expect(canAccess('fenicebot@fenice.com', '/chat')).toBe(false);
+    expect(canAccess('brunoiacopo02@gmail.com', '/chat')).toBe(true);
+  });
+});
