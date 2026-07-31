@@ -369,6 +369,23 @@ describe('drainMarioReplies — guardia canSendOutcome dal vivo', () => {
     expect(calls.messageInserts.length).toBeGreaterThan(0);
     expect(calls.messageInserts.every((m) => m.sender === 'bot')).toBe(true);
   });
+
+  it('la conferma di visione del video finisce anche su gdo_video_watched_at', async () => {
+    const claimedRow: ClaimedRow = { id: 60, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const rows: FakeMsgRow[] = [
+      OPENING,
+      { direction: 'in', body: 'FATTO, visto tutto', template_sid: null, created_at: '2026-07-25T09:00:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto, me lo segno.',
+      appointmentFixed: false, passToHuman: false, videoWatched: true,
+    });
+
+    await drainMarioReplies(supabase, 60, '+391234567890', () => 0);
+
+    expect(calls.convUpdates.some((u) => typeof u.gdo_video_watched_at === 'string')).toBe(true);
+  });
 });
 
 describe('drainMarioReplies — il lucchetto viene sempre rilasciato', () => {

@@ -377,6 +377,12 @@ export async function drainMarioReplies(
       if (result.passToHuman) { finalStatus = 'handed_off'; break; }
 
       if (result.videoWatched) {
+        // Il log non si interroga per decidere: la conferma serve al cron dei solleciti,
+        // che deve smettere di scrivere a chi il video l'ha già visto.
+        await supabase.from('conversations')
+          .update({ gdo_video_watched_at: new Date().toISOString() })
+          .eq('id', conversationId);
+
         await supabase.from('event_log').insert({
           type: 'video_watched',
           payload: { conversationId, crmLeadId } as never,
