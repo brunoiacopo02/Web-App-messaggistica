@@ -48,6 +48,10 @@
     {
       "path": "/api/cron/precall-reminders",
       "schedule": "30 6-19 * * *"
+    },
+    {
+      "path": "/api/cron/gdo-video-followups",
+      "schedule": "0,30 6-21 * * *"
     }
   ]
 }
