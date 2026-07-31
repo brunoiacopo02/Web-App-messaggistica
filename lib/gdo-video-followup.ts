@@ -41,11 +41,13 @@ export function decideGdoVideoFollowup(i: GdoFollowupInput): GdoFollowupAction {
   const giorniAttesi = i.slot === 'sera' ? 0 : 1;
   if (i.giorniDaAgenda !== giorniAttesi) return 'none';
 
-  // Un sollecito dopo la call è solo danno.
-  if (i.appointmentAt) {
-    const at = Date.parse(i.appointmentAt);
-    if (!Number.isNaN(at) && at <= i.nowMs) return 'none';
-  } else if (i.slot === 'sera' && i.romeHourAgenda >= ORA_AGENDA_TARDI) {
+  // Un sollecito dopo la call è solo danno. Una data illeggibile vale come sconosciuta.
+  const appointmentTime = i.appointmentAt ? Date.parse(i.appointmentAt) : NaN;
+  const hasValidAppointment = !Number.isNaN(appointmentTime);
+
+  if (hasValidAppointment && appointmentTime <= i.nowMs) return 'none';
+
+  if (!hasValidAppointment && i.slot === 'sera' && i.romeHourAgenda >= ORA_AGENDA_TARDI) {
     // Senza la data vera, un'agenda arrivata a sera è probabilmente una call a
     // ridosso — o già avvenuta. Si tace e si riprova il mattino dopo.
     return 'none';

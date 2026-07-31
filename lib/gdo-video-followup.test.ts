@@ -99,6 +99,14 @@ describe('decideGdoVideoFollowup — quando tacere', () => {
       lastMessageIsInbound: true,
     }))).toBe('none');
   });
+
+  it('una data d\'appuntamento illeggibile vale come sconosciuta: vale il ripiego', () => {
+    expect(decideGdoVideoFollowup(base({ appointmentAt: 'non-una-data', romeHourAgenda: 19 }))).toBe('none');
+  });
+
+  it('una data illeggibile non blocca lo slot se l\'agenda è arrivata presto', () => {
+    expect(decideGdoVideoFollowup(base({ appointmentAt: 'non-una-data', romeHourAgenda: 10 }))).toBe('video-template');
+  });
 });
 
 describe('mappa dei template video', () => {
