@@ -15,7 +15,7 @@ export default async function ChatListLayout({ children }: { children: React.Rea
     .from('conversations')
     .select(`
       id, last_message_at, last_inbound_at, unread_count, last_message_preview,
-      ai_owner, gdo_agenda_at,
+      ai_owner, gdo_agenda_at, gdo_video_sent_at,
       lead:leads ( id, phone_e164, first_name, last_name )
     `)
     .order('last_message_at', { ascending: false })

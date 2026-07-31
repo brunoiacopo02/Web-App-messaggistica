@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { soloMondoFenice, isConversazioneChat, mondoDi } from './chat-perimetro';
+import { soloMondoFenice, isConversazioneChat, mondoDi, mondoLabel } from './chat-perimetro';
 
 /** Finto query builder che registra le chiamate invece di parlare col DB. */
 function fakeQuery() {
@@ -24,20 +24,20 @@ function fakeClient(row: unknown) {
 }
 
 describe('soloMondoFenice', () => {
-  it('con campagne fenice: un solo OR con mario e le campagne', () => {
+  it('con campagne fenice: un solo OR con mario, il video GDO e le campagne', () => {
     const { q, calls } = fakeQuery();
     soloMondoFenice(q, [7, 9]);
     expect(calls).toHaveLength(1);
     expect(calls[0].method).toBe('or');
-    expect(calls[0].args[0]).toBe('ai_owner.eq.mario,campaign_id.in.(7,9)');
+    expect(calls[0].args[0]).toBe('ai_owner.eq.mario,gdo_video_sent_at.not.is.null,campaign_id.in.(7,9)');
   });
 
-  it('senza campagne fenice: solo mario, mai un IN vuoto', () => {
+  it('senza campagne fenice: un solo OR con mario e il video GDO, mai un IN vuoto', () => {
     const { q, calls } = fakeQuery();
     soloMondoFenice(q, []);
     expect(calls).toHaveLength(1);
-    expect(calls[0].method).toBe('eq');
-    expect(calls[0].args).toEqual(['ai_owner', 'mario']);
+    expect(calls[0].method).toBe('or');
+    expect(calls[0].args[0]).toBe('ai_owner.eq.mario,gdo_video_sent_at.not.is.null');
     // `IN ()` è SQL invalido: non deve comparire in nessuna forma.
     expect(JSON.stringify(calls)).not.toContain('in.()');
   });
@@ -56,6 +56,11 @@ describe('isConversazioneChat', () => {
 
   it('dentro: conversazione di campagna fenice', async () => {
     const c = fakeClient({ ai_owner: null, campaign_id: 7, campaign: { owner: 'fenice' } });
+    expect(await isConversazioneChat(c, 1)).toBe(true);
+  });
+
+  it('dentro: lead GDO video-only (script invio-video-agenda-gdo, senza ai_owner né campaign_id)', async () => {
+    const c = fakeClient({ ai_owner: null, campaign_id: null, gdo_video_sent_at: '2026-07-31T10:00:00Z', campaign: null });
     expect(await isConversazioneChat(c, 1)).toBe(true);
   });
 
@@ -84,5 +89,21 @@ describe('mondoDi', () => {
   });
   it('Campagna quando il bot non la governa', () => {
     expect(mondoDi({ gdo_agenda_at: null, ai_owner: null })).toBe('CAMPAGNA');
+  });
+  it('GDO anche solo col video (script video-only, senza agenda né ai_owner)', () => {
+    expect(mondoDi({ gdo_agenda_at: null, ai_owner: null, gdo_video_sent_at: '2026-07-31T10:00:00Z' })).toBe('GDO');
+  });
+});
+
+describe('mondoLabel', () => {
+  it('forma compatta (default): GDO, Mario, Campagna', () => {
+    expect(mondoLabel('GDO')).toBe('GDO');
+    expect(mondoLabel('MARIO')).toBe('Mario');
+    expect(mondoLabel('CAMPAGNA')).toBe('Campagna');
+  });
+  it('forma estesa: solo GDO cambia', () => {
+    expect(mondoLabel('GDO', 'estesa')).toBe('GDO · postino');
+    expect(mondoLabel('MARIO', 'estesa')).toBe('Mario');
+    expect(mondoLabel('CAMPAGNA', 'estesa')).toBe('Campagna');
   });
 });
