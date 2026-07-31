@@ -7,7 +7,7 @@ export type Sender = 'bot' | 'automazione' | 'operatore';
  * è una deduzione (sbaglia sui messaggi scritti a mano dentro una chat di Mario).
  * Va allineata al momento reale di applicazione in produzione — vedi Task 9 del piano.
  */
-export const SENDER_STIMATO_PRIMA_DI = '2026-07-31T00:00:00Z';
+export const SENDER_STIMATO_PRIMA_DI = '2026-07-31T16:27:29Z';
 
 export function senderStimato(createdAt: string): boolean {
   return Date.parse(createdAt) < Date.parse(SENDER_STIMATO_PRIMA_DI);

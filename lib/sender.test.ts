@@ -26,7 +26,12 @@ describe('senderStimato', () => {
     expect(Number.isNaN(Date.parse(SENDER_STIMATO_PRIMA_DI))).toBe(false);
   });
   it('regge il formato con microsecondi che restituisce PostgREST', () => {
-    expect(senderStimato('2026-07-30T23:59:59.123456+00:00')).toBe(true);
-    expect(senderStimato('2026-07-31T00:00:01.123456+00:00')).toBe(false);
+    // Ancorati alla soglia, non a una data fissa: la costante viene riallineata
+    // al momento reale di applicazione della migration a ogni go-live.
+    const soglia = Date.parse(SENDER_STIMATO_PRIMA_DI);
+    const conMicrosecondi = (ms: number) =>
+      new Date(ms).toISOString().replace('Z', '123+00:00');
+    expect(senderStimato(conMicrosecondi(soglia - 1000))).toBe(true);
+    expect(senderStimato(conMicrosecondi(soglia + 1000))).toBe(false);
   });
 });
