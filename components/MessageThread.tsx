@@ -7,6 +7,7 @@ import { getSupabaseBrowser } from '@/lib/supabase/client';
 type Msg = {
   id: number; conversation_id: number; direction: 'in' | 'out'; body: string; created_at: string;
   twilio_status: string | null; twilio_error_code: number | null; is_template: boolean | null;
+  sender?: string | null;
 };
 
 function groupByDay(msgs: Msg[]): { day: string; items: Msg[] }[] {
@@ -24,11 +25,12 @@ function mergeSorted(list: Msg[]): Msg[] {
   return [...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at));
 }
 
-export function MessageThread({ conversationId, initial, campaignNamesById, apiBase = '/api/conversations' }: {
+export function MessageThread({ conversationId, initial, campaignNamesById, apiBase = '/api/conversations', showSender = false }: {
   conversationId: number;
   initial: Msg[];
   campaignNamesById: Record<number, string>;
   apiBase?: string;
+  showSender?: boolean;
 }) {
   const [items, setItems] = useState<Msg[]>(initial);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -97,7 +99,7 @@ export function MessageThread({ conversationId, initial, campaignNamesById, apiB
         <div key={i} className="space-y-2">
           <div className="text-center"><span className="text-xs text-zinc-500 bg-zinc-100 dark:bg-zinc-800 rounded-full px-2 py-0.5">{formatDateGroup(g.day)}</span></div>
           {g.items.map((m) => (
-            <MessageBubble key={m.id} msg={m} campaignName={campaignNamesById[m.id]} />
+            <MessageBubble key={m.id} msg={m} campaignName={campaignNamesById[m.id]} showSender={showSender} />
           ))}
         </div>
       ))}

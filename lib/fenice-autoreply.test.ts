@@ -351,6 +351,24 @@ describe('drainMarioReplies — guardia canSendOutcome dal vivo', () => {
 
     expect(calls.finalStatusWrites).toEqual(['active']);
   });
+
+  it("la risposta di Mario viene registrata con sender 'bot'", async () => {
+    const claimedRow: ClaimedRow = { id: 45, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const rows: FakeMsgRow[] = [
+      OPENING,
+      { direction: 'in', body: 'mi interessa, come funziona?', template_sid: null, created_at: '2026-07-25T09:00:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Te lo spiego in due parole.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 45, '+391234567890', () => 0);
+
+    expect(calls.messageInserts.length).toBeGreaterThan(0);
+    expect(calls.messageInserts.every((m) => m.sender === 'bot')).toBe(true);
+  });
 });
 
 describe('drainMarioReplies — il lucchetto viene sempre rilasciato', () => {

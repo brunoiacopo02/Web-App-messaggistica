@@ -162,6 +162,7 @@ export async function POST(req: NextRequest) {
       template_sid: campaign.twilio_template_sid,
       template_vars: vars,
       is_template: true,
+      sender: 'automazione',
     });
     return NextResponse.json({ ok: true, sent: false });
   }
@@ -176,6 +177,7 @@ export async function POST(req: NextRequest) {
     template_sid: campaign.twilio_template_sid,
     template_vars: vars,
     is_template: true,
+    sender: 'automazione',
   });
 
   await supabase.from('conversations')

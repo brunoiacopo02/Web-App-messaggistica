@@ -240,6 +240,7 @@ export async function drainMarioReplies(
         await supabase.from('messages').insert({
           conversation_id: conversationId, direction: 'out', body,
           twilio_sid: sent.sid, twilio_status: sent.status,
+          sender: 'bot',
         });
         const sentAt = new Date().toISOString();
         await supabase.from('conversations')
@@ -328,6 +329,7 @@ export async function drainMarioReplies(
         await supabase.from('messages').insert({
           conversation_id: conversationId, direction: 'out', body: parts[i],
           twilio_sid: sent.sid, twilio_status: sent.status,
+          sender: 'bot',
         });
       }
       if (parts.length > 0) {

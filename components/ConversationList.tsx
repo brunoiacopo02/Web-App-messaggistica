@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { getSupabaseBrowser } from '@/lib/supabase/client';
+import { mondoLabel, type Mondo } from '@/lib/chat-perimetro';
 
 type Conv = {
   id: number;
@@ -15,6 +16,7 @@ type Conv = {
   unread_count: number;
   lead: { id: number; phone_e164: string; first_name: string | null; last_name: string | null } | null;
   preview?: string;
+  mondo?: string;
 };
 
 export function ConversationList({ initial, apiPath = '/api/conversations', basePath = '/inbox', channelName = 'inbox-list' }: {
@@ -104,9 +106,18 @@ export function ConversationList({ initial, apiPath = '/api/conversations', base
               className={cn('flex items-center gap-3 p-3 hover:bg-zinc-50 dark:hover:bg-zinc-900 border-b', active && 'bg-zinc-100 dark:bg-zinc-800')}>
               <PhoneAvatar firstName={c.lead?.first_name} lastName={c.lead?.last_name} phone={c.lead?.phone_e164 ?? ''} />
               <div className="flex-1 min-w-0">
-                <div className="flex justify-between items-baseline">
+                <div className="flex justify-between items-baseline gap-2">
                   <span className="font-medium truncate">{name}</span>
-                  <span className="text-xs text-zinc-500 shrink-0 ml-2">{formatRelativeShort(c.last_message_at)}</span>
+                  <span className="flex items-center gap-2 shrink-0">
+                    {/* Il badge compare solo dove l'API lo manda (pannello /chat): gli altri
+                        pannelli non hanno `mondo` e restano identici a prima. */}
+                    {c.mondo && (
+                      <span className="text-[10px] uppercase tracking-wide rounded px-1.5 py-0.5 bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300">
+                        {mondoLabel(c.mondo as Mondo)}
+                      </span>
+                    )}
+                    <span className="text-xs text-zinc-500">{formatRelativeShort(c.last_message_at)}</span>
+                  </span>
                 </div>
                 <div className="flex justify-between items-center mt-0.5">
                   <span className="text-sm text-zinc-500 truncate">{c.preview ?? c.lead?.phone_e164}</span>

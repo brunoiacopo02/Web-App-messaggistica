@@ -1,12 +1,16 @@
 import { cn, formatRelativeShort } from '@/lib/utils';
 import { DeliveryStatus } from './DeliveryStatus';
+import { senderLabel, senderStimato } from '@/lib/sender';
 
-export function MessageBubble({ msg, campaignName }: {
+export function MessageBubble({ msg, campaignName, showSender = false }: {
   msg: { id: number; direction: 'in' | 'out'; body: string; created_at: string;
-    twilio_status?: string | null; twilio_error_code?: number | null; is_template?: boolean | null };
+    twilio_status?: string | null; twilio_error_code?: number | null; is_template?: boolean | null;
+    sender?: string | null };
   campaignName?: string | null;
+  showSender?: boolean;
 }) {
   const out = msg.direction === 'out';
+  const chi = showSender && out ? senderLabel(msg.sender) : null;
   return (
     <div className={cn('flex w-full', out ? 'justify-end' : 'justify-start')}>
       <div className={cn(
@@ -15,6 +19,11 @@ export function MessageBubble({ msg, campaignName }: {
       )}>
         {msg.is_template && campaignName && (
           <div className="text-[10px] uppercase tracking-wide text-zinc-500 mb-1">Template · {campaignName}</div>
+        )}
+        {chi && (
+          <div className="text-[10px] uppercase tracking-wide text-zinc-500 mb-1">
+            {chi}{senderStimato(msg.created_at) && ' · stimato'}
+          </div>
         )}
         <div className="whitespace-pre-wrap break-words text-sm">{msg.body}</div>
         <div className="flex items-center gap-1 mt-1 justify-end text-[11px] text-zinc-500">

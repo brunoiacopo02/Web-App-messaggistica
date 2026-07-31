@@ -23,7 +23,10 @@
 // - throttling a ~25 invii/minuto, finestra oraria 09:00-20:30 di Roma;
 // - le conversazioni NON vengono assegnate a Mario (ai_owner resta null) e NON hanno
 //   crm_lead_id: i cron (sequence-touches, bot-followups) li ignorano e il bot non
-//   risponde in automatico. Le risposte restano in inbox per un umano.
+//   risponde in automatico. Le risposte restano in inbox per un umano;
+// - gdo_video_url/gdo_video_sent_at vengono comunque valorizzati sulla conversazione:
+//   è il marcatore durevole che tiene questi lead visibili nel perimetro del
+//   pannello /chat (lib/chat-perimetro.ts), pur senza ai_owner né campaign_id.
 import fs from 'node:fs';
 import { assertApprovedUtility } from './lib/template-guard.mjs';
 
@@ -232,12 +235,21 @@ for (const [i, r] of daFare.entries()) {
         body: `Video di preparazione (${r.variante}) ${url}`,
         twilio_sid: msg.sid, twilio_status: msg.status,
         template_sid: sid, is_template: true,
+        sender: 'automazione',
       }),
       headers: { Prefer: 'return=minimal' },
     });
+    // Marcatore durevole del video mandato: senza questo la conversazione resta
+    // invisibile a chi la cerca dopo (es. il pannello /chat), perché non ha
+    // ai_owner né campaign_id. Ricalca gdo_video_url/gdo_video_sent_at di
+    // invio-agenda-gdo.mjs, ma valorizzato subito perché qui il video è già partito.
     await sb(`conversations?id=eq.${conversationId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ last_message_at: new Date().toISOString() }),
+      body: JSON.stringify({
+        last_message_at: new Date().toISOString(),
+        gdo_video_url: url,
+        gdo_video_sent_at: new Date().toISOString(),
+      }),
       headers: { Prefer: 'return=minimal' },
     });
     esiti.inviati++;

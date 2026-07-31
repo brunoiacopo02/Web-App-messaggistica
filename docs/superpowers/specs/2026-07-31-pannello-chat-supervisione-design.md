@@ -184,11 +184,14 @@ Il badge del mondo compare anche nelle righe della lista.
 
 ## Limite noto (accettato)
 
-L'isolamento è **solo per path**. Le RLS sono `auth_all` (single-tenant): chi possiede le
-credenziali `fenice@academy.com` può in teoria leggere qualsiasi tabella interrogando
-PostgREST direttamente, Serenamente compresa. Vale già oggi per `campagne@fenice.com` ed è un
-follow-up aperto dal 13/07. Se l'utenza finisce fuori dal controllo di Bruno, va affrontata
-prima con RLS per ruolo.
+L'isolamento è **solo per path**. Le RLS in `supabase/migrations/20260501000002_rls_policies.sql`
+sono `for all to authenticated using (true) with check (true)` su `messages`, `conversations`,
+`leads` e `campaigns`: single-tenant, senza distinzione di ruolo. Chi possiede le credenziali
+`fenice@academy.com` può interrogare PostgREST direttamente e non solo **leggere** qualsiasi
+riga di quelle tabelle, Serenamente compresa, ma anche **scriverla** — INSERT, UPDATE, DELETE,
+bypassando sia il perimetro sia la sola-lettura del pannello, che sono garanzie della UI, non
+del database. Vale già oggi per `campagne@fenice.com` ed è un follow-up aperto dal 13/07. Se
+l'utenza finisce fuori dal controllo di Bruno, va affrontata prima con RLS per ruolo.
 
 ## Test
 

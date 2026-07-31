@@ -73,6 +73,7 @@ export async function sendTemplateAndLog(
       twilio_status: sent.status,
       template_sid: templateSid,
       is_template: true,
+      sender: 'automazione',
     });
     await supabase
       .from('conversations')
@@ -89,6 +90,7 @@ export async function sendTemplateAndLog(
       twilio_error_code: e?.code ?? null,
       template_sid: templateSid,
       is_template: true,
+      sender: 'automazione',
     });
     return { ok: false, error: e?.message ?? 'unknown' };
   }

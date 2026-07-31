@@ -260,6 +260,9 @@ export type Database = {
         }
         Relationships: []
       }
+      // NB: `sender` (migration 20260731000001) aggiunto a mano in attesa del prossimo
+      // `npm run supabase:gen-types`, che lo riprodurrà identico. Preferito ai cast `as any`
+      // sparsi sui 13 punti d'invio (il precedente di `campaigns.owner` è ciò che si evita).
       messages: {
         Row: {
           body: string
@@ -269,6 +272,7 @@ export type Database = {
           id: number
           is_template: boolean
           read_at: string | null
+          sender: string | null
           template_sid: string | null
           template_vars: Json | null
           twilio_error_code: number | null
@@ -283,6 +287,7 @@ export type Database = {
           id?: number
           is_template?: boolean
           read_at?: string | null
+          sender?: string | null
           template_sid?: string | null
           template_vars?: Json | null
           twilio_error_code?: number | null
@@ -297,6 +302,7 @@ export type Database = {
           id?: number
           is_template?: boolean
           read_at?: string | null
+          sender?: string | null
           template_sid?: string | null
           template_vars?: Json | null
           twilio_error_code?: number | null
