@@ -39,10 +39,15 @@ export default async function ChatConversationPage({
   const now = new Date().toISOString();
   const seg = { bot_outcome: conv.bot_outcome, last_inbound_at: conv.last_inbound_at, ai_status: conv.ai_status };
   const mondo = mondoDi(conv);
-  // Il bot decide un esito solo dove governa la conversazione: sulle chat di campagna
-  // (es. Black Summer) Mario non è mai passato, bot_outcome/ai_status restano nulli e
-  // segmentOf tornerebbe comunque un segmento (MAI_RISPOSTO) che qui non significa nulla.
-  const governataDalBot = mondo !== 'CAMPAGNA';
+  // Il bot decide un esito solo dove governa DAVVERO la conversazione: `ai_owner==='mario'`,
+  // non `mondo !== 'CAMPAGNA'`. Quel proxy bastava prima del fix sul perimetro GDO
+  // video-only, quando ogni chat GDO/Mario aveva per forza ai_owner='mario'; ora il
+  // perimetro include anche le chat GDO servite dal solo script video (ai_owner e
+  // ai_status nulli), che sono comunque mondo==='GDO' ma senza bot che le governi.
+  // Su quelle, come sulle chat di campagna, bot_outcome/ai_status restano nulli e
+  // segmentOf/chatStatusMeta tornerebbero comunque un esito (MAI_RISPOSTO, "Attivo")
+  // inventato.
+  const governataDalBot = conv.ai_owner === 'mario';
   const appuntamento = conv.bot_scheduled_at ? formatRomeDateTime(conv.bot_scheduled_at) : null;
 
   return (
