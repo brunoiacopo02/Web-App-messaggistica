@@ -232,6 +232,7 @@ for (const [i, r] of daFare.entries()) {
         body: `Video di preparazione (${r.variante}) ${url}`,
         twilio_sid: msg.sid, twilio_status: msg.status,
         template_sid: sid, is_template: true,
+        sender: 'automazione',
       }),
       headers: { Prefer: 'return=minimal' },
     });

@@ -236,6 +236,7 @@ for (const [i, r] of daFare.entries()) {
         body: gdoAgendaText(nome),
         twilio_sid: msg.sid, twilio_status: msg.status,
         template_sid: AGENDA_SID, is_template: true,
+        sender: 'automazione',
       }),
       headers: { Prefer: 'return=minimal' },
     });

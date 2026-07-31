@@ -144,6 +144,7 @@ async function sendOne(
       template_sid: campaign.twilio_template_sid,
       template_vars: vars,
       is_template: true,
+      sender: 'automazione',
     });
     await supabase
       .from('conversations')
@@ -167,6 +168,7 @@ async function sendOne(
       template_sid: campaign.twilio_template_sid,
       template_vars: vars,
       is_template: true,
+      sender: 'automazione',
     });
     return 'failed';
   }

@@ -45,6 +45,7 @@ export async function sendConversationMessage(input: SendMessageInput): Promise<
       body: input.body,
       twilio_sid: sent.sid,
       twilio_status: sent.status,
+      sender: 'operatore',
     }).select('id').single();
     await admin.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', input.conversation_id);
     return NextResponse.json({ id: (msg as any)?.id, twilio_sid: sent.sid });
@@ -85,6 +86,7 @@ export async function sendConversationMessage(input: SendMessageInput): Promise<
     template_sid: (campaign as any).twilio_template_sid,
     template_vars: input.vars,
     is_template: true,
+    sender: 'operatore',
   }).select('id').single();
   await admin.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', input.conversation_id);
   return NextResponse.json({ id: (msg as any)?.id, twilio_sid: sent.sid });

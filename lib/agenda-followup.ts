@@ -160,6 +160,7 @@ export async function runAgendaFollowups(
     await supabase.from('messages').insert({
       conversation_id: c.id, direction: 'out', body,
       twilio_sid: msg.sid, twilio_status: msg.status,
+      sender: 'automazione',
     });
     await supabase.from('conversations')
       .update({ bot_followups_sent: (c.bot_followups_sent ?? 0) + 1, last_message_at: now.toISOString() })

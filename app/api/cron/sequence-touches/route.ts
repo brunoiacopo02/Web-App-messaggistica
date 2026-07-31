@@ -69,6 +69,7 @@ async function sendSequenceTemplate(
       twilio_status: sent.status,
       template_sid: templateSid,
       is_template: true,
+      sender: 'automazione',
     });
     await supabase
       .from('conversations')
@@ -94,6 +95,7 @@ async function sendSequenceTemplate(
       twilio_error_code: e?.code ?? null,
       template_sid: templateSid,
       is_template: true,
+      sender: 'automazione',
     });
     return { ok: false, error: e?.message ?? 'unknown' };
   }
@@ -347,6 +349,7 @@ export async function GET(req: NextRequest) {
           twilio_sid: res.sid,
           twilio_status: res.status,
           is_template: false,
+          sender: 'automazione',
         });
         await supabase
           .from('conversations')
