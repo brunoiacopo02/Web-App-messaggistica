@@ -1,7 +1,9 @@
 import { notFound } from 'next/navigation';
 import { getSupabaseServer } from '@/lib/supabase/server';
 import { MessageThread } from '@/components/MessageThread';
-import { isConversazioneChat } from '@/lib/chat-perimetro';
+import { isConversazioneChat, mondoDi } from '@/lib/chat-perimetro';
+import { segmentOf, fermaReason } from '@/lib/lead-segments';
+import { ChatStatusPill, ReasonPill, SegmentPill } from '@/components/fenice/status';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,14 +35,32 @@ export default async function ChatConversationPage({
   const fullName = [conv.lead?.first_name, conv.lead?.last_name].filter(Boolean).join(' ')
     || conv.lead?.phone_e164 || 'Sconosciuto';
 
+  const now = new Date().toISOString();
+  const seg = { bot_outcome: conv.bot_outcome, last_inbound_at: conv.last_inbound_at, ai_status: conv.ai_status };
+  const mondo = mondoDi(conv);
+  const appuntamento = conv.bot_scheduled_at
+    ? new Date(conv.bot_scheduled_at).toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' })
+    : null;
+
   return (
     <div className="flex-1 flex flex-col h-full min-w-0">
-      <header className="border-b px-4 py-3">
-        <div className="text-base font-medium">{fullName}</div>
-        <div className="text-xs text-zinc-500">{conv.lead?.phone_e164}</div>
+      <header className="border-b px-4 py-3 space-y-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-base font-medium">{fullName}</span>
+          <span className="text-[10px] uppercase tracking-wide rounded px-1.5 py-0.5 bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300">
+            {mondo === 'GDO' ? 'GDO · postino' : mondo === 'MARIO' ? 'Mario' : 'Campagna'}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap text-xs text-zinc-500">
+          <span>{conv.lead?.phone_e164}</span>
+          <SegmentPill segment={segmentOf(seg, now)} />
+          <ReasonPill reason={fermaReason(seg, now)} />
+          <ChatStatusPill status={conv.ai_status} />
+          {appuntamento && <span>Appuntamento: {appuntamento}</span>}
+        </div>
       </header>
       {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-      <MessageThread conversationId={id} initial={(msgsRes.data ?? []) as any} campaignNamesById={{}} apiBase="/api/chat/conversations" />
+      <MessageThread conversationId={id} initial={(msgsRes.data ?? []) as any} campaignNamesById={{}} apiBase="/api/chat/conversations" showSender />
     </div>
   );
 }
