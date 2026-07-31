@@ -21,5 +21,5 @@ const LABELS: Record<string, string> = {
 
 /** Etichetta in italiano, o null se non c'è niente da mostrare. */
 export function senderLabel(sender: string | null | undefined): string | null {
-  return (sender && LABELS[sender]) ?? null;
+  return LABELS[sender ?? ''] ?? null;
 }
