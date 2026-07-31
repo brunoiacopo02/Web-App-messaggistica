@@ -1099,6 +1099,23 @@ git commit -m "feat(chat): etichette di chi ha scritto, mondo della chat ed esit
 
 **Nota per chi esegue:** questo task tocca la produzione. I passi che richiedono credenziali (dashboard Supabase, Vercel) vanno eseguiti con Bruno o riportati a lui se bloccati — non inventare valori.
 
+**Precondizione esplicita — ordine obbligato:** la migration `20260731000001_messages_sender.sql`
+va applicata **PRIMA** del deploy del codice di questo branch, mai dopo. Se il codice arriva
+prima della colonna, ogni insert su `messages` che valorizza `sender` (i ~13 punti d'invio del
+Task 7) viene rifiutato da PostgREST con `PGRST204` ("column 'sender' does not exist"). Nessun
+call site controlla l'errore dell'insert dei messaggi: il messaggio WhatsApp **parte comunque**
+(la chiamata a Twilio avviene prima e non dipende dall'insert), ma la riga in `messages` non
+viene mai scritta — un buco silenzioso nella cronologia, non un errore visibile. Per questo
+Step 1 (migration) deve restare Step 1 e completarsi con successo prima di procedere a Step 5
+(merge e deploy): non invertire l'ordine per convenienza.
+
+Come conseguenza, se per qualunque motivo il deploy arriva prima della migration (o i due sono
+comunque separati nel tempo, come qui), **dopo** il deploy vanno **ri-eseguite le tre UPDATE del
+backfill** dello Step 1 (quelle nella migration, sezione "Backfill dello storico"). Sono
+idempotenti (`where sender is null`), quindi rilanciarle non duplica né sovrascrive nulla: sono
+lo strumento per recuperare gli outbound finiti nella finestra fra l'applicazione della
+migration e il deploy del codice, che altrimenti resterebbero con `sender` nullo.
+
 - [ ] **Step 1: Applicare la migration in produzione**
 
 Progetto Supabase: `gosnmagiishkwuvmortj` ("App Messaggistica"). Il PAT non è disponibile: si applica il DDL dal SQL Editor del dashboard via Chrome, come per la migration GDO — procedura in `reference_supabase_ddl_senza_pat` (memoria) e precedente del 29/07. Incollare ed eseguire il contenuto di `supabase/migrations/20260731000001_messages_sender.sql`.
