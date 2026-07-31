@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { getSupabaseBrowser } from '@/lib/supabase/client';
+import { mondoLabel, type Mondo } from '@/lib/chat-perimetro';
 
 type Conv = {
   id: number;
@@ -112,7 +113,7 @@ export function ConversationList({ initial, apiPath = '/api/conversations', base
                         pannelli non hanno `mondo` e restano identici a prima. */}
                     {c.mondo && (
                       <span className="text-[10px] uppercase tracking-wide rounded px-1.5 py-0.5 bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300">
-                        {c.mondo === 'GDO' ? 'GDO' : c.mondo === 'MARIO' ? 'Mario' : 'Campagna'}
+                        {mondoLabel(c.mondo as Mondo)}
                       </span>
                     )}
                     <span className="text-xs text-zinc-500">{formatRelativeShort(c.last_message_at)}</span>

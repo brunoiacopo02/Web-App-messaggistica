@@ -1,9 +1,10 @@
 import { notFound } from 'next/navigation';
 import { getSupabaseServer } from '@/lib/supabase/server';
 import { MessageThread } from '@/components/MessageThread';
-import { isConversazioneChat, mondoDi } from '@/lib/chat-perimetro';
+import { isConversazioneChat, mondoDi, mondoLabel } from '@/lib/chat-perimetro';
 import { segmentOf, fermaReason } from '@/lib/lead-segments';
 import { ChatStatusPill, ReasonPill, SegmentPill } from '@/components/fenice/status';
+import { formatRomeDateTime } from '@/lib/rome-time';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,7 +21,7 @@ export default async function ChatConversationPage({
 
   const [convRes, msgsRes] = await Promise.all([
     supabase.from('conversations').select(`
-      id, last_inbound_at, last_message_at, ai_owner, ai_status, gdo_agenda_at,
+      id, last_inbound_at, last_message_at, ai_owner, ai_status, gdo_agenda_at, gdo_video_sent_at,
       bot_outcome, bot_scheduled_at,
       lead:leads(id, first_name, last_name, phone_e164)
     `).eq('id', id).single(),
@@ -38,9 +39,11 @@ export default async function ChatConversationPage({
   const now = new Date().toISOString();
   const seg = { bot_outcome: conv.bot_outcome, last_inbound_at: conv.last_inbound_at, ai_status: conv.ai_status };
   const mondo = mondoDi(conv);
-  const appuntamento = conv.bot_scheduled_at
-    ? new Date(conv.bot_scheduled_at).toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' })
-    : null;
+  // Il bot decide un esito solo dove governa la conversazione: sulle chat di campagna
+  // (es. Black Summer) Mario non è mai passato, bot_outcome/ai_status restano nulli e
+  // segmentOf tornerebbe comunque un segmento (MAI_RISPOSTO) che qui non significa nulla.
+  const governataDalBot = mondo !== 'CAMPAGNA';
+  const appuntamento = conv.bot_scheduled_at ? formatRomeDateTime(conv.bot_scheduled_at) : null;
 
   return (
     <div className="flex-1 flex flex-col h-full min-w-0">
@@ -48,14 +51,18 @@ export default async function ChatConversationPage({
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-base font-medium">{fullName}</span>
           <span className="text-[10px] uppercase tracking-wide rounded px-1.5 py-0.5 bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300">
-            {mondo === 'GDO' ? 'GDO · postino' : mondo === 'MARIO' ? 'Mario' : 'Campagna'}
+            {mondoLabel(mondo, 'estesa')}
           </span>
         </div>
         <div className="flex items-center gap-2 flex-wrap text-xs text-zinc-500">
           <span>{conv.lead?.phone_e164}</span>
-          <SegmentPill segment={segmentOf(seg, now)} />
-          <ReasonPill reason={fermaReason(seg, now)} />
-          <ChatStatusPill status={conv.ai_status} />
+          {governataDalBot && (
+            <>
+              <SegmentPill segment={segmentOf(seg, now)} />
+              <ReasonPill reason={fermaReason(seg, now)} />
+              <ChatStatusPill status={conv.ai_status} />
+            </>
+          )}
           {appuntamento && <span>Appuntamento: {appuntamento}</span>}
         </div>
       </header>
