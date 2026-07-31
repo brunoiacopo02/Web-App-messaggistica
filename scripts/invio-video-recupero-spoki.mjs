@@ -167,6 +167,7 @@ for (const [i, r] of finali.slice(0, LIMITE).entries()) {
         body: `Video di preparazione (${r.slug}) ${url}`,
         twilio_sid: msg.sid, twilio_status: msg.status,
         template_sid: sid, is_template: true,
+        sender: 'automazione',
       }),
       headers: { Prefer: 'return=minimal' },
     });
