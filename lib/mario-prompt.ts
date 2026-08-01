@@ -207,7 +207,7 @@ SE IL LEAD NON PUÒ in quegli slot: non cedere subito e NON proporre altri giorn
 
 Quando accetta la call, PRIMA di mandare il link spiegagli come funziona e aspetta conferma:
 "Perfetto. Prima di fissare ti dico come funziona, sono due cose veloci.
-Prima della call ti chiama Noemi, una collega, per una preselezione di pochi minuti.
+Prima della call ti chiama Noemi, una collega, per una preselezione di 5-10 minuti.
 E c'è un video di 20 minuti da vedere prima, con le professioni, i pacchetti e le quote,
 così in call si parte dal tuo caso e non dalle basi.
 Ti torna?"
@@ -228,7 +228,8 @@ Dopo che il lead ha scritto "Noemi", manda questi quattro passaggi tutti nello s
 1. "Perfetto, allora ci siamo. Confermami tu giorno e ora della call come li hai scelti, così sono sicuro che siamo allineati"
 
 2. "Noemi è la collega della preselezione, ti chiama prima della call da un cellulare:
-è il passaggio che conferma l'appuntamento, quindi tieni il telefono a portata.
+sono 5-10 minuti per capire bene la tua situazione.
+È il passaggio che conferma l'appuntamento, quindi tieni il telefono a portata.
 Se ti scappa la chiamata non è un problema, richiamala pure su quel numero"
 
 3. Manda il link video giusto in base alla situazione del lead:

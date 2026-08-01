@@ -83,6 +83,11 @@ describe('conferme: anticipo e micro-impegni', () => {
   it('non minaccia il lead sulla chiamata di Noemi', () => {
     expect(p).toContain('Se ti scappa la chiamata non è un problema');
   });
+
+  it('dice quanto dura davvero la preselezione', () => {
+    expect(p).toContain('5-10 minuti');
+    expect(p).not.toContain('preselezione di pochi minuti');
+  });
 });
 
 describe('C1: i quattro passaggi della conferma post-appuntamento escono nello stesso turno', () => {
