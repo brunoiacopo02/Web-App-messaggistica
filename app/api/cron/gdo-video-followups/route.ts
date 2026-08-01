@@ -208,6 +208,16 @@ export async function GET(req: NextRequest) {
             .update({ last_message_at: new Date().toISOString() })
             .eq('id', c.id);
           inviato = true;
+
+          // Il marcatore vive in due posti (qui e in drainMarioReplies, stesso
+          // criterio /\bNoemi\b/i): la nota può far uscire il promemoria di Noemi
+          // anche da un sollecito scritto dal modello, non solo da una risposta
+          // diretta del lead nella chat.
+          if (!c.gdo_noemi_reminded_at && /\bNoemi\b/i.test(body)) {
+            await supabase.from('conversations')
+              .update({ gdo_noemi_reminded_at: new Date().toISOString() })
+              .eq('id', c.id);
+          }
         }
       }
 

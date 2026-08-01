@@ -8,6 +8,7 @@ vi.mock('./bot-outcome', () => ({ sendOutcome: vi.fn(async () => ({ sent: true }
 
 import { generateMarioReply, GDO_CONTEXT_NOTE } from './mario';
 import { sendOutcome } from './bot-outcome';
+import { NOTA_VIDEO, NOTA_NOEMI } from './gdo-context-note';
 
 describe('shouldAutoReply', () => {
   const ok = { toMatchesFenice: true, autoReplyOn: true, aiOwner: 'mario', aiStatus: 'active' };
@@ -626,13 +627,35 @@ describe('drainMarioReplies — modalità postino (lead dei GDO)', () => {
 
     expect(generateMarioReply).toHaveBeenCalledTimes(1);
     // L'agenda l'ha firmata Marta: il lead non deve vedersi rispondere da un altro nome.
-    // Il video è stato mandato ma non ancora confermato: la nota porta anche il
-    // promemoria video (comportamento coperto da gdo-context-note.test.ts).
+    // Il video è stato mandato ma non ancora confermato: la nota deve portare anche il
+    // promemoria video vero e proprio, non solo il testo base — altrimenti uno scambio
+    // fra gdoVideoSentAt e gdoVideoWatchedAt nel call-site passerebbe inosservato.
     expect(vi.mocked(generateMarioReply).mock.calls[0][1]).toMatchObject({
       contextNote: expect.stringContaining(GDO_CONTEXT_NOTE),
       personaName: 'Marta',
     });
+    expect(vi.mocked(generateMarioReply).mock.calls[0][1]?.contextNote).toContain(NOTA_VIDEO);
     expect(calls.messageInserts.map((m: any) => m.body)).toEqual(['Te lo spiega il tutor in call 🙂']);
+  });
+
+  it('video già confermato: la nota non ripete il promemoria video (smaschera uno scambio sent/watched)', async () => {
+    const rows: FakeMsgRow[] = [
+      AGENDA, RISPOSTA,
+      { direction: 'out', body: `ecco il video ${VIDEO}`, template_sid: null, created_at: '2026-07-29T10:03:00Z' },
+      { direction: 'in', body: 'ma quanto costa?', template_sid: null, created_at: '2026-07-29T10:10:00Z' },
+    ];
+    const { supabase } = makeDrainSupabase(
+      postino({ gdo_video_sent_at: '2026-07-29T10:03:00Z', gdo_video_watched_at: '2026-07-29T10:05:00Z' }),
+      rows,
+    );
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Te lo spiega il tutor in call 🙂',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    expect(vi.mocked(generateMarioReply).mock.calls[0][1]?.contextNote).not.toContain(NOTA_VIDEO);
   });
 
   it('un esito del modello diventa una NOTA e non chiude la conversazione: il lead è del GDO', async () => {
@@ -696,6 +719,10 @@ describe('drainMarioReplies — modalità postino (lead dei GDO)', () => {
       id: 61, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null,
       gdo_agenda_at: '2026-08-01T14:00:00Z', gdo_video_url: 'https://corso.feniceacademy.it/conferenza-bx',
       gdo_video_sent_at: '2026-08-01T15:00:00Z',
+      // Un sollecito è già partito: la nota di Noemi è dovuta (serveNoemi in
+      // gdo-context-note.ts), così la contextNote la porta davvero e non solo
+      // il testo base — copre il mapping followupsSent nel call-site.
+      gdo_video_followups_sent: 1,
     };
     const rows: FakeMsgRow[] = [
       AGENDA,
@@ -709,6 +736,7 @@ describe('drainMarioReplies — modalità postino (lead dei GDO)', () => {
 
     await drainMarioReplies(supabase, 61, '+391234567890', () => 0);
 
+    expect(vi.mocked(generateMarioReply).mock.calls[0][1]?.contextNote).toContain(NOTA_NOEMI);
     expect(calls.convUpdates.some((u) => typeof u.gdo_noemi_reminded_at === 'string')).toBe(true);
   });
 
