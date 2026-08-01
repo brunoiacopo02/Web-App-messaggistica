@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { romeOffset, formatRomeDateTime, sameInstant } from './rome-time';
+import { romeOffset, formatRomeDateTime, sameInstant, romeMinute } from './rome-time';
 
 describe('romeOffset', () => {
   it('estate (DST) → +02:00', () => {
@@ -24,6 +24,22 @@ describe('formatRomeDateTime', () => {
   });
   it('ISO non parsabile → non esplode, ritorna la stringa originale', () => {
     expect(formatRomeDateTime('non-una-data')).toBe('non-una-data');
+  });
+});
+
+describe('romeMinute', () => {
+  it('legge i minuti dell\'ora italiana', () => {
+    expect(romeMinute(new Date('2026-08-01T19:30:00Z'))).toBe(30);
+    expect(romeMinute(new Date('2026-08-01T08:00:00Z'))).toBe(0);
+  });
+  it('l\'offset di Roma è a ore intere: i minuti non cambiano fra estate e inverno', () => {
+    // Stessa lettura d'ora ma stagioni diverse: se un giorno l'offset diventasse a
+    // mezz'ora, gli slot del cron dei solleciti slitterebbero senza avvisare.
+    expect(romeMinute(new Date('2026-01-20T08:45:00Z'))).toBe(45);
+    expect(romeMinute(new Date('2026-06-20T08:45:00Z'))).toBe(45);
+  });
+  it('i secondi non sporcano il minuto', () => {
+    expect(romeMinute(new Date('2026-08-01T19:30:59Z'))).toBe(30);
   });
 });
 

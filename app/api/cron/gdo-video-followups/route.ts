@@ -2,10 +2,17 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendTemplateAndLog } from '@/lib/messaging';
 import { sendFreeText } from '@/lib/twilio';
-import { generateMarioReply, type MarioTurn } from '@/lib/mario';
+import { generateMarioReply } from '@/lib/mario';
+import { splitMarioMessages } from '@/lib/mario-split';
+import { unknownFeniceLinks } from '@/lib/outbound-sanitize';
 import { gdoContextNote } from '@/lib/gdo-context-note';
 import { gdoVideoText } from '@/lib/gdo-agenda';
-import { decideGdoVideoFollowup, VIDEO_TEMPLATE_ENV_BY_LINK, type GdoSlot } from '@/lib/gdo-video-followup';
+import {
+  buildSollecitoHistory,
+  decideGdoVideoFollowup,
+  VIDEO_TEMPLATE_ENV_BY_LINK,
+  type GdoSlot,
+} from '@/lib/gdo-video-followup';
 import { romeHour, romeMinute, romeDaysBetween } from '@/lib/rome-time';
 import { templateName } from '@/lib/name';
 
@@ -19,6 +26,8 @@ export const maxDuration = 300;
 // modello se la finestra è aperta. Questa rotta NON tocca mai bot_outcome, ai_status
 // né gli altri campi del lead: è di un GDO, non nostro.
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 function authorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) return false;
@@ -27,12 +36,22 @@ function authorized(req: NextRequest): boolean {
   return false;
 }
 
-/** Lo slot italiano di adesso, o null se non è né le 21:30 né le 10:00. */
+/**
+ * Lo slot italiano di adesso, o null se non siamo né nella mezz'ora delle 21:30 né in
+ * quella delle 10:00.
+ *
+ * Si guarda la mezz'ora, non il minuto esatto: Vercel non garantisce l'istante di
+ * invocazione, e un run partito a 21:31 costerebbe al lead i suoi due soli touch del
+ * giorno, in silenzio. Con lo schedule `0,30 6-21 * * *` dentro un'ora c'è al massimo
+ * un'invocazione per metà, quindi la tolleranza resta esattamente-una-volta. Allargarla
+ * oltre (es. `h === 21 && m >= 0`) farebbe scattare due volte lo slot serale e i due
+ * touch uscirebbero nella stessa sera.
+ */
 function slotOf(now: Date): GdoSlot | null {
   const h = romeHour(now);
   const m = romeMinute(now);
-  if (h === 21 && m === 30) return 'sera';
-  if (h === 10 && m === 0) return 'mattina';
+  if (h === 21 && m >= 30) return 'sera';
+  if (h === 10 && m < 30) return 'mattina';
   return null;
 }
 
@@ -76,6 +95,11 @@ export async function GET(req: NextRequest) {
     `)
     .not('gdo_agenda_at', 'is', null)
     .gte('gdo_agenda_at', da)
+    // Su handed_off/booked/closed risponde una persona: un sollecito automatico le
+    // arriverebbe addosso, e nel ramo libero sarebbe pure un testo scritto dal modello
+    // sopra una chat che sta gestendo lei. Stessa convenzione di sequence-touches e
+    // bot-followups.
+    .eq('ai_status', 'active')
     .limit(500);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -183,9 +207,8 @@ export async function GET(req: NextRequest) {
         // Il sollecito lo scrive il modello dentro il contesto della chat: se il lead
         // stava parlando d'altro, Marta risponde a quello e aggancia il video.
         // `rows` è già tagliata dall'arruolamento in poi (query sopra): niente da
-        // rifiltrare qui.
-        const history: MarioTurn[] = rows
-          .map((m) => ({ role: m.direction === 'in' ? 'user' : 'assistant', content: m.body }));
+        // rifiltrare qui. La coda della cronologia la chiude buildSollecitoHistory.
+        const history = buildSollecitoHistory(rows);
         const result = await generateMarioReply(history, {
           personaName: 'Marta',
           contextNote: gdoContextNote({
@@ -196,24 +219,45 @@ export async function GET(req: NextRequest) {
             videoAppenaConfermato: false,
           }),
         });
-        const body = result.visibleReply?.trim();
-        if (body) {
-          const twilio = await sendFreeText({ to: phone, body, from });
-          await supabase.from('messages').insert({
-            conversation_id: c.id, direction: 'out', body,
-            twilio_sid: twilio.sid, twilio_status: twilio.status,
-            sender: 'bot',
+        // Stesse due lavorazioni del drain (lib/fenice-autoreply.ts): un a-capo è una
+        // bolla nuova — altrimenti la voce di Marta diverge fra i due canali — e un
+        // link Fenice inventato dal modello va registrato, o parte al lead senza
+        // lasciare traccia da nessuna parte.
+        const parts = splitMarioMessages(result.visibleReply ?? '');
+
+        const linkInventati = parts.flatMap((p) => unknownFeniceLinks(p));
+        if (linkInventati.length > 0) {
+          await supabase.from('event_log').insert({
+            type: 'unknown_fenice_link',
+            payload: { conversationId: c.id, links: linkInventati } as never,
+            message: `[gdo] conv ${c.id}: link Fenice non ufficiale in uscita: ${linkInventati.join(', ')}`,
+            level: 'warn',
           });
+        }
+
+        if (parts.length > 0) {
+          for (let i = 0; i < parts.length; i++) {
+            if (i > 0) await sleep(Math.min(3000, 800 + parts[i].length * 25));
+            const twilio = await sendFreeText({ to: phone, body: parts[i], from });
+            await supabase.from('messages').insert({
+              conversation_id: c.id, direction: 'out', body: parts[i],
+              twilio_sid: twilio.sid, twilio_status: twilio.status,
+              sender: 'bot',
+            });
+          }
           await supabase.from('conversations')
             .update({ last_message_at: new Date().toISOString() })
             .eq('id', c.id);
+          // Le bolle sono UN sollecito, non una a testa: il contatore dei due touch
+          // si incrementa una volta sola (più giù, su `inviato`).
           inviato = true;
 
           // Il marcatore vive in due posti (qui e in drainMarioReplies, stesso
           // criterio /\bNoemi\b/i): la nota può far uscire il promemoria di Noemi
           // anche da un sollecito scritto dal modello, non solo da una risposta
-          // diretta del lead nella chat.
-          if (!c.gdo_noemi_reminded_at && /\bNoemi\b/i.test(body)) {
+          // diretta del lead nella chat. Si guarda il testo DAVVERO uscito, bolla
+          // per bolla, non la risposta grezza del modello.
+          if (!c.gdo_noemi_reminded_at && parts.some((p) => /\bNoemi\b/i.test(p))) {
             await supabase.from('conversations')
               .update({ gdo_noemi_reminded_at: new Date().toISOString() })
               .eq('id', c.id);

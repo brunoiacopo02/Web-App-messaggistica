@@ -1,4 +1,5 @@
 import { BLACK_SUMMER_LINK } from './gdo-agenda';
+import type { MarioTurn } from './mario';
 
 /**
  * Solleciti del video ai lead dei GDO: due touch, ancorati al giorno in cui il lead
@@ -70,6 +71,40 @@ export function decideGdoVideoFollowup(i: GdoFollowupInput): GdoFollowupAction {
 
   const finestraAperta = daUltimoInbound !== null && daUltimoInbound < FINESTRA_24H_MS;
   return finestraAperta ? 'sollecito-libero' : 'sollecito-template';
+}
+
+/**
+ * Turno sintetico che chiude la cronologia del sollecito libero. Non è un messaggio del
+ * lead e va scritto in modo che il modello non lo scambi per tale: è la nostra decisione
+ * di riprendere il filo.
+ */
+export const TURNO_RIPRESA_SOLLECITO =
+  '[nota di sistema, non è un messaggio del lead: il lead non risponde da qualche ora. ' +
+  'Riprendi tu il filo del discorso seguendo le note di contesto.]';
+
+/**
+ * Cronologia da passare al modello per un sollecito libero.
+ *
+ * `decideGdoVideoFollowup` restituisce un'azione solo quando l'ultimo messaggio della
+ * chat è nostro (`lastMessageIsInbound === false`): la cronologia grezza finirebbe
+ * quindi SEMPRE con un turno `assistant`, e su claude-sonnet-4-6 il prefill dell'ultimo
+ * turno assistant non esiste più — l'API risponde 400 e il sollecito non parte. Il turno
+ * sintetico in coda chiude la cronologia lato `user` ed è anche più onesto: qui non c'è
+ * un messaggio a cui rispondere, c'è una nostra decisione di riagganciare.
+ *
+ * Cronologia vuota (tutte le righe precedono `ai_started_at`): si lascia vuota, così
+ * `generateMarioReply` usa la sua apertura — il turno sintetico da solo, senza nessun
+ * filo da riprendere, direbbe al modello una cosa falsa.
+ */
+export function buildSollecitoHistory(
+  rows: { direction: string; body: string }[],
+): MarioTurn[] {
+  const history: MarioTurn[] = rows.map((m) => ({
+    role: m.direction === 'in' ? 'user' : 'assistant',
+    content: m.body,
+  }));
+  if (history.length === 0) return history;
+  return [...history, { role: 'user', content: TURNO_RIPRESA_SOLLECITO }];
 }
 
 /**

@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { decideGdoVideoFollowup, VIDEO_TEMPLATE_ENV_BY_LINK, type GdoFollowupInput } from './gdo-video-followup';
+import {
+  buildSollecitoHistory,
+  decideGdoVideoFollowup,
+  TURNO_RIPRESA_SOLLECITO,
+  VIDEO_TEMPLATE_ENV_BY_LINK,
+  type GdoFollowupInput,
+} from './gdo-video-followup';
 import { romeDaysBetween, romeDayKey } from './rome-time';
 
 const H = 3600_000;
@@ -106,6 +112,39 @@ describe('decideGdoVideoFollowup — quando tacere', () => {
 
   it('una data illeggibile non blocca lo slot se l\'agenda è arrivata presto', () => {
     expect(decideGdoVideoFollowup(base({ appointmentAt: 'non-una-data', romeHourAgenda: 10 }))).toBe('video-template');
+  });
+});
+
+describe('buildSollecitoHistory', () => {
+  const chat = [
+    { direction: 'out', body: 'ciao, ecco il link per l\'agenda' },
+    { direction: 'in', body: 'ok grazie' },
+    { direction: 'out', body: 'ecco il video da guardare' },
+  ];
+
+  it('chiude sempre con un turno user: un ultimo turno assistant sarebbe un 400', () => {
+    // Il sollecito parte solo quando l'ultimo messaggio della chat è nostro, quindi
+    // senza il turno sintetico la richiesta finirebbe SEMPRE con `assistant`, che
+    // claude-sonnet-4-6 rifiuta: il ramo sarebbe inoperante al 100% dei casi.
+    const history = buildSollecitoHistory(chat);
+    expect(history[history.length - 1].role).toBe('user');
+  });
+
+  it('conserva la cronologia e le aggiunge in coda il turno di ripresa', () => {
+    expect(buildSollecitoHistory(chat)).toEqual([
+      { role: 'assistant', content: 'ciao, ecco il link per l\'agenda' },
+      { role: 'user', content: 'ok grazie' },
+      { role: 'assistant', content: 'ecco il video da guardare' },
+      { role: 'user', content: TURNO_RIPRESA_SOLLECITO },
+    ]);
+  });
+
+  it('il turno di ripresa non si spaccia per un messaggio del lead', () => {
+    expect(TURNO_RIPRESA_SOLLECITO).toMatch(/non è un messaggio del lead/i);
+  });
+
+  it('cronologia vuota: resta vuota, l\'apertura la mette generateMarioReply', () => {
+    expect(buildSollecitoHistory([])).toEqual([]);
   });
 });
 
