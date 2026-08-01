@@ -10,6 +10,7 @@ import { gdoVideoText } from '@/lib/gdo-agenda';
 import {
   buildSollecitoHistory,
   decideGdoVideoFollowup,
+  inviaBolleSollecito,
   VIDEO_TEMPLATE_ENV_BY_LINK,
   type GdoSlot,
 } from '@/lib/gdo-video-followup';
@@ -25,8 +26,6 @@ export const maxDuration = 300;
 // (finestra chiusa ⇒ template); chi ha risposto riceve un sollecito, scritto dal
 // modello se la finestra è aperta. Questa rotta NON tocca mai bot_outcome, ai_status
 // né gli altri campi del lead: è di un GDO, non nostro.
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function authorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -156,6 +155,23 @@ export async function GET(req: NextRequest) {
 
       const nome = c.leads?.first_name ?? null;
       let inviato = false;
+      /** Bolle spedite su bolle previste: valorizzato solo dal sollecito libero. */
+      let bolle: { spedite: number; previste: number } | null = null;
+
+      // Il contatore dei due touch si muove qui e solo qui, una volta per
+      // conversazione e per slot. È idempotente perché il ramo libero lo segna appena
+      // la PRIMA bolla è partita, e il blocco in fondo lo richiama a giro finito.
+      let touchSegnato = false;
+      const segnaTouch = async () => {
+        if (touchSegnato) return;
+        await supabase.from('conversations')
+          .update({ gdo_video_followups_sent: (c.gdo_video_followups_sent ?? 0) + 1 })
+          .eq('id', c.id);
+        // Marcato solo dopo la scrittura: se l'update esplode, la chiamata dal blocco
+        // in fondo riprova invece di dare per segnato un touch che non c'è.
+        touchSegnato = true;
+        sent++;
+      };
 
       if (action === 'video-template') {
         const link = c.gdo_video_url as string | null;
@@ -236,48 +252,72 @@ export async function GET(req: NextRequest) {
         }
 
         if (parts.length > 0) {
-          for (let i = 0; i < parts.length; i++) {
-            if (i > 0) await sleep(Math.min(3000, 800 + parts[i].length * 25));
-            const twilio = await sendFreeText({ to: phone, body: parts[i], from });
-            await supabase.from('messages').insert({
-              conversation_id: c.id, direction: 'out', body: parts[i],
-              twilio_sid: twilio.sid, twilio_status: twilio.status,
-              sender: 'bot',
-            });
-          }
-          await supabase.from('conversations')
-            .update({ last_message_at: new Date().toISOString() })
-            .eq('id', c.id);
-          // Le bolle sono UN sollecito, non una a testa: il contatore dei due touch
-          // si incrementa una volta sola (più giù, su `inviato`).
-          inviato = true;
+          const spedite = await inviaBolleSollecito(parts, {
+            invia: (body) => sendFreeText({ to: phone, body, from }),
+            dopoInvio: async (b) => {
+              // Il touch si segna appena la PRIMA bolla è uscita: se il giro si
+              // interrompe più avanti il lead resta con un sollecito troncato, ma
+              // allo slot dopo non ne riceve un terzo. Le bolle restano UN sollecito.
+              await segnaTouch();
+              await supabase.from('messages').insert({
+                conversation_id: c.id, direction: 'out', body: b.body,
+                twilio_sid: b.sid, twilio_status: b.status,
+                sender: 'bot',
+              });
+            },
+            suErrore: async (info) => {
+              // Il giro si ferma, ma l'errore non sparisce: stesso tipo e stesso
+              // livello del catch per-conversazione, con il punto esatto in cui si è
+              // rotto l'invio.
+              await supabase.from('event_log').insert({
+                type: 'gdo_followup_error',
+                payload: { conversationId: c.id, bolla: info.indice + 1, previste: info.previste } as never,
+                message: `[gdo] conv ${c.id}: bolla ${info.indice + 1}/${info.previste} del sollecito non spedita — ${info.errore}`,
+                level: 'error',
+              });
+            },
+          });
 
-          // Il marcatore vive in due posti (qui e in drainMarioReplies, stesso
-          // criterio /\bNoemi\b/i): la nota può far uscire il promemoria di Noemi
-          // anche da un sollecito scritto dal modello, non solo da una risposta
-          // diretta del lead nella chat. Si guarda il testo DAVVERO uscito, bolla
-          // per bolla, non la risposta grezza del modello.
-          if (!c.gdo_noemi_reminded_at && parts.some((p) => /\bNoemi\b/i.test(p))) {
+          if (spedite.length > 0) {
             await supabase.from('conversations')
-              .update({ gdo_noemi_reminded_at: new Date().toISOString() })
+              .update({ last_message_at: new Date().toISOString() })
               .eq('id', c.id);
+            inviato = true;
+            bolle = { spedite: spedite.length, previste: parts.length };
+
+            // Il marcatore vive in due posti (qui e in drainMarioReplies, stesso
+            // criterio /\bNoemi\b/i): la nota può far uscire il promemoria di Noemi
+            // anche da un sollecito scritto dal modello, non solo da una risposta
+            // diretta del lead nella chat. Si guardano le bolle DAVVERO uscite: se
+            // il giro si è rotto prima di quella che nominava Noemi, non è stata
+            // detta e non si segna.
+            if (!c.gdo_noemi_reminded_at && spedite.some((p) => /\bNoemi\b/i.test(p))) {
+              await supabase.from('conversations')
+                .update({ gdo_noemi_reminded_at: new Date().toISOString() })
+                .eq('id', c.id);
+            }
           }
         }
       }
 
       if (inviato) {
-        sent++;
-        await supabase.from('conversations')
-          .update({ gdo_video_followups_sent: (c.gdo_video_followups_sent ?? 0) + 1 })
-          .eq('id', c.id);
+        // Sul ramo libero il touch è già segnato dalla prima bolla: qui la chiamata
+        // non fa nulla. Sui due rami a template è invece il solo punto in cui passa.
+        await segnaTouch();
+        // L'evento racconta il vero: un sollecito uscito a metà non si legge come un
+        // sollecito completo.
+        const parziale = bolle !== null && bolle.spedite < bolle.previste;
+        const dettaglio = bolle && parziale
+          ? ` — solo ${bolle.spedite} bolle su ${bolle.previste}`
+          : '';
         await supabase.from('event_log').insert({
           type: 'gdo_video_followup_sent',
-          payload: { conversationId: c.id, phone, slot, action } as never,
-          message: `[gdo] ${action} inviato a ${phone} (slot ${slot})`,
-          level: 'info',
+          payload: { conversationId: c.id, phone, slot, action, ...(bolle ? { bolle } : {}) } as never,
+          message: `[gdo] ${action} inviato a ${phone} (slot ${slot})${dettaglio}`,
+          level: parziale ? 'warn' : 'info',
         });
       }
-      report.push({ id: c.id, action, inviato });
+      report.push({ id: c.id, action, inviato, ...(bolle ? { bolle } : {}) });
     } catch (err: unknown) {
       // Un lead che esplode non deve fermare il giro degli altri.
       const e = err as { message?: string };

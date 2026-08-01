@@ -107,6 +107,50 @@ export function buildSollecitoHistory(
   return [...history, { role: 'user', content: TURNO_RIPRESA_SOLLECITO }];
 }
 
+/** Pausa prima di una bolla, come nel drain: la riga dopo non arriva addosso alla prima. */
+export const pausaFraBolle = (body: string): number => Math.min(3000, 800 + body.length * 25);
+
+export type BolleDeps = {
+  /** Manda una bolla e torna gli identificativi Twilio. */
+  invia: (body: string) => Promise<{ sid?: string; status?: string }>;
+  /** Dopo ogni bolla accettata da Twilio: segna il touch e registra il messaggio. */
+  dopoInvio: (bolla: { body: string; sid?: string; status?: string; indice: number }) => Promise<void>;
+  /** Il giro si interrompe qui. L'errore non si perde: chi chiama lo registra. */
+  suErrore: (info: { indice: number; previste: number; errore: string }) => Promise<void>;
+  sleep?: (ms: number) => Promise<void>;
+};
+
+/**
+ * Manda un sollecito libero a bolle e torna QUELLE DAVVERO USCITE.
+ *
+ * L'invio a bolle non è atomico come quello a bolla singola: un `sendFreeText` che
+ * esplode a metà lascerebbe il lead con un sollecito troncato e, se il touch si
+ * segnasse solo a fine ciclo, con il contatore fermo — allo slot dopo ne riceverebbe un
+ * terzo, contro il tetto dei due touch. Per questo `dopoInvio` è chiamata subito dopo
+ * ogni bolla accettata (chi chiama ci segna il touch, idempotente) e non a fine giro.
+ *
+ * Una bolla accettata da Twilio conta come spedita anche se la registrazione a valle
+ * fallisce: il lead l'ha ricevuta, e il testo davvero uscito è quello che decide se
+ * Noemi è stata nominata o no.
+ */
+export async function inviaBolleSollecito(parts: string[], deps: BolleDeps): Promise<string[]> {
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const spedite: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    if (i > 0) await sleep(pausaFraBolle(parts[i]));
+    try {
+      const twilio = await deps.invia(parts[i]);
+      spedite.push(parts[i]);
+      await deps.dopoInvio({ body: parts[i], sid: twilio.sid, status: twilio.status, indice: i });
+    } catch (err) {
+      const e = err as { message?: string };
+      await deps.suErrore({ indice: i, previste: parts.length, errore: e?.message ?? 'errore ignoto' });
+      break;
+    }
+  }
+  return spedite;
+}
+
 /**
  * Quale variabile d'ambiente contiene il template video per un dato link.
  * Fail-closed: un link non in mappa, o una env vuota, non produce nessun invio.

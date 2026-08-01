@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   buildSollecitoHistory,
   decideGdoVideoFollowup,
+  inviaBolleSollecito,
   TURNO_RIPRESA_SOLLECITO,
   VIDEO_TEMPLATE_ENV_BY_LINK,
+  type BolleDeps,
   type GdoFollowupInput,
 } from './gdo-video-followup';
 import { romeDaysBetween, romeDayKey } from './rome-time';
@@ -145,6 +147,117 @@ describe('buildSollecitoHistory', () => {
 
   it('cronologia vuota: resta vuota, l\'apertura la mette generateMarioReply', () => {
     expect(buildSollecitoHistory([])).toEqual([]);
+  });
+});
+
+/**
+ * Banco di prova che rifà la contabilità del cron attorno a `inviaBolleSollecito`:
+ * touch idempotente segnato dalla prima bolla, una riga `messages` per bolla, errore
+ * registrato. Serve a verificare il vincolo vero — mai un terzo messaggio al lead —
+ * non solo il valore di ritorno.
+ */
+function banco(opts: { esplodeAllaBolla?: number; dopoInvioEsplode?: number } = {}) {
+  const inviate: string[] = [];
+  const messaggi: string[] = [];
+  const errori: { indice: number; previste: number; errore: string }[] = [];
+  const pause: number[] = [];
+  const conto = { touch: 0 };
+  let touchSegnato = false;
+
+  const deps: BolleDeps = {
+    invia: async (body) => {
+      if (opts.esplodeAllaBolla === inviate.length) throw new Error('twilio 63016');
+      inviate.push(body);
+      return { sid: `SM${inviate.length}`, status: 'queued' };
+    },
+    dopoInvio: async (b) => {
+      // Come nel cron: il contatore dei due touch si muove una volta sola.
+      if (!touchSegnato) { touchSegnato = true; conto.touch++; }
+      if (opts.dopoInvioEsplode === b.indice) throw new Error('insert fallita');
+      messaggi.push(b.body);
+    },
+    suErrore: async (info) => { errori.push(info); },
+    sleep: async (ms) => { pause.push(ms); },
+  };
+
+  return { deps, inviate, messaggi, errori, pause, conto };
+}
+
+const NOEMI = /\bNoemi\b/i;
+
+describe('inviaBolleSollecito', () => {
+  const TRE = ['Ciao!', 'Ti ricordo il video', 'Prima della call ti chiama Noemi'];
+
+  it('tutte le bolle partono: un solo touch, una riga messaggio per bolla', async () => {
+    const b = banco();
+
+    const spedite = await inviaBolleSollecito(TRE, b.deps);
+
+    expect(spedite).toEqual(TRE);
+    expect(b.messaggi).toEqual(TRE);
+    // Le bolle sono UN sollecito, non uno a testa: il tetto dei due touch tiene.
+    expect(b.conto.touch).toBe(1);
+    expect(b.errori).toEqual([]);
+  });
+
+  it('la seconda bolla esplode: il touch è già segnato, il lead non ne riceve un terzo allo slot dopo', async () => {
+    const b = banco({ esplodeAllaBolla: 1 });
+
+    const spedite = await inviaBolleSollecito(TRE, b.deps);
+
+    expect(spedite).toEqual([TRE[0]]);
+    expect(b.messaggi).toEqual([TRE[0]]);
+    // Il punto del fix: il contatore si muove comunque, l'invio troncato costa un
+    // touch. Se restasse a zero, i due slot manderebbero fino a tre messaggi.
+    expect(b.conto.touch).toBe(1);
+    expect(b.errori).toEqual([{ indice: 1, previste: 3, errore: 'twilio 63016' }]);
+  });
+
+  it('la bolla con Noemi non è uscita: il testo davvero inviato non la nomina', async () => {
+    const b = banco({ esplodeAllaBolla: 2 });
+
+    const spedite = await inviaBolleSollecito(TRE, b.deps);
+
+    // Il criterio del cron applicato alle bolle spedite, non a quelle previste.
+    expect(spedite.some((p) => NOEMI.test(p))).toBe(false);
+    expect(TRE.some((p) => NOEMI.test(p))).toBe(true);
+  });
+
+  it('la prima bolla esplode: niente touch, niente messaggi, errore registrato', async () => {
+    const b = banco({ esplodeAllaBolla: 0 });
+
+    const spedite = await inviaBolleSollecito(TRE, b.deps);
+
+    expect(spedite).toEqual([]);
+    expect(b.conto.touch).toBe(0);
+    expect(b.messaggi).toEqual([]);
+    expect(b.errori[0]).toMatchObject({ indice: 0, previste: 3 });
+  });
+
+  it('la registrazione a valle fallisce: la bolla conta come uscita, il lead l\'ha ricevuta', async () => {
+    const b = banco({ dopoInvioEsplode: 0 });
+
+    const spedite = await inviaBolleSollecito(TRE, b.deps);
+
+    expect(spedite).toEqual([TRE[0]]);
+    expect(b.inviate).toEqual([TRE[0]]);
+    expect(b.errori[0].errore).toBe('insert fallita');
+  });
+
+  it('la prima bolla non aspetta, le altre sì', async () => {
+    const b = banco();
+
+    await inviaBolleSollecito(TRE, b.deps);
+
+    expect(b.pause).toHaveLength(2);
+    expect(b.pause.every((ms) => ms >= 800 && ms <= 3000)).toBe(true);
+  });
+
+  it('nessuna bolla: nessun invio, nessun errore', async () => {
+    const b = banco();
+    expect(await inviaBolleSollecito([], b.deps)).toEqual([]);
+    expect(b.conto.touch).toBe(0);
+    expect(b.errori).toEqual([]);
   });
 });
 
