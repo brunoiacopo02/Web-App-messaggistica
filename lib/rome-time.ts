@@ -63,3 +63,25 @@ export function sameInstant(a: string | null | undefined, b: string | null | und
   if (Number.isNaN(ta) || Number.isNaN(tb)) return false;
   return ta === tb;
 }
+
+const romeDayKeyFmt = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Europe/Rome', year: 'numeric', month: '2-digit', day: '2-digit',
+});
+
+/** Giorno di calendario italiano, 'YYYY-MM-DD'. Serve ad ancorare gli slot dei
+ *  solleciti al giorno in cui il lead ha ricevuto l'agenda, non alle ore trascorse. */
+export function romeDayKey(date: Date): string {
+  return romeDayKeyFmt.format(date);
+}
+
+/** Minuti (0–59) di `date` nel fuso Europe/Rome. Il fuso non cambia i minuti, ma
+ *  leggerli da qui tiene tutta la logica oraria in un posto solo. */
+export function romeMinute(date: Date): number {
+  return date.getUTCMinutes();
+}
+
+/** Giorni di calendario italiani fra due istanti. Le chiavi 'YYYY-MM-DD' si
+ *  parsano a mezzanotte UTC, quindi la differenza è un intero esatto di giorni. */
+export function romeDaysBetween(from: Date, to: Date): number {
+  return Math.round((Date.parse(romeDayKey(to)) - Date.parse(romeDayKey(from))) / 86_400_000);
+}

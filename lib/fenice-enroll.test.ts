@@ -297,6 +297,23 @@ describe('enrollGdoLeadAsPostino — arruolamento in modalità postino', () => {
     expect(calls.updates[0].ai_started_at).toBeTruthy();
   });
 
+  it('ri-arruolamento: video, contatore dei solleciti e conferma ripartono; Noemi no', async () => {
+    // Il GDO sposta l'appuntamento e ri-arruola. Senza l'azzeramento, un lead già
+    // passato dal flusso resterebbe a followups 2 con la conferma del video vecchia:
+    // decideGdoVideoFollowup direbbe 'none' per sempre e non riceverebbe più nulla.
+    const { supabase, calls } = makeSupabase();
+
+    await enrollGdoLeadAsPostino(supabase, PAYLOAD);
+
+    expect(calls.updates[0]).toMatchObject({
+      gdo_video_sent_at: null,
+      gdo_video_followups_sent: 0,
+      gdo_video_watched_at: null,
+    });
+    // Chi è Noemi si spiega una volta per lead, non a ogni appuntamento.
+    expect('gdo_noemi_reminded_at' in calls.updates[0]).toBe(false);
+  });
+
   it('offerta del mese → video Black Summer', async () => {
     const { supabase, calls } = makeSupabase();
 

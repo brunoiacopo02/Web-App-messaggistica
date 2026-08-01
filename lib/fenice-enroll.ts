@@ -177,8 +177,15 @@ export async function enrollGdoLeadAsPostino(
       // processo muore prima, la deduplica trova comunque un esito coerente.
       gdo_agenda_esito: res.ok ? 'inviato' : 'fallito',
       gdo_video_url: videoLinkForVariant(args.variant),
-      // Nuova agenda = nuovo appuntamento: il video deve poter ripartire.
+      // Nuova agenda = nuovo appuntamento: il video deve poter ripartire, e con lui i
+      // suoi due solleciti. Senza questo azzeramento un lead ri-arruolato (il GDO
+      // sposta la call, cosa ordinaria) resterebbe a followups 2 e con la conferma
+      // del video vecchia: decideGdoVideoFollowup direbbe 'none' per sempre.
       gdo_video_sent_at: null,
+      gdo_video_followups_sent: 0,
+      gdo_video_watched_at: null,
+      // gdo_noemi_reminded_at NO: chi è Noemi e cosa fa la sua chiamata si spiega una
+      // volta per lead, non a ogni appuntamento. Ripeterlo suonerebbe come un disco.
     })
     .eq('id', conversationId);
 

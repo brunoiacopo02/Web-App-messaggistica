@@ -1,5 +1,6 @@
 import type { getSupabaseAdmin } from './supabase/admin';
-import { generateMarioReply, GDO_CONTEXT_NOTE, type MarioTurn } from './mario';
+import { generateMarioReply, type MarioTurn } from './mario';
+import { gdoContextNote } from './gdo-context-note';
 import { gdoVideoText } from './gdo-agenda';
 import { sendFreeText } from './twilio';
 import { marioDelayMs } from './mario-latency';
@@ -204,7 +205,7 @@ export async function drainMarioReplies(
     .eq('ai_status', 'active')
     .is('ai_paused_at', null) // fermo manuale: la chat è di un umano, non si claima
     .or(`ai_lock_at.is.null,ai_lock_at.lt.${staleCutoff}`)
-    .select('id, ai_started_at, crm_lead_id, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, leads(first_name)')
+    .select('id, ai_started_at, crm_lead_id, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, leads(first_name)')
     .single();
   if (!claimed) return;
   const startedAt = (claimed as { ai_started_at: string | null }).ai_started_at;
@@ -216,12 +217,19 @@ export async function drainMarioReplies(
     gdo_agenda_at?: string | null;
     gdo_video_url?: string | null;
     gdo_video_sent_at?: string | null;
+    gdo_video_watched_at?: string | null;
+    gdo_video_followups_sent?: number | null;
+    gdo_noemi_reminded_at?: string | null;
     leads?: { first_name?: string | null } | null;
   };
   const gdoAgendaAt = gdo.gdo_agenda_at ?? null;
   const gdoVideoUrl = gdo.gdo_video_url ?? null;
   const postino = gdoAgendaAt !== null;
   let gdoVideoSentAt = gdo.gdo_video_sent_at ?? null;
+  let gdoVideoWatchedAt = gdo.gdo_video_watched_at ?? null;
+  // Non incrementato qui: il contatore dei solleciti lo muove solo il cron dedicato.
+  const gdoFollowupsSent = gdo.gdo_video_followups_sent ?? 0;
+  let gdoNoemiRemindedAt = gdo.gdo_noemi_reminded_at ?? null;
   let gdoVideoMissingLogged = false;
 
   // Carica i messaggi della conversazione dall'arruolamento in poi (in ordine).
@@ -300,12 +308,67 @@ export async function drainMarioReplies(
           : 'mario';
       const result = await generateMarioReply(history, {
         personaName: PERSONA_NAME[persona],
-        // Il lead ha già l'appuntamento: il modello non deve ripartire col pitch.
-        ...(postino ? { contextNote: GDO_CONTEXT_NOTE } : {}),
+        // I promemoria pendenti (video non confermato, Noemi non ancora spiegata)
+        // viaggiano dentro il contesto: il modello li integra nel discorso invece di
+        // farli arrivare come un messaggio programmato addosso.
+        ...(postino
+          ? {
+              contextNote: gdoContextNote({
+                gdoVideoSentAt: gdoVideoSentAt,
+                gdoVideoWatchedAt: gdoVideoWatchedAt,
+                gdoNoemiRemindedAt: gdoNoemiRemindedAt,
+                followupsSent: gdoFollowupsSent,
+                videoAppenaConfermato: false,
+              }),
+            }
+          : {}),
       });
 
+      // Il lead può confermare di aver visto il video PRIMA che gli sia mai arrivato
+      // un sollecito (gdo_video_followups_sent resta 0 per sempre): in quel caso
+      // `serveNoemi` non scatterebbe mai da nessuno dei due canali e Noemi non
+      // verrebbe mai nominata. Qui lo sappiamo subito dopo il primo giro — si rifà
+      // UNA sola chiamata con la nota aggiornata e si sostituisce solo il TESTO da
+      // mandare: gli esiti del primo giro (outcome, passToHuman, appointmentFixed,
+      // videoWatched...) restano quelli letti dal messaggio vero del lead. Non li si
+      // ricalcola sul secondo giro: il suo unico scopo è infilarci il promemoria di
+      // Noemi, e la nota in più che gli passiamo lo distoglierebbe dal resto del
+      // turno — il primo giro li ha già letti puliti.
+      let visibleReply = result.visibleReply;
+      let watchedAt: string | null = null;
+      if (result.videoWatched) watchedAt = new Date().toISOString();
+      // Niente rigenerazione se il turno ha prodotto un esito o un passaggio umano:
+      // "l'ho visto, ma voglio annullare" vale insieme videoWatched e disdetta, e la
+      // NOTA_NOEMI ("diglielo adesso") sostituirebbe la risposta giusta con un
+      // promemoria della preselezione mentre al CRM parte la nota di annullamento.
+      if (postino && result.videoWatched && !gdoNoemiRemindedAt && !result.outcome && !result.passToHuman) {
+        try {
+          const retry = await generateMarioReply(history, {
+            personaName: PERSONA_NAME[persona],
+            contextNote: gdoContextNote({
+              gdoVideoSentAt: gdoVideoSentAt,
+              gdoVideoWatchedAt: watchedAt, // appena confermato: sopprime NOTA_VIDEO nella nota
+              gdoNoemiRemindedAt: gdoNoemiRemindedAt,
+              followupsSent: gdoFollowupsSent,
+              videoAppenaConfermato: true, // forza NOTA_NOEMI anche a followupsSent 0
+            }),
+          });
+          // Fail-safe: una rigenerazione vuota non vale meno di zero, vale come un
+          // fallimento — si manda comunque la prima risposta, il lead non resta muto.
+          if (retry.visibleReply?.trim()) visibleReply = retry.visibleReply;
+        } catch (err) {
+          const m = err instanceof Error ? err.message : 'errore';
+          await supabase.from('event_log').insert({
+            type: 'gdo_noemi_regen_failed',
+            payload: { conversationId } as never,
+            message: `[gdo] conv ${conversationId}: rigenerazione per il promemoria di Noemi fallita, mandata la prima risposta — ${m}`,
+            level: 'warn',
+          });
+        }
+      }
+
       // Invia ogni a-capo come messaggio separato (più umano), con breve pausa.
-      let parts = splitMarioMessages(result.visibleReply);
+      let parts = splitMarioMessages(visibleReply);
 
       // Link Fenice che il modello si è inventato (es. `conferenza-zx`): il lead lo
       // riceverebbe senza che ne resti traccia da nessuna parte. Non blocchiamo
@@ -393,13 +456,32 @@ export async function drainMarioReplies(
 
       if (result.passToHuman) { finalStatus = 'handed_off'; break; }
 
-      if (result.videoWatched) {
+      if (result.videoWatched && watchedAt) {
+        // Il log non si interroga per decidere: la conferma serve al cron dei solleciti,
+        // che deve smettere di scrivere a chi il video l'ha già visto. Si persiste
+        // comunque, indipendentemente da come sia andata la rigenerazione sopra.
+        await supabase.from('conversations')
+          .update({ gdo_video_watched_at: watchedAt })
+          .eq('id', conversationId);
+        gdoVideoWatchedAt = watchedAt;
+
         await supabase.from('event_log').insert({
           type: 'video_watched',
           payload: { conversationId, crmLeadId } as never,
           message: `[bot-fissatore] conv ${conversationId}: il lead conferma di aver visto il video pre-call`,
           level: 'info',
         });
+      }
+
+      // Si segna il promemoria solo se è davvero uscito nel testo mandato al lead
+      // (quello rigenerato, se la rigenerazione è scattata): iniettare la nota non
+      // garantisce che il modello l'abbia detto, e segnarlo a vuoto significherebbe
+      // non ripeterlo mai più.
+      if (postino && !gdoNoemiRemindedAt && /\bNoemi\b/i.test(visibleReply ?? '')) {
+        gdoNoemiRemindedAt = new Date().toISOString();
+        await supabase.from('conversations')
+          .update({ gdo_noemi_reminded_at: gdoNoemiRemindedAt })
+          .eq('id', conversationId);
       }
 
       if (result.appointmentFixed) {
