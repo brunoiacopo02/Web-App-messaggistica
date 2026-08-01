@@ -17,6 +17,8 @@ export type AutoReplyGate = {
   autoReplyOn: boolean;
   aiOwner: string | null;
   aiStatus: string | null;
+  /** Valorizzato = un umano ha preso le redini della chat (vedi `shouldAutoReply`). */
+  aiPausedAt?: string | null;
 };
 
 /**
@@ -30,8 +32,14 @@ export type AutoReplyGate = {
  *
  * 'replying' resta fra gli stati ammessi perché in produzione esistono righe ferme
  * su quel valore dal vecchio meccanismo: devono restare gestibili.
+ *
+ * `ai_paused_at` è il fermo manuale ed è un veto che viene prima di tutto: lo mette
+ * un umano dal pannello quando prende in carico la chat. Vive su una colonna sua e
+ * non su `ai_status` proprio perché nessun turno del bot lo possa riscrivere per
+ * sbaglio — a differenza dello stato, che il `finally` del drain rimaneggia a ogni giro.
  */
 export function shouldAutoReply(g: AutoReplyGate): boolean {
+  if (g.aiPausedAt) return false;
   if (!(g.toMatchesFenice && g.autoReplyOn && g.aiOwner === 'mario')) return false;
   return g.aiStatus === 'active' || g.aiStatus === 'replying';
 }
@@ -44,8 +52,16 @@ export function shouldAutoReply(g: AutoReplyGate): boolean {
  * si riapre (vedi il commento su `shouldAutoReply`: `ai_status` fa anche da lucchetto
  * del drain, claimarlo perderebbe lo stato "appuntamento fissato" durante il turno).
  * Falso per 'handed_off': se un umano ha preso in carico la chat, il bot non rientra.
+ * Falso anche col fermo manuale attivo: riaprire non farebbe rispondere il bot
+ * (`shouldAutoReply` ha il suo veto) ma mostrerebbe 'active' su una chat che è in
+ * mano a una persona.
  */
-export function shouldReopen(g: { aiOwner: string | null; aiStatus: string | null }): boolean {
+export function shouldReopen(g: {
+  aiOwner: string | null;
+  aiStatus: string | null;
+  aiPausedAt?: string | null;
+}): boolean {
+  if (g.aiPausedAt) return false;
   if (g.aiOwner !== 'mario') return false;
   return g.aiStatus === 'closed';
 }
@@ -186,6 +202,7 @@ export async function drainMarioReplies(
     .update({ ai_lock_at: nowIso })
     .eq('id', conversationId)
     .eq('ai_status', 'active')
+    .is('ai_paused_at', null) // fermo manuale: la chat è di un umano, non si claima
     .or(`ai_lock_at.is.null,ai_lock_at.lt.${staleCutoff}`)
     .select('id, ai_started_at, crm_lead_id, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, leads(first_name)')
     .single();
@@ -411,11 +428,30 @@ export async function drainMarioReplies(
     });
     finalStatus = 'active';
   } finally {
-    // Rilascio del lucchetto insieme allo stato finale: se il drain muore prima,
-    // ci pensa il TTL (isLockStale) invece di lasciare la riga bloccata per sempre.
-    await supabase
+    // Rilascio del lucchetto insieme allo stato finale, ma solo se il turno è ancora
+    // NOSTRO: fra il claim e qui possono essere successe due cose, e in entrambe
+    // riscrivere `ai_status` significa cancellare la decisione di qualcun altro.
+    //   1) un umano ha fermato il bot dal pannello (`ai_paused_at` valorizzato);
+    //   2) un altro drain ha scavalcato il lucchetto scaduto e sta gestendo lui il turno.
+    // L'update cieco che c'era prima riportava la conversazione ad 'active' in tutti e
+    // due i casi: è il motivo per cui un fermo manuale deciso a metà turno spariva dopo
+    // pochi secondi e il bot ripartiva (conv 3748, 1/08/2026).
+    // Se il drain muore prima di arrivare qui, il lucchetto lo sblocca il TTL (isLockStale).
+    const { data: rilasciate } = await supabase
       .from('conversations')
       .update({ ai_status: finalStatus, ai_lock_at: null })
-      .eq('id', conversationId);
+      .eq('id', conversationId)
+      .eq('ai_lock_at', nowIso)
+      .is('ai_paused_at', null)
+      .select('id');
+    if (!rilasciate || rilasciate.length === 0) {
+      // Lo stato non si tocca, ma il lucchetto — se è ancora il nostro — va comunque
+      // liberato: è il caso del fermo manuale, dove nessun altro processo lo scioglierà.
+      await supabase
+        .from('conversations')
+        .update({ ai_lock_at: null })
+        .eq('id', conversationId)
+        .eq('ai_lock_at', nowIso);
+    }
   }
 }

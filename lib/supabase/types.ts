@@ -75,6 +75,7 @@ export type Database = {
           ai_objection_category: string | null
           ai_objection_note: string | null
           ai_lock_at: string | null
+          ai_paused_at: string | null
           ai_owner: string | null
           ai_started_at: string | null
           ai_status: string | null
@@ -107,6 +108,7 @@ export type Database = {
           ai_objection_category?: string | null
           ai_objection_note?: string | null
           ai_lock_at?: string | null
+          ai_paused_at?: string | null
           ai_owner?: string | null
           ai_started_at?: string | null
           ai_status?: string | null
@@ -139,6 +141,7 @@ export type Database = {
           ai_objection_category?: string | null
           ai_objection_note?: string | null
           ai_lock_at?: string | null
+          ai_paused_at?: string | null
           ai_owner?: string | null
           ai_started_at?: string | null
           ai_status?: string | null
