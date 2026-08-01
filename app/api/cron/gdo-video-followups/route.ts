@@ -161,17 +161,34 @@ export async function GET(req: NextRequest) {
       /** Bolle spedite su bolle previste: valorizzato solo dal sollecito libero. */
       let bolle: { spedite: number; previste: number } | null = null;
 
-      // Il contatore dei due touch si muove qui e solo qui, una volta per
-      // conversazione e per slot. È idempotente perché il ramo libero lo segna appena
-      // la PRIMA bolla è partita, e il blocco in fondo lo richiama a giro finito.
+      // Il contatore dei due touch si muove qui e solo qui, una volta per conversazione
+      // e per slot: il ramo libero chiama appena la PRIMA bolla è partita, il blocco in
+      // fondo richiama a giro finito e la seconda chiamata non fa nulla. Non è
+      // idempotenza della funzione: è una proprietà dei call-site, che sono awaitati in
+      // sequenza dentro lo stesso giro del `for` e non si sovrappongono mai.
       let touchSegnato = false;
       const segnaTouch = async () => {
         if (touchSegnato) return;
-        await supabase.from('conversations')
+        const { error } = await supabase.from('conversations')
           .update({ gdo_video_followups_sent: (c.gdo_video_followups_sent ?? 0) + 1 })
           .eq('id', c.id);
-        // Marcato solo dopo la scrittura: se l'update esplode, la chiamata dal blocco
-        // in fondo riprova invece di dare per segnato un touch che non c'è.
+        if (error) {
+          // postgrest-js non rigetta MAI la promise senza .throwOnError(), che questo
+          // repo non chiama da nessuna parte: un update fallito torna qui come valore,
+          // e persino l'errore di rete viene convertito in `error`. Senza leggerlo, un
+          // touch mai scritto passerebbe per segnato e al giro dopo
+          // decideGdoVideoFollowup — che legge la colonna — concederebbe un touch in
+          // più, di nuovo contro il tetto dei due.
+          await supabase.from('event_log').insert({
+            type: 'gdo_followup_touch_error',
+            payload: { conversationId: c.id, slot, action, errore: error.message } as never,
+            message: `[gdo] conv ${c.id}: touch NON segnato, gdo_video_followups_sent non incrementato — ${error.message}`,
+            level: 'error',
+          });
+          // `touchSegnato` resta false: la chiamata dal blocco in fondo ci riprova
+          // davvero, invece di dare per segnato un touch che a DB non c'è.
+          return;
+        }
         touchSegnato = true;
         sent++;
       };
