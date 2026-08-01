@@ -181,6 +181,9 @@ export async function GET(req: NextRequest) {
       // riaggancio non li riguarda — e il riaggancio arriverebbe dal nostro bot su un
       // lead che sta lavorando un commerciale.
       .is('gdo_agenda_at', null)
+      // Fermo manuale dal pannello: la chat è in mano a una persona, nessun touch
+      // automatico le arriva addosso.
+      .is('ai_paused_at', null)
       .range(fromRow, fromRow + 999);
     const batch = data ?? [];
     convs.push(...batch);

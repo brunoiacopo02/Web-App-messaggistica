@@ -59,6 +59,9 @@ export async function GET(req: NextRequest) {
       .select('id, ai_status, ai_lock_at, ai_started_at, crm_lead_id, bot_outcome, bot_followups_sent, gdo_agenda_at, leads(phone_e164)')
       .not('crm_lead_id', 'is', null)
       .in('ai_status', ['active', 'replying', 'handed_off', 'booked'])
+      // Fermo manuale dal pannello: fuori dal giro del cron per intero — niente
+      // re-drive, niente watchdog, niente classificazione. Ci sta lavorando una persona.
+      .is('ai_paused_at', null)
       .order('id', { ascending: true })
       .range(from, from + 999);
     const page = (data ?? []) as any[];

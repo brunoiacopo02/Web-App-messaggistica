@@ -69,6 +69,9 @@ export async function GET(req: NextRequest) {
     .from('conversations')
     .select('id, bot_scheduled_at, leads(phone_e164, first_name)')
     .eq('bot_outcome', 'APPUNTAMENTO')
+    // Fermo manuale dal pannello: nessun invio automatico su una chat presa in
+    // carico da una persona, promemoria pre-call compresi.
+    .is('ai_paused_at', null)
     .gte('bot_scheduled_at', windowStart)
     .lte('bot_scheduled_at', windowEnd);
 

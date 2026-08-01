@@ -99,6 +99,9 @@ export async function GET(req: NextRequest) {
     // sopra una chat che sta gestendo lei. Stessa convenzione di sequence-touches e
     // bot-followups.
     .eq('ai_status', 'active')
+    // Fermo manuale dal pannello: la chat è in mano a una persona, il bot non ci
+    // scrive più — solleciti compresi.
+    .is('ai_paused_at', null)
     .limit(500);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
