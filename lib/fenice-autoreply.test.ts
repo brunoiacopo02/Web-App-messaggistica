@@ -761,6 +761,122 @@ describe('drainMarioReplies — modalità postino (lead dei GDO)', () => {
     expect(calls.convUpdates.some((u) => 'gdo_noemi_reminded_at' in u)).toBe(false);
   });
 
+  it('il lead conferma il video prima di qualunque sollecito: si rigenera per infilarci Noemi e si manda SOLO quella risposta', async () => {
+    const claimedRow: ClaimedRow = {
+      id: 63, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null,
+      gdo_agenda_at: '2026-08-01T14:00:00Z', gdo_video_url: 'https://corso.feniceacademy.it/conferenza-bx',
+      gdo_video_sent_at: '2026-08-01T15:00:00Z',
+      // gdo_video_followups_sent resta a 0 (default): il lead risponde prima che
+      // parta il primo sollecito. Senza la rigenerazione, serveNoemi non
+      // scatterebbe mai per questo lead, da nessuno dei due canali.
+    };
+    const rows: FakeMsgRow[] = [
+      AGENDA,
+      { direction: 'in', body: 'l\'ho visto tutto', template_sid: null, created_at: '2026-08-01T18:00:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply)
+      .mockResolvedValueOnce({
+        visibleReply: 'Perfetto, ottimo.',
+        appointmentFixed: false, passToHuman: false, videoWatched: true,
+      })
+      .mockResolvedValueOnce({
+        visibleReply: 'Perfetto! Ti ricordo che prima della call ti chiama Noemi, sono 5-10 minuti.',
+        appointmentFixed: false, passToHuman: false, videoWatched: false,
+      });
+
+    await drainMarioReplies(supabase, 63, '+391234567890', () => 0);
+
+    expect(generateMarioReply).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(generateMarioReply).mock.calls[1][1]?.contextNote).toContain(NOTA_NOEMI);
+    // Una bolla sola al lead: quella del secondo giro, non la somma dei due.
+    expect(calls.messageInserts).toHaveLength(1);
+    expect(calls.messageInserts[0].body).toBe('Perfetto! Ti ricordo che prima della call ti chiama Noemi, sono 5-10 minuti.');
+    expect(calls.convUpdates.some((u) => typeof u.gdo_video_watched_at === 'string')).toBe(true);
+    expect(calls.convUpdates.some((u) => typeof u.gdo_noemi_reminded_at === 'string')).toBe(true);
+  });
+
+  it('Noemi è già stata spiegata: la conferma del video non fa scattare una seconda chiamata al modello', async () => {
+    const claimedRow: ClaimedRow = {
+      id: 64, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null,
+      gdo_agenda_at: '2026-08-01T14:00:00Z', gdo_video_url: 'https://corso.feniceacademy.it/conferenza-bx',
+      gdo_video_sent_at: '2026-08-01T15:00:00Z',
+      gdo_noemi_reminded_at: '2026-08-01T16:00:00Z',
+    };
+    const rows: FakeMsgRow[] = [
+      AGENDA,
+      { direction: 'in', body: 'l\'ho visto tutto', template_sid: null, created_at: '2026-08-01T18:00:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto, ottimo.',
+      appointmentFixed: false, passToHuman: false, videoWatched: true,
+    });
+
+    await drainMarioReplies(supabase, 64, '+391234567890', () => 0);
+
+    expect(generateMarioReply).toHaveBeenCalledTimes(1);
+    expect(calls.messageInserts).toHaveLength(1);
+    expect(calls.messageInserts[0].body).toBe('Perfetto, ottimo.');
+    expect(calls.convUpdates.some((u) => typeof u.gdo_video_watched_at === 'string')).toBe(true);
+  });
+
+  it('la rigenerazione per Noemi fallisce con un eccezione: si manda comunque la prima risposta, nessuna perdita', async () => {
+    const claimedRow: ClaimedRow = {
+      id: 65, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null,
+      gdo_agenda_at: '2026-08-01T14:00:00Z', gdo_video_url: 'https://corso.feniceacademy.it/conferenza-bx',
+      gdo_video_sent_at: '2026-08-01T15:00:00Z',
+    };
+    const rows: FakeMsgRow[] = [
+      AGENDA,
+      { direction: 'in', body: 'l\'ho visto tutto', template_sid: null, created_at: '2026-08-01T18:00:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply)
+      .mockResolvedValueOnce({
+        visibleReply: 'Perfetto, ottimo.',
+        appointmentFixed: false, passToHuman: false, videoWatched: true,
+      })
+      .mockRejectedValueOnce(new Error('529 overloaded'));
+
+    await drainMarioReplies(supabase, 65, '+391234567890', () => 0);
+
+    expect(generateMarioReply).toHaveBeenCalledTimes(2);
+    expect(calls.messageInserts).toHaveLength(1);
+    expect(calls.messageInserts[0].body).toBe('Perfetto, ottimo.');
+    expect(calls.convUpdates.some((u) => typeof u.gdo_video_watched_at === 'string')).toBe(true);
+    expect(calls.events.some((e: { type: string }) => e.type === 'gdo_noemi_regen_failed')).toBe(true);
+  });
+
+  it('la rigenerazione per Noemi torna una risposta vuota: si manda comunque la prima', async () => {
+    const claimedRow: ClaimedRow = {
+      id: 66, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null,
+      gdo_agenda_at: '2026-08-01T14:00:00Z', gdo_video_url: 'https://corso.feniceacademy.it/conferenza-bx',
+      gdo_video_sent_at: '2026-08-01T15:00:00Z',
+    };
+    const rows: FakeMsgRow[] = [
+      AGENDA,
+      { direction: 'in', body: 'l\'ho visto tutto', template_sid: null, created_at: '2026-08-01T18:00:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply)
+      .mockResolvedValueOnce({
+        visibleReply: 'Perfetto, ottimo.',
+        appointmentFixed: false, passToHuman: false, videoWatched: true,
+      })
+      .mockResolvedValueOnce({
+        visibleReply: '   ',
+        appointmentFixed: false, passToHuman: false, videoWatched: false,
+      });
+
+    await drainMarioReplies(supabase, 66, '+391234567890', () => 0);
+
+    expect(generateMarioReply).toHaveBeenCalledTimes(2);
+    expect(calls.messageInserts).toHaveLength(1);
+    expect(calls.messageInserts[0].body).toBe('Perfetto, ottimo.');
+    expect(calls.convUpdates.some((u) => typeof u.gdo_video_watched_at === 'string')).toBe(true);
+  });
+
   it('modalità postino senza link video: lo segnala e lascia rispondere Mario, niente silenzio', async () => {
     const { supabase, calls } = makeDrainSupabase(postino({ gdo_video_url: null }), [AGENDA, RISPOSTA]);
     vi.mocked(generateMarioReply).mockResolvedValueOnce({
