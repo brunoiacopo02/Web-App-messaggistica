@@ -62,6 +62,7 @@ export async function sendTemplate(
   input: SendTemplateInput,
   opts: SendOptions = {},
 ) {
+  await assertTemplateSendable(input.contentSid);
   const client = getClient();
   return withRetry(async () => {
     const msg = await client.messages.create({
@@ -89,6 +90,47 @@ export async function sendFreeText(
     });
     return { sid: msg.sid, status: msg.status };
   }, opts);
+}
+
+// ── Presidio categoria: nessun template MARKETING parte a insaputa nostra ──────
+//
+// Il 29/07/2026 il presidio è nato per gli script (scripts/lib/template-guard.mjs), ma
+// le route dell'app non lo avevano: aperture, touch e riaggancio sono partiti per giorni
+// come MARKETING senza che nulla lo dicesse. La categoria vera la decide Meta, non la
+// richiesta che abbiamo fatto noi: qui la si chiede a Twilio e la si applica.
+//
+// UTILITY_ONLY=1 → si spedisce solo ciò che Meta ha approvato come UTILITY. È
+// l'interruttore da alzare quando il numero è in riabilitazione (qualità LOW).
+const _templateCategoryCache = new Map<string, string | null>();
+
+export async function getTemplateCategory(contentSid: string): Promise<string | null> {
+  if (_templateCategoryCache.has(contentSid)) return _templateCategoryCache.get(contentSid)!;
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const tok = process.env.TWILIO_AUTH_TOKEN;
+  if (!sid || !tok) return null;
+  const res = await fetch(`https://content.twilio.com/v1/Content/${contentSid}/ApprovalRequests`, {
+    headers: { Authorization: 'Basic ' + Buffer.from(`${sid}:${tok}`).toString('base64') },
+  });
+  if (!res.ok) throw new Error(`categoria del template ${contentSid} non verificabile (HTTP ${res.status})`);
+  const data = (await res.json()) as { whatsapp?: { category?: string } };
+  const cat = data?.whatsapp?.category ?? null;
+  _templateCategoryCache.set(contentSid, cat);
+  return cat;
+}
+
+/** Lancia se il template non è spedibile con la policy corrente. Fail-closed: se la
+ * categoria non è verificabile non si spedisce, perché è esattamente la condizione in
+ * cui l'incidente si ripete. */
+export async function assertTemplateSendable(contentSid: string): Promise<void> {
+  if (process.env.UTILITY_ONLY !== '1') return;
+  if ((process.env.UTILITY_ONLY_ALLOW ?? '').split(',').map((s) => s.trim()).includes(contentSid)) return;
+  const cat = await getTemplateCategory(contentSid);
+  if (cat !== 'UTILITY') {
+    throw new Error(
+      `template ${contentSid} bloccato: categoria ${cat ?? 'sconosciuta'} con UTILITY_ONLY attivo. ` +
+      'Sostituirlo con una versione utility, oppure sbloccarlo per SID esteso in UTILITY_ONLY_ALLOW.',
+    );
+  }
 }
 
 // Cache del testo dei template (per mostrare il messaggio reale invece di "[template] X").
