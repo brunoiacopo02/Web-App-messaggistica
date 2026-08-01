@@ -5,10 +5,13 @@ import { isConversazioneChat, mondoDi, mondoLabel } from '@/lib/chat-perimetro';
 import { segmentOf, fermaReason } from '@/lib/lead-segments';
 import { ChatStatusPill, ReasonPill, SegmentPill } from '@/components/fenice/status';
 import { formatRomeDateTime } from '@/lib/rome-time';
+import { isWindowOpen } from '@/lib/utils';
+import { ChatTakeover } from './_components/ChatTakeover';
 
 export const dynamic = 'force-dynamic';
 
-// Sola lettura: nessun Composer, e nessuna scrittura su read_at/unread_count.
+// Sola lettura finché il bot governa la chat: nessuna scrittura su read_at/unread_count,
+// e il Composer compare solo dopo il fermo manuale (vedi ChatTakeover).
 export default async function ChatConversationPage({
   params,
 }: { params: Promise<{ conversationId: string }> }) {
@@ -21,7 +24,7 @@ export default async function ChatConversationPage({
 
   const [convRes, msgsRes] = await Promise.all([
     supabase.from('conversations').select(`
-      id, last_inbound_at, last_message_at, ai_owner, ai_status, gdo_agenda_at, gdo_video_sent_at,
+      id, last_inbound_at, last_message_at, ai_owner, ai_status, ai_paused_at, gdo_agenda_at, gdo_video_sent_at,
       bot_outcome, bot_scheduled_at,
       lead:leads(id, first_name, last_name, phone_e164)
     `).eq('id', id).single(),
@@ -68,11 +71,21 @@ export default async function ChatConversationPage({
               <ChatStatusPill status={conv.ai_status} />
             </>
           )}
+          {conv.ai_paused_at && (
+            <span className="rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-100">
+              Bot fermo
+            </span>
+          )}
           {appuntamento && <span>Appuntamento: {appuntamento}</span>}
         </div>
       </header>
       {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
       <MessageThread conversationId={id} initial={(msgsRes.data ?? []) as any} campaignNamesById={{}} apiBase="/api/chat/conversations" showSender />
+      <ChatTakeover
+        conversationId={id}
+        paused={!!conv.ai_paused_at}
+        windowOpen={isWindowOpen(conv.last_inbound_at)}
+      />
     </div>
   );
 }

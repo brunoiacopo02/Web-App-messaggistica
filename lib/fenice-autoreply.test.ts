@@ -216,6 +216,7 @@ function makeDrainSupabase(claimedRow: ClaimedRow, initialRows: FakeMsgRow[]) {
               let filterStatus: string | null = null;
               const stub: any = {
                 eq(col: string, val: string) { if (col === 'ai_status') filterStatus = val; return stub; },
+                is() { return stub; },
                 or() { return stub; },
                 select() { return stub; },
                 single() { return Promise.resolve({ data: filterStatus === 'active' ? claimedRow : null }); },
@@ -228,7 +229,15 @@ function makeDrainSupabase(claimedRow: ClaimedRow, initialRows: FakeMsgRow[]) {
               // null = rilasciato; qualunque altro valore sarebbe un lucchetto lasciato appeso.
               calls.lockReleases.push(payload.ai_lock_at);
             }
-            return { eq() { return Promise.resolve({ data: null }); } };
+            // Qui la conversazione non è mai in pausa né contesa: il rilascio finale
+            // trova sempre la sua riga (una riga tornata = CAS riuscito).
+            const stub: any = {
+              eq() { return stub; },
+              is() { return stub; },
+              select() { return stub; },
+              then(resolve: any) { resolve({ data: [{ id: claimedRow.id }] }); },
+            };
+            return stub;
           },
         };
       }
@@ -410,6 +419,7 @@ describe('drainMarioReplies — il lucchetto viene sempre rilasciato', () => {
       if (t !== 'conversations') return originale(t);
       return { update: () => ({
         eq(col: string, val: string) { return this; },
+        is() { return this; },
         or() { return this; },
         select() { return this; },
         single() { return Promise.resolve({ data: null }); },
@@ -700,5 +710,161 @@ describe('drainMarioReplies — modalità postino (lead dei GDO)', () => {
     expect(generateMarioReply).toHaveBeenCalledTimes(1);
     expect(vi.mocked(generateMarioReply).mock.calls[0][1]?.contextNote).toBeUndefined();
     expect(calls.events.some((e: any) => e.type === 'gdo_video_sent')).toBe(false);
+  });
+});
+
+/**
+ * Fake Supabase con STATO: la riga conversations vive davvero, così si può
+ * osservare chi la riscrive e quando. Serve per il fermo manuale — dove il punto
+ * non è "cosa scrive il drain" ma "cosa NON deve riscrivere se nel frattempo la
+ * chat è passata a un umano o il lucchetto è di un altro processo".
+ */
+type FakeConvRow = {
+  id: number;
+  ai_status: string;
+  ai_lock_at: string | null;
+  ai_paused_at: string | null;
+  ai_started_at?: string | null;
+  crm_lead_id?: string | null;
+  gdo_agenda_at?: string | null;
+  gdo_video_url?: string | null;
+  gdo_video_sent_at?: string | null;
+};
+
+function makeStatefulDrainSupabase(row: FakeConvRow, initialRows: FakeMsgRow[]) {
+  const conv: any = { ...row };
+  const messagesRows = [...initialRows];
+  const calls = { events: [] as any[], convUpdates: [] as any[], messageInserts: [] as any[] };
+
+  function updateChain(payload: any) {
+    const eqs: [string, any][] = [];
+    const iss: [string, any][] = [];
+    let lockDeveEsserLibero = false;
+
+    function matches(): boolean {
+      for (const [col, val] of eqs) if (conv[col] !== val) return false;
+      for (const [col, val] of iss) if ((conv[col] ?? null) !== val) return false;
+      // `.or('ai_lock_at.is.null,ai_lock_at.lt.<cutoff>')` del claim: qui basta
+      // il caso "libero", i lucchetti scaduti hanno un test loro (isLockStale).
+      if (lockDeveEsserLibero && conv.ai_lock_at !== null) return false;
+      return true;
+    }
+    function run(): any[] {
+      if (!matches()) return [];
+      calls.convUpdates.push(payload);
+      Object.assign(conv, payload);
+      return [conv];
+    }
+
+    const stub: any = {
+      eq(col: string, val: any) { eqs.push([col, val]); return stub; },
+      is(col: string, val: any) { iss.push([col, val]); return stub; },
+      or(expr: string) { lockDeveEsserLibero = expr.includes('ai_lock_at.is.null'); return stub; },
+      select() { return stub; },
+      single() { return Promise.resolve({ data: run()[0] ?? null }); },
+      then(resolve: any) { resolve({ data: run() }); },
+    };
+    return stub;
+  }
+
+  const supabase: any = {
+    from(table: string) {
+      if (table === 'conversations') return { update: updateChain };
+      if (table === 'messages') {
+        return {
+          select() {
+            const stub: any = {
+              eq() { return stub; }, order() { return stub; }, limit() { return stub; }, gte() { return stub; },
+              then(resolve: any) { resolve({ data: messagesRows }); },
+            };
+            return stub;
+          },
+          insert(payload: any) {
+            messagesRows.push({ direction: 'out', body: payload.body, template_sid: null, created_at: new Date().toISOString() });
+            calls.messageInserts.push(payload);
+            return Promise.resolve({ data: null });
+          },
+        };
+      }
+      return { insert(payload: any) { calls.events.push(payload); return Promise.resolve({ data: null }); } };
+    },
+  };
+
+  return { supabase, calls, conv };
+}
+
+describe('fermo manuale del bot su una singola chat', () => {
+  const OPENING: FakeMsgRow = { direction: 'out', body: 'apertura', template_sid: null, created_at: '2026-07-01T10:00:00Z' };
+  const INBOUND: FakeMsgRow = { direction: 'in', body: 'ciao', template_sid: null, created_at: '2026-08-01T09:00:00Z' };
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.mocked(generateMarioReply).mockReset();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('shouldAutoReply: una conversazione in pausa non riceve risposte, anche se attiva', () => {
+    const attiva = { toMatchesFenice: true, autoReplyOn: true, aiOwner: 'mario', aiStatus: 'active', aiPausedAt: null };
+    expect(shouldAutoReply(attiva)).toBe(true);
+    expect(shouldAutoReply({ ...attiva, aiPausedAt: '2026-08-01T12:00:00Z' })).toBe(false);
+  });
+
+  it('shouldReopen: una conversazione in pausa non si riapre al nuovo messaggio del lead', () => {
+    expect(shouldReopen({ aiOwner: 'mario', aiStatus: 'closed', aiPausedAt: null })).toBe(true);
+    expect(shouldReopen({ aiOwner: 'mario', aiStatus: 'closed', aiPausedAt: '2026-08-01T12:00:00Z' })).toBe(false);
+  });
+
+  it('il drain non claima nemmeno una conversazione già in pausa', async () => {
+    const { supabase, calls, conv } = makeStatefulDrainSupabase(
+      { id: 100, ai_status: 'active', ai_lock_at: null, ai_paused_at: '2026-08-01T12:00:00Z', ai_started_at: null, crm_lead_id: 'crm1' },
+      [OPENING, INBOUND],
+    );
+
+    await drainMarioReplies(supabase, 100, '+391234567890', () => 0);
+
+    expect(generateMarioReply).not.toHaveBeenCalled();
+    expect(calls.messageInserts).toEqual([]);
+    expect(conv.ai_lock_at).toBeNull(); // nessun lucchetto preso
+  });
+
+  // Il bug del 1/08/2026: il `finally` riscriveva ai_status senza guardare se il
+  // lucchetto fosse ancora suo, quindi un fermo deciso a metà turno spariva e il
+  // bot ripartiva al messaggio successivo.
+  it('un fermo deciso MENTRE il drain risponde non viene sovrascritto dal rilascio finale', async () => {
+    const { supabase, conv } = makeStatefulDrainSupabase(
+      { id: 101, ai_status: 'active', ai_lock_at: null, ai_paused_at: null, ai_started_at: null, crm_lead_id: 'crm1' },
+      [OPENING, INBOUND],
+    );
+    vi.mocked(generateMarioReply).mockImplementationOnce(async () => {
+      // Un umano preme "ferma il bot" mentre il modello sta generando.
+      conv.ai_paused_at = '2026-08-01T12:30:00Z';
+      conv.ai_status = 'handed_off';
+      return { visibleReply: 'Ciao!', appointmentFixed: false, passToHuman: false, videoWatched: false };
+    });
+
+    await drainMarioReplies(supabase, 101, '+391234567890', () => 0);
+
+    expect(conv.ai_status).toBe('handed_off'); // NON riportato ad 'active'
+    expect(conv.ai_paused_at).toBe('2026-08-01T12:30:00Z');
+    expect(conv.ai_lock_at).toBeNull(); // il lucchetto va comunque rilasciato
+  });
+
+  it('se un altro processo ha scavalcato il lucchetto, il rilascio non gli ruba lo stato', async () => {
+    const { supabase, conv } = makeStatefulDrainSupabase(
+      { id: 102, ai_status: 'active', ai_lock_at: null, ai_paused_at: null, ai_started_at: null, crm_lead_id: 'crm1' },
+      [OPENING, INBOUND],
+    );
+    vi.mocked(generateMarioReply).mockImplementationOnce(async () => {
+      // Lucchetto considerato scaduto e riclaimato da un altro drain, che nel
+      // frattempo ha pure fissato l'appuntamento.
+      conv.ai_lock_at = '2026-08-01T12:31:00Z';
+      conv.ai_status = 'booked';
+      return { visibleReply: 'Ciao!', appointmentFixed: false, passToHuman: false, videoWatched: false };
+    });
+
+    await drainMarioReplies(supabase, 102, '+391234567890', () => 0);
+
+    expect(conv.ai_status).toBe('booked');
+    expect(conv.ai_lock_at).toBe('2026-08-01T12:31:00Z'); // il lucchetto altrui resta
   });
 });

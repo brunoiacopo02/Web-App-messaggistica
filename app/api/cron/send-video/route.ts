@@ -56,7 +56,9 @@ export async function GET(req: NextRequest) {
   if (targets.length === 0) return NextResponse.json({ ok: true, sent: 0 });
 
   // Recupera i telefoni dei lead delle conversazioni target.
-  const { data: convs } = await supabase.from('conversations').select('id, lead_id').in('id', targets);
+  // `.is('ai_paused_at', null)`: una chat presa in carico da una persona resta fuori
+  // anche dagli invii mirati, altrimenti il video le arriverebbe in mezzo al discorso.
+  const { data: convs } = await supabase.from('conversations').select('id, lead_id').in('id', targets).is('ai_paused_at', null);
   const leadIds = [...new Set((convs ?? []).map((c) => c.lead_id))];
   const { data: leads } = await supabase.from('leads').select('id, phone_e164').in('id', leadIds);
   const phoneByLead = new Map((leads ?? []).map((l) => [l.id, l.phone_e164]));

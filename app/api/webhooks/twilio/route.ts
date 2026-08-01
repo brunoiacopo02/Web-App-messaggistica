@@ -176,11 +176,11 @@ export async function POST(req: NextRequest) {
     if (toMatchesFenice) {
       const { data: conv } = await supabase
         .from('conversations')
-        .select('ai_owner, ai_status, crm_lead_id')
+        .select('ai_owner, ai_status, ai_paused_at, crm_lead_id')
         .eq('id', conversationId)
         .single();
 
-      if (conv && shouldReopen({ aiOwner: conv.ai_owner, aiStatus: conv.ai_status })) {
+      if (conv && shouldReopen({ aiOwner: conv.ai_owner, aiStatus: conv.ai_status, aiPausedAt: conv.ai_paused_at })) {
         await supabase.from('conversations').update({ ai_status: 'active' }).eq('id', conversationId);
         conv.ai_status = 'active';
       }
@@ -191,6 +191,7 @@ export async function POST(req: NextRequest) {
         autoReplyOn,
         aiOwner: conv?.ai_owner ?? null,
         aiStatus: conv?.ai_status ?? null,
+        aiPausedAt: conv?.ai_paused_at ?? null,
       })) {
         // Dopo aver risposto 200 a Twilio: Mario risponde in background, con latenza.
         after(drainMarioReplies(supabase, conversationId, phone));

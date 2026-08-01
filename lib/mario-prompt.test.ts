@@ -398,3 +398,47 @@ describe('M1: FASE 5, i tagli del pitch cadono su confine di frase, non a metà'
     );
   });
 });
+
+describe('rientro sul tema: la chat non diventa una chiacchierata personale', () => {
+  // Il 1/08 una conversazione GDO è andata avanti due ore su musica, concerti e un
+  // cortometraggio del lead, senza mai tornare al video di preparazione né alla call.
+  // Il bot ha assecondato ogni deviazione ("mandalo pure, lo guardo con piacere",
+  // "sto lavorando un po'"), alimentando un rapporto personale con una persona che
+  // non esiste. Il prompt non aveva NESSUNA regola di rientro.
+  const p = buildMarioSystem('Marta');
+
+  it('esiste una sezione dedicata alle conversazioni che escono dal tema', () => {
+    expect(p).toContain('SE LA CONVERSAZIONE ESCE DAL TEMA');
+  });
+
+  it('concede al massimo due scambi fuori tema, poi impone il rientro', () => {
+    expect(p).toMatch(/al massimo due (scambi|messaggi) fuori tema/i);
+    expect(p).toMatch(/riporta(lo)? (al|sul) (punto|tema)/i);
+  });
+
+  it('vieta di raccontare attività o gusti personali che non hai', () => {
+    // "sto lavorando", "lo guardo stasera", "anche a me piace": sono bugie, e la
+    // regola dell'onestà del prompt (non affermare di essere una persona reale) le
+    // vieta già nello spirito. Qui diventa esplicita.
+    expect(p).toMatch(/non raccontare mai attività, gusti o esperienze personali tue/i);
+    expect(p).toMatch(/non promettere di guardare, leggere o ascoltare/i);
+  });
+
+  it('vieta di alimentare la confidenza con complimenti sulla persona', () => {
+    expect(p).toMatch(/non fare complimenti alla persona/i);
+  });
+
+  it('passa la chat a un umano se il lead insiste sul personale o cerca un rapporto affettivo', () => {
+    // Ancorato DENTRO la sezione: il prompt contiene già un "non insistere più di 2
+    // volte sulla stessa obiezione, poi usa [PASSAGGIO_UMANO]" nella gestione
+    // obiezioni, che farebbe passare il test senza che la regola nuova esista.
+    const sezione = p.slice(p.indexOf('SE LA CONVERSAZIONE ESCE DAL TEMA'));
+    const blocco = sezione.slice(0, sezione.indexOf('\n---'));
+    expect(blocco).toContain('[PASSAGGIO_UMANO]');
+    expect(blocco).toMatch(/insiste|affettiv|intim/i);
+  });
+
+  it('la regola vale anche quando l\'appuntamento è già fissato (caso GDO postino)', () => {
+    expect(p).toContain('Vale anche a appuntamento già fissato');
+  });
+});
