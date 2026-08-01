@@ -320,7 +320,11 @@ export async function drainMarioReplies(
       let visibleReply = result.visibleReply;
       let watchedAt: string | null = null;
       if (result.videoWatched) watchedAt = new Date().toISOString();
-      if (postino && result.videoWatched && !gdoNoemiRemindedAt) {
+      // Niente rigenerazione se il turno ha prodotto un esito o un passaggio umano:
+      // "l'ho visto, ma voglio annullare" vale insieme videoWatched e disdetta, e la
+      // NOTA_NOEMI ("diglielo adesso") sostituirebbe la risposta giusta con un
+      // promemoria della preselezione mentre al CRM parte la nota di annullamento.
+      if (postino && result.videoWatched && !gdoNoemiRemindedAt && !result.outcome && !result.passToHuman) {
         try {
           const retry = await generateMarioReply(history, {
             personaName: PERSONA_NAME[persona],

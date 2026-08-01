@@ -821,6 +821,59 @@ describe('drainMarioReplies — modalità postino (lead dei GDO)', () => {
     expect(calls.convUpdates.some((u) => typeof u.gdo_video_watched_at === 'string')).toBe(true);
   });
 
+  it('video visto E esito nello stesso turno: nessuna rigenerazione, vince la risposta all\'esito', async () => {
+    // "L'ho visto, ma voglio annullare": la NOTA_NOEMI del secondo giro ("diglielo
+    // adesso") sostituirebbe la risposta giusta con un promemoria della preselezione,
+    // mentre al CRM parte la nota di disdetta.
+    const claimedRow: ClaimedRow = {
+      id: 67, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null,
+      gdo_agenda_at: '2026-08-01T14:00:00Z', gdo_video_url: 'https://corso.feniceacademy.it/conferenza-bx',
+      gdo_video_sent_at: '2026-08-01T15:00:00Z',
+      gdo_video_followups_sent: 1,
+    };
+    const rows: FakeMsgRow[] = [
+      AGENDA,
+      { direction: 'in', body: 'l\'ho visto ma voglio annullare tutto', template_sid: null, created_at: '2026-08-01T18:00:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Va bene, avviso il collega e annullo.',
+      appointmentFixed: false, passToHuman: false, videoWatched: true,
+      outcome: 'INTERROTTO', note: 'il lead vuole annullare',
+    });
+
+    await drainMarioReplies(supabase, 67, '+391234567890', () => 0);
+
+    expect(generateMarioReply).toHaveBeenCalledTimes(1);
+    expect(calls.messageInserts).toHaveLength(1);
+    expect(calls.messageInserts[0].body).toBe('Va bene, avviso il collega e annullo.');
+    expect(calls.convUpdates.some((u) => typeof u.gdo_noemi_reminded_at === 'string')).toBe(false);
+  });
+
+  it('video visto E passaggio umano nello stesso turno: nessuna rigenerazione', async () => {
+    const claimedRow: ClaimedRow = {
+      id: 68, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null,
+      gdo_agenda_at: '2026-08-01T14:00:00Z', gdo_video_url: 'https://corso.feniceacademy.it/conferenza-bx',
+      gdo_video_sent_at: '2026-08-01T15:00:00Z',
+      gdo_video_followups_sent: 1,
+    };
+    const rows: FakeMsgRow[] = [
+      AGENDA,
+      { direction: 'in', body: 'l\'ho visto, ma voglio parlare con una persona', template_sid: null, created_at: '2026-08-01T18:00:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Certo, ti faccio ricontattare da una collega.',
+      appointmentFixed: false, passToHuman: true, videoWatched: true,
+    });
+
+    await drainMarioReplies(supabase, 68, '+391234567890', () => 0);
+
+    expect(generateMarioReply).toHaveBeenCalledTimes(1);
+    expect(calls.finalStatusWrites).toEqual(['handed_off']);
+    expect(calls.convUpdates.some((u) => typeof u.gdo_noemi_reminded_at === 'string')).toBe(false);
+  });
+
   it('la rigenerazione per Noemi fallisce con un eccezione: si manda comunque la prima risposta, nessuna perdita', async () => {
     const claimedRow: ClaimedRow = {
       id: 65, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null,
