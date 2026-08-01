@@ -9,6 +9,7 @@ import {
   toRomeIso,
   NUDGE1_MAX_H,
   SEQUENCE_END_DAYS,
+  TOUCH_OFFSETS_DAYS,
   type MsgLite,
 } from '@/lib/sequence';
 import { sendOutcome } from '@/lib/bot-outcome';
@@ -116,7 +117,6 @@ export async function GET(req: NextRequest) {
     process.env.TWILIO_WHATSAPP_NUMBER_FOLLOWUP ?? process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
   const openingFrom = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
   const openingSid = process.env.FENICE_OPENING_TEMPLATE_SID;
-  const reengageSid = process.env.REENGAGE_TEMPLATE_SID;
   const maxPerRun = Math.max(1, Number(process.env.SEQUENCE_MAX_PER_RUN) || 25);
 
   // SID sequenza Track A: env SEQ_TEMPLATE_SID_1..4 (posizionali sui touch 1..4).
@@ -133,8 +133,11 @@ export async function GET(req: NextRequest) {
   const martaSids = new Set(
     [...martaOpeningSids, ...martaSeqSidByIndex, martaReengageSid].filter((s): s is string => !!s),
   );
-  const missingSeqIdx = [1, 2, 3, 4].filter((i) => !seqSidByIndex[i - 1]);
-  // Il CONTEGGIO dei touch considera entrambe le varianti (legacy + Marta).
+  // Servono solo i SID dei touch ancora previsti (oggi: il primo). I 2/3/4 restano
+  // in env e nel conteggio, ma la loro assenza non è più un errore di configurazione.
+  const missingSeqIdx = TOUCH_OFFSETS_DAYS.map((_, i) => i + 1).filter((i) => !seqSidByIndex[i - 1]);
+  // Il CONTEGGIO dei touch considera entrambe le varianti (legacy + Marta) e tutti
+  // gli indici storici: chi ha già preso un touch 2 o 3 non deve ricominciare da capo.
   const seqSids = [...seqSidByIndex, ...martaSeqSidByIndex].filter((s): s is string => !!s);
   if (missingSeqIdx.length) {
     // Una volta per run: i send_touch degli indici mancanti verranno saltati.
@@ -321,65 +324,44 @@ export async function GET(req: NextRequest) {
         sequenceEnabled: true,
       });
 
-      if (action.kind !== 'nudge_free' && action.kind !== 'nudge_template') {
-        // classify lo fa bot-followups; wait = niente.
+      if (action.kind !== 'nudge_free') {
+        // classify lo fa bot-followups; wait = niente. I template di riaggancio
+        // non esistono più: fuori dalla finestra 24h non si insegue.
         skipped++;
         continue;
       }
 
-      // Anti-doppione: con nudgesSent=1 e silenzio in [48,96) il percorso normale
-      // è indistinguibile da un recupero appena fatto → nessun nudge se l'ultimo
-      // out è più recente di 20h.
+      // Anti-doppione: mai un nudge sopra un out recente.
       const lastOut = lastOutboundAtMs(msgs);
       if (lastOut !== null && now - lastOut < MIN_GAP_OUT_MS) {
         skipped++;
         continue;
       }
 
-      if (action.kind === 'nudge_free') {
-        // Ricontrolla la finestra 24h WhatsApp: fuori finestra niente free text.
-        if (now - lastInboundAtMs >= NUDGE1_MAX_H * H) {
-          skipped++;
-          continue;
-        }
-        const body = pickNudgeText(c.id, firstName, PERSONA_NAME[persona]);
-        sent++;
-        const res = await sendFreeText({ to: phone, body, from: followupFrom });
-        await supabase.from('messages').insert({
-          conversation_id: c.id,
-          direction: 'out',
-          body,
-          twilio_sid: res.sid,
-          twilio_status: res.status,
-          is_template: false,
-          sender: 'automazione',
-        });
-        await supabase
-          .from('conversations')
-          .update({
-            last_message_at: new Date().toISOString(),
-            bot_followups_sent: (((c.bot_followups_sent as number | null) ?? 0) + 1),
-          })
-          .eq('id', c.id);
-      } else {
-        const rSid = persona === 'marta' ? martaReengageSid : reengageSid;
-        if (!rSid) {
-          await logConfigError(persona === 'marta' ? 'MARTA_REENGAGE_TEMPLATE_SID' : 'REENGAGE_TEMPLATE_SID');
-          skipped++;
-          continue;
-        }
-        sent++;
-        const res = await sendSequenceTemplate(
-          supabase, c.id, phone, rSid, `Riaggancio ${action.nudgeIndex}`, followupFrom, { '1': templateName(firstName) },
-        );
-        // Contatore nudge SOLO a invio riuscito (63049/errori → si ritenta).
-        if (res.ok) {
-          await supabase
-            .from('conversations')
-            .update({ bot_followups_sent: (((c.bot_followups_sent as number | null) ?? 0) + 1) })
-            .eq('id', c.id);
-        }
+      // Ricontrolla la finestra 24h WhatsApp: fuori finestra niente free text.
+      if (now - lastInboundAtMs >= NUDGE1_MAX_H * H) {
+        skipped++;
+        continue;
       }
+      const body = pickNudgeText(c.id, firstName, PERSONA_NAME[persona]);
+      sent++;
+      const res = await sendFreeText({ to: phone, body, from: followupFrom });
+      await supabase.from('messages').insert({
+        conversation_id: c.id,
+        direction: 'out',
+        body,
+        twilio_sid: res.sid,
+        twilio_status: res.status,
+        is_template: false,
+        sender: 'automazione',
+      });
+      await supabase
+        .from('conversations')
+        .update({
+          last_message_at: new Date().toISOString(),
+          bot_followups_sent: (((c.bot_followups_sent as number | null) ?? 0) + 1),
+        })
+        .eq('id', c.id);
     } catch (e) {
       await supabase.from('event_log').insert({
         type: 'sequence_touch_error',

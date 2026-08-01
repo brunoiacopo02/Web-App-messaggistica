@@ -92,6 +92,65 @@ describe('from override', () => {
   });
 });
 
+describe('presidio categoria (UTILITY_ONLY)', () => {
+  const mockCategory = (category: string | null, ok = true) =>
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok, status: ok ? 200 : 500, json: async () => ({ whatsapp: { category } }),
+    })));
+
+  beforeEach(() => {
+    delete process.env.UTILITY_ONLY;
+    delete process.env.UTILITY_ONLY_ALLOW;
+    vi.unstubAllGlobals();
+  });
+
+  it('spento: spedisce anche un MARKETING senza chiedere nulla a Twilio', async () => {
+    const f = vi.fn();
+    vi.stubGlobal('fetch', f);
+    messagesCreate.mockResolvedValueOnce({ sid: 'SM1', status: 'queued' });
+    await sendTemplate({ to: '+393331234567', contentSid: 'HX_mkt_a', variables: {} });
+    expect(f).not.toHaveBeenCalled();
+    expect(messagesCreate).toHaveBeenCalled();
+  });
+
+  it('acceso: blocca il MARKETING e non chiama Twilio', async () => {
+    process.env.UTILITY_ONLY = '1';
+    mockCategory('MARKETING');
+    await expect(
+      sendTemplate({ to: '+393331234567', contentSid: 'HX_mkt_b', variables: {} }),
+    ).rejects.toThrow(/bloccato: categoria MARKETING/);
+    expect(messagesCreate).not.toHaveBeenCalled();
+  });
+
+  it('acceso: lascia passare lo UTILITY', async () => {
+    process.env.UTILITY_ONLY = '1';
+    mockCategory('UTILITY');
+    messagesCreate.mockResolvedValueOnce({ sid: 'SM2', status: 'queued' });
+    await sendTemplate({ to: '+393331234567', contentSid: 'HX_util_a', variables: {} });
+    expect(messagesCreate).toHaveBeenCalled();
+  });
+
+  it('acceso: categoria non verificabile → non si spedisce (fail-closed)', async () => {
+    process.env.UTILITY_ONLY = '1';
+    mockCategory(null, false);
+    await expect(
+      sendTemplate({ to: '+393331234567', contentSid: 'HX_boh', variables: {} }),
+    ).rejects.toThrow(/non verificabile/);
+    expect(messagesCreate).not.toHaveBeenCalled();
+  });
+
+  it('sblocco per SID esteso in UTILITY_ONLY_ALLOW', async () => {
+    process.env.UTILITY_ONLY = '1';
+    process.env.UTILITY_ONLY_ALLOW = 'HX_mkt_c, HX_altro';
+    const f = vi.fn();
+    vi.stubGlobal('fetch', f);
+    messagesCreate.mockResolvedValueOnce({ sid: 'SM3', status: 'queued' });
+    await sendTemplate({ to: '+393331234567', contentSid: 'HX_mkt_c', variables: {} });
+    expect(f).not.toHaveBeenCalled();
+    expect(messagesCreate).toHaveBeenCalled();
+  });
+});
+
 describe('validateTwilioSignature', () => {
   it('ritorna true se TWILIO_VALIDATE_SIGNATURE=false', async () => {
     process.env.TWILIO_VALIDATE_SIGNATURE = 'false';

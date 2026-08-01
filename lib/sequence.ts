@@ -4,11 +4,19 @@ const H = 3600_000;
 const D = 24 * H;
 
 // Sequenza Track A: offset dei follow-up (giorni dal PRIMO outbound) e chiusura.
-export const TOUCH_OFFSETS_DAYS: number[] = [1, 3, 7, 12];
-export const SEQUENCE_END_DAYS = 14;
-// Track B (lead che ha risposto poi tace): finestre nudge e resa.
+//
+// 01/08/2026 — sequenza tagliata a UN SOLO follow-up. Sui dati dei primi 7 giorni il
+// touch 1 ha reso 26 risposte su 101 consegnati e 3 appuntamenti; i touch 2 e 3 insieme
+// 11 risposte su 70 consegnati e ZERO appuntamenti, con la lettura in calo a ogni giro
+// (54% → 42% → 38%). Sono template MARKETING verso chi non risponde: il prezzo lo paga
+// la reputazione del numero (qualità Meta scesa a LOW), il ricavo non esiste.
+export const TOUCH_OFFSETS_DAYS: number[] = [1];
+export const SEQUENCE_END_DAYS = 4;
+// Track B (lead che ha risposto poi tace): finestra del nudge gratuito e resa.
+// I due template di riaggancio sono stati rimossi (18 risposte su 74 consegnati, metà
+// delle quali un "NO" secco, zero appuntamenti): resta il solo nudge free-text, che
+// viaggia dentro la finestra 24h e non consuma reputazione.
 export const NUDGE1_MIN_H = 18; export const NUDGE1_MAX_H = 24;
-export const NUDGE2_H = 48; export const NUDGE3_H = 96;
 export const TRACKB_GIVEUP_H = 120;
 
 const FAST_FAIL_H = 48;   // numero morto: touch>=1 e mai nulla consegnato
@@ -110,7 +118,6 @@ export function decideTrackA(input: {
 
 export type TrackBAction =
   | { kind: 'nudge_free' }
-  | { kind: 'nudge_template'; nudgeIndex: 1 | 2 }
   | { kind: 'classify' }
   | { kind: 'wait' };
 
@@ -126,15 +133,9 @@ export function decideTrackB(input: {
   // La resa classifica sempre (non è un invio: kill-switch e fascia non contano).
   if (silH >= TRACKB_GIVEUP_H) return { kind: 'classify' };
   if (!sequenceEnabled || !inSendWindow(nowMs)) return { kind: 'wait' };
-  // Nudge free solo dentro la finestra 24h WhatsApp (silenzio in [18,24)).
+  // Unico richiamo rimasto: free-text dentro la finestra 24h (silenzio in [18,24)).
+  // Persa quella finestra non si insegue più con un template: si aspetta la resa.
   if (nudgesSent === 0 && silH >= NUDGE1_MIN_H && silH < NUDGE1_MAX_H) return { kind: 'nudge_free' };
-  // nudgesSent==0 a 48h = finestra free persa (es. lead notturno): recupero col template.
-  if (nudgesSent === 0 && silH >= NUDGE2_H) return { kind: 'nudge_template', nudgeIndex: 1 };
-  // A 96h il turno è comunque del secondo template, anche se il primo nudge è
-  // stato il recupero (contatore a 1): progressione 0→t1→t2→classify garantita.
-  if (nudgesSent === 1 && silH >= NUDGE3_H) return { kind: 'nudge_template', nudgeIndex: 2 };
-  if (nudgesSent === 1 && silH >= NUDGE2_H) return { kind: 'nudge_template', nudgeIndex: 1 };
-  if (nudgesSent === 2 && silH >= NUDGE3_H) return { kind: 'nudge_template', nudgeIndex: 2 };
   return { kind: 'wait' };
 }
 
