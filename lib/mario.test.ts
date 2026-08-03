@@ -64,12 +64,38 @@ describe('generateMarioReply', () => {
   // Un media senza didascalia arriva da Twilio con body vuoto. Finito nello storico,
   // faceva fallire OGNI turno successivo di quella chat con 400 "user messages must
   // have non-empty content", e il cron riprovava all'infinito.
-  it('scarta i turni senza testo invece di mandarli a Claude', async () => {
+  it('racconta a Mario il media del lead invece di mandare un turno vuoto', async () => {
+    messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'Ok!' }] });
+    await generateMarioReply([
+      { role: 'user', content: 'ciao' },
+      { role: 'assistant', content: 'Dimmi pure' },
+      { role: 'user', content: '   ' },
+    ]);
+    const inviati = messagesCreate.mock.calls[0][0].messages;
+    expect(inviati).toHaveLength(3);
+    expect(inviati[2].role).toBe('user');
+    expect(inviati[2].content).toContain('senza testo');
+  });
+
+  // Il vuoto è quasi sempre l'ULTIMO messaggio della chat: scartarlo lascerebbe la
+  // conversazione a finire con un turno assistant, che Sonnet 4.6 rifiuta con
+  // 400 "does not support assistant message prefill".
+  it('non lascia mai la conversazione finita su un turno assistant', async () => {
+    messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'Ok!' }] });
+    await generateMarioReply([
+      { role: 'user', content: 'grazie mille' },
+      { role: 'assistant', content: 'Grazie a te, a presto 👋' },
+      { role: 'user', content: '' },
+    ]);
+    const inviati = messagesCreate.mock.calls[0][0].messages;
+    expect(inviati[inviati.length - 1].role).toBe('user');
+  });
+
+  it('un turno assistant vuoto invece si scarta: non ha nulla da dire', async () => {
     messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'Ok!' }] });
     await generateMarioReply([
       { role: 'user', content: 'ciao' },
       { role: 'assistant', content: '' },
-      { role: 'user', content: '   ' },
       { role: 'user', content: 'ci sei?' },
     ]);
     expect(messagesCreate.mock.calls[0][0].messages).toEqual([
@@ -78,10 +104,10 @@ describe('generateMarioReply', () => {
     ]);
   });
 
-  it('history di soli messaggi vuoti: ripiega sul seed di apertura', async () => {
+  it('history di soli turni assistant vuoti: ripiega sul seed di apertura', async () => {
     messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'Ciao!' }] });
     await generateMarioReply([
-      { role: 'user', content: '' },
+      { role: 'assistant', content: '' },
       { role: 'assistant', content: '  ' },
     ]);
     expect(messagesCreate.mock.calls[0][0].messages).toEqual([
@@ -92,7 +118,7 @@ describe('generateMarioReply', () => {
   it('tollera un content nullo arrivato dal database', async () => {
     messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'Ok!' }] });
     await generateMarioReply([
-      { role: 'user', content: null as unknown as string },
+      { role: 'assistant', content: null as unknown as string },
       { role: 'user', content: 'ci sei?' },
     ]);
     expect(messagesCreate.mock.calls[0][0].messages).toEqual([{ role: 'user', content: 'ci sei?' }]);

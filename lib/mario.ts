@@ -84,6 +84,11 @@ export const GDO_CONTEXT_NOTE =
   "video da vedere prima della call. Applica la sezione \"SE L'APPUNTAMENTO È GIÀ FISSATO\": non " +
   'ripartire col pitch, non riproporre la call e non rimandare il video. Il collega non si nomina mai.';
 
+/** Cosa vede Mario al posto di un messaggio del lead senza testo. Le note vocali arrivano
+ *  già trascritte, quindi qui resta il materiale visivo e i documenti. */
+const MEDIA_SENZA_TESTO =
+  '[il lead ha inviato un contenuto senza testo: una foto, uno sticker, un video o un documento]';
+
 /** Genera la prossima risposta del bot data la cronologia. Inietta l'ora di Roma.
  *  `personaName` (default 'Mario') parametrizza SOLO il nome nel system prompt.
  *  `contextNote` aggiunge in coda al system un contesto specifico della conversazione. */
@@ -91,12 +96,21 @@ export async function generateMarioReply(
   history: MarioTurn[],
   opts?: { now?: Date; personaName?: string; contextNote?: string },
 ): Promise<MarioResult> {
-  // Un media senza didascalia entra in `messages` con body vuoto: l'API rifiuta l'intera
-  // richiesta con 400 "user messages must have non-empty content", e siccome il messaggio
-  // resta nello storico la chat non riceve più una risposta, a nessun tentativo. Si scarta
-  // qui, al confine con Claude, così vale per tutti i chiamanti. Turni consecutivi dello
-  // stesso ruolo sono ammessi dall'API, quindi togliere di mezzo non rompe l'alternanza.
-  const turni = history.filter((t) => typeof t.content === 'string' && t.content.trim() !== '');
+  // Un media senza didascalia (foto, sticker, documento) entra in `messages` con body
+  // vuoto: l'API rifiuta l'intera richiesta con 400 "user messages must have non-empty
+  // content", e siccome il messaggio resta nello storico quella chat non riceve più una
+  // risposta, a nessun tentativo. Si sistema qui, al confine con Claude, così vale per
+  // tutti i chiamanti.
+  //
+  // Il turno del lead NON si può scartare: il vuoto è quasi sempre l'ultimo messaggio
+  // della chat, e togliendolo la conversazione finirebbe su un turno assistant — che
+  // Sonnet 4.6 rifiuta a sua volta, con 400 "does not support assistant message prefill".
+  // Si dice a Mario cosa è arrivato, così risponde al lead invece di ignorarlo.
+  const turni = history.flatMap((t) => {
+    if (typeof t.content === 'string' && t.content.trim() !== '') return [t];
+    if (t.role === 'user') return [{ role: 'user' as const, content: MEDIA_SENZA_TESTO }];
+    return []; // un turno di Mario senza testo non ha nulla da dire: via.
+  });
   const messages =
     turni.length > 0
       ? turni
