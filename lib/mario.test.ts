@@ -60,6 +60,43 @@ describe('generateMarioReply', () => {
       { role: 'user', content: 'Inizia la conversazione presentandoti.' },
     ]);
   });
+
+  // Un media senza didascalia arriva da Twilio con body vuoto. Finito nello storico,
+  // faceva fallire OGNI turno successivo di quella chat con 400 "user messages must
+  // have non-empty content", e il cron riprovava all'infinito.
+  it('scarta i turni senza testo invece di mandarli a Claude', async () => {
+    messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'Ok!' }] });
+    await generateMarioReply([
+      { role: 'user', content: 'ciao' },
+      { role: 'assistant', content: '' },
+      { role: 'user', content: '   ' },
+      { role: 'user', content: 'ci sei?' },
+    ]);
+    expect(messagesCreate.mock.calls[0][0].messages).toEqual([
+      { role: 'user', content: 'ciao' },
+      { role: 'user', content: 'ci sei?' },
+    ]);
+  });
+
+  it('history di soli messaggi vuoti: ripiega sul seed di apertura', async () => {
+    messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'Ciao!' }] });
+    await generateMarioReply([
+      { role: 'user', content: '' },
+      { role: 'assistant', content: '  ' },
+    ]);
+    expect(messagesCreate.mock.calls[0][0].messages).toEqual([
+      { role: 'user', content: 'Inizia la conversazione presentandoti.' },
+    ]);
+  });
+
+  it('tollera un content nullo arrivato dal database', async () => {
+    messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'Ok!' }] });
+    await generateMarioReply([
+      { role: 'user', content: null as unknown as string },
+      { role: 'user', content: 'ci sei?' },
+    ]);
+    expect(messagesCreate.mock.calls[0][0].messages).toEqual([{ role: 'user', content: 'ci sei?' }]);
+  });
 });
 
 describe('tag [VIDEO_VISTO]', () => {

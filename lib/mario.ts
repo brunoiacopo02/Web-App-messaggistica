@@ -91,9 +91,15 @@ export async function generateMarioReply(
   history: MarioTurn[],
   opts?: { now?: Date; personaName?: string; contextNote?: string },
 ): Promise<MarioResult> {
+  // Un media senza didascalia entra in `messages` con body vuoto: l'API rifiuta l'intera
+  // richiesta con 400 "user messages must have non-empty content", e siccome il messaggio
+  // resta nello storico la chat non riceve più una risposta, a nessun tentativo. Si scarta
+  // qui, al confine con Claude, così vale per tutti i chiamanti. Turni consecutivi dello
+  // stesso ruolo sono ammessi dall'API, quindi togliere di mezzo non rompe l'alternanza.
+  const turni = history.filter((t) => typeof t.content === 'string' && t.content.trim() !== '');
   const messages =
-    history.length > 0
-      ? history
+    turni.length > 0
+      ? turni
       : [{ role: 'user' as const, content: 'Inizia la conversazione presentandoti.' }];
 
   const now = opts?.now ?? new Date();
