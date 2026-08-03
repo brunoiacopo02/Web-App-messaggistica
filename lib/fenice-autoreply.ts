@@ -499,7 +499,14 @@ export async function drainMarioReplies(
             level: 'error',
           });
         }
-        finalStatus = 'booked'; break;
+        // NON si va su 'booked': quello stato protegge un appuntamento REGISTRATO
+        // (`bot_outcome` valorizzato) dal declassamento, ed è anche il lucchetto del
+        // drain — quindi congela la chat per sempre. Qui non c'è nulla da proteggere:
+        // il bot ha solo intuito l'appuntamento senza leggerne la data. Restando
+        // 'active' al turno dopo può chiedere giorno e ora, e allora sì che l'esito
+        // parte e lo stato diventa terminale per davvero.
+        // (Caso reale conv 3401: il lead ha scritto altre due volte nel vuoto.)
+        break;
       }
     }
   } catch (err) {

@@ -306,6 +306,31 @@ describe('drainMarioReplies — guardia canSendOutcome dal vivo', () => {
     expect(calls.finalStatusWrites).toEqual(['closed']); // sendOutcome mock risolve { sent: true }
   });
 
+  // Caso reale conv 3401 (lead Nayha, 30/07): il bot capisce che l'appuntamento c'è
+  // ma non ne estrae la data, quindi nessun esito parte. Prima finiva su 'booked' —
+  // che è terminale e non claimabile — e il bot restava muto per sempre: il lead ha
+  // scritto altre due volte, compreso un dubbio personale, senza mai una risposta.
+  // 'booked' protegge un appuntamento REGISTRATO; qui non c'è nulla da proteggere.
+  it('appuntamento intuito ma senza data: la conversazione resta viva, non si congela su booked', async () => {
+    const claimedRow: ClaimedRow = { id: 3401, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const rows: FakeMsgRow[] = [
+      OPENING,
+      { direction: 'in', body: 'Ma ho scelto 31/7 alle 15. Va bene così?', template_sid: null, created_at: '2026-07-30T12:08:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto, allora ci siamo.',
+      appointmentFixed: true, passToHuman: false, videoWatched: false,
+      // niente outcome: la data non è stata parsata
+    });
+
+    await drainMarioReplies(supabase, 3401, '+391234567890', () => 0);
+
+    expect(calls.finalStatusWrites).toEqual(['active']);
+    // L'allarme resta: serve comunque che qualcuno se ne accorga.
+    expect(calls.events.map((e) => e.type)).toContain('booked_without_outcome');
+  });
+
   it('conversazione active con nuovo esito CRM legittimo: sendOutcome viene chiamata normalmente (controllo di non-regressione)', async () => {
     const claimedRow: ClaimedRow = { id: 43, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
     const rows: FakeMsgRow[] = [
