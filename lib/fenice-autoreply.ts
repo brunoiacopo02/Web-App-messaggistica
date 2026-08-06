@@ -9,7 +9,7 @@ import { ensureConfirmationBlock, containsVideoLink } from './confirmation-block
 import { unknownFeniceLinks } from './outbound-sanitize';
 import { generateBotReport } from './bot-report';
 import { sendOutcome } from './bot-outcome';
-import { personaForConversation, PERSONA_NAME } from './persona';
+import { personaForConversation, PERSONA_NAME, OPENING_ENV_KEYS } from './persona';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -89,9 +89,7 @@ type DrainMsgRow = MsgRow & { template_sid: string | null };
  *  Env assenti ⇒ set vuoto ⇒ persona sempre Mario (comportamento identico a oggi). */
 export function martaSidsFromEnv(env: NodeJS.ProcessEnv = process.env): Set<string> {
   const keys = [
-    'OPENING_SID_C1', 'OPENING_SID_C2',
-    'OPENING_SID_T1', 'OPENING_SID_T2',
-    'OPENING_SID_J1', 'OPENING_SID_J2',
+    ...OPENING_ENV_KEYS,
     'MARTA_SEQ_TEMPLATE_SID_1', 'MARTA_SEQ_TEMPLATE_SID_2',
     'MARTA_SEQ_TEMPLATE_SID_3', 'MARTA_SEQ_TEMPLATE_SID_4',
     'MARTA_REENGAGE_TEMPLATE_SID',

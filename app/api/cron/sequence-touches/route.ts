@@ -22,6 +22,7 @@ import {
   openingEnvKey,
   openingBody,
   PERSONA_NAME,
+  OPENING_ENV_KEYS,
 } from '@/lib/persona';
 import { firstNameOf, templateName } from '@/lib/name';
 
@@ -127,9 +128,7 @@ export async function GET(req: NextRequest) {
   const martaReengageSid = process.env.MARTA_REENGAGE_TEMPLATE_SID;
   // Tutti i SID "Marta" (aperture A/B + sequenza + riaggancio): servono a derivare
   // la persona di una conversazione dal primo template outbound.
-  const martaOpeningSids = ['C1', 'C2', 'T1', 'T2', 'J1', 'J2'].map(
-    (k) => process.env[`OPENING_SID_${k}`],
-  );
+  const martaOpeningSids = OPENING_ENV_KEYS.map((k) => process.env[k]);
   const martaSids = new Set(
     [...martaOpeningSids, ...martaSeqSidByIndex, martaReengageSid].filter((s): s is string => !!s),
   );
