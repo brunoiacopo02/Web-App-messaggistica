@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { resolveOutcomeAction, buildLockedNote } from './bot-outcome-rules';
+import {
+  resolveOutcomeAction,
+  buildLockedNote,
+  checkDataRichiamo,
+  buildRichiamoSenzaDataNote,
+  RICHIAMO_ORIZZONTE_MS,
+} from './bot-outcome-rules';
 import { formatRomeDateTime } from './rome-time';
 
 const DATE = '2026-06-29T17:00:00Z';
@@ -125,5 +131,66 @@ describe('buildLockedNote — confronto date per istante, non per stringa (round
     expect(n).toContain('spostare');
     expect(n).toContain(diffHuman);
     expect(n).toContain(existingHuman);
+  });
+});
+
+describe('checkDataRichiamo', () => {
+  const now = Date.parse('2026-08-06T12:00:00+02:00');
+
+  it('data futura entro l\'orizzonte → ok', () => {
+    expect(checkDataRichiamo('2026-08-20T10:00:00+02:00', now)).toEqual({ ok: true });
+    expect(checkDataRichiamo('2026-09-01T10:00:00+02:00', now)).toEqual({ ok: true });
+  });
+
+  it('data assente → assente', () => {
+    expect(checkDataRichiamo(undefined, now)).toEqual({ ok: false, motivo: 'assente' });
+    expect(checkDataRichiamo('', now)).toEqual({ ok: false, motivo: 'assente' });
+  });
+
+  it('data illeggibile → illeggibile', () => {
+    expect(checkDataRichiamo('a settembre', now)).toEqual({ ok: false, motivo: 'illeggibile' });
+    expect(checkDataRichiamo('2026-13-45T99:00:00+02:00', now)).toEqual({ ok: false, motivo: 'illeggibile' });
+  });
+
+  it('data nel passato → passato (caso reale conv 3369: 27/01/2026)', () => {
+    expect(checkDataRichiamo('2026-01-27T09:00:00+01:00', now)).toEqual({ ok: false, motivo: 'passato' });
+    expect(checkDataRichiamo('2026-08-06T11:59:00+02:00', now)).toEqual({ ok: false, motivo: 'passato' });
+  });
+
+  it('oltre ~6 mesi → oltre_orizzonte', () => {
+    expect(checkDataRichiamo('2028-08-06T10:00:00+02:00', now)).toEqual({ ok: false, motivo: 'oltre_orizzonte' });
+    expect(checkDataRichiamo('2027-08-06T10:00:00+02:00', now)).toEqual({ ok: false, motivo: 'oltre_orizzonte' });
+  });
+
+  it('il confine dell\'orizzonte è incluso', () => {
+    const limite = new Date(now + RICHIAMO_ORIZZONTE_MS).toISOString();
+    expect(checkDataRichiamo(limite, now)).toEqual({ ok: true });
+    const oltre = new Date(now + RICHIAMO_ORIZZONTE_MS + 60_000).toISOString();
+    expect(checkDataRichiamo(oltre, now)).toEqual({ ok: false, motivo: 'oltre_orizzonte' });
+  });
+});
+
+describe('buildRichiamoSenzaDataNote', () => {
+  it('riporta le parole letterali del lead', () => {
+    const n = buildRichiamoSenzaDataNote({ motivo: 'illeggibile', leadWords: 'ci risentiamo a settembre' });
+    expect(n).toContain('"ci risentiamo a settembre"');
+    expect(n).toContain('da concordare');
+  });
+
+  it('senza parole del lead resta una nota sensata', () => {
+    const n = buildRichiamoSenzaDataNote({ motivo: 'assente' });
+    expect(n).toContain('non ha indicato quando');
+    expect(n).not.toContain('""');
+  });
+
+  it('distingue la data nel passato da quella assente', () => {
+    expect(buildRichiamoSenzaDataNote({ motivo: 'passato' })).toContain('nel passato');
+    expect(buildRichiamoSenzaDataNote({ motivo: 'oltre_orizzonte' })).toContain('troppo lontana');
+  });
+
+  it('non contiene mai una data: è proprio quella che non ci fidiamo a mandare', () => {
+    for (const motivo of ['assente', 'illeggibile', 'passato', 'oltre_orizzonte'] as const) {
+      expect(buildRichiamoSenzaDataNote({ motivo, leadWords: 'boh' })).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+    }
   });
 });
