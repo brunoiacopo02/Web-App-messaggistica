@@ -13,12 +13,12 @@ const auth = 'Basic ' + Buffer.from(`${SID}:${TOK}`).toString('base64');
 // Cloni delle varianti 1, con la SOLA presentazione cambiata: l'A/B isola così
 // esattamente il costo della dichiarazione. Testi allineati a lib/persona.ts.
 const TEMPLATES = [
-  { key: 'OPENING_SID_C3', name: 'fenice_open_c3_marta_ia_v1', body: `Ciao {{1}}, sono Marta, l'assistente digitale di Fenice Academy. Le tue 10 ore gratuite arrivano via email a minuti. Intanto dimmi: punti a una seconda entrata o a cambiare proprio lavoro?` },
+  { key: 'OPENING_SID_C3', name: 'fenice_open_c3_marta_ia_v1', body: `Ciao {{1}}, sono Marta, l’assistente digitale di Fenice Academy. Le tue 10 ore gratuite arrivano via email a minuti. Intanto dimmi: punti a una seconda entrata o a cambiare proprio lavoro?` },
   { key: 'OPENING_SID_C4', name: 'fenice_open_c4_marta_ia_v1', body: `Ciao {{1}}, sono Marta, digital assistant di Fenice Academy. Le tue 10 ore gratuite arrivano via email a minuti. Intanto dimmi: punti a una seconda entrata o a cambiare proprio lavoro?` },
-  { key: 'OPENING_SID_T3', name: 'fenice_open_t3_marta_ia_v1', body: `Ciao {{1}}, sono Marta, l'assistente digitale di Fenice Academy. L'accesso al canale Telegram ti arriva via email a breve. Intanto dimmi: ti interessa più un'entrata extra o cambiare proprio lavoro?` },
-  { key: 'OPENING_SID_T4', name: 'fenice_open_t4_marta_ia_v1', body: `Ciao {{1}}, sono Marta, digital assistant di Fenice Academy. L'accesso al canale Telegram ti arriva via email a breve. Intanto dimmi: ti interessa più un'entrata extra o cambiare proprio lavoro?` },
-  { key: 'OPENING_SID_J3', name: 'fenice_open_j3_marta_ia_v1', body: `Ciao {{1}}, sono Marta, l'assistente digitale di Fenice Academy. Il simulatore ti dirà quale professione digitale ti si addice di più: tu intanto dimmi, punti a un'entrata extra o a cambiare lavoro?` },
-  { key: 'OPENING_SID_J4', name: 'fenice_open_j4_marta_ia_v1', body: `Ciao {{1}}, sono Marta, digital assistant di Fenice Academy. Il simulatore ti dirà quale professione digitale ti si addice di più: tu intanto dimmi, punti a un'entrata extra o a cambiare lavoro?` },
+  { key: 'OPENING_SID_T3', name: 'fenice_open_t3_marta_ia_v1', body: `Ciao {{1}}, sono Marta, l’assistente digitale di Fenice Academy. L’accesso al canale Telegram ti arriva via email a breve. Intanto dimmi: ti interessa più un’entrata extra o cambiare proprio lavoro?` },
+  { key: 'OPENING_SID_T4', name: 'fenice_open_t4_marta_ia_v1', body: `Ciao {{1}}, sono Marta, digital assistant di Fenice Academy. L’accesso al canale Telegram ti arriva via email a breve. Intanto dimmi: ti interessa più un’entrata extra o cambiare proprio lavoro?` },
+  { key: 'OPENING_SID_J3', name: 'fenice_open_j3_marta_ia_v1', body: `Ciao {{1}}, sono Marta, l’assistente digitale di Fenice Academy. Il simulatore ti dirà quale professione digitale ti si addice di più: tu intanto dimmi, punti a un’entrata extra o a cambiare lavoro?` },
+  { key: 'OPENING_SID_J4', name: 'fenice_open_j4_marta_ia_v1', body: `Ciao {{1}}, sono Marta, digital assistant di Fenice Academy. Il simulatore ti dirà quale professione digitale ti si addice di più: tu intanto dimmi, punti a un’entrata extra o a cambiare lavoro?` },
 ];
 
 for (const t of TEMPLATES) {
