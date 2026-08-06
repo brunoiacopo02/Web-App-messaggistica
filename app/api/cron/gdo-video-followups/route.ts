@@ -102,6 +102,9 @@ export async function GET(req: NextRequest) {
     // Fermo manuale dal pannello: la chat è in mano a una persona, il bot non ci
     // scrive più — solleciti compresi.
     .is('ai_paused_at', null)
+    // Disdetta chiesta: sollecitare il video di una call che il lead vuole spostare è
+    // solo danno.
+    .is('cancel_requested_at', null)
     .limit(500);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
