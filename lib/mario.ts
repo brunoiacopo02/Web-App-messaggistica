@@ -3,6 +3,7 @@ import { buildMarioSystem } from './mario-prompt';
 import { romeNowContext } from './rome-time';
 import { bookingSlotsContext } from './booking-slots';
 import { sanitizeOutbound } from './outbound-sanitize';
+import { isoWithOffset } from './bot-contract';
 
 export const MARIO_MODEL = 'claude-sonnet-4-6';
 
@@ -37,7 +38,16 @@ export function parseMarioReply(raw: string): MarioResult {
     const kind = m[1].toUpperCase();
     const arg = (m[2] ?? '').trim();
     if (kind === 'APPUNTAMENTO') { outcome = 'APPUNTAMENTO'; scheduledAt = arg || undefined; }
-    else if (kind === 'RICHIAMO') { outcome = 'RICHIAMO'; scheduledAt = arg || undefined; }
+    else if (kind === 'RICHIAMO') {
+      outcome = 'RICHIAMO';
+      // Il modello può mettere qui una data SOLO se gliel'ha detta il lead; quando il
+      // lead dice "a settembre" mette le sue parole. Un argomento che non è una data
+      // ISO con fuso NON diventa un istante: sarebbe un'ora inventata, ed è esattamente
+      // quello che per mesi è finito in agenda ai commerciali (22 richiami su 26 su
+      // un'ora tonda che nessuno aveva detto).
+      if (arg && isoWithOffset(arg)) scheduledAt = arg;
+      else note = arg || undefined;
+    }
     else if (kind === 'SCARTO') { outcome = 'DA_SCARTARE'; discardReason = arg || undefined; }
     else if (kind === 'INTERROTTO') { outcome = 'INTERROTTO'; note = arg || undefined; }
   }
