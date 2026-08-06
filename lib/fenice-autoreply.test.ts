@@ -417,6 +417,51 @@ describe('drainMarioReplies — guardia canSendOutcome dal vivo', () => {
     expect(calls.finalStatusWrites).toEqual(['active']);
   });
 
+  // Task 7: un RICHIAMO senza una data utilizzabile parte come NOTA ma la
+  // conversazione non è esitata — sendOutcome lo segnala con keepOpen:true e il
+  // drain non deve chiuderla: il bot deve poter ancora chiedere al lead quando.
+  it('sendOutcome torna keepOpen:true (richiamo senza data utilizzabile): la conversazione resta active', async () => {
+    vi.mocked(sendOutcome).mockResolvedValueOnce({ sent: true, keepOpen: true });
+    const claimedRow: ClaimedRow = { id: 46, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const rows: FakeMsgRow[] = [
+      OPENING,
+      { direction: 'in', body: 'richiamatemi più avanti, non saprei dire quando', template_sid: null, created_at: '2026-07-25T09:00:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Va bene, ci risentiamo più avanti.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+      outcome: 'RICHIAMO', note: 'più avanti, non saprei dire quando',
+    });
+
+    await drainMarioReplies(supabase, 46, '+391234567890', () => 0);
+
+    expect(sendOutcome).toHaveBeenCalledTimes(1);
+    expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+
+  // Gemello del test sopra: senza questo, un finalStatus bloccato erroneamente su
+  // 'active' per ogni esito passerebbe comunque l'intera suite.
+  it('sendOutcome torna sent:true senza keepOpen (esito normale): la conversazione si chiude', async () => {
+    vi.mocked(sendOutcome).mockResolvedValueOnce({ sent: true });
+    const claimedRow: ClaimedRow = { id: 47, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const rows: FakeMsgRow[] = [
+      OPENING,
+      { direction: 'in', body: 'richiamatemi la prossima settimana', template_sid: null, created_at: '2026-07-25T09:00:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Va bene, ti richiamiamo la prossima settimana.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+      outcome: 'RICHIAMO', scheduledAt: '2026-08-03T10:00:00+02:00',
+    });
+
+    await drainMarioReplies(supabase, 47, '+391234567890', () => 0);
+
+    expect(sendOutcome).toHaveBeenCalledTimes(1);
+    expect(calls.finalStatusWrites).toEqual(['closed']);
+  });
+
   it("la risposta di Mario viene registrata con sender 'bot'", async () => {
     const claimedRow: ClaimedRow = { id: 45, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
     const rows: FakeMsgRow[] = [
