@@ -6,6 +6,7 @@ import {
   openingBody,
   personaForConversation,
   PERSONA_NAME,
+  OPENING_ENV_KEYS,
   type FunnelKey,
 } from './persona';
 
@@ -31,16 +32,34 @@ describe('normalizeFunnel', () => {
   });
 });
 
-describe('variantIndexFor (parità di conversationId)', () => {
-  it('dispari → 1', () => {
+describe('variantIndexFor (4 vie sul resto modulo 4)', () => {
+  it('resto 1 → variante 1', () => {
     expect(variantIndexFor(1)).toBe(1);
-    expect(variantIndexFor(3)).toBe(1);
+    expect(variantIndexFor(5)).toBe(1);
     expect(variantIndexFor(1001)).toBe(1);
   });
-  it('pari → 2', () => {
-    expect(variantIndexFor(0)).toBe(2);
+  it('resto 2 → variante 2', () => {
     expect(variantIndexFor(2)).toBe(2);
-    expect(variantIndexFor(1000)).toBe(2);
+    expect(variantIndexFor(6)).toBe(2);
+    expect(variantIndexFor(1002)).toBe(2);
+  });
+  it('resto 3 → variante 3', () => {
+    expect(variantIndexFor(3)).toBe(3);
+    expect(variantIndexFor(7)).toBe(3);
+    expect(variantIndexFor(1003)).toBe(3);
+  });
+  it('multipli di 4 → variante 4, mai 0', () => {
+    expect(variantIndexFor(4)).toBe(4);
+    expect(variantIndexFor(0)).toBe(4);
+    expect(variantIndexFor(1000)).toBe(4);
+  });
+  it('distribuisce in quattro gruppi uguali su 400 id consecutivi', () => {
+    const conta = { 1: 0, 2: 0, 3: 0, 4: 0 } as Record<number, number>;
+    for (let id = 1; id <= 400; id++) conta[variantIndexFor(id)]++;
+    expect(conta).toEqual({ 1: 100, 2: 100, 3: 100, 4: 100 });
+  });
+  it('nessun id produce un valore fuori da 1..4', () => {
+    for (let id = 0; id < 50; id++) expect([1, 2, 3, 4]).toContain(variantIndexFor(id));
   });
 });
 
@@ -60,6 +79,16 @@ describe('openingEnvKey', () => {
   it('other → fallback su C1/C2', () => {
     expect(openingEnvKey('other', 1)).toBe('OPENING_SID_C1');
     expect(openingEnvKey('other', 2)).toBe('OPENING_SID_C2');
+  });
+  it('varianti dichiarate 3 e 4 per ogni funnel', () => {
+    expect(openingEnvKey('corso10', 3)).toBe('OPENING_SID_C3');
+    expect(openingEnvKey('corso10', 4)).toBe('OPENING_SID_C4');
+    expect(openingEnvKey('telegram', 3)).toBe('OPENING_SID_T3');
+    expect(openingEnvKey('telegram', 4)).toBe('OPENING_SID_T4');
+    expect(openingEnvKey('jobsim', 3)).toBe('OPENING_SID_J3');
+    expect(openingEnvKey('jobsim', 4)).toBe('OPENING_SID_J4');
+    expect(openingEnvKey('other', 3)).toBe('OPENING_SID_C3');
+    expect(openingEnvKey('other', 4)).toBe('OPENING_SID_C4');
   });
 });
 
@@ -116,12 +145,85 @@ describe('openingBody — testi ESATTI della spec', () => {
   it('nessun placeholder residuo in nessuna variante', () => {
     const funnels: FunnelKey[] = ['corso10', 'telegram', 'jobsim', 'other'];
     for (const f of funnels) {
-      for (const v of [1, 2] as const) {
+      for (const v of [1, 2, 3, 4] as const) {
         const body = openingBody(f, v, 'Luca');
         expect(body).not.toMatch(/\{|\}|undefined|null/);
         expect(body.startsWith('Ciao Luca,')).toBe(true);
       }
     }
+  });
+});
+
+describe('aperture con dichiarazione IA (AI Act art. 50)', () => {
+  it('C3 — assistente digitale', () => {
+    expect(openingBody('corso10', 3, 'Luca')).toBe(
+      "Ciao Luca, sono Marta, l'assistente digitale di Fenice Academy. Le tue 10 ore gratuite arrivano via email a minuti. Intanto dimmi: punti a una seconda entrata o a cambiare proprio lavoro?",
+    );
+  });
+  it('C4 — digital assistant', () => {
+    expect(openingBody('corso10', 4, 'Luca')).toBe(
+      'Ciao Luca, sono Marta, digital assistant di Fenice Academy. Le tue 10 ore gratuite arrivano via email a minuti. Intanto dimmi: punti a una seconda entrata o a cambiare proprio lavoro?',
+    );
+  });
+  it('T3 — assistente digitale', () => {
+    expect(openingBody('telegram', 3, 'Luca')).toBe(
+      "Ciao Luca, sono Marta, l'assistente digitale di Fenice Academy. L'accesso al canale Telegram ti arriva via email a breve. Intanto dimmi: ti interessa più un'entrata extra o cambiare proprio lavoro?",
+    );
+  });
+  it('T4 — digital assistant', () => {
+    expect(openingBody('telegram', 4, 'Luca')).toBe(
+      "Ciao Luca, sono Marta, digital assistant di Fenice Academy. L'accesso al canale Telegram ti arriva via email a breve. Intanto dimmi: ti interessa più un'entrata extra o cambiare proprio lavoro?",
+    );
+  });
+  it('J3 — assistente digitale', () => {
+    expect(openingBody('jobsim', 3, 'Luca')).toBe(
+      "Ciao Luca, sono Marta, l'assistente digitale di Fenice Academy. Il simulatore ti dirà quale professione digitale ti si addice di più: tu intanto dimmi, punti a un'entrata extra o a cambiare lavoro?",
+    );
+  });
+  it('J4 — digital assistant', () => {
+    expect(openingBody('jobsim', 4, 'Luca')).toBe(
+      "Ciao Luca, sono Marta, digital assistant di Fenice Academy. Il simulatore ti dirà quale professione digitale ti si addice di più: tu intanto dimmi, punti a un'entrata extra o a cambiare lavoro?",
+    );
+  });
+
+  it('3 e 4 differiscono dalla variante 1 SOLO per la presentazione', () => {
+    for (const f of ['corso10', 'telegram', 'jobsim'] as FunnelKey[]) {
+      const v1 = openingBody(f, 1, 'Luca');
+      const coda = v1.slice(v1.indexOf('Academy.'));
+      expect(openingBody(f, 3, 'Luca').endsWith(coda)).toBe(true);
+      expect(openingBody(f, 4, 'Luca').endsWith(coda)).toBe(true);
+    }
+  });
+
+  it('la dichiarazione è esplicita e non ammicca a un umano', () => {
+    for (const f of ['corso10', 'telegram', 'jobsim'] as FunnelKey[]) {
+      expect(openingBody(f, 3, 'Luca')).toContain("l'assistente digitale di Fenice Academy");
+      expect(openingBody(f, 4, 'Luca')).toContain('digital assistant di Fenice Academy');
+    }
+  });
+
+  it('nessuna apertura propone il passaggio a un operatore', () => {
+    for (const f of ['corso10', 'telegram', 'jobsim'] as FunnelKey[]) {
+      for (const v of [1, 2, 3, 4] as const) {
+        expect(openingBody(f, v, 'Luca')).not.toMatch(/operatore|collega in carne/i);
+      }
+    }
+  });
+});
+
+describe('OPENING_ENV_KEYS', () => {
+  it('elenca tutte e 12 le env delle aperture', () => {
+    expect(OPENING_ENV_KEYS).toEqual([
+      'OPENING_SID_C1', 'OPENING_SID_C2', 'OPENING_SID_C3', 'OPENING_SID_C4',
+      'OPENING_SID_T1', 'OPENING_SID_T2', 'OPENING_SID_T3', 'OPENING_SID_T4',
+      'OPENING_SID_J1', 'OPENING_SID_J2', 'OPENING_SID_J3', 'OPENING_SID_J4',
+    ]);
+  });
+  it('coincide con quello che produce openingEnvKey', () => {
+    const generate = (['corso10', 'telegram', 'jobsim'] as FunnelKey[]).flatMap((f) =>
+      ([1, 2, 3, 4] as const).map((v) => openingEnvKey(f, v)),
+    );
+    expect([...OPENING_ENV_KEYS].sort()).toEqual([...generate].sort());
   });
 });
 
