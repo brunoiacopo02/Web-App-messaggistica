@@ -79,3 +79,51 @@ export function resolveOutcomeAction(
   }
   return { kind: 'normal' };
 }
+
+/**
+ * Oltre questo orizzonte una data di richiamo non è più un appuntamento telefonico: è
+ * un numero che il modello ha tirato fuori da "più avanti". ~6 mesi.
+ */
+export const RICHIAMO_ORIZZONTE_MS = 183 * 24 * 3600_000;
+
+export type MotivoDataNonUsabile = 'assente' | 'illeggibile' | 'passato' | 'oltre_orizzonte';
+export type RichiamoCheck = { ok: true } | { ok: false; motivo: MotivoDataNonUsabile };
+
+/**
+ * La data di un RICHIAMO è utilizzabile? `isoWithOffset` valida il FORMATO; qui si
+ * guarda la plausibilità, che è la cosa che mancava: una data nel passato o a due anni
+ * da oggi passa il formato e finisce in agenda a un commerciale.
+ */
+export function checkDataRichiamo(date: string | undefined, nowMs: number): RichiamoCheck {
+  if (!date || !date.trim()) return { ok: false, motivo: 'assente' };
+  const t = Date.parse(date);
+  if (Number.isNaN(t)) return { ok: false, motivo: 'illeggibile' };
+  if (t < nowMs) return { ok: false, motivo: 'passato' };
+  if (t - nowMs > RICHIAMO_ORIZZONTE_MS) return { ok: false, motivo: 'oltre_orizzonte' };
+  return { ok: true };
+}
+
+const DETTAGLIO_MOTIVO: Record<MotivoDataNonUsabile, string> = {
+  assente: 'ma non ha indicato quando',
+  illeggibile: 'ma non ha indicato quando in modo utilizzabile',
+  passato: 'ma la data raccolta è nel passato e non è utilizzabile',
+  oltre_orizzonte: 'ma la data raccolta è troppo lontana per essere quella vera',
+};
+
+/**
+ * La nota che parte al posto di un RICHIAMO con una data che non ci fidiamo a mandare.
+ * Nessuna data dentro, di proposito: si riportano le parole del lead e si dice
+ * esplicitamente che giorno e ora sono da concordare. La data scartata viaggia
+ * nell'event_log, dove serve a noi e non confonde il commerciale.
+ */
+export function buildRichiamoSenzaDataNote(input: {
+  motivo: MotivoDataNonUsabile;
+  leadWords?: string;
+}): string {
+  const parole = input.leadWords?.trim();
+  const citazione = parole ? ` Parole del lead: "${parole}".` : '';
+  return (
+    `Il lead ha chiesto di essere ricontattato ${DETTAGLIO_MOTIVO[input.motivo]}. ` +
+    `Da richiamare, giorno e ora da concordare.${citazione}`
+  );
+}

@@ -279,6 +279,66 @@ describe('sendOutcome — nota duplicata non rimandata', () => {
   });
 });
 
+describe('sendOutcome — RICHIAMO con data non utilizzabile', () => {
+  const attivo = { crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null };
+  const bodyInviato = () => JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string);
+
+  it('parte come NOTA con le parole del lead, mai come RICHIAMO con data', async () => {
+    const { supabase } = makeSupabase(attivo);
+    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', note: 'ci risentiamo a settembre' });
+
+    const body = bodyInviato();
+    expect(body.outcome).toBe('NOTA');
+    expect(body.date).toBeUndefined();
+    expect(body.note).toContain('"ci risentiamo a settembre"');
+    expect(res.sent).toBe(true);
+    expect(res.keepOpen).toBe(true);
+  });
+
+  it('una data nel passato non arriva mai al CRM (caso conv 3369)', async () => {
+    const { supabase } = makeSupabase(attivo);
+    await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: '2026-01-27T09:00:00+01:00' });
+    const body = bodyInviato();
+    expect(body.outcome).toBe('NOTA');
+    expect(JSON.stringify(body)).not.toContain('2026-01-27');
+  });
+
+  it('una data a due anni non arriva mai al CRM', async () => {
+    const { supabase } = makeSupabase(attivo);
+    const fra2anni = new Date(Date.now() + 730 * 86400_000).toISOString();
+    await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: fra2anni });
+    expect(bodyInviato().outcome).toBe('NOTA');
+  });
+
+  it('non tocca bot_outcome né ai_status: la conversazione resta lavorabile', async () => {
+    const { supabase, calls } = makeSupabase(attivo);
+    await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', note: 'più avanti' });
+    for (const u of calls.updates) {
+      expect(u).not.toHaveProperty('bot_outcome');
+      expect(u).not.toHaveProperty('ai_status');
+    }
+  });
+
+  it('una data valida detta dal lead passa intatta come RICHIAMO', async () => {
+    const { supabase } = makeSupabase(attivo);
+    const fra7giorni = new Date(Date.now() + 7 * 86400_000).toISOString();
+    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: fra7giorni });
+    const body = bodyInviato();
+    expect(body.outcome).toBe('RICHIAMO');
+    expect(body.date).toBe(fra7giorni);
+    expect(res.keepOpen).toBeUndefined();
+  });
+
+  it('registra l\'evento con la data scartata, per poterla ritrovare', async () => {
+    const { supabase, calls } = makeSupabase(attivo);
+    await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: '2026-01-27T09:00:00+01:00' });
+    const ev = calls.events.find((e: { type: string }) => e.type === 'richiamo_senza_data');
+    expect(ev).toBeTruthy();
+    expect(ev.payload.dataScartata).toBe('2026-01-27T09:00:00+01:00');
+    expect(ev.payload.motivo).toBe('passato');
+  });
+});
+
 describe('sendOutcome — canale solo-NOTA per i lead dei GDO (noteOnly)', () => {
   // Lead di proprietà del GDO: nessun esito nostro, nessun appuntamento nostro.
   const CONV_GDO = { crm_lead_id: 'gdo1', bot_outcome: null, bot_scheduled_at: null };
