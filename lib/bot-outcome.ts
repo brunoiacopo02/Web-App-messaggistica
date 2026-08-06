@@ -1,7 +1,12 @@
 import type { getSupabaseAdmin } from './supabase/admin';
 import { signPayload } from './bot-hmac';
 import { validateOutcomeBody, type BotOutcome, type BotOutcomeBody, type BotReport } from './bot-contract';
-import { buildLockedNote, resolveOutcomeAction } from './bot-outcome-rules';
+import {
+  buildLockedNote,
+  buildRichiamoSenzaDataNote,
+  checkDataRichiamo,
+  resolveOutcomeAction,
+} from './bot-outcome-rules';
 import { noteFingerprint } from './note-dedup';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
@@ -23,6 +28,42 @@ async function notaGiaInviata(
     .eq('payload->>noteFingerprint', fingerprint)
     .limit(1);
   return (data ?? []).length > 0;
+}
+
+/** POST di una NOTA al CRM. Solo rete e log: nessuna decisione, nessuno stato locale. */
+async function inviaNotaAlCrm(
+  supabase: Supa,
+  conversationId: number,
+  crmLeadId: string,
+  note: string,
+  report: BotReport | undefined,
+  secret: string,
+): Promise<{ sent: boolean; status?: number; error?: string }> {
+  const body: BotOutcomeBody = { leadId: crmLeadId, outcome: 'NOTA', note, ...(report ? { report } : {}) };
+  const valid = validateOutcomeBody(body);
+  if (!valid.ok) {
+    await supabase.from('event_log').insert({
+      type: 'bot_outcome_error',
+      payload: { conversationId, crmLeadId, reason: valid.reason } as never,
+      message: `[bot-fissatore] nota non valida per lead ${crmLeadId}: ${valid.reason}`,
+      level: 'error',
+    });
+    return { sent: false, error: valid.reason };
+  }
+  const rawBody = JSON.stringify(body);
+  const url = process.env.CRM_OUTCOME_URL ?? DEFAULT_CRM_URL;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-bot-signature': signPayload(rawBody, secret) },
+      body: rawBody,
+    });
+    if (res.ok) return { sent: true, status: res.status };
+    const text = await res.text().catch(() => '');
+    return { sent: false, status: res.status, error: text || `http_${res.status}` };
+  } catch (e) {
+    return { sent: false, error: e instanceof Error ? e.message : 'errore' };
+  }
 }
 
 /**
@@ -132,7 +173,7 @@ export async function sendOutcome(
   conversationId: number,
   args: SendOutcomeArgs,
   opts: SendOutcomeOpts = {},
-): Promise<{ sent: boolean; status?: number; error?: string }> {
+): Promise<{ sent: boolean; status?: number; error?: string; keepOpen?: true }> {
   const interim = opts.interim === true && args.outcome === 'RICHIAMO';
   const secret = process.env.BOT_WEBHOOK_SECRET;
   if (!secret) return { sent: false, error: 'not_configured' };
@@ -148,6 +189,22 @@ export async function sendOutcome(
 
   if (opts.noteOnly === true) {
     return sendCrmNoteOnly(supabase, conversationId, crmLeadId, args, row?.bot_scheduled_at ?? null, secret);
+  }
+
+  // Un RICHIAMO senza una data che regga non è un richiamo: è un'ora inventata che
+  // finisce in agenda a un commerciale. Al CRM va una nota con le parole del lead, e
+  // la conversazione resta aperta — il bot deve poter ancora chiedere quando.
+  const dataCheck = args.outcome === 'RICHIAMO' ? checkDataRichiamo(args.date, Date.now()) : { ok: true as const };
+  if (!dataCheck.ok) {
+    const note = buildRichiamoSenzaDataNote({ motivo: dataCheck.motivo, leadWords: args.note });
+    await supabase.from('event_log').insert({
+      type: 'richiamo_senza_data',
+      payload: { conversationId, crmLeadId, motivo: dataCheck.motivo, dataScartata: args.date ?? null, note } as never,
+      message: `[bot-fissatore] RICHIAMO senza data utilizzabile (${dataCheck.motivo}) per lead ${crmLeadId}: inviato come nota`,
+      level: 'warn',
+    });
+    const esito = await inviaNotaAlCrm(supabase, conversationId, crmLeadId, note, args.report, secret);
+    return { ...esito, keepOpen: true };
   }
 
   const action = resolveOutcomeAction(

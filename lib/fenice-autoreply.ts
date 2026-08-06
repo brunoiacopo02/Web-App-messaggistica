@@ -447,7 +447,12 @@ export async function drainMarioReplies(
           // `finally` di questo drain riscriverebbe finalStatus sopra).
           // Postino: la conversazione non si chiude mai per un esito. Il lead è del
           // GDO, il bot resta il suo canale su questa chat.
-          if (!postino && (sent.sent || sent.error === 'note_duplicate')) finalStatus = 'closed';
+          // `keepOpen`: il CRM è stato informato con una nota (RICHIAMO senza una data
+          // utilizzabile) ma la conversazione NON è esitata — il bot deve poter ancora
+          // chiedere al lead quando gli va bene, invece di sparire.
+          if (!postino && !sent.keepOpen && (sent.sent || sent.error === 'note_duplicate')) {
+            finalStatus = 'closed';
+          }
           break;
         }
       }
