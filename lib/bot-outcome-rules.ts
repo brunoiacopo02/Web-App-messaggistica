@@ -127,3 +127,13 @@ export function buildRichiamoSenzaDataNote(input: {
     `Da richiamare, giorno e ora da concordare.${citazione}`
   );
 }
+
+/**
+ * Questo esito, su un lead con l'appuntamento GIÀ fissato, è una richiesta di
+ * disdetta o di spostamento? Serve a spegnere gli automatismi (promemoria, solleciti)
+ * senza toccare `bot_outcome`, che resta terminale.
+ * INTERROTTO e NON_RISPOSTO no: lì il lead non ha chiesto niente, è sparito.
+ */
+export function isRichiestaDisdetta(outcome: BotOutcome): boolean {
+  return outcome === 'DA_SCARTARE' || outcome === 'RICHIAMO';
+}

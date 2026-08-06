@@ -90,6 +90,7 @@ export type Database = {
           bot_report: Json | null
           bot_scheduled_at: string | null
           campaign_id: number | null
+          cancel_requested_at: string | null
           created_at: string
           crm_funnel: string | null
           crm_lead_id: string | null
@@ -127,6 +128,7 @@ export type Database = {
           bot_report?: Json | null
           bot_scheduled_at?: string | null
           campaign_id?: number | null
+          cancel_requested_at?: string | null
           created_at?: string
           crm_funnel?: string | null
           crm_lead_id?: string | null
@@ -164,6 +166,7 @@ export type Database = {
           bot_report?: Json | null
           bot_scheduled_at?: string | null
           campaign_id?: number | null
+          cancel_requested_at?: string | null
           created_at?: string
           crm_funnel?: string | null
           crm_lead_id?: string | null

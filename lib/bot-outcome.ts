@@ -5,6 +5,7 @@ import {
   buildLockedNote,
   buildRichiamoSenzaDataNote,
   checkDataRichiamo,
+  isRichiestaDisdetta,
   resolveOutcomeAction,
 } from './bot-outcome-rules';
 import { noteFingerprint } from './note-dedup';
@@ -66,6 +67,19 @@ async function inviaNotaAlCrm(
   }
 }
 
+/** Segna che il lead ha chiesto di annullare o spostare. Non tocca bot_outcome: è un
+ *  marcatore, non un declassamento. Spegne promemoria pre-call e solleciti GDO. */
+async function marcaDisdetta(supabase: Supa, conversationId: number, crmLeadId: string, outcome: BotOutcome): Promise<void> {
+  const at = new Date().toISOString();
+  await supabase.from('conversations').update({ cancel_requested_at: at }).eq('id', conversationId);
+  await supabase.from('event_log').insert({
+    type: 'cancel_requested',
+    payload: { conversationId, crmLeadId, outcome, at } as never,
+    message: `[bot-fissatore] il lead ${crmLeadId} ha chiesto di annullare/spostare: automatismi spenti su questa chat`,
+    level: 'info',
+  });
+}
+
 /**
  * Canale solo-NOTA: per i lead che restano di proprietà di un GDO (vedi
  * `enrollGdoLeadAsPostino`). Manda al CRM una NOTA e basta — mai un esito, mai una
@@ -81,6 +95,7 @@ async function sendCrmNoteOnly(
   secret: string,
 ): Promise<{ sent: boolean; status?: number; error?: string }> {
   const note = buildLockedNote(args, existingDate);
+  if (isRichiestaDisdetta(args.outcome)) await marcaDisdetta(supabase, conversationId, crmLeadId, args.outcome);
   const fp = noteFingerprint(note);
   if (await notaGiaInviata(supabase, 'bot_note_sent', conversationId, fp)) {
     await supabase.from('event_log').insert({
@@ -191,6 +206,16 @@ export async function sendOutcome(
     return sendCrmNoteOnly(supabase, conversationId, crmLeadId, args, row?.bot_scheduled_at ?? null, secret);
   }
 
+  // Un lead con l'appuntamento già fissato che chiede di annullare o spostare va
+  // marcato SUBITO: sotto, il ramo "RICHIAMO senza data" ritorna presto (prima di
+  // arrivare a resolveOutcomeAction) e perderebbe la marcatura se non lo facessimo
+  // qui. L'interim è un aggiornamento automatico della sequenza, non una richiesta
+  // del lead: non marca mai.
+  const holdsAppointment = (row?.bot_outcome ?? null) === 'APPUNTAMENTO';
+  if (holdsAppointment && !interim && isRichiestaDisdetta(args.outcome)) {
+    await marcaDisdetta(supabase, conversationId, crmLeadId, args.outcome);
+  }
+
   // Un RICHIAMO senza una data che regga non è un richiamo: è un'ora inventata che
   // finisce in agenda a un commerciale. Al CRM va una nota con le parole del lead, e
   // la conversazione resta aperta — il bot deve poter ancora chiedere quando.
@@ -218,6 +243,11 @@ export async function sendOutcome(
   if (interim && action.kind !== 'normal') {
     return { sent: false, error: 'interim_skipped_locked' };
   }
+
+  // La marcatura (se dovuta) è già stata scritta sopra, prima del ramo "RICHIAMO
+  // senza data": qui action.kind === 'locked' equivale a holdsAppointment, quindi non
+  // si ripete. Resta comunque PRIMA della dedup che segue, altrimenti una nota già
+  // inviata farebbe perdere il marcatore.
 
   // Una nota identica a una gia inviata su questa conversazione non aggiunge
   // informazione: il commerciale la vedrebbe solo duplicata sul CRM.
