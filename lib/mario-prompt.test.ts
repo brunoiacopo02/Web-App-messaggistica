@@ -447,3 +447,27 @@ describe('rientro sul tema: la chat non diventa una chiacchierata personale', ()
     expect(p).toContain('Vale anche a appuntamento già fissato');
   });
 });
+
+describe('date del richiamo — mai dedotte', () => {
+  const p = buildMarioSystem('Marta');
+
+  it('non autorizza più a usare la data dell\'appuntamento come ripiego', () => {
+    expect(p).not.toContain('altrimenti la data dell\'appuntamento');
+  });
+
+  it('vieta esplicitamente di inventare giorno e ora', () => {
+    expect(p).toContain('MAI INVENTARE UNA DATA');
+  });
+
+  it('dice di chiedere giorno e fascia oraria quando il lead non li dice', () => {
+    expect(p).toMatch(/chiedigli.*che giorno/i);
+  });
+
+  it('permette di mettere nel tag le parole del lead al posto della data', () => {
+    expect(p).toContain('le sue parole testuali');
+  });
+
+  it('senza una data detta dal lead la conversazione resta aperta', () => {
+    expect(p).toContain('non emettere nessun tag');
+  });
+});
