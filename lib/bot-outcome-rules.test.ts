@@ -4,6 +4,8 @@ import {
   buildLockedNote,
   checkDataRichiamo,
   buildRichiamoSenzaDataNote,
+  buildContattoUmanoNote,
+  paroleDelLead,
   RICHIAMO_ORIZZONTE_MS,
 } from './bot-outcome-rules';
 import { formatRomeDateTime } from './rome-time';
@@ -192,5 +194,55 @@ describe('buildRichiamoSenzaDataNote', () => {
     for (const motivo of ['assente', 'illeggibile', 'passato', 'oltre_orizzonte'] as const) {
       expect(buildRichiamoSenzaDataNote({ motivo, leadWords: 'boh' })).not.toMatch(/\d{4}-\d{2}-\d{2}/);
     }
+  });
+});
+
+describe('paroleDelLead', () => {
+  it('normalizza a-capo e spazi doppi: la nota deve restare leggibile di sguardo', () => {
+    expect(paroleDelLead('voglio\nparlare\ncon   qualcuno')).toBe('voglio parlare con qualcuno');
+  });
+
+  it('vuoto o soli spazi non è una citazione', () => {
+    expect(paroleDelLead('   ')).toBeNull();
+    expect(paroleDelLead(undefined)).toBeNull();
+  });
+
+  it('taglia i messaggi fiume su un confine di parola e segnala il taglio', () => {
+    const lungo = 'ho bisogno di parlare con qualcuno perche '.repeat(30);
+    const r = paroleDelLead(lungo);
+    expect(r).not.toBeNull();
+    expect(r!.length).toBeLessThanOrEqual(401);
+    expect(r!.endsWith('…')).toBe(true);
+    expect(r!.endsWith(' …')).toBe(false);
+  });
+
+  it('sotto la soglia non tocca niente', () => {
+    expect(paroleDelLead('passatemi un responsabile')).toBe('passatemi un responsabile');
+  });
+});
+
+describe('buildContattoUmanoNote', () => {
+  it('il fatto in testa, poi le parole del lead', () => {
+    const n = buildContattoUmanoNote({ leadWords: 'posso parlare con un vostro operatore?' });
+    expect(n.startsWith('RICHIESTA DI PARLARE CON UNA PERSONA')).toBe(true);
+    expect(n).toContain('"posso parlare con un vostro operatore?"');
+  });
+
+  it('senza le parole del lead non inventa il contenuto della richiesta', () => {
+    const n = buildContattoUmanoNote({});
+    expect(n.startsWith('RICHIESTA DI PARLARE CON UNA PERSONA')).toBe(true);
+    expect(n).not.toContain('""');
+    expect(n.trim().length).toBeGreaterThan(0);
+  });
+
+  it('il contesto va in coda e non sostituisce le parole del lead', () => {
+    const n = buildContattoUmanoNote({ leadWords: 'voglio disdire', motivo: 'insiste da due turni' });
+    expect(n).toContain('"voglio disdire"');
+    expect(n).toContain('insiste da due turni');
+  });
+
+  it('resta corta: le Conferme la leggono col telefono in mano', () => {
+    const n = buildContattoUmanoNote({ leadWords: 'ciao '.repeat(500) });
+    expect(n.length).toBeLessThan(600);
   });
 });
