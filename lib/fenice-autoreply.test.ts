@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { shouldAutoReply, shouldReopen, nextUnansweredInboundIndex, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS, canSendOutcome, drainMarioReplies, isLockStale, LOCK_TTL_MS, shouldSendGdoVideo } from './fenice-autoreply';
+import { shouldAutoReply, shouldReopen, nextUnansweredInboundIndex, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS, canSendOutcome, drainMarioReplies, isLockStale, LOCK_TTL_MS, shouldSendGdoVideo, martaSidsFromEnv } from './fenice-autoreply';
 
 vi.mock('./mario', () => ({ generateMarioReply: vi.fn(), GDO_CONTEXT_NOTE: 'CONTESTO-GDO' }));
 vi.mock('./twilio', () => ({ sendFreeText: vi.fn(async () => ({ sid: 'SM_fake', status: 'queued' })) }));
@@ -9,6 +9,7 @@ vi.mock('./bot-outcome', () => ({ sendOutcome: vi.fn(async () => ({ sent: true }
 import { generateMarioReply, GDO_CONTEXT_NOTE } from './mario';
 import { sendOutcome } from './bot-outcome';
 import { NOTA_VIDEO, NOTA_NOEMI } from './gdo-context-note';
+import { OPENING_ENV_KEYS, personaForConversation } from './persona';
 
 describe('shouldAutoReply', () => {
   const ok = { toMatchesFenice: true, autoReplyOn: true, aiOwner: 'mario', aiStatus: 'active' };
@@ -183,6 +184,32 @@ describe('canSendOutcome', () => {
 
   it('continua a bloccare su booked, che è un problema diverso', () => {
     expect(canSendOutcome({ crmLeadId: 'crm1', aiStatus: 'booked' })).toBe(false);
+  });
+});
+
+describe('martaSidsFromEnv — aperture dichiarate', () => {
+  it('riconosce tutti e 12 i SID di apertura', () => {
+    const env = Object.fromEntries(
+      OPENING_ENV_KEYS.map((k, i) => [k, `SID_${i}`]),
+    ) as NodeJS.ProcessEnv;
+    const sids = martaSidsFromEnv(env);
+    for (let i = 0; i < OPENING_ENV_KEYS.length; i++) expect(sids.has(`SID_${i}`)).toBe(true);
+    expect(sids.size).toBe(12);
+  });
+
+  it('una conversazione aperta con C3 prosegue come Marta', () => {
+    const env = { OPENING_SID_C3: 'HXdichiarata' } as unknown as NodeJS.ProcessEnv;
+    const sids = martaSidsFromEnv(env);
+    expect(
+      personaForConversation(
+        [{ direction: 'out', template_sid: 'HXdichiarata' }, { direction: 'in', template_sid: null }],
+        sids,
+      ),
+    ).toBe('marta');
+  });
+
+  it('env assenti ⇒ set vuoto (nessuna regressione)', () => {
+    expect(martaSidsFromEnv({} as NodeJS.ProcessEnv).size).toBe(0);
   });
 });
 

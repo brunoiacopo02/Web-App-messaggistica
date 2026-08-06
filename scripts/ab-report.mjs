@@ -22,10 +22,16 @@ const OPENINGS = [
   { label: 'legacy-mario', env: 'FENICE_OPENING_TEMPLATE_SID', legacy: true },
   { label: 'C1', env: 'OPENING_SID_C1' },
   { label: 'C2', env: 'OPENING_SID_C2' },
+  { label: 'C3', env: 'OPENING_SID_C3', dichiarata: true },
+  { label: 'C4', env: 'OPENING_SID_C4', dichiarata: true },
   { label: 'T1', env: 'OPENING_SID_T1' },
   { label: 'T2', env: 'OPENING_SID_T2' },
+  { label: 'T3', env: 'OPENING_SID_T3', dichiarata: true },
+  { label: 'T4', env: 'OPENING_SID_T4', dichiarata: true },
   { label: 'J1', env: 'OPENING_SID_J1' },
   { label: 'J2', env: 'OPENING_SID_J2' },
+  { label: 'J3', env: 'OPENING_SID_J3', dichiarata: true },
+  { label: 'J4', env: 'OPENING_SID_J4', dichiarata: true },
 ];
 const active = OPENINGS.filter((o) => process.env[o.env]);
 const skipped = OPENINGS.filter((o) => !process.env[o.env]);
@@ -114,11 +120,15 @@ const rows = [['Apertura', 'Invii', 'Consegnate', 'Risposta<=72h', 'Appuntamento
 const total = emptyStats();
 const legacyTot = emptyStats();
 const newTot = emptyStats();
+// Il confronto che serve per l'AI Act: stessa apertura, sola presentazione diversa.
+const dichiarateTot = emptyStats();
+const nonDichiarateTot = emptyStats();
 for (const o of active) {
   const s = bySid.get(process.env[o.env]);
   rows.push(row(o.label, s));
   addInto(total, s);
   addInto(o.legacy ? legacyTot : newTot, s);
+  if (!o.legacy) addInto(o.dichiarata ? dichiarateTot : nonDichiarateTot, s);
 }
 rows.push(row('TOTALE', total));
 
@@ -136,3 +146,9 @@ console.log('\nConfronto risposta <=72h: legacy ' + pct(legacyTot.replied72, leg
   ' vs nuove aggregate ' + pct(newTot.replied72, newTot.n) + ` (${newTot.replied72}/${newTot.n})`);
 console.log('Confronto appuntamenti:   legacy ' + pct(legacyTot.appuntamento, legacyTot.n) + ` (${legacyTot.appuntamento}/${legacyTot.n})` +
   ' vs nuove aggregate ' + pct(newTot.appuntamento, newTot.n) + ` (${newTot.appuntamento}/${newTot.n})`);
+
+console.log('\nCosto della dichiarazione IA (solo aperture Marta):');
+console.log('  risposta <=72h: non dichiarate ' + pct(nonDichiarateTot.replied72, nonDichiarateTot.n) + ` (${nonDichiarateTot.replied72}/${nonDichiarateTot.n})` +
+  ' vs dichiarate ' + pct(dichiarateTot.replied72, dichiarateTot.n) + ` (${dichiarateTot.replied72}/${dichiarateTot.n})`);
+console.log('  appuntamenti:   non dichiarate ' + pct(nonDichiarateTot.appuntamento, nonDichiarateTot.n) + ` (${nonDichiarateTot.appuntamento}/${nonDichiarateTot.n})` +
+  ' vs dichiarate ' + pct(dichiarateTot.appuntamento, dichiarateTot.n) + ` (${dichiarateTot.appuntamento}/${dichiarateTot.n})`);

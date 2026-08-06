@@ -100,10 +100,16 @@ describe('enrollLeadIntoMario — selezione apertura per-funnel A/B (NEW_OPENING
   function stubOpeningSids() {
     vi.stubEnv('OPENING_SID_C1', 'HX_C1');
     vi.stubEnv('OPENING_SID_C2', 'HX_C2');
+    vi.stubEnv('OPENING_SID_C3', 'HX_C3');
+    vi.stubEnv('OPENING_SID_C4', 'HX_C4');
     vi.stubEnv('OPENING_SID_T1', 'HX_T1');
     vi.stubEnv('OPENING_SID_T2', 'HX_T2');
+    vi.stubEnv('OPENING_SID_T3', 'HX_T3');
+    vi.stubEnv('OPENING_SID_T4', 'HX_T4');
     vi.stubEnv('OPENING_SID_J1', 'HX_J1');
     vi.stubEnv('OPENING_SID_J2', 'HX_J2');
+    vi.stubEnv('OPENING_SID_J3', 'HX_J3');
+    vi.stubEnv('OPENING_SID_J4', 'HX_J4');
   }
 
   beforeEach(() => {
@@ -129,7 +135,7 @@ describe('enrollLeadIntoMario — selezione apertura per-funnel A/B (NEW_OPENING
     expect(calls.events.some((e) => e.type === 'opening_config_error')).toBe(false);
   });
 
-  it('flag on, conv dispari (43) → variante 1 (parità id) → OPENING_SID_C1', async () => {
+  it('flag on, conv id 43 (43 mod 4 = 3) → variante 3 → OPENING_SID_C3', async () => {
     vi.stubEnv('NEW_OPENING_ENABLED', '1');
     stubOpeningSids();
     vi.mocked(findOrCreateLeadConversation).mockResolvedValueOnce({ leadId: 7, conversationId: 43 } as never);
@@ -141,9 +147,9 @@ describe('enrollLeadIntoMario — selezione apertura per-funnel A/B (NEW_OPENING
 
     expect(res.conversationId).toBe(43);
     const call = vi.mocked(sendTemplateAndLog).mock.calls[0];
-    expect(call[3]).toBe('HX_C1');
-    expect(call[4]).toBe('Apertura OPENING_SID_C1');
-    expect(call[7]).toBe(openingBody('corso10', 1, 'Anna'));
+    expect(call[3]).toBe('HX_C3');
+    expect(call[4]).toBe('Apertura OPENING_SID_C3');
+    expect(call[7]).toBe(openingBody('corso10', 3, 'Anna'));
   });
 
   it('flag on, TELEGRAM → SID T*, JOB SIMULATOR → SID J*', async () => {
