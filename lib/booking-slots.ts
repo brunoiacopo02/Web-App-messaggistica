@@ -112,6 +112,13 @@ const fascia = (imminente: boolean) => (imminente ? 'dalle 15:00 alle 21:00' : '
 
 const INTESTAZIONE = 'SLOT APPUNTAMENTO DISPONIBILI (la domenica non è mai disponibile, fuso Europe/Rome):';
 
+// Il modello usava questi giorni anche per "correggere" la data di una call che il
+// lead aveva già fissato con un collega: a chi diceva "domani alle 17" rispondeva col
+// giorno dei propri slot. L'ambito va detto dove stanno i giorni, non solo nel prompt.
+const AMBITO =
+  'Questi slot valgono SOLO per gli appuntamenti che fissi TU adesso in chat. ' +
+  'Se il lead ha già una call fissata, la sua data non si tocca: non correggerlo con questi giorni.';
+
 /** Blocco da iniettare nel prompt: gli unici slot in cui Mario può fissare. */
 export function bookingSlotsContext(now: Date): string {
   const { day1, day2, day1Imminente, chiusuraPrimaDiDay1, chiusuraDopoDay1 } = computeBookingDays(now);
@@ -127,6 +134,7 @@ export function bookingSlotsContext(now: Date): string {
       `Proponi SOLO ${day1.label}. Se serve dire perché, dì come stanno le cose: dopo quel giorno siamo chiusi per la settimana di ferragosto. È un fatto, non una leva di vendita: dillo semplicemente, senza spingere sulla fretta.`,
       `Solo se il lead dice che non può, proponi ${day2.label}, dalle 09:00 alle 21:00 (ultimo slot alle 21:00).`,
       tag,
+      AMBITO,
     ].join('\n');
   }
 
@@ -139,6 +147,7 @@ export function bookingSlotsContext(now: Date): string {
       `CHIUSURA: siamo chiusi fino a ${chiusuraPrimaDiDay1.label} compreso, la prima data utile è ${day1.label}. Se il lead chiede una data prima, dì come stanno le cose: siamo fermi per la settimana di ferragosto. È un fatto, non una leva di vendita.`,
       `Puoi fissare l'appuntamento SOLO in uno di questi due giorni e dentro queste fasce orarie. Nessun altro giorno o orario è ammesso.`,
       tag,
+      AMBITO,
     ].join('\n');
   }
 
@@ -149,5 +158,6 @@ export function bookingSlotsContext(now: Date): string {
     `- ${day2.label}, dalle 09:00 alle 21:00 (ultimo slot alle 21:00)`,
     `Puoi fissare l'appuntamento SOLO in uno di questi due giorni e dentro queste fasce orarie. Nessun altro giorno o orario è ammesso.`,
     tag,
+    AMBITO,
   ].join('\n');
 }

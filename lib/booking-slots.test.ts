@@ -64,6 +64,21 @@ describe('bookingSlotsContext', () => {
     expect(ctx).toContain('2026-06-24');
     expect(ctx).toContain('La domenica'.toLowerCase());
   });
+
+  it('dice che gli slot valgono solo per gli appuntamenti che fissa lui', () => {
+    const ctx = bookingSlotsContext(new Date('2026-06-22T10:00:00+02:00'));
+    expect(ctx).toContain('appuntamenti che fissi TU');
+    expect(ctx).toContain('non correggerlo con questi giorni');
+  });
+
+  it("l'ambito c'è anche nelle due forme della chiusura", () => {
+    const primaDellaChiusura = bookingSlotsContext(new Date('2026-08-08T10:00:00+02:00'));
+    const dentroLaChiusura = bookingSlotsContext(new Date('2026-08-12T10:00:00+02:00'));
+    for (const ctx of [primaDellaChiusura, dentroLaChiusura]) {
+      expect(ctx).toContain('appuntamenti che fissi TU');
+      expect(ctx).toContain('non correggerlo con questi giorni');
+    }
+  });
 });
 
 // Chiusura ferragosto 2026: 11-17 agosto compresi, si riapre martedì 18.

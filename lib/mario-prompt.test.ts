@@ -23,6 +23,24 @@ describe('buildMarioSystem', () => {
   });
 });
 
+describe('data di un appuntamento già fissato da altri', () => {
+  const p = buildMarioSystem('Marta');
+
+  it('la data che il lead riferisce è la verità e non si corregge con gli slot', () => {
+    expect(p).toContain('La data che ti dice il lead è quella giusta');
+    expect(p).toContain('NON usare i giorni del blocco SLOT APPUNTAMENTO per correggerlo');
+  });
+
+  it('i giorni relativi si calcolano dalla data di oggi', () => {
+    expect(p).toContain('"domani"');
+    expect(p).toContain('calcolalo dalla data di oggi');
+  });
+
+  it('nel dubbio chiede conferma invece di affermare una data', () => {
+    expect(p).toContain('non affermare nessuna data');
+  });
+});
+
 describe('prezzo', () => {
   const p = buildMarioSystem('Marta');
 
