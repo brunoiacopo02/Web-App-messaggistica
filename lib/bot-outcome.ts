@@ -219,7 +219,12 @@ export async function sendOutcome(
   // Un RICHIAMO senza una data che regga non è un richiamo: è un'ora inventata che
   // finisce in agenda a un commerciale. Al CRM va una nota con le parole del lead, e
   // la conversazione resta aperta — il bot deve poter ancora chiedere quando.
-  const dataCheck = args.outcome === 'RICHIAMO' ? checkDataRichiamo(args.date, Date.now()) : { ok: true as const };
+  // Esclude l'interim: quel RICHIAMO non è una richiesta del lead ma un ping
+  // automatico della sequenza di follow-up, con data calcolata dal cron — se questa
+  // guardia lo intercettasse lo tradurrebbe in una nota che racconta al commerciale
+  // qualcosa che il lead non ha mai detto. L'interim ha già il suo percorso e le sue
+  // regole più sotto (vedi `interim && action.kind !== 'normal'`).
+  const dataCheck = args.outcome === 'RICHIAMO' && !interim ? checkDataRichiamo(args.date, Date.now()) : { ok: true as const };
   if (!dataCheck.ok) {
     const note = buildRichiamoSenzaDataNote({ motivo: dataCheck.motivo, leadWords: args.note });
     await supabase.from('event_log').insert({

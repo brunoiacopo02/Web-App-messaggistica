@@ -146,9 +146,14 @@ describe('sendOutcome — guard APPUNTAMENTO terminale', () => {
 });
 
 describe('sendOutcome — RICHIAMO interim', () => {
+  // Data relativa: una fissa nel futuro scritta oggi diventa passato fra qualche
+  // settimana, e la guardia sulla plausibilità della data (vedi sotto) la
+  // intercetterebbe scambiando questi test per il caso "data non plausibile".
+  const FUTURA = () => new Date(Date.now() + 7 * 86_400_000).toISOString();
+
   it('interim su lead in lavorazione → POST inviato, nessuna persistenza locale', async () => {
     const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null });
-    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: '2026-08-07T09:00:00+02:00', note: 'seq' }, { interim: true });
+    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: FUTURA(), note: 'seq' }, { interim: true });
 
     expect(res.sent).toBe(true);
     const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
@@ -159,7 +164,7 @@ describe('sendOutcome — RICHIAMO interim', () => {
 
   it('interim su lead già APPUNTAMENTO → nessun POST (mai riportare indietro lo stato)', async () => {
     const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE });
-    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: '2026-08-07T09:00:00+02:00' }, { interim: true });
+    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: FUTURA() }, { interim: true });
 
     expect(res.sent).toBe(false);
     expect(res.error).toBe('interim_skipped_locked');
@@ -170,11 +175,32 @@ describe('sendOutcome — RICHIAMO interim', () => {
   it('interim con CRM 403 → nessuna persistenza (RICHIAMO non è un esito nostro)', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 403, text: async () => 'no' })));
     const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null });
-    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: '2026-08-07T09:00:00+02:00' }, { interim: true });
+    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: FUTURA() }, { interim: true });
 
     expect(res.sent).toBe(false);
     expect(calls.updates).toHaveLength(0);
     expect(calls.events.some((e) => e.type === 'bot_outcome_rejected')).toBe(true);
+  });
+
+  // La guardia "RICHIAMO senza data plausibile" (vedi sendOutcome) sta prima del
+  // ramo interim: senza l'esclusione esplicita si mangerebbe anche gli interim,
+  // convertendoli in una NOTA che racconta al commerciale una richiesta del lead
+  // che non è mai esistita — l'interim è un ping automatico della sequenza, non
+  // qualcosa che il lead ha detto. In produzione la data del cron è sempre futura
+  // quindi il caso non scatta mai, ma un interim con data passata deve comunque
+  // seguire il percorso interim normale, non diventare una nota.
+  it('interim con data nel passato su lead in lavorazione → resta un interim normale, non diventa una nota', async () => {
+    const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null });
+    const PASSATA = new Date(Date.now() - 7 * 86_400_000).toISOString();
+    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: PASSATA, note: 'seq' }, { interim: true });
+
+    expect(res.sent).toBe(true);
+    const fetchMock = globalThis.fetch as unknown as { mock: { calls: [string, { body: string }][] } };
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.outcome).toBe('RICHIAMO');
+    expect(calls.updates).toHaveLength(0);
+    expect(calls.events.some((e) => e.type === 'richiamo_senza_data')).toBe(false);
+    expect(calls.events.some((e) => e.type === 'bot_outcome_sent' && e.payload.interim === true)).toBe(true);
   });
 });
 
