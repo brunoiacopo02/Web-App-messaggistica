@@ -19,7 +19,7 @@ export interface SendAgendaPayload extends BotIntakePayload {
   variant: GdoVariant;
 }
 
-export type BotOutcome = 'APPUNTAMENTO' | 'DA_SCARTARE' | 'RICHIAMO' | 'NON_RISPOSTO' | 'INTERROTTO' | 'NOTA';
+export type BotOutcome = 'APPUNTAMENTO' | 'DA_SCARTARE' | 'RICHIAMO' | 'NON_RISPOSTO' | 'INTERROTTO' | 'NOTA' | 'CONTATTO_UMANO';
 
 export interface BotReport {
   summary?: string;
@@ -39,7 +39,10 @@ export interface BotOutcomeBody {
   report?: BotReport;
 }
 
-const OUTCOMES: BotOutcome[] = ['APPUNTAMENTO', 'DA_SCARTARE', 'RICHIAMO', 'NON_RISPOSTO', 'INTERROTTO', 'NOTA'];
+const OUTCOMES: BotOutcome[] = ['APPUNTAMENTO', 'DA_SCARTARE', 'RICHIAMO', 'NON_RISPOSTO', 'INTERROTTO', 'NOTA', 'CONTATTO_UMANO'];
+// CONTATTO_UMANO resta FUORI da DATE_REQUIRED: non è un appuntamento, è una
+// segnalazione. Chiedere una data qui rimetterebbe il modello nella condizione di
+// inventarne una — il bug chiuso il 06/08 sulle date di RICHIAMO.
 const DATE_REQUIRED: BotOutcome[] = ['APPUNTAMENTO', 'RICHIAMO'];
 
 /** True solo se ISO 8601 con offset di fuso (`Z` oppure `±HH:MM`). */
@@ -107,7 +110,8 @@ export function validateOutcomeBody(
   if (DATE_REQUIRED.includes(b.outcome)) {
     if (!b.date || !isoWithOffset(b.date)) return { ok: false, reason: 'bad_request' };
   }
-  if (b.outcome === 'NOTA' && (!b.note || !b.note.trim())) {
+  // La nota È il contenuto per questi due esiti: senza, il CRM risponde 400.
+  if ((b.outcome === 'NOTA' || b.outcome === 'CONTATTO_UMANO') && (!b.note || !b.note.trim())) {
     return { ok: false, reason: 'note_required' };
   }
   return { ok: true };

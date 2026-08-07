@@ -55,9 +55,11 @@ export function buildLockedNote(args: OutcomeArgs, existingDate: string | null):
       }
       break;
     case 'NOTA':
-      // Non dovrebbe mai arrivare qui come esito IN INGRESSO (NOTA è solo l'esito
-      // prodotto in USCITA da resolveOutcomeAction per il ramo locked). Caso incluso
-      // solo per l'esaustività dello switch dopo l'aggiunta di 'NOTA' a BotOutcome.
+    case 'CONTATTO_UMANO':
+      // Non arrivano mai qui come esito IN INGRESSO: sono i due esiti prodotti in
+      // USCITA (NOTA dal ramo locked di resolveOutcomeAction, CONTATTO_UMANO da
+      // sendOutcome, che lo intercetta prima). Il caso resta per l'esaustività dello
+      // switch: senza, TypeScript vede `base` potenzialmente non assegnata.
       base = `Appuntamento mantenuto.`;
       break;
   }
@@ -109,6 +111,40 @@ const DETTAGLIO_MOTIVO: Record<MotivoDataNonUsabile, string> = {
   passato: 'ma la data raccolta è nel passato e non è utilizzabile',
   oltre_orizzonte: 'ma la data raccolta è troppo lontana per essere quella vera',
 };
+
+/** Oltre questa lunghezza una citazione smette di essere leggibile al volo. */
+const MAX_PAROLE_LEAD = 400;
+
+/**
+ * Le parole del lead pronte per una nota: a-capo e spazi doppi via, taglio su confine
+ * di parola. Le note le leggono le Conferme pochi minuti prima di chiamare il cliente,
+ * quindi devono stare su una riga e finire dove finisce un pensiero.
+ */
+export function paroleDelLead(testo: string | undefined, max = MAX_PAROLE_LEAD): string | null {
+  const pulito = (testo ?? '').replace(/\s+/g, ' ').trim();
+  if (!pulito) return null;
+  if (pulito.length <= max) return pulito;
+  const tagliato = pulito.slice(0, max);
+  const ultimoSpazio = tagliato.lastIndexOf(' ');
+  const base = ultimoSpazio > max * 0.6 ? tagliato.slice(0, ultimoSpazio) : tagliato;
+  return `${base.trimEnd()}…`;
+}
+
+/**
+ * La nota del CONTATTO_UMANO. Il CRM la mostra alle Conferme: il fatto in testa, poi
+ * le parole del lead. La richiesta non si parafrasa mai — "vuole assistenza" e "voglio
+ * disdire e parlare con un responsabile" non sono la stessa cosa, e chi chiama deve
+ * sapere quale delle due ha davanti.
+ */
+export function buildContattoUmanoNote(input: { leadWords?: string; motivo?: string }): string {
+  const parole = paroleDelLead(input.leadWords);
+  const motivo = input.motivo?.replace(/\s+/g, ' ').trim();
+  const coda = parole
+    ? ` Parole del lead: "${parole}".`
+    : ' Il lead ha chiesto esplicitamente di parlare con una persona.';
+  const contesto = motivo ? ` Contesto: ${motivo}.` : '';
+  return `RICHIESTA DI PARLARE CON UNA PERSONA — il bot si è fatto da parte.${coda}${contesto}`;
+}
 
 /**
  * La nota che parte al posto di un RICHIAMO con una data che non ci fidiamo a mandare.

@@ -2,6 +2,7 @@ import type { getSupabaseAdmin } from './supabase/admin';
 import { signPayload } from './bot-hmac';
 import { validateOutcomeBody, type BotOutcome, type BotOutcomeBody, type BotReport } from './bot-contract';
 import {
+  buildContattoUmanoNote,
   buildLockedNote,
   buildRichiamoSenzaDataNote,
   checkDataRichiamo,
@@ -147,6 +148,79 @@ async function sendCrmNoteOnly(
   }
 }
 
+/**
+ * `CONTATTO_UMANO`: il lead ha chiesto di parlare con una persona. Non è un esito, è
+ * una segnalazione — non cambia stato, non riassegna, non tocca l'appuntamento. Prima
+ * del 06/08 il tag [PASSAGGIO_UMANO] impostava solo `ai_status='handed_off'` in locale
+ * e la richiesta non usciva mai dal nostro database.
+ *
+ * Il CRM sopprime la notifica se ce n'è già stata una nelle 24h sullo stesso lead
+ * (`notifySuppressed: true`): non è un errore e non si ritenta.
+ */
+async function inviaContattoUmano(
+  supabase: Supa,
+  conversationId: number,
+  crmLeadId: string,
+  args: SendOutcomeArgs,
+  secret: string,
+): Promise<{ sent: boolean; status?: number; error?: string; notifySuppressed?: true }> {
+  const note = buildContattoUmanoNote({ leadWords: args.note, motivo: args.discardReason });
+  const body: BotOutcomeBody = { leadId: crmLeadId, outcome: 'CONTATTO_UMANO', note };
+  const valid = validateOutcomeBody(body);
+  if (!valid.ok) {
+    await supabase.from('event_log').insert({
+      type: 'bot_outcome_error',
+      payload: { conversationId, crmLeadId, reason: valid.reason, outcome: 'CONTATTO_UMANO' } as never,
+      message: `[bot-fissatore] contatto umano non valido per lead ${crmLeadId}: ${valid.reason}`,
+      level: 'error',
+    });
+    return { sent: false, error: valid.reason };
+  }
+
+  const rawBody = JSON.stringify(body);
+  const url = process.env.CRM_OUTCOME_URL ?? DEFAULT_CRM_URL;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-bot-signature': signPayload(rawBody, secret) },
+      body: rawBody,
+    });
+    const testo = await res.text().catch(() => '');
+    if (res.ok) {
+      let soppressa = false;
+      // Un corpo che non è JSON vale come notifica passata: il 2xx l'ha già detto.
+      try { soppressa = (JSON.parse(testo) as { notifySuppressed?: boolean })?.notifySuppressed === true; } catch { /* niente */ }
+      await supabase.from('event_log').insert({
+        type: soppressa ? 'bot_contatto_umano_soppresso' : 'bot_contatto_umano_inviato',
+        payload: { conversationId, crmLeadId, note } as never,
+        message: soppressa
+          ? `[bot-fissatore] contatto umano già segnalato nelle ultime 24h per lead ${crmLeadId}: notifica soppressa dal CRM`
+          : `[bot-fissatore] contatto umano segnalato al CRM per lead ${crmLeadId}`,
+        level: 'info',
+      });
+      return soppressa
+        ? { sent: true, status: res.status, notifySuppressed: true }
+        : { sent: true, status: res.status };
+    }
+    await supabase.from('event_log').insert({
+      type: 'bot_outcome_error',
+      payload: { conversationId, crmLeadId, outcome: 'CONTATTO_UMANO', status: res.status, body: testo } as never,
+      message: `[bot-fissatore] il CRM ha risposto ${res.status} al contatto umano per lead ${crmLeadId}`,
+      level: 'error',
+    });
+    return { sent: false, status: res.status, error: testo || `http_${res.status}` };
+  } catch (e) {
+    const errore = e instanceof Error ? e.message : 'errore';
+    await supabase.from('event_log').insert({
+      type: 'bot_outcome_error',
+      payload: { conversationId, crmLeadId, outcome: 'CONTATTO_UMANO', error: errore } as never,
+      message: `[bot-fissatore] segnalazione del contatto umano fallita (rete) per lead ${crmLeadId}`,
+      level: 'error',
+    });
+    return { sent: false, error: errore };
+  }
+}
+
 export type SendOutcomeArgs = {
   outcome: BotOutcome;
   date?: string;
@@ -173,7 +247,7 @@ export async function sendOutcome(
   conversationId: number,
   args: SendOutcomeArgs,
   opts: SendOutcomeOpts = {},
-): Promise<{ sent: boolean; status?: number; error?: string; keepOpen?: true }> {
+): Promise<{ sent: boolean; status?: number; error?: string; keepOpen?: true; notifySuppressed?: true }> {
   const interim = opts.interim === true && args.outcome === 'RICHIAMO';
   const secret = process.env.BOT_WEBHOOK_SECRET;
   if (!secret) return { sent: false, error: 'not_configured' };
@@ -189,6 +263,13 @@ export async function sendOutcome(
 
   if (opts.noteOnly === true) {
     return sendCrmNoteOnly(supabase, conversationId, crmLeadId, args, row?.bot_scheduled_at ?? null, secret);
+  }
+
+  // Passa PRIMA di resolveOutcomeAction apposta: su un lead già APPUNTAMENTO il ramo
+  // locked lo tradurrebbe in una nota generica "appuntamento mantenuto", e la richiesta
+  // di parlare con una persona si perderebbe un'altra volta.
+  if (args.outcome === 'CONTATTO_UMANO') {
+    return inviaContattoUmano(supabase, conversationId, crmLeadId, args, secret);
   }
 
   // Un RICHIAMO senza una data che regga non è un richiamo: è un'ora inventata che

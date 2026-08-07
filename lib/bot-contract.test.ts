@@ -68,6 +68,27 @@ describe('esito NOTA', () => {
   });
 });
 
+describe('esito CONTATTO_UMANO', () => {
+  it('è un esito valido con una nota', () => {
+    expect(validateOutcomeBody({ leadId: 'u1', outcome: 'CONTATTO_UMANO', note: 'vuole parlare con una persona' }))
+      .toEqual({ ok: true });
+  });
+
+  it('senza nota non parte: il CRM risponderebbe 400', () => {
+    expect(validateOutcomeBody({ leadId: 'u1', outcome: 'CONTATTO_UMANO' }))
+      .toEqual({ ok: false, reason: 'note_required' });
+    expect(validateOutcomeBody({ leadId: 'u1', outcome: 'CONTATTO_UMANO', note: '   ' }))
+      .toEqual({ ok: false, reason: 'note_required' });
+  });
+
+  it('NON richiede una data: non è un appuntamento, è una segnalazione', () => {
+    // Metterlo in DATE_REQUIRED rimetterebbe il modello nella condizione di inventarne
+    // una, che è esattamente il bug chiuso il 06/08 sulle date di RICHIAMO.
+    expect(validateOutcomeBody({ leadId: 'u1', outcome: 'CONTATTO_UMANO', note: 'x' }))
+      .toEqual({ ok: true });
+  });
+});
+
 describe('parseSendAgendaPayload', () => {
   const base = {
     leadId: 'gdo-1',
