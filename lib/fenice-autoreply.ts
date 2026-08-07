@@ -10,6 +10,7 @@ import { unknownFeniceLinks } from './outbound-sanitize';
 import { generateBotReport } from './bot-report';
 import { sendOutcome } from './bot-outcome';
 import { personaForConversation, PERSONA_NAME, OPENING_ENV_KEYS } from './persona';
+import { confermaVideoVisto } from './video-visto';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -289,6 +290,9 @@ export async function drainMarioReplies(
       // Il messaggio del lead a cui stiamo rispondendo in questo giro.
       const inboundIdx = nextUnansweredInboundIndex(rows);
       const inboundBody = inboundIdx >= 0 ? (rows[inboundIdx].body ?? '') : '';
+      // Un link del video già uscito in questa chat: serve sia alla patch del blocco
+      // conferma, sia alla rete di sicurezza sul FATTO qui sotto.
+      const videoGiaInviato = rows.some((m) => m.direction === 'out' && containsVideoLink(m.body));
 
       /** Manda il video del GDO come bolla a sé e ne registra l'invio. */
       const inviaVideoGdo = async (): Promise<void> => {
@@ -381,12 +385,20 @@ export async function drainMarioReplies(
       // turno — il primo giro li ha già letti puliti.
       let visibleReply = result.visibleReply;
       let watchedAt: string | null = null;
-      if (result.videoWatched) watchedAt = new Date().toISOString();
+      // Rete di sicurezza: il tag [VIDEO_VISTO] il modello se lo dimentica nel 40% dei
+      // casi. Se il video è già uscito e il lead scrive "fatto"/"visto", vale come
+      // conferma anche senza tag — altrimenti continua a ricevere solleciti dopo aver
+      // fatto quello che gli avevamo chiesto.
+      const videoLinkInviato = videoGiaInviato || !!gdoVideoSentAt;
+      const videoConfermato =
+        result.videoWatched ||
+        (videoLinkInviato && !gdoVideoWatchedAt && confermaVideoVisto(inboundBody));
+      if (videoConfermato) watchedAt = new Date().toISOString();
       // Niente rigenerazione se il turno ha prodotto un esito o un passaggio umano:
       // "l'ho visto, ma voglio annullare" vale insieme videoWatched e disdetta, e la
       // NOTA_NOEMI ("diglielo adesso") sostituirebbe la risposta giusta con un
       // promemoria della preselezione mentre al CRM parte la nota di annullamento.
-      if (postino && result.videoWatched && !gdoNoemiRemindedAt && !result.outcome && !result.passToHuman) {
+      if (postino && videoConfermato && !gdoNoemiRemindedAt && !result.outcome && !result.passToHuman) {
         try {
           const retry = await generateMarioReply(history, {
             personaName: PERSONA_NAME[persona],
@@ -442,7 +454,6 @@ export async function drainMarioReplies(
       // una seconda volta staccato da qualsiasi video. Il video già inviato in un turno
       // precedente è il segnale che il blocco è già stato mandato; se invece il link
       // esce proprio adesso, la cronologia non lo contiene ancora e la patch si applica.
-      const videoGiaInviato = rows.some((m) => m.direction === 'out' && containsVideoLink(m.body));
       if (result.appointmentFixed && !videoGiaInviato) {
         const block = ensureConfirmationBlock(parts);
         parts = block.parts;
@@ -527,7 +538,7 @@ export async function drainMarioReplies(
 
       if (result.passToHuman) { finalStatus = 'handed_off'; break; }
 
-      if (result.videoWatched && watchedAt) {
+      if (videoConfermato && watchedAt) {
         // Il log non si interroga per decidere: la conferma serve al cron dei solleciti,
         // che deve smettere di scrivere a chi il video l'ha già visto. Si persiste
         // comunque, indipendentemente da come sia andata la rigenerazione sopra.
@@ -538,7 +549,7 @@ export async function drainMarioReplies(
 
         await supabase.from('event_log').insert({
           type: 'video_watched',
-          payload: { conversationId, crmLeadId } as never,
+          payload: { conversationId, crmLeadId, daTag: result.videoWatched } as never,
           message: `[bot-fissatore] conv ${conversationId}: il lead conferma di aver visto il video pre-call`,
           level: 'info',
         });

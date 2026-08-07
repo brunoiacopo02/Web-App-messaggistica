@@ -1174,6 +1174,72 @@ describe('drainMarioReplies — modalità postino (lead dei GDO)', () => {
     expect(calls.messageInserts).toHaveLength(1);
     expect(calls.messageInserts[0].body).not.toContain(VIDEO);
   });
+
+  // Il modello si dimentica [VIDEO_VISTO] nel 40% dei casi: qui non lo emette mai.
+  const senzaTag = (visibleReply: string) => ({
+    visibleReply, appointmentFixed: false, passToHuman: false, videoWatched: false,
+  });
+  const VIDEO_USCITO: FakeMsgRow = {
+    direction: 'out', body: `ecco il video ${VIDEO}`, template_sid: null, created_at: '2026-07-29T10:03:00Z',
+  };
+  const dopoIlVideo = (body: string): FakeMsgRow => ({
+    direction: 'in', body, template_sid: null, created_at: '2026-07-29T18:00:00Z',
+  });
+
+  it('"fatto" vale come conferma anche senza il tag del modello', async () => {
+    const { supabase, calls } = makeDrainSupabase(
+      postino({ gdo_video_sent_at: '2026-07-29T10:03:00Z' }),
+      [AGENDA, RISPOSTA, VIDEO_USCITO, dopoIlVideo('fatto')],
+    );
+    // Il turno può rigenerare per infilare il promemoria di Noemi: due risposte pronte.
+    vi.mocked(generateMarioReply).mockResolvedValue(senzaTag('perfetto, allora ci siamo'));
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    expect(calls.convUpdates.some((u) => typeof u.gdo_video_watched_at === 'string')).toBe(true);
+    const ev = calls.events.find((e: { type: string }) => e.type === 'video_watched');
+    expect(ev).toBeTruthy();
+    expect(ev.payload.daTag).toBe(false);
+  });
+
+  it('"lo guardo stasera" non è una conferma', async () => {
+    const { supabase, calls } = makeDrainSupabase(
+      postino({ gdo_video_sent_at: '2026-07-29T10:03:00Z' }),
+      [AGENDA, RISPOSTA, VIDEO_USCITO, dopoIlVideo('lo guardo stasera')],
+    );
+    vi.mocked(generateMarioReply).mockResolvedValue(senzaTag('ok perfetto'));
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    expect(calls.convUpdates.some((u) => 'gdo_video_watched_at' in u)).toBe(false);
+  });
+
+  it('senza nessun video mai uscito, "fatto" non conferma niente', async () => {
+    const { supabase, calls } = makeDrainSupabase(
+      postino({ gdo_video_url: null }),
+      [AGENDA, dopoIlVideo('fatto')],
+    );
+    vi.mocked(generateMarioReply).mockResolvedValue(senzaTag('dimmi pure'));
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    expect(calls.convUpdates.some((u) => 'gdo_video_watched_at' in u)).toBe(false);
+  });
+
+  it('il tag del modello resta la via principale e continua a funzionare', async () => {
+    const { supabase, calls } = makeDrainSupabase(
+      postino({ gdo_video_sent_at: '2026-07-29T10:03:00Z' }),
+      [AGENDA, RISPOSTA, VIDEO_USCITO, dopoIlVideo('👍')],
+    );
+    vi.mocked(generateMarioReply).mockResolvedValue({
+      visibleReply: 'grande', appointmentFixed: false, passToHuman: false, videoWatched: true,
+    });
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    const ev = calls.events.find((e: { type: string }) => e.type === 'video_watched');
+    expect(ev.payload.daTag).toBe(true);
+  });
 });
 
 /**
