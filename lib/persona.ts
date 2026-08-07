@@ -23,12 +23,30 @@ export function normalizeFunnel(f: string | null | undefined): FunnelKey {
  *  (AI Act art. 50) e sono cloni della 1 con la sola presentazione cambiata. */
 export type OpeningVariant = 1 | 2 | 3 | 4;
 
-/** Assegnazione A/B per resto modulo 4 del conversationId: 1→1, 2→2, 3→3, 0→4.
- *  Il resto 0 mappa sulla QUARTA variante, non sulla prima: con `r || 4` un id
- *  multiplo di 4 finirebbe silenziosamente nel gruppo sbagliato. */
-export function variantIndexFor(conversationId: number): OpeningVariant {
-  const r = ((conversationId % 4) + 4) % 4;
-  return (r === 0 ? 4 : r) as OpeningVariant;
+/** Quante vie ha l'A/B: 4 con le varianti dichiarate, 2 senza. */
+export type OpeningWays = 2 | 4;
+
+/** Assegnazione A/B per resto modulo `ways` del conversationId: 1→1, 2→2, 3→3, 0→ways.
+ *  Il resto 0 mappa sull'ULTIMA variante, non sulla prima: con `r || 1` un id
+ *  multiplo di `ways` finirebbe silenziosamente nel gruppo sbagliato.
+ *  A due vie il risultato è quello storico: dispari → 1, pari → 2. */
+export function variantIndexFor(conversationId: number, ways: OpeningWays = 4): OpeningVariant {
+  const r = ((conversationId % ways) + ways) % ways;
+  return (r === 0 ? ways : r) as OpeningVariant;
+}
+
+/**
+ * Le vie dell'A/B per un funnel, in base ai template che esistono DAVVERO.
+ *
+ * Le varianti dichiarate (3 e 4) vivono su template Twilio separati, che vanno
+ * creati e approvati da Meta prima di poter essere usati. Finché i loro SID non
+ * sono configurati, assegnare un lead alla 3 o alla 4 lo farebbe cadere
+ * sull'apertura legacy di Mario: metà dei nuovi lead perderebbe la persona Marta
+ * per una configurazione mancante. Meglio restare a due vie e passare a quattro
+ * da sé, il giorno in cui i template ci sono.
+ */
+export function openingWaysFor(funnel: FunnelKey, hasSid: (envKey: string) => boolean): OpeningWays {
+  return hasSid(openingEnvKey(funnel, 3)) && hasSid(openingEnvKey(funnel, 4)) ? 4 : 2;
 }
 
 const FUNNEL_LETTER: Record<FunnelKey, 'C' | 'T' | 'J'> = {

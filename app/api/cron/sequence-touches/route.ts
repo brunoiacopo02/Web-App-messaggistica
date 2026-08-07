@@ -21,6 +21,7 @@ import {
   variantIndexFor,
   openingEnvKey,
   openingBody,
+  openingWaysFor,
   PERSONA_NAME,
   OPENING_ENV_KEYS,
 } from '@/lib/persona';
@@ -247,7 +248,8 @@ export async function GET(req: NextRequest) {
           if (newOpeningEnabled) {
             // Nuove aperture per-funnel A/B (persona Marta), stessa selezione dell'enroll.
             const funnel = normalizeFunnel(c.crm_funnel as string | null | undefined);
-            const variant = variantIndexFor(c.id);
+            const ways = openingWaysFor(funnel, (k) => Boolean(process.env[k]));
+            const variant = variantIndexFor(c.id, ways);
             const envKey = openingEnvKey(funnel, variant);
             const newSid = process.env[envKey];
             if (newSid) {

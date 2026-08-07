@@ -152,6 +152,46 @@ describe('enrollLeadIntoMario — selezione apertura per-funnel A/B (NEW_OPENING
     expect(call[7]).toBe(openingBody('corso10', 3, 'Anna'));
   });
 
+  it('senza i SID dichiarati l A/B resta a due vie: conv 43 prende C1 (Marta), non il legacy', async () => {
+    // Lo stato reale della produzione al 07/08: solo le varianti 1 e 2 hanno un template.
+    vi.stubEnv('NEW_OPENING_ENABLED', '1');
+    vi.stubEnv('OPENING_SID_C1', 'HX_C1');
+    vi.stubEnv('OPENING_SID_C2', 'HX_C2');
+    vi.stubEnv('OPENING_SID_C3', '');
+    vi.stubEnv('OPENING_SID_C4', '');
+    vi.mocked(findOrCreateLeadConversation).mockResolvedValueOnce({ leadId: 7, conversationId: 43 } as never);
+    const { supabase, calls } = makeSupabase();
+
+    await enrollLeadIntoMario(supabase, {
+      phone: '+393331234567', firstName: 'Anna', crmFunnel: 'CORSO 10 ORE',
+    });
+
+    const call = vi.mocked(sendTemplateAndLog).mock.calls[0];
+    expect(call[3]).toBe('HX_C1'); // 43 dispari → variante 1, la regola storica
+    expect(call[4]).toBe('Apertura OPENING_SID_C1');
+    expect(call[7]).toBe(openingBody('corso10', 1, 'Anna'));
+    expect(calls.events.some((e) => e.type === 'opening_config_error')).toBe(false);
+  });
+
+  it('senza i SID dichiarati nessun lead cade sull apertura legacy di Mario', async () => {
+    vi.stubEnv('NEW_OPENING_ENABLED', '1');
+    vi.stubEnv('OPENING_SID_C1', 'HX_C1');
+    vi.stubEnv('OPENING_SID_C2', 'HX_C2');
+    vi.stubEnv('OPENING_SID_C3', '');
+    vi.stubEnv('OPENING_SID_C4', '');
+
+    for (const id of [40, 41, 42, 43]) {
+      vi.mocked(sendTemplateAndLog).mockClear();
+      vi.mocked(findOrCreateLeadConversation).mockResolvedValueOnce({ leadId: 7, conversationId: id } as never);
+      const { supabase } = makeSupabase();
+      await enrollLeadIntoMario(supabase, {
+        phone: '+393331234567', firstName: 'Anna', crmFunnel: 'CORSO 10 ORE',
+      });
+      const call = vi.mocked(sendTemplateAndLog).mock.calls[0];
+      expect(['HX_C1', 'HX_C2']).toContain(call[3]);
+    }
+  });
+
   it('flag on, TELEGRAM → SID T*, JOB SIMULATOR → SID J*', async () => {
     vi.stubEnv('NEW_OPENING_ENABLED', '1');
     stubOpeningSids();
