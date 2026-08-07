@@ -17,7 +17,13 @@ export const SEQUENCE_END_DAYS = 4;
 // delle quali un "NO" secco, zero appuntamenti): resta il solo nudge free-text, che
 // viaggia dentro la finestra 24h e non consuma reputazione.
 export const NUDGE1_MIN_H = 18; export const NUDGE1_MAX_H = 24;
-export const TRACKB_GIVEUP_H = 120;
+// 07/08/2026 — la resa passa da 120h a 288h (12 giorni). Per il CRM classificare
+// significa restituire il lead: INTERROTTO lo rimette nel giro dei GDO umani. A cinque
+// giorni la chat puo' ancora ripartire, e quando riparte due canali lavorano la stessa
+// persona senza vedersi — caso Marina Destefanis del 26/07: restituita, riassegnata a
+// un GDO che l'ha chiamata tre volte e poi scartata, mentre il giorno dopo il bot
+// fissava l'appuntamento.
+export const TRACKB_GIVEUP_H = 288;
 
 const FAST_FAIL_H = 48;   // numero morto: touch>=1 e mai nulla consegnato
 const MIN_GAP_OUT_H = 20; // anti-doppione tra due out consecutivi
@@ -130,8 +136,12 @@ export function decideTrackB(input: {
 }): TrackBAction {
   const { nowMs, lastInboundAtMs, nudgesSent, sequenceEnabled } = input;
   const silH = (nowMs - lastInboundAtMs) / H;
+  // "Abbiamo davvero smesso di lavorarlo" vuol dire due cose insieme: silenzio oltre la
+  // resa E nessun invio ancora previsto. Finché il nudge gratuito è da spendere e la sua
+  // finestra non è passata, il lead è ancora nostro e non si restituisce.
+  const abbiamoFinito = nudgesSent >= 1 || silH >= NUDGE1_MAX_H;
   // La resa classifica sempre (non è un invio: kill-switch e fascia non contano).
-  if (silH >= TRACKB_GIVEUP_H) return { kind: 'classify' };
+  if (silH >= TRACKB_GIVEUP_H && abbiamoFinito) return { kind: 'classify' };
   if (!sequenceEnabled || !inSendWindow(nowMs)) return { kind: 'wait' };
   // Unico richiamo rimasto: free-text dentro la finestra 24h (silenzio in [18,24)).
   // Persa quella finestra non si insegue più con un template: si aspetta la resa.

@@ -5,6 +5,7 @@ import {
   checkDataRichiamo,
   buildRichiamoSenzaDataNote,
   buildContattoUmanoNote,
+  buildBotRipresoNote,
   paroleDelLead,
   RICHIAMO_ORIZZONTE_MS,
 } from './bot-outcome-rules';
@@ -254,6 +255,22 @@ describe('buildLockedNote — formato fattuale per le Conferme', () => {
       const n = buildLockedNote({ outcome: o, date: DIFF, discardReason: 'x'.repeat(60), leadWords: 'y'.repeat(600) }, DATE);
       expect(n.length).toBeLessThan(800);
       expect(n).not.toContain('\n');
+    }
+  });
+});
+
+describe('buildBotRipresoNote', () => {
+  it('dice cosa era stato restituito, quando il lead ha riscritto, e di non chiamare', () => {
+    const n = buildBotRipresoNote({ esitoPrecedente: 'INTERROTTO', quandoIso: DATE });
+    expect(n.startsWith('IL BOT HA RIPRESO LA CHAT —')).toBe(true);
+    expect(n).toContain('INTERROTTO');
+    expect(n).toContain(DATE_HUMAN);
+    expect(n.toLowerCase()).toContain('non chiamatelo');
+  });
+
+  it('vale per qualunque esito precedente', () => {
+    for (const o of ['NON_RISPOSTO', 'DA_SCARTARE', 'RICHIAMO']) {
+      expect(buildBotRipresoNote({ esitoPrecedente: o, quandoIso: DATE })).toContain(o);
     }
   });
 });

@@ -237,6 +237,28 @@ export type SendOutcomeArgs = {
  * Invia l'esito al CRM per una conversazione CRM-linked. No-op per lead non-CRM.
  * Su 2xx persiste bot_outcome/at/scheduled/report e chiude la conversazione.
  */
+/**
+ * Una NOTA diretta al CRM, senza passare da `resolveOutcomeAction` e senza toccare
+ * nessuno stato locale. Serve per i fatti che non sono esiti — il bot che riprende una
+ * chat già restituita: la logica del lead terminale li tradurrebbe in altro.
+ */
+export async function sendCrmNota(
+  supabase: Supa,
+  conversationId: number,
+  note: string,
+): Promise<{ sent: boolean; status?: number; error?: string }> {
+  const secret = process.env.BOT_WEBHOOK_SECRET;
+  if (!secret) return { sent: false, error: 'not_configured' };
+  const { data: conv } = await supabase
+    .from('conversations')
+    .select('crm_lead_id')
+    .eq('id', conversationId)
+    .maybeSingle();
+  const crmLeadId = (conv as { crm_lead_id: string | null } | null)?.crm_lead_id ?? null;
+  if (!crmLeadId) return { sent: false, error: 'not_crm_lead' };
+  return inviaNotaAlCrm(supabase, conversationId, crmLeadId, note, undefined, secret);
+}
+
 export type SendOutcomeOpts = {
   /** RICHIAMO non-terminale: POST al CRM per visibilità, ma la conversazione resta
    * aperta e bot_outcome non viene toccato (la sequenza continua). */
