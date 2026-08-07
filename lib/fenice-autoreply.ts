@@ -457,7 +457,32 @@ export async function drainMarioReplies(
         }
       }
 
-      if (result.passToHuman) { finalStatus = 'handed_off'; break; }
+      if (result.passToHuman) {
+        // Il CRM ha un esito apposta (CONTATTO_UMANO, dal 05/08). Senza questa chiamata
+        // la richiesta di parlare con una persona resta solo nel nostro database e
+        // nessuno la vede: 6 casi fra i 338 lead che ci hanno segnalato come fermi.
+        // Le parole che mandiamo sono quelle del lead, prese dall'ultimo turno della
+        // cronologia — una parafrasi del modello cambierebbe il senso della richiesta.
+        if (crmLeadId) {
+          const ultimoDelLead = [...history].reverse().find((t) => t.role === 'user')?.content;
+          const esito = await sendOutcome(supabase, conversationId, {
+            outcome: 'CONTATTO_UMANO',
+            note: ultimoDelLead,
+          });
+          // Un CRM che non risponde non deve tenere il bot incollato a una chat che
+          // deve prendere una persona: si registra e si va avanti.
+          if (!esito.sent) {
+            await supabase.from('event_log').insert({
+              type: 'contatto_umano_non_segnalato',
+              payload: { conversationId, crmLeadId, error: esito.error ?? null, status: esito.status ?? null } as never,
+              message: `[bot-fissatore] conv ${conversationId}: passaggio a una persona non segnalato al CRM (${esito.error ?? esito.status})`,
+              level: 'error',
+            });
+          }
+        }
+        finalStatus = 'handed_off';
+        break;
+      }
 
       if (result.videoWatched && watchedAt) {
         // Il log non si interroga per decidere: la conferma serve al cron dei solleciti,

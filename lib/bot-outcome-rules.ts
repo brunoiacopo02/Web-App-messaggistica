@@ -55,9 +55,11 @@ export function buildLockedNote(args: OutcomeArgs, existingDate: string | null):
       }
       break;
     case 'NOTA':
-      // Non dovrebbe mai arrivare qui come esito IN INGRESSO (NOTA è solo l'esito
-      // prodotto in USCITA da resolveOutcomeAction per il ramo locked). Caso incluso
-      // solo per l'esaustività dello switch dopo l'aggiunta di 'NOTA' a BotOutcome.
+    case 'CONTATTO_UMANO':
+      // Non arrivano mai qui come esito IN INGRESSO: sono i due esiti prodotti in
+      // USCITA (NOTA dal ramo locked di resolveOutcomeAction, CONTATTO_UMANO da
+      // sendOutcome, che lo intercetta prima). Il caso resta per l'esaustività dello
+      // switch: senza, TypeScript vede `base` potenzialmente non assegnata.
       base = `Appuntamento mantenuto.`;
       break;
   }
