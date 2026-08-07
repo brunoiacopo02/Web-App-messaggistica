@@ -176,6 +176,43 @@ describe('fix conferme: Noemi chiama da un cellulare (non un numero fisso)', () 
   });
 });
 
+describe('appuntamento già fissato — gestione della disdetta', () => {
+  const p = buildMarioSystem('Marta');
+
+  it('vieta il bivio "sposto o annullo"', () => {
+    expect(p).toContain('non mettergli MAI davanti il bivio');
+    expect(p).toMatch(/non proporgli tu di annullare/i);
+  });
+
+  it('riporta alla chiamata di Noemi come passaggio che conferma', () => {
+    expect(p).toMatch(/sentiti con Noemi/i);
+    expect(p).toContain('è il passaggio che conferma');
+  });
+
+  it('non promette più che "ti ricontatta una collega"', () => {
+    expect(p).not.toContain('ti ricontatta una collega');
+  });
+
+  it('i rilanci dipendono dalla fermezza del no, non dal motivo', () => {
+    expect(p).toContain('QUANTE VOLTE RIPROVARE');
+    expect(p).toMatch(/quanto è fermo il no/i);
+    expect(p).toMatch(/una seconda volta/i);
+  });
+
+  it('nel dubbio si ferma', () => {
+    expect(p).toMatch(/nel dubbio fermati/i);
+  });
+
+  it('chiede il motivo, con una domanda sola', () => {
+    expect(p).toMatch(/chiedi cosa è successo/i);
+    expect(p).toMatch(/una domanda sola/i);
+  });
+
+  it('non riprende a proporre orari: non li gestisce lui', () => {
+    expect(p).toContain('giorno e ora non li gestisci tu');
+  });
+});
+
 describe('comportamento a appuntamento già fissato', () => {
   const p = buildMarioSystem('Marta');
 
@@ -189,7 +226,7 @@ describe('comportamento a appuntamento già fissato', () => {
   });
 
   it('registra spostamento o disdetta come nota per i colleghi invece di passarli a un umano', () => {
-    expect(p).toContain('Se vuole spostare o disdire');
+    expect(p).toContain('SE VUOLE SPOSTARE O DISDIRE');
     expect(p).not.toContain('Se vuole spostare o disdire non gestirlo da solo');
     expect(p).not.toContain('usa [PASSAGGIO_UMANO]. Se fa una domanda sul percorso');
   });
@@ -201,10 +238,6 @@ describe('disdette a appuntamento fissato', () => {
   it('chiede di registrare il motivo con le parole del lead invece di passare a un umano', () => {
     expect(p).toContain('con le parole del lead');
     expect(p).not.toContain('Se vuole spostare o disdire non gestirlo da solo');
-  });
-
-  it('rassicura il lead che qualcuno lo ricontatta', () => {
-    expect(p).toContain('ti ricontatta una collega');
   });
 });
 
