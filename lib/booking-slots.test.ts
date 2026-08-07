@@ -65,3 +65,37 @@ describe('bookingSlotsContext', () => {
     expect(ctx).toContain('La domenica'.toLowerCase());
   });
 });
+
+describe('bookingSlotsContext — un giorno alla volta', () => {
+  const now = new Date('2026-08-06T10:00:00+02:00');
+  const ctx = bookingSlotsContext(now);
+  const { day1, day2 } = computeBookingDays(now);
+
+  it('dice di proporre per primo il giorno dopo', () => {
+    expect(ctx).toContain('PROPONI SEMPRE PRIMA');
+    expect(ctx.indexOf(day1.label)).toBeLessThan(ctx.indexOf(day2.label));
+  });
+
+  it('il secondo giorno si nomina solo se il lead non riesce', () => {
+    expect(ctx).toMatch(/SOLO se il lead proprio non riesce/i);
+    expect(ctx).toMatch(/non nominare l'altro/i);
+  });
+
+  it('spiega perché: la call vicina è quella che il lead non salta', () => {
+    expect(ctx).toMatch(/più è vicina.*meno/i);
+  });
+
+  it('entrambe le date restano legali per il tag', () => {
+    expect(ctx).toContain(day1.date);
+    expect(ctx).toContain(day2.date);
+  });
+
+  it('le fasce orarie non cambiano', () => {
+    expect(ctx).toContain('dalle 15:00 alle 21:00');
+    expect(ctx).toContain('dalle 09:00 alle 21:00');
+  });
+
+  it('la domenica resta esclusa', () => {
+    expect(ctx).toContain('la domenica non è mai disponibile');
+  });
+});

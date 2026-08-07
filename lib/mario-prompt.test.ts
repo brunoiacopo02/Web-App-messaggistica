@@ -504,3 +504,21 @@ describe('date del richiamo — mai dedotte', () => {
     expect(p).toContain('non emettere nessun tag');
   });
 });
+
+describe('FASE 6 — un giorno alla volta', () => {
+  const p = buildMarioSystem('Marta');
+
+  it('propone un solo giorno per volta, partendo dal primo', () => {
+    expect(p).toContain('Proponi UN GIORNO ALLA VOLTA');
+    expect(p).toMatch(/parti sempre dal primo/i);
+  });
+
+  it('non propone più i due giorni insieme', () => {
+    expect(p).not.toContain('Proponi tu i due giorni');
+    expect(p).not.toContain('oppure [secondo giorno]');
+  });
+
+  it('prima cerca un orario dentro il primo giorno', () => {
+    expect(p).toMatch(/prima prova a trovargli un orario dentro quel giorno/i);
+  });
+});

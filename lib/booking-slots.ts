@@ -59,14 +59,18 @@ export function computeBookingDays(now: Date): { day1: BookingDay; day2: Booking
   };
 }
 
-/** Blocco da iniettare nel prompt: gli unici slot in cui Mario può fissare. */
+/** Blocco da iniettare nel prompt: gli unici slot in cui Mario può fissare.
+ *  I giorni si propongono UNO ALLA VOLTA, partendo dal primo: l'attesa mediana fra
+ *  fissaggio e call è 44 ore e il 39% supera le 48h — più la call è lontana, più
+ *  l'imprevisto di lavoro se la mangia (28% dei motivi di disdetta). */
 export function bookingSlotsContext(now: Date): string {
   const { day1, day2 } = computeBookingDays(now);
   const off = romeOffset(now);
   return [
     'SLOT APPUNTAMENTO DISPONIBILI (la domenica non è mai disponibile, fuso Europe/Rome):',
-    `- ${day1.label}, dalle 15:00 alle 21:00 (ultimo slot alle 21:00)`,
-    `- ${day2.label}, dalle 09:00 alle 21:00 (ultimo slot alle 21:00)`,
+    `- PROPONI SEMPRE PRIMA questo: ${day1.label}, dalle 15:00 alle 21:00 (ultimo slot alle 21:00)`,
+    `- SOLO se il lead proprio non riesce nel giorno sopra: ${day2.label}, dalle 09:00 alle 21:00 (ultimo slot alle 21:00)`,
+    `Proponi UN GIORNO ALLA VOLTA: parti da ${day1.label} e non nominare l'altro. Il secondo giorno esiste solo dopo che il lead ti ha detto che il primo non gli va bene, e prima di passarci prova a trovargli un orario dentro il primo. Più è vicina la call, meno probabilità c'è che gli capiti un imprevisto e la salti.`,
     `Puoi fissare l'appuntamento SOLO in uno di questi due giorni e dentro queste fasce orarie. Nessun altro giorno o orario è ammesso.`,
     `Nel tag [ESITO:APPUNTAMENTO|...] usa la data ISO 8601 del giorno scelto (${day1.date} oppure ${day2.date}) con l'ora concordata e fuso ${off}.`,
   ].join('\n');
