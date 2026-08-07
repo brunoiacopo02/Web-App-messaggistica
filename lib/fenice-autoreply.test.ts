@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { shouldAutoReply, shouldReopen, nextUnansweredInboundIndex, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS, canSendOutcome, drainMarioReplies, isLockStale, LOCK_TTL_MS, shouldSendGdoVideo, martaSidsFromEnv } from './fenice-autoreply';
+import { shouldAutoReply, shouldReopen, nextUnansweredInboundIndex, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS, canSendOutcome, drainMarioReplies, isLockStale, LOCK_TTL_MS, shouldSendGdoVideo, martaSidsFromEnv, serveRedrive } from './fenice-autoreply';
 
 vi.mock('./mario', () => ({ generateMarioReply: vi.fn(), GDO_CONTEXT_NOTE: 'CONTESTO-GDO' }));
 vi.mock('./twilio', () => ({ sendFreeText: vi.fn(async () => ({ sid: 'SM_fake', status: 'queued' })) }));
@@ -110,6 +110,35 @@ describe('isOrphanedReplyingLock', () => {
   });
   it('(d) replying + lastInboundAtMs null → false', () => {
     expect(isOrphanedReplyingLock('replying', null, NOW)).toBe(false);
+  });
+});
+
+describe('serveRedrive: il re-drive e una rete, non un ciclo', () => {
+  const now = Date.UTC(2026, 7, 7, 12, 0, 0);
+  const MAX = 5 * 86400_000;
+  const h = (n: number) => now - n * 3600_000;
+
+  it('inbound nuovo mai re-drivato: si parte', () => {
+    expect(serveRedrive({ ultimoInboundMs: h(1), ultimoDrainMs: null, nowMs: now, maxMs: MAX })).toBe(true);
+  });
+
+  it('stesso inbound gia re-drivato: non si ripete — e il loop orario di conv 3728', () => {
+    // Il drain e girato DOPO l'inbound e non ha prodotto testo visibile: nessuna riga
+    // outbound, quindi lastIsUnansweredInbound resta vero. Senza questa guardia lo
+    // stesso esito ripartirebbe ogni ora per cinque giorni.
+    expect(serveRedrive({ ultimoInboundMs: h(3), ultimoDrainMs: h(2), nowMs: now, maxMs: MAX })).toBe(false);
+  });
+
+  it('inbound piu recente dell ultimo drain: si riparte', () => {
+    expect(serveRedrive({ ultimoInboundMs: h(1), ultimoDrainMs: h(3), nowMs: now, maxMs: MAX })).toBe(true);
+  });
+
+  it('drain esattamente contemporaneo all inbound: gia gestito', () => {
+    expect(serveRedrive({ ultimoInboundMs: h(2), ultimoDrainMs: h(2), nowMs: now, maxMs: MAX })).toBe(false);
+  });
+
+  it('inbound piu vecchio del tetto: il lead e perso, si va alla classificazione', () => {
+    expect(serveRedrive({ ultimoInboundMs: now - 6 * 86400_000, ultimoDrainMs: null, nowMs: now, maxMs: MAX })).toBe(false);
   });
 });
 
