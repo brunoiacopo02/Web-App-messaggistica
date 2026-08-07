@@ -70,3 +70,28 @@ describe('contenuto del promemoria Noemi', () => {
     expect(gdoContextNote(base())).not.toContain(NOTA_NOEMI);
   });
 });
+
+describe('gdoContextNote — il video sta uscendo adesso', () => {
+  const base = { gdoVideoSentAt: null, gdoVideoWatchedAt: null, gdoNoemiRemindedAt: null, followupsSent: 0, videoAppenaConfermato: false };
+
+  it('con videoInUscita non dice al modello che il video è già stato mandato', () => {
+    const n = gdoContextNote({ ...base, videoInUscita: true });
+    expect(n).toContain('IL VIDEO ESCE ORA');
+    expect(n).not.toContain('e il video da vedere prima della call');
+  });
+
+  it('con videoInUscita non chiede anche il promemoria video: sarebbe un doppione', () => {
+    const n = gdoContextNote({ ...base, gdoVideoSentAt: '2026-08-06T10:00:00Z', videoInUscita: true });
+    expect(n).not.toContain(NOTA_VIDEO);
+  });
+
+  it('vieta al modello di scrivere lui il link', () => {
+    expect(gdoContextNote({ ...base, videoInUscita: true })).toMatch(/non mandare nessun link/i);
+  });
+
+  it('senza il flag il comportamento è quello di oggi', () => {
+    const n = gdoContextNote({ ...base, gdoVideoSentAt: '2026-08-06T10:00:00Z' });
+    expect(n).toContain(NOTA_VIDEO);
+    expect(n).not.toContain('IL VIDEO ESCE ORA');
+  });
+});

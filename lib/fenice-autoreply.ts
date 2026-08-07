@@ -162,6 +162,38 @@ export function shouldSendGdoVideo(g: {
   return !g.gdoVideoSentAt;
 }
 
+/** Parole che da sole non chiedono niente: una presa d'atto, non un messaggio. */
+const PRESE_DATTO = new Set([
+  'ok', 'okay', 'oki', 'okey', 'va', 'bene', 'vabene', 'vabbene', 'vabbe', 'perfetto',
+  'ottimo', 'grazie', 'mille', 'graz', 'si', 'certo', 'ricevuto', 'daccordo', 'accordo',
+  'ciao', 'salve', 'buongiorno', 'buonasera', 'buonpomeriggio', 'ok👍', 'd',
+]);
+
+/**
+ * Pure: questo messaggio del lead è solo una presa d'atto?
+ *
+ * Serve a decidere se il video del GDO può essere l'UNICA risposta a quel messaggio.
+ * Fail-safe verso il "no": nel dubbio risponde il modello, perché il costo di
+ * sbagliare in quella direzione è un messaggio in più, mentre nell'altra è una domanda
+ * del lead che non riceve MAI risposta (conv 3647, 3661, 3676, 3704).
+ */
+export function isSoloPresaDAtto(body: string | null | undefined): boolean {
+  const raw = (body ?? '').trim();
+  if (!raw) return true; // media senza testo: non c'è nessuna domanda a cui rispondere
+  if (raw.includes('?')) return false;
+  const parole = raw
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parole.length === 0) return true; // solo emoji o punteggiatura
+  if (parole.length > 4) return false;
+  return parole.every((p) => PRESE_DATTO.has(p));
+}
+
 const MAX_ROUNDS_PER_DRAIN = 5; // anti-runaway: round di accorpamento per esecuzione
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -254,10 +286,12 @@ export async function drainMarioReplies(
       const rows = await loadHistory();
       if (nextUnansweredInboundIndex(rows) === -1) break;
 
-      // Turno del video (lead del GDO che risponde per la prima volta): il video È la
-      // risposta a quel messaggio. Se qui girasse anche il modello il lead riceverebbe
-      // due messaggi per una sola sua riga.
-      if (shouldSendGdoVideo({ gdoAgendaAt, gdoVideoUrl, gdoVideoSentAt })) {
+      // Il messaggio del lead a cui stiamo rispondendo in questo giro.
+      const inboundIdx = nextUnansweredInboundIndex(rows);
+      const inboundBody = inboundIdx >= 0 ? (rows[inboundIdx].body ?? '') : '';
+
+      /** Manda il video del GDO come bolla a sé e ne registra l'invio. */
+      const inviaVideoGdo = async (): Promise<void> => {
         const body = gdoVideoText(gdo.leads?.first_name ?? null, gdoVideoUrl as string);
         const sent = await sendFreeText({ to: phone, body, from });
         await supabase.from('messages').insert({
@@ -276,6 +310,18 @@ export async function drainMarioReplies(
           level: 'info',
         });
         gdoVideoSentAt = sentAt;
+      };
+
+      const videoDaMandare = shouldSendGdoVideo({ gdoAgendaAt, gdoVideoUrl, gdoVideoSentAt });
+      // Il video può essere l'UNICA risposta solo se il lead non ha chiesto niente. Se
+      // ha fatto una domanda o un'obiezione, il modello risponde e il video esce
+      // insieme: prima il video partiva al posto della risposta, l'ultimo messaggio
+      // diventava outbound e quella domanda non riceveva risposta mai più.
+      const videoDaSolo = videoDaMandare && isSoloPresaDAtto(inboundBody);
+      const videoInsiemeAllaRisposta = videoDaMandare && !videoDaSolo;
+
+      if (videoDaSolo) {
+        await inviaVideoGdo();
         continue; // eventuali altri messaggi del lead li gestisce il round successivo
       }
       if (postino && !gdoVideoUrl && !gdoVideoMissingLogged) {
@@ -317,6 +363,7 @@ export async function drainMarioReplies(
                 gdoNoemiRemindedAt: gdoNoemiRemindedAt,
                 followupsSent: gdoFollowupsSent,
                 videoAppenaConfermato: false,
+                videoInUscita: videoInsiemeAllaRisposta,
               }),
             }
           : {}),
@@ -349,6 +396,7 @@ export async function drainMarioReplies(
               gdoNoemiRemindedAt: gdoNoemiRemindedAt,
               followupsSent: gdoFollowupsSent,
               videoAppenaConfermato: true, // forza NOTA_NOEMI anche a followupsSent 0
+              videoInUscita: videoInsiemeAllaRisposta,
             }),
           });
           // Fail-safe: una rigenerazione vuota non vale meno di zero, vale come un
@@ -367,6 +415,12 @@ export async function drainMarioReplies(
 
       // Invia ogni a-capo come messaggio separato (più umano), con breve pausa.
       let parts = splitMarioMessages(visibleReply);
+
+      // Il video esce in coda alla risposta, come ultima bolla: prima si risponde a
+      // quello che il lead ha chiesto, poi gli si dà il video.
+      if (videoInsiemeAllaRisposta) {
+        parts = [...parts, gdoVideoText(gdo.leads?.first_name ?? null, gdoVideoUrl as string)];
+      }
 
       // Link Fenice che il modello si è inventato (es. `conferenza-zx`): il lead lo
       // riceverebbe senza che ne resti traccia da nessuna parte. Non blocchiamo
@@ -414,6 +468,20 @@ export async function drainMarioReplies(
         await supabase.from('conversations')
           .update({ last_message_at: new Date().toISOString() })
           .eq('id', conversationId);
+      }
+
+      if (videoInsiemeAllaRisposta) {
+        const sentAt = new Date().toISOString();
+        await supabase.from('conversations')
+          .update({ gdo_video_sent_at: sentAt })
+          .eq('id', conversationId);
+        await supabase.from('event_log').insert({
+          type: 'gdo_video_sent',
+          payload: { conversationId, phone, crmLeadId, video: gdoVideoUrl, conRisposta: true } as never,
+          message: `[gdo] video inviato a ${phone} insieme alla risposta del modello`,
+          level: 'info',
+        });
+        gdoVideoSentAt = sentAt;
       }
 
       await supabase.from('event_log').insert({
