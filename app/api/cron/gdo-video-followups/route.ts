@@ -142,6 +142,14 @@ export async function GET(req: NextRequest) {
       const lastInboundAtMs = inbound.length ? Date.parse(inbound[inbound.length - 1].created_at) : null;
       const lastMessageIsInbound = rows.length > 0 && rows[rows.length - 1].direction === 'in';
 
+      // "Ha risposto dopo il video": un inbound successivo all'invio del video. La
+      // soglia di "lead confermato" decisa il 06/08 è questa — qualsiasi risposta,
+      // non il FATTO.
+      const videoSentMs = c.gdo_video_sent_at ? Date.parse(c.gdo_video_sent_at) : NaN;
+      const haRispostoDopoVideo =
+        !Number.isNaN(videoSentMs) &&
+        inbound.some((m) => Date.parse(m.created_at) > videoSentMs);
+
       const agendaAt = new Date(c.gdo_agenda_at);
       const action = decideGdoVideoFollowup({
         gdoAgendaAt: c.gdo_agenda_at,
@@ -155,6 +163,7 @@ export async function GET(req: NextRequest) {
         slot,
         giorniDaAgenda: romeDaysBetween(agendaAt, now),
         romeHourAgenda: romeHour(agendaAt),
+        haRispostoDopoVideo,
       });
 
       if (action === 'none') { report.push({ id: c.id, action: 'none' }); continue; }
