@@ -461,6 +461,10 @@ export async function drainMarioReplies(
             date: result.scheduledAt,
             discardReason: result.discardReason,
             note: result.note,
+            // `note` e `discardReason` sono la sintesi del modello. Le Conferme hanno
+            // chiesto anche le parole vere del lead: sono l'ultimo turno della
+            // cronologia, l'unica cosa che non e' una parafrasi.
+            leadWords: [...history].reverse().find((t) => t.role === 'user')?.content,
             report,
           }, postino ? { noteOnly: true } : {});
           // Esito CRM: chiudiamo se il callback è andato a buon fine; altrimenti
