@@ -4,7 +4,7 @@ import { sendOutcome } from '@/lib/bot-outcome';
 import { decideFollowupAction } from '@/lib/bot-followups';
 import { classifyInterrupted } from '@/lib/interrotto-note';
 import type { MarioTurn } from '@/lib/mario';
-import { drainMarioReplies, lastIsUnansweredInbound, isOrphanedReplyingLock, isLockStale, LOCK_TTL_MS } from '@/lib/fenice-autoreply';
+import { drainMarioReplies, lastIsUnansweredInbound, isOrphanedReplyingLock, isLockStale, LOCK_TTL_MS, serveRedrive } from '@/lib/fenice-autoreply';
 import { runAgendaFollowups } from '@/lib/agenda-followup';
 
 export const runtime = 'nodejs';
@@ -97,7 +97,23 @@ export async function GET(req: NextRequest) {
         // lastIsUnansweredInbound true ⇒ l'ultima riga è un inbound.
         const lastPendingInboundAtMs = Date.parse(rows[rows.length - 1].created_at);
 
-        if (now - lastPendingInboundAtMs <= REDRIVE_MAX_MS) {
+        // Il drain scrive un `fenice_ai_reply` a ogni giro andato a termine, anche
+        // quando il turno non produce testo visibile. È la traccia che dice "a questo
+        // inbound abbiamo già risposto": senza, un turno di soli tag non lascia nessuna
+        // riga outbound, lastIsUnansweredInbound resta vero e lo stesso esito riparte
+        // ogni ora fino al tetto dei 5 giorni (conv 3728, 32 ripetizioni a gap 1.00h).
+        const { data: drainPrecedenti } = await supabase
+          .from('event_log')
+          .select('created_at')
+          .eq('type', 'fenice_ai_reply')
+          .eq('payload->>conversationId', String(c.id))
+          .gte('created_at', new Date(lastPendingInboundAtMs).toISOString())
+          .limit(1);
+        const ultimoDrainMs = (drainPrecedenti ?? []).length > 0
+          ? Date.parse((drainPrecedenti as { created_at: string }[])[0].created_at)
+          : null;
+
+        if (serveRedrive({ ultimoInboundMs: lastPendingInboundAtMs, ultimoDrainMs, nowMs: now, maxMs: REDRIVE_MAX_MS })) {
           if (!phone) {
             report.push({ id: c.id, action: 'redrive', skipped: true, reason: 'no_from' });
             continue;
@@ -125,8 +141,9 @@ export async function GET(req: NextRequest) {
           report.push({ id: c.id, action: 'redrive' });
           continue;
         }
-        // Inbound più vecchio di 5 giorni: il lead è già perso, va restituito,
-        // non ri-risposto → fallthrough verso la classificazione.
+        // Inbound già gestito da un drain precedente, oppure più vecchio di 5 giorni
+        // (lead perso, va restituito e non ri-risposto) → fallthrough verso la
+        // classificazione, che ha le sue guardie.
       }
 
       // 2a. Lead di un GDO (modalità postino): il re-drive sopra vale — il bot resta
@@ -137,16 +154,18 @@ export async function GET(req: NextRequest) {
         continue;
       }
 
-      // 2b. Lead terminale (APPUNTAMENTO): mai riclassificare. La riga è stata
-      // riaperta dal webhook: richiudila per farla uscire dal giro del cron.
-      if (c.bot_outcome === 'APPUNTAMENTO') {
+      // 2b. Lead già esitato (qualunque esito): mai riclassificare. La riga è stata
+      // riaperta dal webhook: richiudila per farla uscire dal giro del cron. Il
+      // re-drive sopra resta comunque valido — un lead esitato che riscrive merita
+      // ancora una risposta, e al CRM lo dice la nota "il bot ha ripreso la chat".
+      if (c.bot_outcome) {
         if (c.ai_status === 'active') {
           await supabase
             .from('conversations')
             .update({ ai_status: 'closed' })
             .eq('id', c.id)
             .eq('ai_status', 'active');
-          report.push({ id: c.id, action: 'close_terminal' });
+          report.push({ id: c.id, action: 'close_terminal', outcome: c.bot_outcome });
         }
         continue;
       }

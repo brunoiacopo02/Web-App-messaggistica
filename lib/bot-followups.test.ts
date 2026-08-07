@@ -61,6 +61,26 @@ describe('decideFollowupAction — APPUNTAMENTO terminale', () => {
     const a = decide({ msgs: [out(130 * H, 'delivered'), inb(125 * H)], hasInbound: true, lastInboundAtMs: NOW - 125 * H, botOutcome: 'APPUNTAMENTO' });
     expect(a).toBe('none');
   });
+
+  // La guardia copriva solo APPUNTAMENTO. Il 07/08 c'erano 21 conversazioni 'active'
+  // con un esito gia registrato (11 INTERROTTO, 8 NON_RISPOSTO, 2 RICHIAMO): ognuna,
+  // alla classificazione successiva, rispediva al CRM lo stesso esito che aveva gia
+  // dato. Un esito e un esito: non si riclassifica, qualunque sia.
+  it('nessun esito gia dato si riclassifica, non solo APPUNTAMENTO', () => {
+    for (const o of ['APPUNTAMENTO', 'INTERROTTO', 'NON_RISPOSTO', 'DA_SCARTARE', 'RICHIAMO']) {
+      expect(decide({
+        msgs: [out(130 * H, 'delivered'), inb(125 * H)],
+        hasInbound: true,
+        lastInboundAtMs: NOW - 125 * H,
+        botOutcome: o,
+      })).toBe('none');
+      expect(decide({ msgs: [out(14 * D, 'delivered')], botOutcome: o })).toBe('none');
+    }
+  });
+
+  it('senza esito la classificazione resta quella di sempre', () => {
+    expect(decide({ msgs: [out(14 * D, 'delivered')], botOutcome: null })).toBe('non_risposto');
+  });
 });
 
 describe('decideFollowupAction — Track A (mai risposto)', () => {
@@ -117,8 +137,14 @@ describe('decideFollowupAction — Track B (risposto poi silente)', () => {
     expect(a).toBe('none');
   });
 
-  it('esito non terminale (NON_RISPOSTO) non blocca la classificazione', () => {
+  // Rovesciato il 07/08. Prima un lead gia restituito come NON_RISPOSTO poteva essere
+  // riclassificato INTERROTTO se rispondeva e poi taceva. Ma per il CRM ogni
+  // classificazione e una restituzione ("ho chiuso, riprendetevelo"): la seconda arriva
+  // su un lead che gli abbiamo gia ridato, e nel frattempo un GDO ci sta lavorando.
+  // Un lead restituito che riscrive si segnala con la nota "il bot ha ripreso la chat",
+  // non con un secondo esito.
+  it('un lead gia restituito non si restituisce una seconda volta', () => {
     const a = decide({ msgs: [inb(125 * H)], hasInbound: true, lastInboundAtMs: NOW - 125 * H, botOutcome: 'NON_RISPOSTO' });
-    expect(a).toBe('interrotto_classify');
+    expect(a).toBe('none');
   });
 });

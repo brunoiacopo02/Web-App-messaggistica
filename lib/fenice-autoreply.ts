@@ -115,6 +115,31 @@ export function lastIsUnansweredInbound(rows: MsgRow[]): boolean {
   return nextUnansweredInboundIndex(rows) !== -1;
 }
 
+/**
+ * Pure: il re-drive del cron deve scattare per questo inbound?
+ *
+ * Il re-drive è una rete di sicurezza, non un ciclo. Deve partire una volta sola per
+ * inbound rimasto senza risposta: quando un turno produce solo tag e nessun testo
+ * visibile non viene scritta nessuna riga outbound, `lastIsUnansweredInbound` resta
+ * vero, e senza questa guardia lo stesso esito ripartirebbe ogni ora fino al tetto dei
+ * 5 giorni. È il loop che il CRM vede come "lo stesso APPUNTAMENTO ogni ora" (conv
+ * 3728: 32 ripetizioni a gap 1.00h fra il 01/08 e il 03/08).
+ *
+ * `ultimoDrainMs` è l'istante dell'ultimo giro di drain su questa conversazione, letto
+ * dagli eventi `fenice_ai_reply` che il drain scrive a ogni giro andato a termine. Se
+ * il drain è morto a metà l'evento non c'è, e il re-drive riparte: è voluto.
+ */
+export function serveRedrive(input: {
+  ultimoInboundMs: number;
+  ultimoDrainMs: number | null;
+  nowMs: number;
+  maxMs: number;
+}): boolean {
+  if (input.nowMs - input.ultimoInboundMs > input.maxMs) return false;
+  if (input.ultimoDrainMs === null) return true;
+  return input.ultimoInboundMs > input.ultimoDrainMs;
+}
+
 /** Dopo questo tempo un lucchetto è considerato abbandonato (processo morto). */
 export const LOCK_TTL_MS = 10 * 60_000;
 
