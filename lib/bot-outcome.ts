@@ -227,6 +227,10 @@ export type SendOutcomeArgs = {
   note?: string;
   discardReason?: string;
   report?: BotReport;
+  /** L'ultimo messaggio del lead, testuale: finisce fra virgolette nella nota al CRM.
+   *  `note` e `discardReason` sono la sintesi del modello, cioè una parafrasi — le
+   *  Conferme hanno chiesto anche le parole vere. */
+  leadWords?: string;
 };
 
 /**
@@ -254,15 +258,25 @@ export async function sendOutcome(
 
   const { data: conv } = await supabase
     .from('conversations')
-    .select('crm_lead_id, bot_outcome, bot_scheduled_at')
+    .select('crm_lead_id, bot_outcome, bot_scheduled_at, gdo_appuntamento_at')
     .eq('id', conversationId)
     .maybeSingle();
-  const row = conv as { crm_lead_id: string | null; bot_outcome: string | null; bot_scheduled_at: string | null } | null;
+  const row = conv as {
+    crm_lead_id: string | null;
+    bot_outcome: string | null;
+    bot_scheduled_at: string | null;
+    gdo_appuntamento_at?: string | null;
+  } | null;
   const crmLeadId = row?.crm_lead_id ?? null;
   if (!crmLeadId) return { sent: false, error: 'not_crm_lead' };
 
   if (opts.noteOnly === true) {
-    return sendCrmNoteOnly(supabase, conversationId, crmLeadId, args, row?.bot_scheduled_at ?? null, secret);
+    // Sui lead dei GDO l'appuntamento l'ha preso il commerciale al telefono e
+    // bot_scheduled_at è nullo: la disdetta arrivava al CRM senza dire QUALE
+    // appuntamento. `gdo_appuntamento_at` è la data che ci manda il CRM
+    // (POST /api/appointment-set) ed è l'unica che abbiamo per quei lead.
+    const dataNota = row?.bot_scheduled_at ?? row?.gdo_appuntamento_at ?? null;
+    return sendCrmNoteOnly(supabase, conversationId, crmLeadId, args, dataNota, secret);
   }
 
   // Passa PRIMA di resolveOutcomeAction apposta: su un lead già APPUNTAMENTO il ramo

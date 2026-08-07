@@ -6,6 +6,10 @@ export type OutcomeArgs = {
   date?: string;
   note?: string;
   discardReason?: string;
+  /** L'ultimo messaggio del lead, testuale. Il "motivo" che il modello produce è una
+   *  sintesi: le Conferme hanno chiesto anche le parole vere, per non scoprire al
+   *  telefono che la disdetta diceva un'altra cosa. */
+  leadWords?: string;
 };
 
 export type OutcomeAction =
@@ -17,16 +21,25 @@ export type OutcomeAction =
  * successivo. L'esito non declassa: viene tradotto in una nota informativa.
  */
 export function buildLockedNote(args: OutcomeArgs, existingDate: string | null): string {
+  const inAgenda = existingDate ? formatRomeDateTime(existingDate) : null;
+  // Le parole del lead sono la cosa che il CRM ci ha chiesto e che mancava: il "motivo"
+  // che mandavamo era la sintesi del modello, cioè una parafrasi. Restano entrambi —
+  // la sintesi orienta, la citazione è la prova.
+  const parole = paroleDelLead(args.leadWords);
+  const citazione = parole ? ` Parole del lead: "${parole}".` : '';
   const extra = args.note && args.note.trim() ? ` ${args.note.trim()}` : '';
   let base: string;
   switch (args.outcome) {
     case 'DA_SCARTARE': {
-      const when = existingDate ? ` (fissato per ${formatRomeDateTime(existingDate)})` : '';
-      base = `Il lead vuole annullare l'appuntamento${when}. Motivo: ${args.discardReason?.trim() || 'non specificato'}.`;
+      // Se disdice, QUANDO: senza la data le Conferme non sanno quale appuntamento
+      // stanno per perdere. Quando non ce l'abbiamo lo si dice, invece di tacere.
+      const quando = inAgenda ? `appuntamento di ${inAgenda} da annullare` : `appuntamento da annullare (data non nota da noi)`;
+      base = `DISDETTA — ${quando}. Motivo: ${args.discardReason?.trim() || 'non specificato'}.`;
       break;
     }
     case 'INTERROTTO':
-      base = `Conversazione interrotta dopo l'appuntamento. Appuntamento mantenuto.`;
+      base = `CHAT INTERROTTA — il lead ha smesso di rispondere dopo il fissaggio.` +
+        ` Appuntamento mantenuto${inAgenda ? `: ${inAgenda}` : ''}.`;
       break;
     case 'RICHIAMO': {
       // RICHIAMO qui significa "il lead vuole spostare l'appuntamento già fissato".
@@ -40,18 +53,24 @@ export function buildLockedNote(args: OutcomeArgs, existingDate: string | null):
       // prompt, quindi lo stesso istante avrebbe quasi sempre due stringhe diverse.
       const leadDate = args.date && !sameInstant(args.date, existingDate) ? args.date : null;
       const datePart = leadDate ? ` alla data indicata (${formatRomeDateTime(leadDate)})` : ' (nessuna nuova data indicata dal lead)';
-      const kept = existingDate ? `Appuntamento mantenuto: ${formatRomeDateTime(existingDate)}.` : 'Appuntamento mantenuto.';
-      base = `Il lead ha chiesto di spostare l'appuntamento${datePart}. ${kept}`;
+      // "Mantenuto" da solo si legge come "tutto a posto". Chi legge deve sapere che
+      // l'appuntamento è ancora lì perché noi non lo spostiamo, e che tocca a loro.
+      const kept = inAgenda
+        ? `In agenda resta ${inAgenda}: mantenuto finché non lo spostate voi.`
+        : 'Appuntamento mantenuto: da spostare voi.';
+      base = `SPOSTAMENTO CHIESTO — il lead ha chiesto di spostare l'appuntamento${datePart}. ${kept}`;
       break;
     }
     case 'NON_RISPOSTO':
-      base = `Nessuna risposta successiva. Appuntamento mantenuto.`;
+      base = `NESSUNA RISPOSTA — nessun riscontro dopo il fissaggio.` +
+        ` Appuntamento mantenuto${inAgenda ? `: ${inAgenda}` : ''}.`;
       break;
     case 'APPUNTAMENTO':
       if (args.date && existingDate && !sameInstant(args.date, existingDate)) {
-        base = `Il lead ha chiesto di spostare a ${formatRomeDateTime(args.date)}. Appuntamento originale mantenuto: ${formatRomeDateTime(existingDate)}.`;
+        base = `SPOSTAMENTO CHIESTO — il lead ha chiesto di spostare a ${formatRomeDateTime(args.date)}.` +
+          ` In agenda resta ${formatRomeDateTime(existingDate)}: mantenuto finché non lo spostate voi.`;
       } else {
-        base = `Il lead ha riconfermato l'appuntamento.`;
+        base = `RICONFERMA — il lead ha riconfermato l'appuntamento${inAgenda ? ` di ${inAgenda}` : ''}.`;
       }
       break;
     case 'NOTA':
@@ -60,10 +79,10 @@ export function buildLockedNote(args: OutcomeArgs, existingDate: string | null):
       // USCITA (NOTA dal ramo locked di resolveOutcomeAction, CONTATTO_UMANO da
       // sendOutcome, che lo intercetta prima). Il caso resta per l'esaustività dello
       // switch: senza, TypeScript vede `base` potenzialmente non assegnata.
-      base = `Appuntamento mantenuto.`;
+      base = `AGGIORNAMENTO — appuntamento mantenuto${inAgenda ? `: ${inAgenda}` : ''}.`;
       break;
   }
-  return `${base}${extra}`.trim();
+  return `${base}${extra}${citazione}`.trim();
 }
 
 /**
@@ -156,10 +175,10 @@ export function buildRichiamoSenzaDataNote(input: {
   motivo: MotivoDataNonUsabile;
   leadWords?: string;
 }): string {
-  const parole = input.leadWords?.trim();
+  const parole = paroleDelLead(input.leadWords);
   const citazione = parole ? ` Parole del lead: "${parole}".` : '';
   return (
-    `Il lead ha chiesto di essere ricontattato ${DETTAGLIO_MOTIVO[input.motivo]}. ` +
-    `Da richiamare, giorno e ora da concordare.${citazione}`
+    `DA RICHIAMARE — giorno e ora da concordare: il lead ha chiesto di essere ` +
+    `ricontattato ${DETTAGLIO_MOTIVO[input.motivo]}.${citazione}`
   );
 }
