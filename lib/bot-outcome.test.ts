@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { sendOutcome } from './bot-outcome';
+import { sendOutcome, sendCrmNota } from './bot-outcome';
 
 const DATE = '2026-06-29T17:00:00Z';
 
@@ -343,6 +343,28 @@ describe('sendOutcome — RICHIAMO con data non utilizzabile', () => {
     expect(ev).toBeTruthy();
     expect(ev.payload.dataScartata).toBe('2026-01-27T09:00:00+01:00');
     expect(ev.payload.motivo).toBe('passato');
+  });
+});
+
+describe('sendCrmNota — una nota diretta, fuori dalla logica degli esiti', () => {
+  it('manda una NOTA anche su un lead già APPUNTAMENTO, senza toccare nulla', async () => {
+    // Passando da sendOutcome, resolveOutcomeAction la trasformerebbe in una nota
+    // "appuntamento mantenuto": il fatto che il bot abbia ripreso la chat sparirebbe.
+    const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE });
+    const r = await sendCrmNota(supabase, 1, 'IL BOT HA RIPRESO LA CHAT — ...');
+
+    expect(r.sent).toBe(true);
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(body.outcome).toBe('NOTA');
+    expect(body.note).toContain('IL BOT HA RIPRESO');
+    expect(calls.updates).toHaveLength(0);
+  });
+
+  it('lead non CRM: nessuna chiamata', async () => {
+    const { supabase } = makeSupabase({ crm_lead_id: null, bot_outcome: null, bot_scheduled_at: null });
+    const r = await sendCrmNota(supabase, 1, 'qualcosa');
+    expect(r).toEqual({ sent: false, error: 'not_crm_lead' });
+    expect((globalThis.fetch as any).mock.calls).toHaveLength(0);
   });
 });
 

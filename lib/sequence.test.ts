@@ -26,7 +26,9 @@ describe('costanti', () => {
     // Un solo follow-up: i touch 2/3/4 sono stati rimossi il 01/08/2026.
     expect(TOUCH_OFFSETS_DAYS).toEqual([1]);
     expect(SEQUENCE_END_DAYS).toBe(4);
-    expect([NUDGE1_MIN_H, NUDGE1_MAX_H, TRACKB_GIVEUP_H]).toEqual([18, 24, 120]);
+    // La resa e passata da 120h a 288h (12 giorni) il 07/08: vedi il commento in
+    // lib/sequence.ts e il caso Marina Destefanis.
+    expect([NUDGE1_MIN_H, NUDGE1_MAX_H, TRACKB_GIVEUP_H]).toEqual([18, 24, 288]);
   });
 });
 
@@ -188,9 +190,24 @@ describe('decideTrackB', () => {
   it('50h con nudgesSent=0 → wait (niente template fuori finestra)', () =>
     expect(dec(50, 0)).toEqual({ kind: 'wait' }));
   it('96h con nudgesSent=0 → wait', () => expect(dec(96, 0)).toEqual({ kind: 'wait' }));
-  it('120h → classify, anche fuori fascia e con kill-switch off', () => {
-    expect(dec(120, 0)).toEqual({ kind: 'classify' });
-    expect(dec(130, 3, { now: NOW_NIGHT, enabled: false })).toEqual({ kind: 'classify' });
+  // Per il CRM classificare significa restituire il lead: INTERROTTO lo rimette nel
+  // giro dei GDO umani. A 120h la chat puo' ancora ripartire, ed e' quello che e'
+  // successo a Marina Destefanis il 26/07: restituita, riassegnata a un GDO che l'ha
+  // chiamata tre volte e poi scartata, mentre il giorno dopo il bot fissava.
+  it('a 120h non si classifica piu: la chat puo ancora ripartire', () => {
+    expect(dec(120, 1)).toEqual({ kind: 'wait' });
+    expect(dec(200, 1, { now: NOW_NIGHT, enabled: false })).toEqual({ kind: 'wait' });
+  });
+
+  it('288h (12 giorni) → classify, anche fuori fascia e con kill-switch off', () => {
+    expect(dec(288, 0)).toEqual({ kind: 'classify' });
+    expect(dec(300, 3, { now: NOW_NIGHT, enabled: false })).toEqual({ kind: 'classify' });
+  });
+
+  it('non si classifica finche il nudge gratuito e ancora da spendere', () => {
+    // Silenzio dentro la finestra del nudge e nudge non ancora mandato: non abbiamo
+    // finito di lavorare il lead, quindi non lo restituiamo.
+    expect(dec(20, 0, { enabled: false })).toEqual({ kind: 'wait' });
   });
 
   it('lead notturno che salta il free: si arriva alla resa senza toccare un template', () => {
@@ -200,8 +217,9 @@ describe('decideTrackB', () => {
     expect(dec(30, 0)).toEqual({ kind: 'wait' });
     expect(dec(48, 0)).toEqual({ kind: 'wait' });
     expect(dec(96, 0)).toEqual({ kind: 'wait' });
-    // Resta solo la resa a 120h.
-    expect(dec(121, 0)).toEqual({ kind: 'classify' });
+    // Resta solo la resa, ora a 288h.
+    expect(dec(121, 0)).toEqual({ kind: 'wait' });
+    expect(dec(289, 0)).toEqual({ kind: 'classify' });
   });
 });
 

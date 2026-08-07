@@ -166,6 +166,21 @@ export function buildContattoUmanoNote(input: { leadWords?: string; motivo?: str
 }
 
 /**
+ * Il lead era già stato restituito al CRM e ha riscritto. Da qui in poi due canali
+ * lavorano la stessa persona senza vedersi, ed è esattamente com'è andata a Marina
+ * Destefanis: restituita il 26/07, riassegnata a un GDO che l'ha chiamata tre volte e
+ * poi scartata, mentre il giorno dopo il bot le fissava l'appuntamento. La nota serve a
+ * fermare quella telefonata, quindi lo dice in chiaro.
+ */
+export function buildBotRipresoNote(input: { esitoPrecedente: string; quandoIso: string }): string {
+  return (
+    `IL BOT HA RIPRESO LA CHAT — il lead ha riscritto ${formatRomeDateTime(input.quandoIso)}, ` +
+    `dopo che ve lo avevamo restituito come ${input.esitoPrecedente}. ` +
+    `Non chiamatelo a mano finché non vi arriva un nuovo esito dal bot.`
+  );
+}
+
+/**
  * La nota che parte al posto di un RICHIAMO con una data che non ci fidiamo a mandare.
  * Nessuna data dentro, di proposito: si riportano le parole del lead e si dice
  * esplicitamente che giorno e ora sono da concordare. La data scartata viaggia
