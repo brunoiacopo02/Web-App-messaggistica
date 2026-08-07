@@ -14,6 +14,16 @@ import { toE164 } from './phone';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
+/**
+ * Dal 30/07 il CRM espone questo endpoint per sapere che un'agenda uscita come
+ * "inviato" è poi stata consegnata: senza l'avviso quel lead resta ambiguo da loro e il
+ * reinvio resta bloccato per sempre. Fino al 07/08 ha ricevuto ZERO chiamate — non per
+ * codice mancante, ma perché l'URL viveva solo in una env mai configurata su Vercel, e
+ * 63 agende su 316 sono rimaste appese. Il default fa sì che una env dimenticata non
+ * possa più zittire un canale: stessa scelta già fatta per CRM_OUTCOME_URL.
+ */
+export const DEFAULT_CRM_AGENDA_DELIVERED_URL = 'https://crm-sales-fenice.vercel.app/api/bot/agenda-delivery';
+
 export type SendAgendaResult = {
   ok: boolean;
   esito: SendAgendaEsito;
@@ -217,9 +227,10 @@ export async function handleGdoDeliveryUpdate(
     level: 'info',
   });
 
-  const url = process.env.CRM_AGENDA_DELIVERED_URL;
+  const url = process.env.CRM_AGENDA_DELIVERED_URL || DEFAULT_CRM_AGENDA_DELIVERED_URL;
   const secret = process.env.BOT_WEBHOOK_SECRET;
-  if (!url || !secret || !c.crm_lead_id) return { updated: true, notified: false };
+  // Il segreto invece resta bloccante: senza firma non si manda niente in chiaro.
+  if (!secret || !c.crm_lead_id) return { updated: true, notified: false };
 
   const body = JSON.stringify({
     leadId: c.crm_lead_id,

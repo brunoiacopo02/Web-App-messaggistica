@@ -4,7 +4,7 @@ vi.mock('./fenice-enroll', () => ({
   enrollGdoLeadAsPostino: vi.fn(async () => ({ ok: true, conversationId: 42, sid: 'SM_AGENDA' })),
 }));
 
-import { runSendAgenda, handleGdoDeliveryUpdate } from './send-agenda-gdo';
+import { runSendAgenda, handleGdoDeliveryUpdate, DEFAULT_CRM_AGENDA_DELIVERED_URL } from './send-agenda-gdo';
 import { enrollGdoLeadAsPostino } from './fenice-enroll';
 
 const PAYLOAD = {
@@ -348,8 +348,33 @@ describe('handleGdoDeliveryUpdate — l\'inviato che poi arriva davvero', () => 
     expect(await handleGdoDeliveryUpdate(supabase, { sid: 'ignoto', status: 'delivered' })).toMatchObject({ updated: false });
   });
 
-  it('senza URL del CRM configurato: l\'esito nostro si aggiorna comunque', async () => {
+  // Questo test diceva il contrario fino al 07/08: senza env, nessuna chiamata. E'
+  // esattamente cio' che e' successo in produzione — l'endpoint del CRM, online dal 30
+  // luglio, ha ricevuto ZERO chiamate perche' CRM_AGENDA_DELIVERED_URL non e' mai stata
+  // configurata su Vercel, e 63 agende su 316 sono rimaste "inviato" per sempre col
+  // reinvio bloccato. Una env dimenticata non deve poter zittire un canale.
+  it('senza CRM_AGENDA_DELIVERED_URL l\'avviso parte lo stesso, sull\'URL di default', async () => {
     vi.stubEnv('CRM_AGENDA_DELIVERED_URL', '');
+    const { supabase, calls } = makeDeliverySupabase({ msg: MSG, conv: CONV });
+
+    const res = await handleGdoDeliveryUpdate(supabase, { sid: 'SM1', status: 'delivered' });
+
+    expect(res).toMatchObject({ updated: true, notified: true });
+    expect(calls.updates).toEqual([{ gdo_agenda_esito: 'consegnato' }]);
+    const [url, init] = (globalThis.fetch as any).mock.calls[0];
+    expect(url).toBe(DEFAULT_CRM_AGENDA_DELIVERED_URL);
+    expect(init.headers['x-bot-signature']).toMatch(/^sha256=[0-9a-f]{64}$/);
+    expect(JSON.parse(init.body)).toMatchObject({ leadId: 'gdo-1', esito: 'consegnato', sid: 'SM1' });
+  });
+
+  it('l\'env, se c\'e\', vince sul default', async () => {
+    const { supabase } = makeDeliverySupabase({ msg: MSG, conv: CONV });
+    await handleGdoDeliveryUpdate(supabase, { sid: 'SM1', status: 'delivered' });
+    expect((globalThis.fetch as any).mock.calls[0][0]).toBe('https://crm.example/api/bot/agenda-delivered');
+  });
+
+  it('senza segreto HMAC non si manda niente in chiaro', async () => {
+    vi.stubEnv('BOT_WEBHOOK_SECRET', '');
     const { supabase, calls } = makeDeliverySupabase({ msg: MSG, conv: CONV });
 
     const res = await handleGdoDeliveryUpdate(supabase, { sid: 'SM1', status: 'delivered' });
