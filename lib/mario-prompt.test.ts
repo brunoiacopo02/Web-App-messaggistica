@@ -540,3 +540,47 @@ describe('FASE 6 — un giorno alla volta', () => {
     expect(p).toMatch(/prima prova a trovargli un orario dentro quel giorno/i);
   });
 });
+
+// Il punto in cui si perde più gente: su 360 lead a cui la call è stata proposta, solo
+// il 18% è arrivato ad accettarla, e quasi nessuno aveva detto no — dicevano "ci penso",
+// "ti contatto io", "ora lavoro", oppure facevano una domanda. Nelle chat vere è il BOT
+// che chiude: "in bocca al lupo", "scrivimi quando vuoi", "prenditi il tempo che serve".
+describe('SE RIMANDA LA CALL — il rimando prima del fissaggio', () => {
+  const p = buildMarioSystem('Marta');
+
+  it('esiste una sezione dedicata al rimando della call, distinta da quella sul giorno', () => {
+    expect(p).toContain('SE RIMANDA LA CALL');
+    expect(p.indexOf('SE RIMANDA LA CALL')).toBeLessThan(p.indexOf('SE IL LEAD NON PUÒ'));
+  });
+
+  it('vieta di chiudere la porta col saluto: l\'ultimo messaggio è un passo con un quando', () => {
+    expect(p).toContain('non chiudere TU la porta');
+    expect(p).toContain('non è un saluto');
+  });
+
+  it('tratta la domanda come una domanda, non come un rifiuto', () => {
+    expect(p).toContain('UNA DOMANDA NON È UN NO');
+  });
+
+  it('separa il "non posso spendere" dalla call, che è gratuita e non impegna', () => {
+    expect(p).toContain('la call è gratuita e non impegna');
+  });
+
+  it('sul rinvio al materiale prende un impegno con un giorno, invece di lasciare la palla al lead', () => {
+    expect(p).toMatch(/PRIMA GUARDO IL CORSO[\s\S]{0,400}Non lasciarlo a "scrivimi tu/);
+  });
+
+  it('vieta esplicitamente fretta, scarsità e senso di colpa', () => {
+    expect(p).toContain('Non usare mai la fretta, la scarsità o il senso di colpa');
+  });
+
+  it('applica la stessa regola sulla fermezza del no delle disdette: sul no fermo ci si ferma subito', () => {
+    const sezione = p.slice(p.indexOf('SE RIMANDA LA CALL'), p.indexOf('SE IL LEAD NON PUÒ'));
+    expect(sezione).toContain('quanto è fermo il no');
+    expect(sezione).toContain('non insisti di un millimetro');
+  });
+
+  it('INTERROTTO non esce alla prima frase di rimando', () => {
+    expect(p).toMatch(/\[ESITO:INTERROTTO\|<motivo breve>\][^\n]*NON alla prima frase/);
+  });
+});
