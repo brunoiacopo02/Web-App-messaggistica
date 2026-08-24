@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isoWithOffset, parseIntakePayload, parseSendAgendaPayload, validateOutcomeBody } from './bot-contract';
+import { isoWithOffset, parseIntakePayload, parseSendAgendaPayload, validateOutcomeBody, parseAppointmentSetPayload } from './bot-contract';
 
 describe('isoWithOffset', () => {
   it('accetta offset esplicito', () => {
@@ -65,6 +65,77 @@ describe('esito NOTA', () => {
   it('NOTA non richiede la data', () => {
     const r = validateOutcomeBody({ leadId: 'x', outcome: 'NOTA', note: 'ok' });
     expect(r.ok).toBe(true);
+  });
+});
+
+// Il CRM ci chiama a ogni appuntamento fissato o spostato. Prima del 07/08 l'endpoint
+// non esisteva e le loro chiamate morivano in un 404 di Vercel: non abbiamo nemmeno una
+// richiesta vera da cui dedurre lo schema, quindi il parser e tollerante sui nomi.
+describe('parseAppointmentSetPayload', () => {
+  const DATA = '2026-08-07T18:00:00+02:00';
+
+  it('la forma canonica', () => {
+    expect(parseAppointmentSetPayload({ leadId: 'u1', appointmentAt: DATA }))
+      .toEqual({ ok: true, value: { leadId: 'u1', appointmentAt: DATA } });
+  });
+
+  it('accetta gli alias dell\'identificativo del lead', () => {
+    for (const k of ['leadId', 'lead_id', 'crmLeadId', 'crm_lead_id']) {
+      expect(parseAppointmentSetPayload({ [k]: 'u1', appointmentAt: DATA }))
+        .toEqual({ ok: true, value: { leadId: 'u1', appointmentAt: DATA } });
+    }
+  });
+
+  it('accetta gli alias della data', () => {
+    for (const k of ['appointmentAt', 'appuntamentoAt', 'appointment_at', 'appuntamento_at', 'scheduledAt', 'scheduled_at', 'date', 'at']) {
+      expect(parseAppointmentSetPayload({ leadId: 'u1', [k]: DATA }))
+        .toEqual({ ok: true, value: { leadId: 'u1', appointmentAt: DATA } });
+    }
+  });
+
+  it('una data senza offset di fuso non si indovina', () => {
+    // Due ore di errore in silenzio valgono meno di un 400 che si legge subito.
+    expect(parseAppointmentSetPayload({ leadId: 'u1', appointmentAt: '2026-08-07T18:00:00' }))
+      .toEqual({ ok: false, reason: 'data_senza_offset' });
+    expect(parseAppointmentSetPayload({ leadId: 'u1', appointmentAt: '07/08/2026 18:00' }))
+      .toEqual({ ok: false, reason: 'data_senza_offset' });
+  });
+
+  it('distingue lead mancante da data mancante: il messaggio d\'errore deve dirglielo', () => {
+    expect(parseAppointmentSetPayload({ appointmentAt: DATA })).toEqual({ ok: false, reason: 'lead_mancante' });
+    expect(parseAppointmentSetPayload({ leadId: 'u1' })).toEqual({ ok: false, reason: 'data_mancante' });
+  });
+
+  it('campi presenti ma vuoti valgono come mancanti', () => {
+    expect(parseAppointmentSetPayload({ leadId: '  ', appointmentAt: DATA })).toEqual({ ok: false, reason: 'lead_mancante' });
+    expect(parseAppointmentSetPayload({ leadId: 'u1', appointmentAt: '   ' })).toEqual({ ok: false, reason: 'data_mancante' });
+  });
+
+  it('corpo non-oggetto', () => {
+    expect(parseAppointmentSetPayload(null)).toEqual({ ok: false, reason: 'bad_request' });
+    expect(parseAppointmentSetPayload('ciao')).toEqual({ ok: false, reason: 'bad_request' });
+    expect(parseAppointmentSetPayload([{ leadId: 'u1' }])).toEqual({ ok: false, reason: 'bad_request' });
+  });
+});
+
+describe('esito CONTATTO_UMANO', () => {
+  it('è un esito valido con una nota', () => {
+    expect(validateOutcomeBody({ leadId: 'u1', outcome: 'CONTATTO_UMANO', note: 'vuole parlare con una persona' }))
+      .toEqual({ ok: true });
+  });
+
+  it('senza nota non parte: il CRM risponderebbe 400', () => {
+    expect(validateOutcomeBody({ leadId: 'u1', outcome: 'CONTATTO_UMANO' }))
+      .toEqual({ ok: false, reason: 'note_required' });
+    expect(validateOutcomeBody({ leadId: 'u1', outcome: 'CONTATTO_UMANO', note: '   ' }))
+      .toEqual({ ok: false, reason: 'note_required' });
+  });
+
+  it('NON richiede una data: non è un appuntamento, è una segnalazione', () => {
+    // Metterlo in DATE_REQUIRED rimetterebbe il modello nella condizione di inventarne
+    // una, che è esattamente il bug chiuso il 06/08 sulle date di RICHIAMO.
+    expect(validateOutcomeBody({ leadId: 'u1', outcome: 'CONTATTO_UMANO', note: 'x' }))
+      .toEqual({ ok: true });
   });
 });
 

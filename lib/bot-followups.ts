@@ -16,7 +16,7 @@ export function decideFollowupAction(input: {
   seqSids: string[];
   hasInbound: boolean;
   lastInboundAtMs: number | null;
-  /** Esito CRM già registrato. APPUNTAMENTO è terminale: mai riclassificare. */
+  /** Esito CRM già registrato. Qualunque esito è terminale: mai riclassificare. */
   botOutcome?: string | null;
   /** Kill-switch invii (SEQUENCE_ENABLED). Irrilevante per le classificazioni. */
   sequenceEnabled?: boolean;
@@ -29,9 +29,12 @@ export function decideFollowupAction(input: {
   // arriverebbe al CRM come esito su un lead che sta lavorando un commerciale.
   if (input.gdoPostino === true) return 'none';
 
-  // Lead già fissato: mai riclassificare (il re-invio verrebbe tradotto in un
-  // nuovo POST APPUNTAMENTO al CRM, che lo risegnerebbe da zero).
-  if (input.botOutcome === 'APPUNTAMENTO') return 'none';
+  // Un esito è già stato dato: mai riclassificare, qualunque esso sia. La guardia
+  // copriva solo APPUNTAMENTO, ma una riga riaperta dal webhook che porta ancora il suo
+  // esito rispedisce lo stesso POST a ogni giro del cron — il 07/08 erano 21
+  // conversazioni 'active' con un esito già registrato (11 INTERROTTO, 8 NON_RISPOSTO,
+  // 2 RICHIAMO).
+  if (input.botOutcome) return 'none';
 
   if (input.hasInbound && input.lastInboundAtMs !== null) {
     // Track B: ha risposto poi silenzio.

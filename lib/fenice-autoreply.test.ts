@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { shouldAutoReply, shouldReopen, nextUnansweredInboundIndex, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS, canSendOutcome, drainMarioReplies, isLockStale, LOCK_TTL_MS, shouldSendGdoVideo, martaSidsFromEnv, isSoloPresaDAtto } from './fenice-autoreply';
+import { shouldAutoReply, shouldReopen, nextUnansweredInboundIndex, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS, canSendOutcome, drainMarioReplies, isLockStale, LOCK_TTL_MS, shouldSendGdoVideo, martaSidsFromEnv, isSoloPresaDAtto, serveRedrive } from './fenice-autoreply';
 
 vi.mock('./mario', () => ({ generateMarioReply: vi.fn(), GDO_CONTEXT_NOTE: 'CONTESTO-GDO' }));
 vi.mock('./twilio', () => ({ sendFreeText: vi.fn(async () => ({ sid: 'SM_fake', status: 'queued' })) }));
@@ -110,6 +110,35 @@ describe('isOrphanedReplyingLock', () => {
   });
   it('(d) replying + lastInboundAtMs null → false', () => {
     expect(isOrphanedReplyingLock('replying', null, NOW)).toBe(false);
+  });
+});
+
+describe('serveRedrive: il re-drive e una rete, non un ciclo', () => {
+  const now = Date.UTC(2026, 7, 7, 12, 0, 0);
+  const MAX = 5 * 86400_000;
+  const h = (n: number) => now - n * 3600_000;
+
+  it('inbound nuovo mai re-drivato: si parte', () => {
+    expect(serveRedrive({ ultimoInboundMs: h(1), ultimoDrainMs: null, nowMs: now, maxMs: MAX })).toBe(true);
+  });
+
+  it('stesso inbound gia re-drivato: non si ripete — e il loop orario di conv 3728', () => {
+    // Il drain e girato DOPO l'inbound e non ha prodotto testo visibile: nessuna riga
+    // outbound, quindi lastIsUnansweredInbound resta vero. Senza questa guardia lo
+    // stesso esito ripartirebbe ogni ora per cinque giorni.
+    expect(serveRedrive({ ultimoInboundMs: h(3), ultimoDrainMs: h(2), nowMs: now, maxMs: MAX })).toBe(false);
+  });
+
+  it('inbound piu recente dell ultimo drain: si riparte', () => {
+    expect(serveRedrive({ ultimoInboundMs: h(1), ultimoDrainMs: h(3), nowMs: now, maxMs: MAX })).toBe(true);
+  });
+
+  it('drain esattamente contemporaneo all inbound: gia gestito', () => {
+    expect(serveRedrive({ ultimoInboundMs: h(2), ultimoDrainMs: h(2), nowMs: now, maxMs: MAX })).toBe(false);
+  });
+
+  it('inbound piu vecchio del tetto: il lead e perso, si va alla classificazione', () => {
+    expect(serveRedrive({ ultimoInboundMs: now - 6 * 86400_000, ultimoDrainMs: null, nowMs: now, maxMs: MAX })).toBe(false);
   });
 });
 
@@ -854,6 +883,63 @@ describe('drainMarioReplies — modalità postino (lead dei GDO)', () => {
     await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
 
     expect(calls.finalStatusWrites).toEqual(['handed_off']);
+  });
+
+  // Prima del 06/08 il tag [PASSAGGIO_UMANO] impostava solo ai_status='handed_off' e
+  // la richiesta del lead non usciva mai dal nostro database: 6 casi solo fra i 338
+  // lead che il CRM ci ha segnalato come fermi.
+  describe('la richiesta di parlare con una persona arriva al CRM', () => {
+    const rowsRichiesta: FakeMsgRow[] = [
+      { direction: 'out', body: 'apertura', template_sid: null, created_at: '2026-07-29T10:00:00Z' },
+      { direction: 'in', body: 'voglio parlare con una persona', template_sid: null, created_at: '2026-07-29T10:10:00Z' },
+    ];
+
+    it('su lead CRM: CONTATTO_UMANO con le parole del lead, poi handed_off', async () => {
+      const claimedRow: ClaimedRow = { id: 91, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+      const { supabase, calls } = makeDrainSupabase(claimedRow, rowsRichiesta);
+      vi.mocked(generateMarioReply).mockResolvedValueOnce({
+        visibleReply: 'Certo, ti metto subito in contatto con un mio collega.',
+        appointmentFixed: false, passToHuman: true, videoWatched: false,
+      });
+
+      await drainMarioReplies(supabase, 91, '+391234567890', () => 0);
+
+      expect(vi.mocked(sendOutcome)).toHaveBeenCalledTimes(1);
+      const args = vi.mocked(sendOutcome).mock.calls[0][2];
+      expect(args.outcome).toBe('CONTATTO_UMANO');
+      // Le parole del lead, non una parafrasi del modello.
+      expect(args.note).toBe('voglio parlare con una persona');
+      expect(calls.finalStatusWrites).toEqual(['handed_off']);
+    });
+
+    it('su lead NON CRM: nessuna chiamata al CRM, solo handed_off', async () => {
+      const claimedRow: ClaimedRow = { id: 92, ai_started_at: null, crm_lead_id: null, bot_outcome: null };
+      const { supabase, calls } = makeDrainSupabase(claimedRow, rowsRichiesta);
+      vi.mocked(generateMarioReply).mockResolvedValueOnce({
+        visibleReply: 'Ti passo un collega.',
+        appointmentFixed: false, passToHuman: true, videoWatched: false,
+      });
+
+      await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+      expect(vi.mocked(sendOutcome)).not.toHaveBeenCalled();
+      expect(calls.finalStatusWrites).toEqual(['handed_off']);
+    });
+
+    it('un CRM che risponde male non tiene il bot incollato a una chat che deve prendere una persona', async () => {
+      const claimedRow: ClaimedRow = { id: 93, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+      const { supabase, calls } = makeDrainSupabase(claimedRow, rowsRichiesta);
+      vi.mocked(sendOutcome).mockResolvedValueOnce({ sent: false, error: 'http_500' });
+      vi.mocked(generateMarioReply).mockResolvedValueOnce({
+        visibleReply: 'Ti passo un collega.',
+        appointmentFixed: false, passToHuman: true, videoWatched: false,
+      });
+
+      await drainMarioReplies(supabase, 93, '+391234567890', () => 0);
+
+      expect(calls.finalStatusWrites).toEqual(['handed_off']);
+      expect(calls.events.some((e: { type: string }) => e.type === 'contatto_umano_non_segnalato')).toBe(true);
+    });
   });
 
   it('marca gdo_noemi_reminded_at solo se la risposta nomina davvero Noemi', async () => {

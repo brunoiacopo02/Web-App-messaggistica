@@ -116,6 +116,31 @@ export function lastIsUnansweredInbound(rows: MsgRow[]): boolean {
   return nextUnansweredInboundIndex(rows) !== -1;
 }
 
+/**
+ * Pure: il re-drive del cron deve scattare per questo inbound?
+ *
+ * Il re-drive è una rete di sicurezza, non un ciclo. Deve partire una volta sola per
+ * inbound rimasto senza risposta: quando un turno produce solo tag e nessun testo
+ * visibile non viene scritta nessuna riga outbound, `lastIsUnansweredInbound` resta
+ * vero, e senza questa guardia lo stesso esito ripartirebbe ogni ora fino al tetto dei
+ * 5 giorni. È il loop che il CRM vede come "lo stesso APPUNTAMENTO ogni ora" (conv
+ * 3728: 32 ripetizioni a gap 1.00h fra il 01/08 e il 03/08).
+ *
+ * `ultimoDrainMs` è l'istante dell'ultimo giro di drain su questa conversazione, letto
+ * dagli eventi `fenice_ai_reply` che il drain scrive a ogni giro andato a termine. Se
+ * il drain è morto a metà l'evento non c'è, e il re-drive riparte: è voluto.
+ */
+export function serveRedrive(input: {
+  ultimoInboundMs: number;
+  ultimoDrainMs: number | null;
+  nowMs: number;
+  maxMs: number;
+}): boolean {
+  if (input.nowMs - input.ultimoInboundMs > input.maxMs) return false;
+  if (input.ultimoDrainMs === null) return true;
+  return input.ultimoInboundMs > input.ultimoDrainMs;
+}
+
 /** Dopo questo tempo un lucchetto è considerato abbandonato (processo morto). */
 export const LOCK_TTL_MS = 10 * 60_000;
 
@@ -515,6 +540,10 @@ export async function drainMarioReplies(
             date: result.scheduledAt,
             discardReason: result.discardReason,
             note: result.note,
+            // `note` e `discardReason` sono la sintesi del modello. Le Conferme hanno
+            // chiesto anche le parole vere del lead: sono l'ultimo turno della
+            // cronologia, l'unica cosa che non e' una parafrasi.
+            leadWords: [...history].reverse().find((t) => t.role === 'user')?.content,
             report,
           }, postino ? { noteOnly: true } : {});
           // Esito CRM: chiudiamo se il callback è andato a buon fine; altrimenti
@@ -536,7 +565,32 @@ export async function drainMarioReplies(
         }
       }
 
-      if (result.passToHuman) { finalStatus = 'handed_off'; break; }
+      if (result.passToHuman) {
+        // Il CRM ha un esito apposta (CONTATTO_UMANO, dal 05/08). Senza questa chiamata
+        // la richiesta di parlare con una persona resta solo nel nostro database e
+        // nessuno la vede: 6 casi fra i 338 lead che ci hanno segnalato come fermi.
+        // Le parole che mandiamo sono quelle del lead, prese dall'ultimo turno della
+        // cronologia — una parafrasi del modello cambierebbe il senso della richiesta.
+        if (crmLeadId) {
+          const ultimoDelLead = [...history].reverse().find((t) => t.role === 'user')?.content;
+          const esito = await sendOutcome(supabase, conversationId, {
+            outcome: 'CONTATTO_UMANO',
+            note: ultimoDelLead,
+          });
+          // Un CRM che non risponde non deve tenere il bot incollato a una chat che
+          // deve prendere una persona: si registra e si va avanti.
+          if (!esito.sent) {
+            await supabase.from('event_log').insert({
+              type: 'contatto_umano_non_segnalato',
+              payload: { conversationId, crmLeadId, error: esito.error ?? null, status: esito.status ?? null } as never,
+              message: `[bot-fissatore] conv ${conversationId}: passaggio a una persona non segnalato al CRM (${esito.error ?? esito.status})`,
+              level: 'error',
+            });
+          }
+        }
+        finalStatus = 'handed_off';
+        break;
+      }
 
       if (videoConfermato && watchedAt) {
         // Il log non si interroga per decidere: la conferma serve al cron dei solleciti,

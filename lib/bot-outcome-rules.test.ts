@@ -5,6 +5,9 @@ import {
   checkDataRichiamo,
   buildRichiamoSenzaDataNote,
   isRichiestaDisdetta,
+  buildContattoUmanoNote,
+  buildBotRipresoNote,
+  paroleDelLead,
   RICHIAMO_ORIZZONTE_MS,
 } from './bot-outcome-rules';
 import { formatRomeDateTime } from './rome-time';
@@ -206,5 +209,132 @@ describe('isRichiestaDisdetta', () => {
     expect(isRichiestaDisdetta('NON_RISPOSTO')).toBe(false);
     expect(isRichiestaDisdetta('APPUNTAMENTO')).toBe(false);
     expect(isRichiestaDisdetta('NOTA')).toBe(false);
+  });
+});
+
+// Il CRM ha ricevuto 296 note su 142 lead dal 26/07: il canale funziona, il contenuto
+// no. Le leggono le Conferme pochi minuti prima di chiamare il cliente, quindi serve il
+// fatto in testa e i dati che lo rendono azionabile — se disdice QUANDO, se sposta A
+// QUANDO — piu' le parole vere del lead, non la parafrasi del modello.
+describe('buildLockedNote — formato fattuale per le Conferme', () => {
+  it('ogni nota si apre con l\'etichetta del fatto, in maiuscolo', () => {
+    const atteso: [Parameters<typeof buildLockedNote>[0], string][] = [
+      [{ outcome: 'DA_SCARTARE', discardReason: 'no budget' }, 'DISDETTA —'],
+      [{ outcome: 'RICHIAMO', date: DIFF }, 'SPOSTAMENTO CHIESTO —'],
+      [{ outcome: 'APPUNTAMENTO', date: DIFF }, 'SPOSTAMENTO CHIESTO —'],
+      [{ outcome: 'APPUNTAMENTO', date: DATE }, 'RICONFERMA —'],
+      [{ outcome: 'INTERROTTO' }, 'CHAT INTERROTTA —'],
+      [{ outcome: 'NON_RISPOSTO' }, 'NESSUNA RISPOSTA —'],
+    ];
+    for (const [args, etichetta] of atteso) {
+      expect(buildLockedNote(args, DATE).startsWith(etichetta)).toBe(true);
+    }
+  });
+
+  it('la disdetta dice QUANDO era l\'appuntamento', () => {
+    const n = buildLockedNote({ outcome: 'DA_SCARTARE', discardReason: 'no budget' }, DATE);
+    expect(n).toContain(DATE_HUMAN);
+  });
+
+  it('quando la data non ce l\'abbiamo lo dichiara, invece di tacere', () => {
+    // Caso reale dei lead dei GDO: l'appuntamento l'ha preso il commerciale al
+    // telefono e bot_scheduled_at resta nullo. Fino al 07/08 la nota diceva solo
+    // "Il lead vuole annullare l'appuntamento", senza far capire quale.
+    const n = buildLockedNote({ outcome: 'DA_SCARTARE', discardReason: 'no budget' }, null);
+    expect(n).toContain('data non nota da noi');
+  });
+
+  it('lo spostamento dice che tocca a loro, non solo che l\'appuntamento e mantenuto', () => {
+    const n = buildLockedNote({ outcome: 'RICHIAMO', date: DIFF }, DATE);
+    expect(n).toContain('spostate voi');
+  });
+
+  it('le parole del lead compaiono tra virgolette, accanto alla sintesi del modello', () => {
+    const n = buildLockedNote(
+      { outcome: 'DA_SCARTARE', discardReason: 'motivo economico', leadWords: 'non me la sento di spendere adesso' },
+      DATE,
+    );
+    expect(n).toContain('motivo economico');
+    expect(n).toContain('"non me la sento di spendere adesso"');
+  });
+
+  it('senza le parole del lead la nota resta pulita, senza virgolette vuote', () => {
+    const n = buildLockedNote({ outcome: 'DA_SCARTARE', discardReason: 'no budget' }, DATE);
+    expect(n).not.toContain('""');
+    expect(n).not.toContain('Parole del lead');
+  });
+
+  it('resta leggibile al volo: mai piu di due righe', () => {
+    for (const o of ['DA_SCARTARE', 'RICHIAMO', 'INTERROTTO', 'NON_RISPOSTO', 'APPUNTAMENTO'] as const) {
+      const n = buildLockedNote({ outcome: o, date: DIFF, discardReason: 'x'.repeat(60), leadWords: 'y'.repeat(600) }, DATE);
+      expect(n.length).toBeLessThan(800);
+      expect(n).not.toContain('\n');
+    }
+  });
+});
+
+describe('buildBotRipresoNote', () => {
+  it('dice cosa era stato restituito, quando il lead ha riscritto, e di non chiamare', () => {
+    const n = buildBotRipresoNote({ esitoPrecedente: 'INTERROTTO', quandoIso: DATE });
+    expect(n.startsWith('IL BOT HA RIPRESO LA CHAT —')).toBe(true);
+    expect(n).toContain('INTERROTTO');
+    expect(n).toContain(DATE_HUMAN);
+    expect(n.toLowerCase()).toContain('non chiamatelo');
+  });
+
+  it('vale per qualunque esito precedente', () => {
+    for (const o of ['NON_RISPOSTO', 'DA_SCARTARE', 'RICHIAMO']) {
+      expect(buildBotRipresoNote({ esitoPrecedente: o, quandoIso: DATE })).toContain(o);
+    }
+  });
+});
+
+describe('paroleDelLead', () => {
+  it('normalizza a-capo e spazi doppi: la nota deve restare leggibile di sguardo', () => {
+    expect(paroleDelLead('voglio\nparlare\ncon   qualcuno')).toBe('voglio parlare con qualcuno');
+  });
+
+  it('vuoto o soli spazi non è una citazione', () => {
+    expect(paroleDelLead('   ')).toBeNull();
+    expect(paroleDelLead(undefined)).toBeNull();
+  });
+
+  it('taglia i messaggi fiume su un confine di parola e segnala il taglio', () => {
+    const lungo = 'ho bisogno di parlare con qualcuno perche '.repeat(30);
+    const r = paroleDelLead(lungo);
+    expect(r).not.toBeNull();
+    expect(r!.length).toBeLessThanOrEqual(401);
+    expect(r!.endsWith('…')).toBe(true);
+    expect(r!.endsWith(' …')).toBe(false);
+  });
+
+  it('sotto la soglia non tocca niente', () => {
+    expect(paroleDelLead('passatemi un responsabile')).toBe('passatemi un responsabile');
+  });
+});
+
+describe('buildContattoUmanoNote', () => {
+  it('il fatto in testa, poi le parole del lead', () => {
+    const n = buildContattoUmanoNote({ leadWords: 'posso parlare con un vostro operatore?' });
+    expect(n.startsWith('RICHIESTA DI PARLARE CON UNA PERSONA')).toBe(true);
+    expect(n).toContain('"posso parlare con un vostro operatore?"');
+  });
+
+  it('senza le parole del lead non inventa il contenuto della richiesta', () => {
+    const n = buildContattoUmanoNote({});
+    expect(n.startsWith('RICHIESTA DI PARLARE CON UNA PERSONA')).toBe(true);
+    expect(n).not.toContain('""');
+    expect(n.trim().length).toBeGreaterThan(0);
+  });
+
+  it('il contesto va in coda e non sostituisce le parole del lead', () => {
+    const n = buildContattoUmanoNote({ leadWords: 'voglio disdire', motivo: 'insiste da due turni' });
+    expect(n).toContain('"voglio disdire"');
+    expect(n).toContain('insiste da due turni');
+  });
+
+  it('resta corta: le Conferme la leggono col telefono in mano', () => {
+    const n = buildContattoUmanoNote({ leadWords: 'ciao '.repeat(500) });
+    expect(n.length).toBeLessThan(600);
   });
 });

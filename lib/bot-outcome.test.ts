@@ -1,7 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { sendOutcome } from './bot-outcome';
+import { sendOutcome, sendCrmNota } from './bot-outcome';
 
 const DATE = '2026-06-29T17:00:00Z';
+
+/**
+ * Data di richiamo plausibile, relativa a adesso. Fissarla a una data assoluta la fa
+ * scadere: `checkDataRichiamo` scarta le date nel passato, e una fixture scritta come
+ * "domani" diventa rossa a mezzanotte senza che nessuno abbia toccato il codice.
+ */
+const FRA_TRE_GIORNI = new Date(Date.now() + 3 * 86400_000).toISOString();
 
 /** Valore di una colonna secondo il filtro passato a `.eq()`. Riproduce la sintassi
  *  Postgres `payload->>chiave` che la guardia anti-duplicato usa sul JSON. */
@@ -146,14 +153,9 @@ describe('sendOutcome — guard APPUNTAMENTO terminale', () => {
 });
 
 describe('sendOutcome — RICHIAMO interim', () => {
-  // Data relativa: una fissa nel futuro scritta oggi diventa passato fra qualche
-  // settimana, e la guardia sulla plausibilità della data (vedi sotto) la
-  // intercetterebbe scambiando questi test per il caso "data non plausibile".
-  const FUTURA = () => new Date(Date.now() + 7 * 86_400_000).toISOString();
-
   it('interim su lead in lavorazione → POST inviato, nessuna persistenza locale', async () => {
     const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null });
-    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: FUTURA(), note: 'seq' }, { interim: true });
+    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: FRA_TRE_GIORNI, note: 'seq' }, { interim: true });
 
     expect(res.sent).toBe(true);
     const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
@@ -164,7 +166,7 @@ describe('sendOutcome — RICHIAMO interim', () => {
 
   it('interim su lead già APPUNTAMENTO → nessun POST (mai riportare indietro lo stato)', async () => {
     const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE });
-    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: FUTURA() }, { interim: true });
+    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: FRA_TRE_GIORNI }, { interim: true });
 
     expect(res.sent).toBe(false);
     expect(res.error).toBe('interim_skipped_locked');
@@ -175,7 +177,7 @@ describe('sendOutcome — RICHIAMO interim', () => {
   it('interim con CRM 403 → nessuna persistenza (RICHIAMO non è un esito nostro)', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 403, text: async () => 'no' })));
     const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null });
-    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: FUTURA() }, { interim: true });
+    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: FRA_TRE_GIORNI }, { interim: true });
 
     expect(res.sent).toBe(false);
     expect(calls.updates).toHaveLength(0);
@@ -365,6 +367,112 @@ describe('sendOutcome — RICHIAMO con data non utilizzabile', () => {
     expect(ev).toBeTruthy();
     expect(ev.payload.dataScartata).toBe('2026-01-27T09:00:00+01:00');
     expect(ev.payload.motivo).toBe('passato');
+  });
+});
+
+describe('sendCrmNota — una nota diretta, fuori dalla logica degli esiti', () => {
+  it('manda una NOTA anche su un lead già APPUNTAMENTO, senza toccare nulla', async () => {
+    // Passando da sendOutcome, resolveOutcomeAction la trasformerebbe in una nota
+    // "appuntamento mantenuto": il fatto che il bot abbia ripreso la chat sparirebbe.
+    const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE });
+    const r = await sendCrmNota(supabase, 1, 'IL BOT HA RIPRESO LA CHAT — ...');
+
+    expect(r.sent).toBe(true);
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(body.outcome).toBe('NOTA');
+    expect(body.note).toContain('IL BOT HA RIPRESO');
+    expect(calls.updates).toHaveLength(0);
+  });
+
+  it('lead non CRM: nessuna chiamata', async () => {
+    const { supabase } = makeSupabase({ crm_lead_id: null, bot_outcome: null, bot_scheduled_at: null });
+    const r = await sendCrmNota(supabase, 1, 'qualcosa');
+    expect(r).toEqual({ sent: false, error: 'not_crm_lead' });
+    expect((globalThis.fetch as any).mock.calls).toHaveLength(0);
+  });
+});
+
+// Il CRM ha aperto CONTATTO_UMANO il 05/08: è una segnalazione, non un esito. Non
+// cambia stato, non riassegna, non tocca l'appuntamento. Prima, il tag
+// [PASSAGGIO_UMANO] impostava solo ai_status='handed_off' in locale e la richiesta del
+// lead non usciva mai dal nostro database.
+describe('sendOutcome — CONTATTO_UMANO', () => {
+  const CONV_UMANO = { crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null };
+
+  it('fa il POST e non tocca nessuno stato locale', async () => {
+    const { supabase, calls } = makeSupabase(CONV_UMANO);
+    const res = await sendOutcome(supabase, 1, { outcome: 'CONTATTO_UMANO', note: 'voglio parlare con una persona' });
+
+    expect(res.sent).toBe(true);
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(body.outcome).toBe('CONTATTO_UMANO');
+    expect(body.date).toBeUndefined();
+    expect(body.note).toContain('voglio parlare con una persona');
+    expect(calls.updates).toHaveLength(0);
+    expect(calls.events.some((e: { type: string }) => e.type === 'bot_contatto_umano_inviato')).toBe(true);
+  });
+
+  it('su un lead già APPUNTAMENTO parte lo stesso come CONTATTO_UMANO, non come NOTA', async () => {
+    // Passando da resolveOutcomeAction il ramo locked lo tradurrebbe in una nota
+    // generica "appuntamento mantenuto": la richiesta si perderebbe un'altra volta.
+    const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE });
+    const res = await sendOutcome(supabase, 1, { outcome: 'CONTATTO_UMANO', note: 'passatemi un responsabile' });
+
+    expect(res.sent).toBe(true);
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(body.outcome).toBe('CONTATTO_UMANO');
+    expect(body.note).toContain('passatemi un responsabile');
+    expect(calls.updates).toHaveLength(0);
+  });
+
+  it('notifySuppressed non è un errore e non si ritenta', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, status: 200, text: async () => JSON.stringify({ ok: true, notifySuppressed: true }),
+    })));
+    const { supabase, calls } = makeSupabase(CONV_UMANO);
+    const res = await sendOutcome(supabase, 1, { outcome: 'CONTATTO_UMANO', note: 'ancora io' });
+
+    expect(res.sent).toBe(true);
+    expect(res.notifySuppressed).toBe(true);
+    expect((globalThis.fetch as any).mock.calls).toHaveLength(1);
+    expect(calls.events.some((e: { type: string; level: string }) =>
+      e.type === 'bot_contatto_umano_soppresso' && e.level === 'info')).toBe(true);
+  });
+
+  it('senza le parole del lead la segnalazione parte lo stesso, mai con una nota vuota', async () => {
+    // La nota è obbligatoria per il CRM (senza → 400). Il fallback esiste perché il
+    // segnale non vada perso quando l'ultimo turno del lead è vuoto (una nota vocale
+    // non trascritta, un media senza didascalia): meglio una richiesta senza citazione
+    // che nessuna richiesta.
+    const { supabase } = makeSupabase(CONV_UMANO);
+    const res = await sendOutcome(supabase, 1, { outcome: 'CONTATTO_UMANO', note: '   ' });
+
+    expect(res.sent).toBe(true);
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(body.note.trim().length).toBeGreaterThan(0);
+    expect(body.note).not.toContain('""');
+  });
+
+  it('un CRM che risponde male lascia la traccia e non persiste niente', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, text: async () => 'boom' })));
+    const { supabase, calls } = makeSupabase(CONV_UMANO);
+    const res = await sendOutcome(supabase, 1, { outcome: 'CONTATTO_UMANO', note: 'voglio una persona' });
+
+    expect(res.sent).toBe(false);
+    expect(res.status).toBe(500);
+    expect(calls.updates).toHaveLength(0);
+    expect(calls.events.some((e: { type: string; level: string }) =>
+      e.type === 'bot_outcome_error' && e.level === 'error')).toBe(true);
+  });
+
+  it('una risposta non JSON vale come notifica passata', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, text: async () => 'OK' })));
+    const { supabase, calls } = makeSupabase(CONV_UMANO);
+    const res = await sendOutcome(supabase, 1, { outcome: 'CONTATTO_UMANO', note: 'voglio una persona' });
+
+    expect(res.sent).toBe(true);
+    expect(res.notifySuppressed).toBeUndefined();
+    expect(calls.events.some((e: { type: string }) => e.type === 'bot_contatto_umano_inviato')).toBe(true);
   });
 });
 

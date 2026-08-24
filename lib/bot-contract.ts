@@ -19,7 +19,7 @@ export interface SendAgendaPayload extends BotIntakePayload {
   variant: GdoVariant;
 }
 
-export type BotOutcome = 'APPUNTAMENTO' | 'DA_SCARTARE' | 'RICHIAMO' | 'NON_RISPOSTO' | 'INTERROTTO' | 'NOTA';
+export type BotOutcome = 'APPUNTAMENTO' | 'DA_SCARTARE' | 'RICHIAMO' | 'NON_RISPOSTO' | 'INTERROTTO' | 'NOTA' | 'CONTATTO_UMANO';
 
 export interface BotReport {
   summary?: string;
@@ -39,7 +39,10 @@ export interface BotOutcomeBody {
   report?: BotReport;
 }
 
-const OUTCOMES: BotOutcome[] = ['APPUNTAMENTO', 'DA_SCARTARE', 'RICHIAMO', 'NON_RISPOSTO', 'INTERROTTO', 'NOTA'];
+const OUTCOMES: BotOutcome[] = ['APPUNTAMENTO', 'DA_SCARTARE', 'RICHIAMO', 'NON_RISPOSTO', 'INTERROTTO', 'NOTA', 'CONTATTO_UMANO'];
+// CONTATTO_UMANO resta FUORI da DATE_REQUIRED: non è un appuntamento, è una
+// segnalazione. Chiedere una data qui rimetterebbe il modello nella condizione di
+// inventarne una — il bug chiuso il 06/08 sulle date di RICHIAMO.
 const DATE_REQUIRED: BotOutcome[] = ['APPUNTAMENTO', 'RICHIAMO'];
 
 /** True solo se ISO 8601 con offset di fuso (`Z` oppure `±HH:MM`). */
@@ -99,6 +102,49 @@ export function parseSendAgendaPayload(
   };
 }
 
+/** Data e ora della call comunicate dal CRM: primo fissaggio o spostamento. */
+export interface AppointmentSetPayload {
+  leadId: string;
+  /** ISO 8601 con offset esplicito di fuso. */
+  appointmentAt: string;
+}
+
+// Non abbiamo la loro specifica scritta e le loro chiamate finora morivano in un 404,
+// quindi non ne abbiamo nemmeno una da leggere: si accettano gli alias plausibili e il
+// route registra il corpo grezzo di tutto il resto. Il primo giorno di traffico vero
+// vale piu' di un documento.
+const ALIAS_LEAD = ['leadId', 'lead_id', 'crmLeadId', 'crm_lead_id'] as const;
+const ALIAS_DATA = [
+  'appointmentAt', 'appuntamentoAt', 'appointment_at', 'appuntamento_at',
+  'scheduledAt', 'scheduled_at', 'date', 'at',
+] as const;
+
+const primaStringa = (o: Record<string, unknown>, chiavi: readonly string[]): string | null => {
+  for (const k of chiavi) {
+    const v = o[k];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return null;
+};
+
+export type AppointmentSetReason = 'bad_request' | 'lead_mancante' | 'data_mancante' | 'data_senza_offset';
+
+export function parseAppointmentSetPayload(
+  raw: unknown,
+): { ok: true; value: AppointmentSetPayload } | { ok: false; reason: AppointmentSetReason } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, reason: 'bad_request' };
+  const o = raw as Record<string, unknown>;
+  const leadId = primaStringa(o, ALIAS_LEAD);
+  if (!leadId) return { ok: false, reason: 'lead_mancante' };
+  const data = primaStringa(o, ALIAS_DATA);
+  if (!data) return { ok: false, reason: 'data_mancante' };
+  // Senza offset non sappiamo se le 18:00 sono italiane o UTC, e un appuntamento
+  // sbagliato di due ore in silenzio vale meno di un 400 che si legge subito. E' la
+  // stessa regola che il loro endpoint applica alle date che mandiamo noi.
+  if (!isoWithOffset(data)) return { ok: false, reason: 'data_senza_offset' };
+  return { ok: true, value: { leadId, appointmentAt: data } };
+}
+
 export function validateOutcomeBody(
   b: BotOutcomeBody,
 ): { ok: true } | { ok: false; reason: string } {
@@ -107,7 +153,8 @@ export function validateOutcomeBody(
   if (DATE_REQUIRED.includes(b.outcome)) {
     if (!b.date || !isoWithOffset(b.date)) return { ok: false, reason: 'bad_request' };
   }
-  if (b.outcome === 'NOTA' && (!b.note || !b.note.trim())) {
+  // La nota È il contenuto per questi due esiti: senza, il CRM risponde 400.
+  if ((b.outcome === 'NOTA' || b.outcome === 'CONTATTO_UMANO') && (!b.note || !b.note.trim())) {
     return { ok: false, reason: 'note_required' };
   }
   return { ok: true };

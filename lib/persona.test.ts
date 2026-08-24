@@ -4,6 +4,7 @@ import {
   variantIndexFor,
   openingEnvKey,
   openingBody,
+  openingWaysFor,
   personaForConversation,
   PERSONA_NAME,
   OPENING_ENV_KEYS,
@@ -60,6 +61,62 @@ describe('variantIndexFor (4 vie sul resto modulo 4)', () => {
   });
   it('nessun id produce un valore fuori da 1..4', () => {
     for (let id = 0; id < 50; id++) expect([1, 2, 3, 4]).toContain(variantIndexFor(id));
+  });
+});
+
+describe('variantIndexFor a due vie (template dichiarati assenti)', () => {
+  it('dispari → 1, pari → 2, come prima delle varianti dichiarate', () => {
+    expect(variantIndexFor(1, 2)).toBe(1);
+    expect(variantIndexFor(3, 2)).toBe(1);
+    expect(variantIndexFor(2, 2)).toBe(2);
+    expect(variantIndexFor(4, 2)).toBe(2);
+    expect(variantIndexFor(0, 2)).toBe(2);
+  });
+  it('non assegna mai una variante dichiarata', () => {
+    for (let id = 0; id < 200; id++) expect([1, 2]).toContain(variantIndexFor(id, 2));
+  });
+  it('riproduce esattamente la vecchia regola di parita su 400 id', () => {
+    for (let id = 1; id <= 400; id++) {
+      expect(variantIndexFor(id, 2)).toBe(id % 2 !== 0 ? 1 : 2);
+    }
+  });
+});
+
+describe('openingWaysFor', () => {
+  const tutti = () => true;
+  const nessuno = () => false;
+
+  it('quattro vie solo se esistono ENTRAMBI i SID dichiarati del funnel', () => {
+    expect(openingWaysFor('corso10', tutti)).toBe(4);
+    expect(openingWaysFor('telegram', tutti)).toBe(4);
+    expect(openingWaysFor('jobsim', tutti)).toBe(4);
+  });
+  it('nessun SID dichiarato → due vie, l A/B storico resta intatto', () => {
+    expect(openingWaysFor('corso10', nessuno)).toBe(2);
+    expect(openingWaysFor('other', nessuno)).toBe(2);
+  });
+  it('un solo SID dichiarato su due → due vie, niente mezze attivazioni', () => {
+    const soloTre = (k: string) => k.endsWith('3');
+    const soloQuattro = (k: string) => k.endsWith('4');
+    expect(openingWaysFor('corso10', soloTre)).toBe(2);
+    expect(openingWaysFor('corso10', soloQuattro)).toBe(2);
+  });
+  it('guarda i SID del funnel giusto: telegram pronto non attiva corso10', () => {
+    const soloTelegram = (k: string) => k.startsWith('OPENING_SID_T');
+    expect(openingWaysFor('telegram', soloTelegram)).toBe(4);
+    expect(openingWaysFor('corso10', soloTelegram)).toBe(2);
+    expect(openingWaysFor('jobsim', soloTelegram)).toBe(2);
+  });
+  it('funnel sconosciuto usa i SID di CORSO 10 ORE', () => {
+    const soloCorso = (k: string) => k.startsWith('OPENING_SID_C');
+    expect(openingWaysFor('other', soloCorso)).toBe(4);
+  });
+  it('con i SID veri di oggi (solo varianti 1 e 2) tutti i funnel stanno a due vie', () => {
+    const configuratiOggi = new Set(['C1', 'C2', 'T1', 'T2', 'J1', 'J2'].map((s) => `OPENING_SID_${s}`));
+    const hasSid = (k: string) => configuratiOggi.has(k);
+    for (const f of ['corso10', 'telegram', 'jobsim', 'other'] as FunnelKey[]) {
+      expect(openingWaysFor(f, hasSid)).toBe(2);
+    }
   });
 });
 

@@ -2,7 +2,7 @@ import type { getSupabaseAdmin } from './supabase/admin';
 import { findOrCreateLeadConversation, sendTemplateAndLog } from './messaging';
 import { feniceOpening } from './fenice-opening';
 import { inSendWindow } from './sequence';
-import { normalizeFunnel, variantIndexFor, openingEnvKey, openingBody } from './persona';
+import { normalizeFunnel, variantIndexFor, openingEnvKey, openingBody, openingWaysFor } from './persona';
 import { firstNameOf, templateName } from './name';
 import type { GdoVariant } from './bot-contract';
 import { gdoAgendaText, videoLinkForVariant } from './gdo-agenda';
@@ -77,7 +77,8 @@ export async function enrollLeadIntoMario(
   let bodyOverride = feniceOpening(firstName);
   if (process.env.NEW_OPENING_ENABLED === '1') {
     const funnel = normalizeFunnel(args.crmFunnel);
-    const variant = variantIndexFor(conversationId);
+    const ways = openingWaysFor(funnel, (k) => Boolean(process.env[k]));
+    const variant = variantIndexFor(conversationId, ways);
     const envKey = openingEnvKey(funnel, variant);
     const openingSid = process.env[envKey];
     if (openingSid) {

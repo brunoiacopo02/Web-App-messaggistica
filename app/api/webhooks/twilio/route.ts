@@ -7,6 +7,8 @@ import { getAutoReply } from '@/lib/fenice-settings';
 import { shouldAutoReply, shouldReopen, drainMarioReplies } from '@/lib/fenice-autoreply';
 import { isAudioInbound, transcribeTwilioAudio } from '@/lib/transcribe';
 import { handleGdoDeliveryUpdate } from '@/lib/send-agenda-gdo';
+import { sendCrmNota } from '@/lib/bot-outcome';
+import { buildBotRipresoNote } from '@/lib/bot-outcome-rules';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -176,13 +178,27 @@ export async function POST(req: NextRequest) {
     if (toMatchesFenice) {
       const { data: conv } = await supabase
         .from('conversations')
-        .select('ai_owner, ai_status, ai_paused_at, crm_lead_id')
+        .select('ai_owner, ai_status, ai_paused_at, crm_lead_id, bot_outcome')
         .eq('id', conversationId)
         .single();
 
       if (conv && shouldReopen({ aiOwner: conv.ai_owner, aiStatus: conv.ai_status, aiPausedAt: conv.ai_paused_at })) {
         await supabase.from('conversations').update({ ai_status: 'active' }).eq('id', conversationId);
         conv.ai_status = 'active';
+        // Il lead era già stato restituito al CRM e ha riscritto: da adesso il bot e i
+        // GDO lavorano la stessa persona. Avvisarli è l'unico modo perché non chiamino
+        // a vuoto (caso Marina Destefanis). APPUNTAMENTO è escluso: lì il lead è già in
+        // agenda e la riapertura ha il suo canale, le note del lead terminale.
+        // Dopo la risposta a Twilio: la loro rete non deve rallentare il webhook.
+        if (conv.crm_lead_id && conv.bot_outcome && conv.bot_outcome !== 'APPUNTAMENTO') {
+          after(
+            sendCrmNota(
+              supabase,
+              conversationId,
+              buildBotRipresoNote({ esitoPrecedente: conv.bot_outcome, quandoIso: new Date().toISOString() }),
+            ),
+          );
+        }
       }
 
       const autoReplyOn = await getAutoReply(supabase);
