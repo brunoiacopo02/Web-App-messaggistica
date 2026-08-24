@@ -4,6 +4,7 @@ import {
   buildLockedNote,
   checkDataRichiamo,
   buildRichiamoSenzaDataNote,
+  isRichiestaDisdetta,
   buildContattoUmanoNote,
   buildBotRipresoNote,
   paroleDelLead,
@@ -195,6 +196,19 @@ describe('buildRichiamoSenzaDataNote', () => {
     for (const motivo of ['assente', 'illeggibile', 'passato', 'oltre_orizzonte'] as const) {
       expect(buildRichiamoSenzaDataNote({ motivo, leadWords: 'boh' })).not.toMatch(/\d{4}-\d{2}-\d{2}/);
     }
+  });
+});
+
+describe('isRichiestaDisdetta', () => {
+  it('annullare e spostare sono richieste di disdetta', () => {
+    expect(isRichiestaDisdetta('DA_SCARTARE')).toBe(true);
+    expect(isRichiestaDisdetta('RICHIAMO')).toBe(true);
+  });
+  it('tutto il resto no: il lead non ha chiesto niente', () => {
+    expect(isRichiestaDisdetta('INTERROTTO')).toBe(false);
+    expect(isRichiestaDisdetta('NON_RISPOSTO')).toBe(false);
+    expect(isRichiestaDisdetta('APPUNTAMENTO')).toBe(false);
+    expect(isRichiestaDisdetta('NOTA')).toBe(false);
   });
 });
 

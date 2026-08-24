@@ -32,6 +32,8 @@ export interface GdoFollowupInput {
   giorniDaAgenda: number;
   /** Ora italiana in cui è arrivata l'agenda. */
   romeHourAgenda: number;
+  /** Il lead ha scritto qualcosa DOPO che gli è arrivato il video. */
+  haRispostoDopoVideo: boolean;
 }
 
 export function decideGdoVideoFollowup(i: GdoFollowupInput): GdoFollowupAction {
@@ -55,6 +57,14 @@ export function decideGdoVideoFollowup(i: GdoFollowupInput): GdoFollowupAction {
   }
 
   if (i.gdoVideoWatchedAt) return 'none';
+
+  // Ha risposto dopo il video: da qui in poi non è più un lead freddo da sbloccare con
+  // un messaggio programmato, è una conversazione. Il promemoria del video viaggia
+  // dentro la risposta del modello (NOTA_VIDEO), che si adatta a quello che ha detto.
+  // Fra i lead GDO che hanno risposto almeno una volta, chi riceve 2 solleciti disdice
+  // al 22,4% contro il 7,6% di chi non ne riceve (misura del 04/08/2026).
+  if (i.haRispostoDopoVideo) return 'none';
+
   if (i.followupsSent >= 2) return 'none';
 
   const daUltimoInbound = i.lastInboundAtMs === null ? null : i.nowMs - i.lastInboundAtMs;

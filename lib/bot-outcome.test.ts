@@ -87,7 +87,9 @@ describe('sendOutcome — guard APPUNTAMENTO terminale', () => {
     expect(body.date).toBeUndefined();
     expect(body.note).toContain('annullare');
     // La riga viene chiusa (stop al loop del cron) ma l'esito resta congelato.
-    expect(calls.updates).toEqual([{ ai_status: 'closed' }]);
+    // DA_SCARTARE su un appuntamento fissato è anche una richiesta di disdetta: si
+    // aggiunge il marcatore, prima della chiusura.
+    expect(calls.updates).toEqual([{ cancel_requested_at: expect.any(String) }, { ai_status: 'closed' }]);
     expect(calls.events.some((e) => e.type === 'bot_outcome_locked' && e.payload.sentAs === 'NOTA')).toBe(true);
   });
 
@@ -145,7 +147,7 @@ describe('sendOutcome — guard APPUNTAMENTO terminale', () => {
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(body.outcome).toBe('NOTA');
     expect(body.outcome).not.toBe('APPUNTAMENTO');
-    expect(calls.updates).toEqual([{ ai_status: 'closed' }]);
+    expect(calls.updates).toEqual([{ cancel_requested_at: expect.any(String) }, { ai_status: 'closed' }]);
     expect(calls.events.some((e) => e.type === 'bot_outcome_rejected')).toBe(true);
   });
 });
@@ -180,6 +182,27 @@ describe('sendOutcome — RICHIAMO interim', () => {
     expect(res.sent).toBe(false);
     expect(calls.updates).toHaveLength(0);
     expect(calls.events.some((e) => e.type === 'bot_outcome_rejected')).toBe(true);
+  });
+
+  // La guardia "RICHIAMO senza data plausibile" (vedi sendOutcome) sta prima del
+  // ramo interim: senza l'esclusione esplicita si mangerebbe anche gli interim,
+  // convertendoli in una NOTA che racconta al commerciale una richiesta del lead
+  // che non è mai esistita — l'interim è un ping automatico della sequenza, non
+  // qualcosa che il lead ha detto. In produzione la data del cron è sempre futura
+  // quindi il caso non scatta mai, ma un interim con data passata deve comunque
+  // seguire il percorso interim normale, non diventare una nota.
+  it('interim con data nel passato su lead in lavorazione → resta un interim normale, non diventa una nota', async () => {
+    const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null });
+    const PASSATA = new Date(Date.now() - 7 * 86_400_000).toISOString();
+    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: PASSATA, note: 'seq' }, { interim: true });
+
+    expect(res.sent).toBe(true);
+    const fetchMock = globalThis.fetch as unknown as { mock: { calls: [string, { body: string }][] } };
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.outcome).toBe('RICHIAMO');
+    expect(calls.updates).toHaveLength(0);
+    expect(calls.events.some((e) => e.type === 'richiamo_senza_data')).toBe(false);
+    expect(calls.events.some((e) => e.type === 'bot_outcome_sent' && e.payload.interim === true)).toBe(true);
   });
 });
 
@@ -230,7 +253,8 @@ describe('sendOutcome — nota duplicata non rimandata', () => {
 
     // Stesso trattamento dell'invio riuscito: nessun declassamento di bot_outcome,
     // ma la riga non resta 'active' con un esito terminale in attesa del cron.
-    expect(calls.updates).toEqual([{ ai_status: 'closed' }]);
+    // ARGS è DA_SCARTARE su un appuntamento fissato: anche qui parte il marcatore.
+    expect(calls.updates).toEqual([{ cancel_requested_at: expect.any(String) }, { ai_status: 'closed' }]);
   });
 
   it('la stessa nota su un\'altra conversazione viene inviata', async () => {
@@ -467,7 +491,13 @@ describe('sendOutcome — canale solo-NOTA per i lead dei GDO (noteOnly)', () =>
     expect(body.note).toContain('non gli serve più');
     expect(body.date).toBeUndefined();
     // Niente bot_outcome, niente ai_status: il lead non è nostro e la chat continua.
-    expect(calls.updates).toHaveLength(0);
+    // DA_SCARTARE è però una richiesta di disdetta: l'unico update ammesso è il
+    // marcatore che spegne gli automatismi.
+    for (const u of calls.updates) {
+      expect(u).not.toHaveProperty('bot_outcome');
+      expect(u).not.toHaveProperty('ai_status');
+    }
+    expect(calls.updates).toEqual([{ cancel_requested_at: expect.any(String) }]);
   });
 
   it('un APPUNTAMENTO del modello non diventa mai un esito: resta una nota', async () => {
@@ -510,7 +540,60 @@ describe('sendOutcome — canale solo-NOTA per i lead dei GDO (noteOnly)', () =>
     const res = await sendOutcome(supabase, 7, { outcome: 'RICHIAMO', date: DATE }, { noteOnly: true });
 
     expect(res.sent).toBe(false);
-    expect(calls.updates).toHaveLength(0);
+    // RICHIAMO è una richiesta di disdetta (spostamento): il marcatore va comunque
+    // scritto, indipendentemente dall'esito della POST al CRM.
+    expect(calls.updates).toEqual([{ cancel_requested_at: expect.any(String) }]);
     expect(calls.events.some((e) => e.type === 'bot_outcome_rejected')).toBe(true);
+  });
+});
+
+describe('sendOutcome — cancel_requested_at', () => {
+  const fissato = { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE };
+  const marcature = (calls: ReturnType<typeof makeSupabase>['calls']) =>
+    calls.updates.filter((u) => 'cancel_requested_at' in u);
+
+  it('un SCARTO su appuntamento fissato marca la disdetta senza declassare', async () => {
+    const { supabase, calls } = makeSupabase(fissato);
+    await sendOutcome(supabase, 1, { outcome: 'DA_SCARTARE', discardReason: 'non ce la faccio piu' });
+
+    expect(marcature(calls)).toHaveLength(1);
+    expect(typeof marcature(calls)[0].cancel_requested_at).toBe('string');
+    for (const u of calls.updates) expect(u.bot_outcome).toBeUndefined();
+    expect(calls.events.some((e) => e.type === 'cancel_requested')).toBe(true);
+  });
+
+  it('un RICHIAMO su appuntamento fissato marca la disdetta', async () => {
+    const { supabase, calls } = makeSupabase(fissato);
+    await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', note: 'la prossima settimana' });
+    expect(marcature(calls)).toHaveLength(1);
+  });
+
+  it('un INTERROTTO NON è una disdetta: il lead non ha chiesto niente', async () => {
+    const { supabase, calls } = makeSupabase(fissato);
+    await sendOutcome(supabase, 1, { outcome: 'INTERROTTO' });
+    expect(marcature(calls)).toHaveLength(0);
+  });
+
+  it('su una conversazione senza appuntamento non si marca niente', async () => {
+    const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null });
+    await sendOutcome(supabase, 1, { outcome: 'DA_SCARTARE', discardReason: 'non mi interessa' });
+    expect(marcature(calls)).toHaveLength(0);
+  });
+
+  it('anche quando la nota è un duplicato, la disdetta resta marcata', async () => {
+    const args = { outcome: 'DA_SCARTARE' as const, discardReason: 'non ce la faccio piu' };
+    const precedente = await eventoLockedGiaScritto(fissato, 1, args);
+    const { supabase, calls } = makeSupabase(fissato, { eventLogRows: [precedente] });
+
+    const res = await sendOutcome(supabase, 1, args);
+
+    expect(res.error).toBe('note_duplicate');
+    expect(marcature(calls)).toHaveLength(1);
+  });
+
+  it('un lead del GDO che disdice marca la disdetta (canale solo-nota)', async () => {
+    const { supabase, calls } = makeSupabase({ crm_lead_id: 'gdo1', bot_outcome: null, bot_scheduled_at: null });
+    await sendOutcome(supabase, 1, { outcome: 'DA_SCARTARE', discardReason: 'annullo tutto' }, { noteOnly: true });
+    expect(marcature(calls)).toHaveLength(1);
   });
 });

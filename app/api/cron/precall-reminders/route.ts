@@ -72,6 +72,10 @@ export async function GET(req: NextRequest) {
     // Fermo manuale dal pannello: nessun invio automatico su una chat presa in
     // carico da una persona, promemoria pre-call compresi.
     .is('ai_paused_at', null)
+    // Il lead ha chiesto di annullare o spostare: un "ti ricordo la call di domani"
+    // dopo che gli abbiamo detto "me lo segno" è la cosa che ha prodotto le risposte
+    // peggiori ("avevo chiesto di rimandare"). 10 casi su 23 misurati il 04/08/2026.
+    .is('cancel_requested_at', null)
     .gte('bot_scheduled_at', windowStart)
     .lte('bot_scheduled_at', windowEnd);
 

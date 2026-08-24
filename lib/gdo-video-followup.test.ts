@@ -26,6 +26,7 @@ const base = (over: Partial<GdoFollowupInput> = {}): GdoFollowupInput => ({
   slot: 'sera',
   giorniDaAgenda: 0,
   romeHourAgenda: 16,
+  haRispostoDopoVideo: false,
   ...over,
 });
 
@@ -47,6 +48,7 @@ describe('decideGdoVideoFollowup — chi ha risposto', () => {
     expect(decideGdoVideoFollowup(base({
       gdoVideoSentAt: '2026-08-01T15:00:00Z',
       lastInboundAtMs: ORA - 8 * H,
+      haRispostoDopoVideo: false,
     }))).toBe('sollecito-libero');
   });
 
@@ -54,7 +56,56 @@ describe('decideGdoVideoFollowup — chi ha risposto', () => {
     expect(decideGdoVideoFollowup(base({
       gdoVideoSentAt: '2026-07-31T15:00:00Z',
       lastInboundAtMs: ORA - 30 * H,
+      haRispostoDopoVideo: false,
     }))).toBe('sollecito-template');
+  });
+});
+
+describe('decideGdoVideoFollowup — chi ha risposto non è più un lead freddo', () => {
+  const basePost = {
+    gdoAgendaAt: '2026-08-06T09:00:00+02:00',
+    gdoVideoSentAt: '2026-08-06T09:30:00+02:00',
+    gdoVideoWatchedAt: null,
+    followupsSent: 0,
+    appointmentAt: null,
+    lastInboundAtMs: Date.parse('2026-08-06T09:20:00+02:00'), // vecchio: fuori dalle 6h
+    lastMessageIsInbound: false,
+    nowMs: Date.parse('2026-08-06T21:35:00+02:00'),
+    slot: 'sera' as const,
+    giorniDaAgenda: 0,
+    romeHourAgenda: 9,
+    haRispostoDopoVideo: false,
+  };
+
+  it('senza risposta dopo il video il sollecito parte come oggi', () => {
+    expect(decideGdoVideoFollowup(basePost)).not.toBe('none');
+  });
+
+  it('se ha risposto dopo il video, nessun sollecito automatico', () => {
+    expect(decideGdoVideoFollowup({ ...basePost, haRispostoDopoVideo: true })).toBe('none');
+  });
+
+  it('vale anche per il secondo slot, quello del mattino', () => {
+    expect(decideGdoVideoFollowup({
+      ...basePost,
+      haRispostoDopoVideo: true,
+      followupsSent: 1,
+      slot: 'mattina',
+      giorniDaAgenda: 1,
+      nowMs: Date.parse('2026-08-07T10:05:00+02:00'),
+    })).toBe('none');
+  });
+
+  it('chi non ha MAI ricevuto il video lo riceve comunque', () => {
+    expect(decideGdoVideoFollowup({
+      ...basePost,
+      gdoVideoSentAt: null,
+      haRispostoDopoVideo: false,
+    })).toBe('video-template');
+  });
+
+  it('il tetto storico dei due touch resta', () => {
+    expect(decideGdoVideoFollowup({ ...basePost, followupsSent: 2 })).toBe('none');
   });
 });
 

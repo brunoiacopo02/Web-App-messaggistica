@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { shouldAutoReply, shouldReopen, nextUnansweredInboundIndex, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS, canSendOutcome, drainMarioReplies, isLockStale, LOCK_TTL_MS, shouldSendGdoVideo, martaSidsFromEnv, serveRedrive } from './fenice-autoreply';
+import { shouldAutoReply, shouldReopen, nextUnansweredInboundIndex, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS, canSendOutcome, drainMarioReplies, isLockStale, LOCK_TTL_MS, shouldSendGdoVideo, martaSidsFromEnv, isSoloPresaDAtto, serveRedrive } from './fenice-autoreply';
 
 vi.mock('./mario', () => ({ generateMarioReply: vi.fn(), GDO_CONTEXT_NOTE: 'CONTESTO-GDO' }));
 vi.mock('./twilio', () => ({ sendFreeText: vi.fn(async () => ({ sid: 'SM_fake', status: 'queued' })) }));
@@ -706,6 +706,41 @@ describe('shouldSendGdoVideo', () => {
   });
 });
 
+describe('isSoloPresaDAtto', () => {
+  it('le prese d\'atto secche sono tali', () => {
+    for (const t of ['ok', 'OK', 'ok!', 'va bene', 'perfetto', 'grazie', 'grazie mille', 'ricevuto', 'certo', 'si', 'sì', 'ciao', 'buongiorno', '👍']) {
+      expect(isSoloPresaDAtto(t)).toBe(true);
+    }
+  });
+
+  it('una domanda non è mai una presa d\'atto', () => {
+    for (const t of ['ok?', 'ma quando?', 'e la call?', 'ok ma a che ora è?']) {
+      expect(isSoloPresaDAtto(t)).toBe(false);
+    }
+  });
+
+  it('una richiesta di spostare non è mai una presa d\'atto', () => {
+    for (const t of [
+      'scusa ma devo spostare',
+      'non ce la faccio più, annulliamo',
+      'possiamo rimandare a settimana prossima',
+      'guarda mi è uscito un imprevisto di lavoro',
+    ]) {
+      expect(isSoloPresaDAtto(t)).toBe(false);
+    }
+  });
+
+  it('un messaggio con contenuto vero non è una presa d\'atto', () => {
+    expect(isSoloPresaDAtto('ok va bene grazie mille per tutto quanto')).toBe(false);
+  });
+
+  it('un messaggio vuoto o un media senza testo: nessuna domanda a cui rispondere', () => {
+    expect(isSoloPresaDAtto('')).toBe(true);
+    expect(isSoloPresaDAtto('   ')).toBe(true);
+    expect(isSoloPresaDAtto(null)).toBe(true);
+  });
+});
+
 describe('drainMarioReplies — modalità postino (lead dei GDO)', () => {
   const VIDEO = 'https://corso.feniceacademy.it/conferenza-bx';
   const AGENDA: FakeMsgRow = { direction: 'out', body: 'Ciao Mario, sono Marta... il mio collega...', template_sid: 'HX_AGENDA_GDO', created_at: '2026-07-29T10:00:00Z' };
@@ -1154,6 +1189,142 @@ describe('drainMarioReplies — modalità postino (lead dei GDO)', () => {
     expect(generateMarioReply).toHaveBeenCalledTimes(1);
     expect(vi.mocked(generateMarioReply).mock.calls[0][1]?.contextNote).toBeUndefined();
     expect(calls.events.some((e: any) => e.type === 'gdo_video_sent')).toBe(false);
+  });
+
+  it('se il lead chiede di spostare, il modello risponde E il video esce in coda', async () => {
+    const DISDETTA: FakeMsgRow = {
+      direction: 'in', body: 'scusa ma mi è uscito un imprevisto, possiamo spostare?',
+      template_sid: null, created_at: '2026-07-29T10:02:00Z',
+    };
+    const { supabase, calls } = makeDrainSupabase(postino(), [AGENDA, DISDETTA]);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'eh ci sta, capita\nsentiti intanto con Noemi, sono cinque minuti',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    // Il lead riceve una risposta alla SUA domanda: prima moriva lì (conv 3647, 3661, 3676, 3704).
+    expect(generateMarioReply).toHaveBeenCalledTimes(1);
+    const corpi = calls.messageInserts.map((m) => m.body);
+    expect(corpi.some((b: string) => b.includes('Noemi'))).toBe(true);
+    // Il video esce comunque, come ultima bolla.
+    expect(corpi.at(-1)).toContain(VIDEO);
+    expect(calls.convUpdates.some((u) => Boolean(u.gdo_video_sent_at))).toBe(true);
+    expect(calls.events.some((e: { type: string }) => e.type === 'gdo_video_sent')).toBe(true);
+    // Timeout largo: il drain mette una pausa "umana" (fino a 3s) fra una bolla e
+    // l'altra e qui le bolle sono tre (due di testo più il video in coda).
+  }, 20_000);
+
+  it('la nota di contesto dice al modello che il video sta uscendo adesso', async () => {
+    const DOMANDA: FakeMsgRow = {
+      direction: 'in', body: 'ma quanto dura la call?', template_sid: null, created_at: '2026-07-29T10:02:00Z',
+    };
+    const { supabase } = makeDrainSupabase(postino(), [AGENDA, DOMANDA]);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'trenta quaranta minuti',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    const nota = vi.mocked(generateMarioReply).mock.calls[0][1]?.contextNote ?? '';
+    expect(nota).toContain('IL VIDEO ESCE ORA');
+    expect(nota).not.toContain(NOTA_VIDEO);
+  });
+
+  it('una presa d\'atto secca continua a ricevere solo il video', async () => {
+    const { supabase, calls } = makeDrainSupabase(postino(), [AGENDA, RISPOSTA]);
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    expect(generateMarioReply).not.toHaveBeenCalled();
+    expect(calls.messageInserts).toHaveLength(1);
+    expect(calls.messageInserts[0].body).toContain(VIDEO);
+  });
+
+  it('video già inviato: nessuna bolla col link in coda alla risposta', async () => {
+    const rows: FakeMsgRow[] = [
+      AGENDA, RISPOSTA,
+      { direction: 'out', body: `ecco il video ${VIDEO}`, template_sid: null, created_at: '2026-07-29T10:03:00Z' },
+      { direction: 'in', body: 'posso spostare?', template_sid: null, created_at: '2026-07-29T10:10:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(postino({ gdo_video_sent_at: '2026-07-29T10:03:00Z' }), rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'eh ci sta, sentiti con Noemi',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    expect(calls.messageInserts).toHaveLength(1);
+    expect(calls.messageInserts[0].body).not.toContain(VIDEO);
+  });
+
+  // Il modello si dimentica [VIDEO_VISTO] nel 40% dei casi: qui non lo emette mai.
+  const senzaTag = (visibleReply: string) => ({
+    visibleReply, appointmentFixed: false, passToHuman: false, videoWatched: false,
+  });
+  const VIDEO_USCITO: FakeMsgRow = {
+    direction: 'out', body: `ecco il video ${VIDEO}`, template_sid: null, created_at: '2026-07-29T10:03:00Z',
+  };
+  const dopoIlVideo = (body: string): FakeMsgRow => ({
+    direction: 'in', body, template_sid: null, created_at: '2026-07-29T18:00:00Z',
+  });
+
+  it('"fatto" vale come conferma anche senza il tag del modello', async () => {
+    const { supabase, calls } = makeDrainSupabase(
+      postino({ gdo_video_sent_at: '2026-07-29T10:03:00Z' }),
+      [AGENDA, RISPOSTA, VIDEO_USCITO, dopoIlVideo('fatto')],
+    );
+    // Il turno può rigenerare per infilare il promemoria di Noemi: due risposte pronte.
+    vi.mocked(generateMarioReply).mockResolvedValue(senzaTag('perfetto, allora ci siamo'));
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    expect(calls.convUpdates.some((u) => typeof u.gdo_video_watched_at === 'string')).toBe(true);
+    const ev = calls.events.find((e: { type: string }) => e.type === 'video_watched');
+    expect(ev).toBeTruthy();
+    expect(ev.payload.daTag).toBe(false);
+  });
+
+  it('"lo guardo stasera" non è una conferma', async () => {
+    const { supabase, calls } = makeDrainSupabase(
+      postino({ gdo_video_sent_at: '2026-07-29T10:03:00Z' }),
+      [AGENDA, RISPOSTA, VIDEO_USCITO, dopoIlVideo('lo guardo stasera')],
+    );
+    vi.mocked(generateMarioReply).mockResolvedValue(senzaTag('ok perfetto'));
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    expect(calls.convUpdates.some((u) => 'gdo_video_watched_at' in u)).toBe(false);
+  });
+
+  it('senza nessun video mai uscito, "fatto" non conferma niente', async () => {
+    const { supabase, calls } = makeDrainSupabase(
+      postino({ gdo_video_url: null }),
+      [AGENDA, dopoIlVideo('fatto')],
+    );
+    vi.mocked(generateMarioReply).mockResolvedValue(senzaTag('dimmi pure'));
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    expect(calls.convUpdates.some((u) => 'gdo_video_watched_at' in u)).toBe(false);
+  });
+
+  it('il tag del modello resta la via principale e continua a funzionare', async () => {
+    const { supabase, calls } = makeDrainSupabase(
+      postino({ gdo_video_sent_at: '2026-07-29T10:03:00Z' }),
+      [AGENDA, RISPOSTA, VIDEO_USCITO, dopoIlVideo('👍')],
+    );
+    vi.mocked(generateMarioReply).mockResolvedValue({
+      visibleReply: 'grande', appointmentFixed: false, passToHuman: false, videoWatched: true,
+    });
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    const ev = calls.events.find((e: { type: string }) => e.type === 'video_watched');
+    expect(ev.payload.daTag).toBe(true);
   });
 });
 

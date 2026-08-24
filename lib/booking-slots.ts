@@ -119,7 +119,19 @@ const AMBITO =
   'Questi slot valgono SOLO per gli appuntamenti che fissi TU adesso in chat. ' +
   'Se il lead ha già una call fissata, la sua data non si tocca: non correggerlo con questi giorni.';
 
-/** Blocco da iniettare nel prompt: gli unici slot in cui Mario può fissare. */
+// Vale anche dentro una chiusura: al rientro il primo giorno aperto si riempie da solo
+// (il 18/08 ha raccolto 98 call in una giornata), e più la call è lontana più l'imprevisto
+// se la mangia. Il secondo giorno esiste solo dopo un no sul primo.
+const UNO_ALLA_VOLTA = (primo: string) =>
+  `Proponi UN GIORNO ALLA VOLTA: parti da ${primo} e non nominare l'altro. Il secondo giorno esiste solo dopo che il lead ti ha detto che il primo non gli va bene, e prima di passarci prova a trovargli un orario dentro il primo. Più è vicina la call, meno probabilità c'è che gli capiti un imprevisto e la salti.`;
+
+/**
+ * Blocco da iniettare nel prompt: gli unici slot in cui Mario può fissare.
+ *
+ * I giorni si propongono UNO ALLA VOLTA, partendo dal primo: l'attesa mediana fra
+ * fissaggio e call è 44 ore e il 39% supera le 48h — più la call è lontana, più
+ * l'imprevisto di lavoro se la mangia (28% dei motivi di disdetta).
+ */
 export function bookingSlotsContext(now: Date): string {
   const { day1, day2, day1Imminente, chiusuraPrimaDiDay1, chiusuraDopoDay1 } = computeBookingDays(now);
   const off = romeOffset(now);
@@ -142,9 +154,10 @@ export function bookingSlotsContext(now: Date): string {
   if (chiusuraPrimaDiDay1) {
     return [
       INTESTAZIONE,
-      `- ${day1.label}, ${fascia(day1Imminente)} (ultimo slot alle 21:00)`,
-      `- ${day2.label}, dalle 09:00 alle 21:00 (ultimo slot alle 21:00)`,
+      `- PROPONI SEMPRE PRIMA questo: ${day1.label}, ${fascia(day1Imminente)} (ultimo slot alle 21:00)`,
+      `- SOLO se il lead proprio non riesce nel giorno sopra: ${day2.label}, dalle 09:00 alle 21:00 (ultimo slot alle 21:00)`,
       `CHIUSURA: siamo chiusi fino a ${chiusuraPrimaDiDay1.label} compreso, la prima data utile è ${day1.label}. Se il lead chiede una data prima, dì come stanno le cose: siamo fermi per la settimana di ferragosto. È un fatto, non una leva di vendita.`,
+      UNO_ALLA_VOLTA(day1.label),
       `Puoi fissare l'appuntamento SOLO in uno di questi due giorni e dentro queste fasce orarie. Nessun altro giorno o orario è ammesso.`,
       tag,
       AMBITO,
@@ -154,8 +167,9 @@ export function bookingSlotsContext(now: Date): string {
   // Forma normale — nessuna chiusura in vista: parola per parola com'è sempre stato.
   return [
     INTESTAZIONE,
-    `- ${day1.label}, ${fascia(day1Imminente)} (ultimo slot alle 21:00)`,
-    `- ${day2.label}, dalle 09:00 alle 21:00 (ultimo slot alle 21:00)`,
+    `- PROPONI SEMPRE PRIMA questo: ${day1.label}, ${fascia(day1Imminente)} (ultimo slot alle 21:00)`,
+    `- SOLO se il lead proprio non riesce nel giorno sopra: ${day2.label}, dalle 09:00 alle 21:00 (ultimo slot alle 21:00)`,
+    UNO_ALLA_VOLTA(day1.label),
     `Puoi fissare l'appuntamento SOLO in uno di questi due giorni e dentro queste fasce orarie. Nessun altro giorno o orario è ammesso.`,
     tag,
     AMBITO,
