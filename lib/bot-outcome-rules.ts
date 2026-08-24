@@ -1,5 +1,6 @@
 import type { BotOutcome } from './bot-contract';
-import { formatRomeDateTime, sameInstant } from './rome-time';
+import { formatRomeDateTime, romeDayKey, romeHour, sameInstant } from './rome-time';
+import { isBookableDate, type BlackoutRange } from './booking-blackout';
 
 export type OutcomeArgs = {
   outcome: BotOutcome;
@@ -122,6 +123,90 @@ export function checkDataRichiamo(date: string | undefined, nowMs: number): Rich
   if (t < nowMs) return { ok: false, motivo: 'passato' };
   if (t - nowMs > RICHIAMO_ORIZZONTE_MS) return { ok: false, motivo: 'oltre_orizzonte' };
   return { ok: true };
+}
+
+/** Fascia in cui Fenice fissa le call, ora di Roma, estremi inclusi (l'ultimo slot è
+ *  alle 21:00). Sta scritta anche nel prompt, in `bookingSlotsContext`. */
+export const APPUNTAMENTO_ORA_MIN = 9;
+export const APPUNTAMENTO_ORA_MAX = 21;
+
+export type MotivoAppuntamentoNonFissabile =
+  | 'assente'
+  | 'illeggibile'
+  | 'passato'
+  | 'domenica'
+  | 'giorno_chiuso'
+  | 'fuori_fascia';
+export type AppuntamentoCheck = { ok: true } | { ok: false; motivo: MotivoAppuntamentoNonFissabile };
+
+/**
+ * La data di un APPUNTAMENTO è fissabile davvero?
+ *
+ * Le regole su giorni e orari vivevano solo nel prompt, dentro `bookingSlotsContext`:
+ * valevano finché era il bot a proporre il giorno, e cadevano appena era il lead a
+ * proporlo. Il 24/08/2026, sui dati: 27 call finite dentro la chiusura di ferragosto
+ * (15 fissate a blocco già attivo) e 3 a mezzanotte. Una call in un giorno o a un'ora
+ * in cui non c'è nessuno arriva alle Conferme e al venditore come se fosse vera.
+ *
+ * Il giorno e l'ora si leggono SEMPRE in ora di Roma: un tag "T22:00" senza offset è
+ * mezzanotte italiana, non le 22.
+ */
+export function checkDataAppuntamento(
+  date: string | undefined,
+  nowMs: number,
+  ranges: BlackoutRange[],
+): AppuntamentoCheck {
+  if (!date || !date.trim()) return { ok: false, motivo: 'assente' };
+  const t = Date.parse(date);
+  if (Number.isNaN(t)) return { ok: false, motivo: 'illeggibile' };
+  if (t < nowMs) return { ok: false, motivo: 'passato' };
+
+  const quando = new Date(t);
+  const giorno = romeDayKey(quando);
+  // romeDayKey dà 'YYYY-MM-DD' del giorno italiano: parsarlo a mezzogiorno UTC evita
+  // che il giorno della settimana slitti col fuso.
+  if (new Date(`${giorno}T12:00:00Z`).getUTCDay() === 0) return { ok: false, motivo: 'domenica' };
+  if (!isBookableDate(giorno, ranges)) return { ok: false, motivo: 'giorno_chiuso' };
+
+  const ora = romeHour(quando);
+  if (ora < APPUNTAMENTO_ORA_MIN || ora > APPUNTAMENTO_ORA_MAX) return { ok: false, motivo: 'fuori_fascia' };
+  return { ok: true };
+}
+
+const DETTAGLIO_APPUNTAMENTO: Record<MotivoAppuntamentoNonFissabile, string> = {
+  assente: 'il tag non portava nessuna data',
+  illeggibile: 'la data non era leggibile',
+  passato: 'la data era già passata',
+  domenica: 'cadeva di domenica, quando non fissiamo',
+  giorno_chiuso: 'cadeva in un giorno di chiusura',
+  fuori_fascia: `era fuori dalla fascia ${APPUNTAMENTO_ORA_MIN}:00-${APPUNTAMENTO_ORA_MAX}:00`,
+};
+
+/**
+ * La nota che parte al posto dell'appuntamento scartato. Deve dire in testa che
+ * l'appuntamento NON c'è: se le Conferme leggessero "appuntamento" chiamerebbero un
+ * lead che non aspetta nessuna call.
+ */
+export function buildAppuntamentoNonFissabileNote(input: {
+  motivo: MotivoAppuntamentoNonFissabile;
+  dataScartata?: string;
+  leadWords?: string;
+}): string {
+  const parole = paroleDelLead(input.leadWords);
+  const citazione = parole ? ` Parole del lead: "${parole}".` : '';
+  const quando =
+    input.dataScartata && !Number.isNaN(Date.parse(input.dataScartata))
+      ? ` (${formatRomeDateTime(input.dataScartata)})`
+      : '';
+  // Il modello, quando emette il tag, ha già detto al lead che la call è presa: la
+  // guardia ferma la scrittura, non la frase già mandata in chat. La nota deve dirlo,
+  // altrimenti chi legge crede che il lead sia solo da richiamare.
+  return (
+    `APPUNTAMENTO NON FISSATO — il bot stava per fissare una call${quando} ma ` +
+    `${DETTAGLIO_APPUNTAMENTO[input.motivo]}: in agenda non c'è niente. Il lead ` +
+    `potrebbe aver ricevuto una conferma in chat: va ricontattato per concordare ` +
+    `giorno e ora.${citazione}`
+  );
 }
 
 const DETTAGLIO_MOTIVO: Record<MotivoDataNonUsabile, string> = {

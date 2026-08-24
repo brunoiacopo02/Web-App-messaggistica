@@ -2,13 +2,16 @@ import type { getSupabaseAdmin } from './supabase/admin';
 import { signPayload } from './bot-hmac';
 import { validateOutcomeBody, type BotOutcome, type BotOutcomeBody, type BotReport } from './bot-contract';
 import {
+  buildAppuntamentoNonFissabileNote,
   buildContattoUmanoNote,
   buildLockedNote,
   buildRichiamoSenzaDataNote,
+  checkDataAppuntamento,
   checkDataRichiamo,
   isRichiestaDisdetta,
   resolveOutcomeAction,
 } from './bot-outcome-rules';
+import { bookingBlackout } from './booking-blackout';
 import { noteFingerprint } from './note-dedup';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
@@ -364,6 +367,35 @@ export async function sendOutcome(
   // riporterebbe indietro di stato lato CRM — avvertenza esplicita del loro team).
   if (interim && action.kind !== 'normal') {
     return { sent: false, error: 'interim_skipped_locked' };
+  }
+
+  // Un appuntamento in un giorno chiuso, di domenica o fuori dalla fascia 09-21 non è
+  // un appuntamento: è una riga in agenda a cui non risponde nessuno, e le Conferme e
+  // il venditore la leggono come vera. Le regole stavano solo nel prompt, quindi
+  // valevano finché era il bot a proporre il giorno e cadevano appena lo proponeva il
+  // lead (27 call dentro la chiusura di ferragosto, 3 a mezzanotte).
+  //
+  // Dopo `resolveOutcomeAction` di proposito: su un lead che ha GIÀ un appuntamento
+  // questo esito è una richiesta di spostamento, non un nuovo fissaggio, e ha già il
+  // suo percorso (`locked` → NOTA). Qui si guarda solo il fissaggio vero.
+  const appuntamentoCheck =
+    args.outcome === 'APPUNTAMENTO' && !interim && action.kind === 'normal'
+      ? checkDataAppuntamento(args.date, Date.now(), bookingBlackout(process.env.BOOKING_BLACKOUT))
+      : { ok: true as const };
+  if (!appuntamentoCheck.ok) {
+    const note = buildAppuntamentoNonFissabileNote({
+      motivo: appuntamentoCheck.motivo,
+      dataScartata: args.date,
+      leadWords: args.leadWords ?? args.note,
+    });
+    await supabase.from('event_log').insert({
+      type: 'appuntamento_non_fissabile',
+      payload: { conversationId, crmLeadId, motivo: appuntamentoCheck.motivo, dataScartata: args.date ?? null, note } as never,
+      message: `[bot-fissatore] APPUNTAMENTO scartato (${appuntamentoCheck.motivo}) per lead ${crmLeadId}: inviato come nota`,
+      level: 'warn',
+    });
+    const esito = await inviaNotaAlCrm(supabase, conversationId, crmLeadId, note, args.report, secret);
+    return { ...esito, keepOpen: true };
   }
 
   // La marcatura (se dovuta) è già stata scritta sopra, prima del ramo "RICHIAMO

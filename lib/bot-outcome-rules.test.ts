@@ -9,6 +9,8 @@ import {
   buildBotRipresoNote,
   paroleDelLead,
   RICHIAMO_ORIZZONTE_MS,
+  checkDataAppuntamento,
+  buildAppuntamentoNonFissabileNote,
 } from './bot-outcome-rules';
 import { formatRomeDateTime } from './rome-time';
 
@@ -336,5 +338,112 @@ describe('buildContattoUmanoNote', () => {
   it('resta corta: le Conferme la leggono col telefono in mano', () => {
     const n = buildContattoUmanoNote({ leadWords: 'ciao '.repeat(500) });
     expect(n.length).toBeLessThan(600);
+  });
+});
+
+// Un appuntamento in un giorno o a un'ora in cui non c'è nessuno arriva alle Conferme
+// e a un venditore come se fosse vero: il lead viene chiamato quando non deve, o non
+// viene chiamato affatto. Il 24/08/2026 sui dati di produzione: 27 call finite dentro
+// la chiusura di ferragosto (15 fissate a blocco già attivo, perché il giorno lo
+// proponeva il lead) e 3 a mezzanotte. Gli slot vivevano solo nel prompt.
+describe('checkDataAppuntamento', () => {
+  // Mercoledì 26 agosto 2026, ore 10:00 di Roma.
+  const ORA = Date.parse('2026-08-26T08:00:00Z');
+  const CHIUSURE = [{ from: '2026-12-24', to: '2026-12-26' }];
+
+  it('un giovedì alle 15:00 di Roma è un appuntamento buono', () => {
+    expect(checkDataAppuntamento('2026-08-27T15:00:00+02:00', ORA, CHIUSURE)).toEqual({ ok: true });
+  });
+
+  it('gli estremi della fascia sono dentro: 09:00 e 21:00 si possono fissare', () => {
+    expect(checkDataAppuntamento('2026-08-27T09:00:00+02:00', ORA, CHIUSURE).ok).toBe(true);
+    expect(checkDataAppuntamento('2026-08-27T21:00:00+02:00', ORA, CHIUSURE).ok).toBe(true);
+  });
+
+  it('mezzanotte no: è il caso reale delle conv 5363 e 5818, "T22:00" letto come ora locale', () => {
+    // 2026-08-27T22:00Z = 00:00 del 28 a Roma.
+    expect(checkDataAppuntamento('2026-08-27T22:00:00Z', ORA, CHIUSURE)).toEqual({
+      ok: false,
+      motivo: 'fuori_fascia',
+    });
+  });
+
+  it('le 08:00 e le 22:00 di Roma sono fuori fascia', () => {
+    expect(checkDataAppuntamento('2026-08-27T08:00:00+02:00', ORA, CHIUSURE).ok).toBe(false);
+    expect(checkDataAppuntamento('2026-08-27T22:00:00+02:00', ORA, CHIUSURE).ok).toBe(false);
+  });
+
+  it('la domenica non esiste come opzione, nemmeno in orario buono', () => {
+    // Domenica 30 agosto 2026.
+    expect(checkDataAppuntamento('2026-08-30T15:00:00+02:00', ORA, CHIUSURE)).toEqual({
+      ok: false,
+      motivo: 'domenica',
+    });
+  });
+
+  it('un giorno di chiusura è chiuso anche se il giorno lo ha proposto il lead', () => {
+    expect(checkDataAppuntamento('2026-12-25T15:00:00+01:00', ORA, CHIUSURE)).toEqual({
+      ok: false,
+      motivo: 'giorno_chiuso',
+    });
+  });
+
+  it('una data nel passato non è un appuntamento: caso conv 3369, 27/01 già passato', () => {
+    expect(checkDataAppuntamento('2026-01-27T15:00:00+01:00', ORA, CHIUSURE)).toEqual({
+      ok: false,
+      motivo: 'passato',
+    });
+  });
+
+  it('data assente o illeggibile', () => {
+    expect(checkDataAppuntamento(undefined, ORA, CHIUSURE)).toEqual({ ok: false, motivo: 'assente' });
+    expect(checkDataAppuntamento('   ', ORA, CHIUSURE)).toEqual({ ok: false, motivo: 'assente' });
+    expect(checkDataAppuntamento('domani pomeriggio', ORA, CHIUSURE)).toEqual({ ok: false, motivo: 'illeggibile' });
+  });
+
+  it('il giorno si valuta in ora di Roma, non in UTC', () => {
+    // 2026-08-29T23:30Z è sabato in UTC ma domenica 30 a Roma.
+    expect(checkDataAppuntamento('2026-08-29T23:30:00Z', ORA, CHIUSURE).ok).toBe(false);
+  });
+});
+
+describe('buildAppuntamentoNonFissabileNote', () => {
+  it('dice in testa che l\'appuntamento NON è stato preso, così nessuno lo chiama', () => {
+    const n = buildAppuntamentoNonFissabileNote({ motivo: 'giorno_chiuso', dataScartata: '2026-12-25T15:00:00+01:00' });
+    expect(n.startsWith('APPUNTAMENTO NON FISSATO —')).toBe(true);
+  });
+
+  it('riporta la data scartata: senza, chi legge non capisce cosa è successo', () => {
+    const n = buildAppuntamentoNonFissabileNote({ motivo: 'domenica', dataScartata: '2026-08-30T15:00:00+02:00' });
+    expect(n).toContain('30 agosto');
+  });
+
+  it('le parole del lead restano, tra virgolette', () => {
+    const n = buildAppuntamentoNonFissabileNote({
+      motivo: 'fuori_fascia',
+      dataScartata: '2026-08-27T22:00:00Z',
+      leadWords: 'facciamo a mezzanotte',
+    });
+    expect(n).toContain('"facciamo a mezzanotte"');
+  });
+
+  it('senza data scartata non lascia buchi né virgolette vuote', () => {
+    const n = buildAppuntamentoNonFissabileNote({ motivo: 'assente' });
+    expect(n).not.toContain('""');
+    expect(n).not.toContain('undefined');
+  });
+
+  it('resta su una riga e leggibile al volo', () => {
+    const n = buildAppuntamentoNonFissabileNote({ motivo: 'passato', dataScartata: '2026-01-27T15:00:00+01:00', leadWords: 'x'.repeat(600) });
+    expect(n).not.toContain('\n');
+    expect(n.length).toBeLessThan(800);
+  });
+});
+
+describe('buildAppuntamentoNonFissabileNote — il lead può credere di avere la call', () => {
+  it('avverte che la conferma in chat può essere già partita', () => {
+    const n = buildAppuntamentoNonFissabileNote({ motivo: 'domenica', dataScartata: '2026-08-30T15:00:00+02:00' });
+    expect(n).toContain('ricontattato');
+    expect(n.toLowerCase()).toContain('conferma in chat');
   });
 });
