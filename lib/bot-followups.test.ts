@@ -122,19 +122,25 @@ describe('decideFollowupAction — Track B (risposto poi silente)', () => {
     expect(a).toBe('none');
   });
 
-  // La resa e passata da 120h a 288h il 07/08: INTERROTTO restituisce il lead al giro
-  // dei GDO, e a cinque giorni la chat puo ancora ripartire (caso Marina Destefanis).
-  it('120h di silenzio → none: e ancora presto per restituirlo', () => {
-    const a = decide({ msgs: [out(130 * H, 'delivered'), inb(120 * H)], hasInbound: true, lastInboundAtMs: NOW - 120 * H });
+  // La resa e scesa da 288h (12gg) a 96h (4gg) il 24/08: oltre le 96h di silenzio,
+  // su 55 lead tornati a scrivere, ZERO hanno poi fissato. Tenerli fermi altri otto
+  // giorni non recuperava niente e ritardava la restituzione ai GDO.
+  it('95h di silenzio → none: il lead e ancora nostro', () => {
+    const a = decide({ msgs: [out(105 * H, 'delivered'), inb(95 * H)], hasInbound: true, lastInboundAtMs: NOW - 95 * H });
     expect(a).toBe('none');
   });
 
-  it('288h di silenzio → interrotto_classify', () => {
-    const a = decide({ msgs: [out(300 * H, 'delivered'), inb(290 * H)], hasInbound: true, lastInboundAtMs: NOW - 290 * H });
+  it('96h di silenzio → interrotto_classify', () => {
+    const a = decide({ msgs: [out(110 * H, 'delivered'), inb(96 * H)], hasInbound: true, lastInboundAtMs: NOW - 96 * H });
     expect(a).toBe('interrotto_classify');
   });
 
-  it('288h → interrotto_classify anche a kill-switch spento', () => {
+  it('120h di silenzio → interrotto_classify', () => {
+    const a = decide({ msgs: [out(130 * H, 'delivered'), inb(120 * H)], hasInbound: true, lastInboundAtMs: NOW - 120 * H });
+    expect(a).toBe('interrotto_classify');
+  });
+
+  it('oltre la resa → interrotto_classify anche a kill-switch spento', () => {
     const a = decide({ msgs: [inb(290 * H)], hasInbound: true, lastInboundAtMs: NOW - 290 * H, sequenceEnabled: false });
     expect(a).toBe('interrotto_classify');
   });
