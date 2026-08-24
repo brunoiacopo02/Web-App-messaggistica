@@ -16,14 +16,28 @@ export const SEQUENCE_END_DAYS = 4;
 // I due template di riaggancio sono stati rimossi (18 risposte su 74 consegnati, metà
 // delle quali un "NO" secco, zero appuntamenti): resta il solo nudge free-text, che
 // viaggia dentro la finestra 24h e non consuma reputazione.
-export const NUDGE1_MIN_H = 18; export const NUDGE1_MAX_H = 24;
-// 07/08/2026 — la resa passa da 120h a 288h (12 giorni). Per il CRM classificare
-// significa restituire il lead: INTERROTTO lo rimette nel giro dei GDO umani. A cinque
-// giorni la chat puo' ancora ripartire, e quando riparte due canali lavorano la stessa
-// persona senza vedersi — caso Marina Destefanis del 26/07: restituita, riassegnata a
-// un GDO che l'ha chiamata tre volte e poi scartata, mentre il giorno dopo il bot
-// fissava l'appuntamento.
-export const TRACKB_GIVEUP_H = 288;
+//
+// 24/08/2026 — la soglia bassa scende da 18h a 12h. Con [18,24) un lead che smetteva
+// di scrivere fra mezzanotte e le 08:30 non poteva ricevere il nudge MAI: la sua
+// finestra cadeva tutta fuori dalla fascia d'invio (08:30-20:30), e il cron gira solo
+// lì dentro. Erano 260 lead su 687 restituiti al CRM senza che avessimo provato
+// nemmeno una volta a riprenderli. A 12h la finestra interseca sempre la fascia.
+// Il tetto resta 24h: è il limite di WhatsApp per il free-text, oltre servirebbe un
+// template — che costa reputazione su un numero LOW e non porta appuntamenti.
+export const NUDGE1_MIN_H = 12; export const NUDGE1_MAX_H = 24;
+// 24/08/2026 — la resa scende da 288h (12 giorni) a 96h (4 giorni).
+//
+// Misurato su 1.074 chat con almeno una risposta e 205 silenzi oltre le 24h richiusi
+// da un ritorno del lead: chi torna dopo MENO di 96h di silenzio fissa nell'8% dei
+// casi (11 appuntamenti); chi torna DOPO le 96h fissa nello 0% — 55 ritorni, zero
+// appuntamenti, in due mesi. Accorciare da 12 a 4 giorni non costa un solo fissaggio
+// e rimette il lead ai GDO otto giorni prima.
+//
+// Il motivo per cui era stata alzata a 12 giorni il 07/08 (due canali che lavorano lo
+// stesso lead senza vedersi — caso Marina Destefanis) resta valido come rischio, ma
+// vale solo per i lead che tornano E convertono: quelli, i dati dicono, stanno tutti
+// sotto le 96h.
+export const TRACKB_GIVEUP_H = 96;
 
 const FAST_FAIL_H = 48;   // numero morto: touch>=1 e mai nulla consegnato
 const MIN_GAP_OUT_H = 20; // anti-doppione tra due out consecutivi

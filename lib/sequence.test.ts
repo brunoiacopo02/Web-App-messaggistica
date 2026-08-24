@@ -26,9 +26,66 @@ describe('costanti', () => {
     // Un solo follow-up: i touch 2/3/4 sono stati rimossi il 01/08/2026.
     expect(TOUCH_OFFSETS_DAYS).toEqual([1]);
     expect(SEQUENCE_END_DAYS).toBe(4);
-    // La resa e passata da 120h a 288h (12 giorni) il 07/08: vedi il commento in
-    // lib/sequence.ts e il caso Marina Destefanis.
-    expect([NUDGE1_MIN_H, NUDGE1_MAX_H, TRACKB_GIVEUP_H]).toEqual([18, 24, 288]);
+    // 24/08/2026: resa da 288h (12gg) a 96h (4gg) e nudge da [18,24) a [12,24).
+    // Misurato su 1.074 chat e 205 silenzi: vedi i commenti in lib/sequence.ts.
+    expect([NUDGE1_MIN_H, NUDGE1_MAX_H, TRACKB_GIVEUP_H]).toEqual([12, 24, 96]);
+  });
+});
+
+// La resa a 4 giorni non è un numero scelto a occhio: oltre le 96h di silenzio, su
+// 55 lead tornati a scrivere, ZERO hanno poi fissato. Tutti gli 11 recuperi che sono
+// finiti in appuntamento vengono da silenzi sotto le 96h.
+describe('decideTrackB — la resa a 4 giorni', () => {
+  const base = { nudgesSent: 1, sequenceEnabled: true };
+  // Mezzogiorno di Roma: dentro la fascia d'invio, così il ramo nudge non interferisce.
+  const ORA = Date.parse('2026-08-26T10:00:00Z');
+  const silenzioDa = (ore: number) => ({ nowMs: ORA, lastInboundAtMs: ORA - ore * 3600_000, ...base });
+
+  it('a 95 ore il lead è ancora nostro: non si restituisce', () => {
+    expect(decideTrackB(silenzioDa(95)).kind).not.toBe('classify');
+  });
+
+  it('a 96 ore tonde si restituisce', () => {
+    expect(decideTrackB(silenzioDa(96))).toEqual({ kind: 'classify' });
+  });
+
+  it('non aspetta piu' + ' i 12 giorni di prima', () => {
+    expect(decideTrackB(silenzioDa(200))).toEqual({ kind: 'classify' });
+  });
+
+  it('la resa classifica anche a sequenza spenta e fuori fascia: non è un invio', () => {
+    const notte = Date.parse('2026-08-26T01:00:00Z');
+    expect(
+      decideTrackB({ nowMs: notte, lastInboundAtMs: notte - 100 * 3600_000, nudgesSent: 1, sequenceEnabled: false })
+    ).toEqual({ kind: 'classify' });
+  });
+});
+
+// Il nudge free-text vive dentro la finestra 24h di WhatsApp: oltre, servirebbe un
+// template, che su un numero LOW costa reputazione e (misurato) non porta un solo
+// appuntamento. Con la vecchia soglia a 18h un lead che taceva fra mezzanotte e le
+// 08:30 non poteva riceverlo MAI: [18,24) gli cadeva tutta fuori dalla fascia d'invio.
+describe('decideTrackB — la finestra del nudge copre anche chi tace di notte', () => {
+  it('lead zitto dalle 07:00: alle 19:00 dello stesso giorno il nudge è ancora possibile', () => {
+    // 07:00 Rome = 05:00Z; 19:00 Rome = 17:00Z → 12 ore di silenzio.
+    const now = Date.parse('2026-08-26T17:00:00Z');
+    expect(
+      decideTrackB({ nowMs: now, lastInboundAtMs: Date.parse('2026-08-26T05:00:00Z'), nudgesSent: 0, sequenceEnabled: true })
+    ).toEqual({ kind: 'nudge_free' });
+  });
+
+  it('sotto le 12 ore è troppo presto: non si insegue un lead che ha appena scritto', () => {
+    const now = Date.parse('2026-08-26T14:00:00Z');
+    expect(
+      decideTrackB({ nowMs: now, lastInboundAtMs: now - 11 * 3600_000, nudgesSent: 0, sequenceEnabled: true }).kind
+    ).toBe('wait');
+  });
+
+  it('oltre le 24 ore la finestra WhatsApp è chiusa: niente free-text', () => {
+    const now = Date.parse('2026-08-26T14:00:00Z');
+    expect(
+      decideTrackB({ nowMs: now, lastInboundAtMs: now - 25 * 3600_000, nudgesSent: 0, sequenceEnabled: true }).kind
+    ).not.toBe('nudge_free');
   });
 });
 
@@ -179,28 +236,28 @@ describe('decideTrackB', () => {
       sequenceEnabled: opts.enabled ?? true,
     });
 
-  it('12h di silenzio → wait', () => expect(dec(12, 0)).toEqual({ kind: 'wait' }));
+  it('11h di silenzio → wait: ha appena scritto, non lo si insegue', () => expect(dec(11, 0)).toEqual({ kind: 'wait' }));
+  it('12h, in fascia, 0 nudge → nudge_free (soglia abbassata il 24/08)', () => expect(dec(12, 0)).toEqual({ kind: 'nudge_free' }));
   it('20h, in fascia, 0 nudge → nudge_free', () => expect(dec(20, 0)).toEqual({ kind: 'nudge_free' }));
   it('20h ma fuori fascia → wait', () => expect(dec(20, 0, { now: NOW_NIGHT })).toEqual({ kind: 'wait' }));
   it('20h ma kill-switch off → wait', () => expect(dec(20, 0, { enabled: false })).toEqual({ kind: 'wait' }));
-  it('24h esatte, 0 nudge → wait (finestra [18,24) chiusa)', () => expect(dec(24, 0)).toEqual({ kind: 'wait' }));
-  it('nudge già speso: nessun secondo richiamo a nessuna distanza', () => {
-    for (const h of [20, 30, 48, 50, 96, 100, 119]) expect(dec(h, 1)).toEqual({ kind: 'wait' });
+  it('24h esatte, 0 nudge → wait (finestra [12,24) chiusa, e la resa e ancora lontana)', () => expect(dec(24, 0)).toEqual({ kind: 'wait' }));
+  it('nudge già speso: nessun secondo richiamo finche non scatta la resa', () => {
+    for (const h of [20, 30, 48, 50, 95]) expect(dec(h, 1)).toEqual({ kind: 'wait' });
   });
   it('50h con nudgesSent=0 → wait (niente template fuori finestra)', () =>
     expect(dec(50, 0)).toEqual({ kind: 'wait' }));
-  it('96h con nudgesSent=0 → wait', () => expect(dec(96, 0)).toEqual({ kind: 'wait' }));
-  // Per il CRM classificare significa restituire il lead: INTERROTTO lo rimette nel
-  // giro dei GDO umani. A 120h la chat puo' ancora ripartire, ed e' quello che e'
-  // successo a Marina Destefanis il 26/07: restituita, riassegnata a un GDO che l'ha
-  // chiamata tre volte e poi scartata, mentre il giorno dopo il bot fissava.
-  it('a 120h non si classifica piu: la chat puo ancora ripartire', () => {
-    expect(dec(120, 1)).toEqual({ kind: 'wait' });
-    expect(dec(200, 1, { now: NOW_NIGHT, enabled: false })).toEqual({ kind: 'wait' });
+  // 24/08/2026: la resa scende a 96h. Su 55 lead tornati dopo piu' di 96h di
+  // silenzio, ZERO hanno poi fissato: tenerli fermi altri otto giorni non recupera
+  // niente e ritarda solo la restituzione ai GDO.
+  it('96h con nudgesSent=0 → classify: e la resa, non un invio', () => expect(dec(96, 0)).toEqual({ kind: 'classify' }));
+  it('a 120h si classifica: oltre le 96h non torna piu nessuno che converta', () => {
+    expect(dec(120, 1)).toEqual({ kind: 'classify' });
+    expect(dec(200, 1, { now: NOW_NIGHT, enabled: false })).toEqual({ kind: 'classify' });
   });
 
-  it('288h (12 giorni) → classify, anche fuori fascia e con kill-switch off', () => {
-    expect(dec(288, 0)).toEqual({ kind: 'classify' });
+  it('la resa classifica anche fuori fascia e con kill-switch off', () => {
+    expect(dec(96, 0)).toEqual({ kind: 'classify' });
     expect(dec(300, 3, { now: NOW_NIGHT, enabled: false })).toEqual({ kind: 'classify' });
   });
 
@@ -210,16 +267,15 @@ describe('decideTrackB', () => {
     expect(dec(20, 0, { enabled: false })).toEqual({ kind: 'wait' });
   });
 
-  it('lead notturno che salta il free: si arriva alla resa senza toccare un template', () => {
-    // Ultimo inbound alle 23: la finestra [18,24) cade tutta fuori fascia → a 20h il cron gira di notte, wait.
+  it('chi perde comunque la finestra free arriva alla resa senza toccare un template', () => {
+    // Se il cron gira solo di notte la finestra free si perde: oltre le 24h WhatsApp
+    // non consente piu' il free-text, e un template non si manda (costa reputazione
+    // su un numero LOW e non ha mai portato un appuntamento).
     expect(dec(20, 0, { now: NOW_NIGHT })).toEqual({ kind: 'wait' });
-    // Primo run utile in fascia è oltre le 24h: la finestra free è persa e non si recupera.
     expect(dec(30, 0)).toEqual({ kind: 'wait' });
     expect(dec(48, 0)).toEqual({ kind: 'wait' });
-    expect(dec(96, 0)).toEqual({ kind: 'wait' });
-    // Resta solo la resa, ora a 288h.
-    expect(dec(121, 0)).toEqual({ kind: 'wait' });
-    expect(dec(289, 0)).toEqual({ kind: 'classify' });
+    // Resta solo la resa, ora a 96h.
+    expect(dec(96, 0)).toEqual({ kind: 'classify' });
   });
 });
 
