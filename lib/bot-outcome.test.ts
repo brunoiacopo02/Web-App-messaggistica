@@ -1,7 +1,22 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { sendOutcome, sendCrmNota } from './bot-outcome';
+import { romeOffset } from './rome-time';
 
 const DATE = '2026-06-29T17:00:00Z';
+
+/**
+ * Un giorno lavorativo futuro all'ora indicata, in ora di Roma. Le fixture a data fissa
+ * scadono: `checkDataAppuntamento` scarta i giorni passati, le domeniche e le ore fuori
+ * dalla fascia 09-21, quindi un appuntamento "buono" va costruito relativo a adesso.
+ */
+function giornoUtile(ora = 15, piuGiorni = 3): string {
+  const d = new Date(Date.now() + piuGiorni * 86_400_000);
+  if (d.getUTCDay() === 0) d.setUTCDate(d.getUTCDate() + 1);
+  const key = new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Europe/Rome', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(d);
+  return `${key}T${String(ora).padStart(2, '0')}:00:00${romeOffset(d)}`;
+}
 
 /**
  * Data di richiamo plausibile, relativa a adesso. Fissarla a una data assoluta la fa
@@ -119,7 +134,7 @@ describe('sendOutcome — guard APPUNTAMENTO terminale', () => {
 
   it('lead non ancora deciso + APPUNTAMENTO → comportamento normale (persiste e chiude)', async () => {
     const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null });
-    const res = await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: DATE });
+    const res = await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: giornoUtile() });
 
     expect(res.sent).toBe(true);
     expect(calls.updates[0]).toMatchObject({ bot_outcome: 'APPUNTAMENTO', ai_status: 'closed' });
@@ -595,5 +610,88 @@ describe('sendOutcome — cancel_requested_at', () => {
     const { supabase, calls } = makeSupabase({ crm_lead_id: 'gdo1', bot_outcome: null, bot_scheduled_at: null });
     await sendOutcome(supabase, 1, { outcome: 'DA_SCARTARE', discardReason: 'annullo tutto' }, { noteOnly: true });
     expect(marcature(calls)).toHaveLength(1);
+  });
+});
+
+// Guardia sulla data dell'APPUNTAMENTO. Le regole su giorni e orari stavano solo nel
+// prompt: reggevano finché era il bot a proporre il giorno, e cadevano appena era il
+// lead a proporlo. Una call in un giorno chiuso o a mezzanotte arriva alle Conferme e
+// al venditore come se fosse vera.
+describe('sendOutcome — APPUNTAMENTO in un giorno o a un\'ora impossibili', () => {
+  const attivo = { crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null };
+  const bodyInviato = () => JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string);
+
+  it('un appuntamento normale passa intatto: la guardia non tocca il caso buono', async () => {
+    const { supabase, calls } = makeSupabase(attivo);
+    const quando = giornoUtile(15);
+    const res = await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: quando });
+
+    expect(bodyInviato().outcome).toBe('APPUNTAMENTO');
+    expect(res.keepOpen).toBeUndefined();
+    expect(calls.events.some((e: { type: string }) => e.type === 'appuntamento_non_fissabile')).toBe(false);
+  });
+
+  it('un\'ora fuori fascia diventa una nota e la chat resta aperta', async () => {
+    const { supabase } = makeSupabase(attivo);
+    const res = await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: giornoUtile(2) });
+
+    const body = bodyInviato();
+    expect(body.outcome).toBe('NOTA');
+    expect(body.note).toContain('APPUNTAMENTO NON FISSATO');
+    expect(res.keepOpen).toBe(true);
+  });
+
+  it('una domenica non diventa mai un appuntamento', async () => {
+    const { supabase } = makeSupabase(attivo);
+    // Cerca la prossima domenica futura, all'ora buona.
+    const d = new Date(Date.now() + 86_400_000);
+    while (d.getUTCDay() !== 0) d.setUTCDate(d.getUTCDate() + 1);
+    const key = new Intl.DateTimeFormat('sv-SE', {
+      timeZone: 'Europe/Rome', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(d);
+    await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: `${key}T15:00:00${romeOffset(d)}` });
+
+    expect(bodyInviato().outcome).toBe('NOTA');
+  });
+
+  it('la data scartata non arriva mai al CRM come data', async () => {
+    const { supabase } = makeSupabase(attivo);
+    const quando = giornoUtile(2);
+    await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: quando });
+
+    const body = bodyInviato();
+    expect(body.date).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain(quando);
+  });
+
+  it('non scrive bot_scheduled_at: in agenda non deve finire niente', async () => {
+    const { supabase, calls } = makeSupabase(attivo);
+    await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: giornoUtile(2) });
+
+    for (const u of calls.updates) {
+      expect(u).not.toHaveProperty('bot_scheduled_at');
+      expect(u).not.toHaveProperty('bot_outcome');
+    }
+  });
+
+  it('registra l\'evento con la data scartata e il motivo, per poterla ritrovare', async () => {
+    const { supabase, calls } = makeSupabase(attivo);
+    const quando = giornoUtile(2);
+    await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: quando });
+
+    const ev = calls.events.find((e: { type: string }) => e.type === 'appuntamento_non_fissabile');
+    expect(ev).toBeDefined();
+    expect(ev.payload.dataScartata).toBe(quando);
+    expect(ev.payload.motivo).toBe('fuori_fascia');
+    expect(ev.level).toBe('warn');
+  });
+
+  it('su un lead che ha GIÀ un appuntamento la guardia non si intromette: decide resolveOutcomeAction', async () => {
+    const giaFissato = { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE };
+    const { supabase, calls } = makeSupabase(giaFissato);
+    await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: giornoUtile(2) });
+
+    expect(calls.events.some((e: { type: string }) => e.type === 'appuntamento_non_fissabile')).toBe(false);
+    expect(bodyInviato().note).not.toContain('APPUNTAMENTO NON FISSATO');
   });
 });
