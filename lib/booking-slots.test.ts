@@ -230,3 +230,71 @@ describe('bookingSlotsContext — un giorno alla volta', () => {
     expect(ctx).toContain('la domenica non è mai disponibile');
   });
 });
+
+// Il giorno di riapertura si riempie da solo: il 18/08/2026 ha raccolto 98 call in una
+// giornata sola. Un giorno pieno si salta come si salta una domenica — ma NON è una
+// chiusura: al lead non si racconta che siamo chiusi quando siamo solo al completo.
+describe('computeBookingDays con giorni al completo', () => {
+  const NIENTE_CHIUSURE: { from: string; to: string }[] = [];
+
+  it('senza giorni pieni si comporta come prima', () => {
+    const r = computeBookingDays(new Date('2026-06-22T10:00:00+02:00'), NIENTE_CHIUSURE, []);
+    expect(r.day1.date).toBe('2026-06-23');
+    expect(r.day2.date).toBe('2026-06-24');
+  });
+
+  it('salta il primo giorno se è al completo', () => {
+    const r = computeBookingDays(new Date('2026-06-22T10:00:00+02:00'), NIENTE_CHIUSURE, ['2026-06-23']);
+    expect(r.day1.date).toBe('2026-06-24');
+    expect(r.day2.date).toBe('2026-06-25');
+  });
+
+  it('salta più giorni pieni di fila', () => {
+    const r = computeBookingDays(new Date('2026-06-22T10:00:00+02:00'), NIENTE_CHIUSURE, ['2026-06-23', '2026-06-24', '2026-06-25']);
+    expect(r.day1.date).toBe('2026-06-26');
+  });
+
+  it('un giorno pieno non viene raccontato come chiusura', () => {
+    const r = computeBookingDays(new Date('2026-06-22T10:00:00+02:00'), NIENTE_CHIUSURE, ['2026-06-23']);
+    expect(r.chiusuraPrimaDiDay1).toBeNull();
+    expect(r.chiusuraDopoDay1).toBeNull();
+  });
+
+  it('day1Imminente è falso se domani è al completo: non è più "domani"', () => {
+    const r = computeBookingDays(new Date('2026-06-22T10:00:00+02:00'), NIENTE_CHIUSURE, ['2026-06-23']);
+    expect(r.day1Imminente).toBe(false);
+  });
+
+  it('pieno e chiuso insieme: salta entrambi, e la chiusura resta segnalata', () => {
+    const r = computeBookingDays(
+      new Date('2026-08-07T10:00:00+02:00'),
+      [{ from: '2026-08-11', to: '2026-08-17' }],
+      ['2026-08-08'],
+    );
+    expect(r.day1.date).toBe('2026-08-10'); // 8 pieno, 9 domenica
+    expect(r.day2.date).toBe('2026-08-18'); // 11-17 chiuso
+    expect(r.chiusuraDopoDay1?.date).toBe('2026-08-17');
+  });
+
+  it('se sono pieni tutti i giorni dell\'orizzonte non azzera l\'agenda: torna comunque due giorni', () => {
+    const pieni = Array.from({ length: 90 }, (_, i) => {
+      const d = new Date(Date.UTC(2026, 5, 23, 12));
+      d.setUTCDate(d.getUTCDate() + i);
+      return d.toISOString().slice(0, 10);
+    });
+    const r = computeBookingDays(new Date('2026-06-22T10:00:00+02:00'), NIENTE_CHIUSURE, pieni);
+    expect(r.day1.date).toBeTruthy();
+    expect(r.day2.date).toBeTruthy();
+    expect(r.day1.date).not.toBe(r.day2.date);
+  });
+
+  it('bookingSlotsContext usa i giorni liberi, e non dice mai che siamo chiusi', () => {
+    const testo = bookingSlotsContext(new Date('2026-06-22T10:00:00+02:00'), {
+      ranges: NIENTE_CHIUSURE,
+      pieni: ['2026-06-23'],
+    });
+    expect(testo).toContain('2026-06-24');
+    expect(testo).not.toContain('2026-06-23');
+    expect(testo.toLowerCase()).not.toContain('chius');
+  });
+});

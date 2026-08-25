@@ -101,10 +101,11 @@ const MEDIA_SENZA_TESTO =
 
 /** Genera la prossima risposta del bot data la cronologia. Inietta l'ora di Roma.
  *  `personaName` (default 'Mario') parametrizza SOLO il nome nel system prompt.
- *  `contextNote` aggiunge in coda al system un contesto specifico della conversazione. */
+ *  `contextNote` aggiunge in coda al system un contesto specifico della conversazione.
+ *  `giorniPieni` (date ISO) sono le giornate già al completo: il bot non le propone. */
 export async function generateMarioReply(
   history: MarioTurn[],
-  opts?: { now?: Date; personaName?: string; contextNote?: string },
+  opts?: { now?: Date; personaName?: string; contextNote?: string; giorniPieni?: readonly string[] },
 ): Promise<MarioResult> {
   // Un media senza didascalia (foto, sticker, documento) entra in `messages` con body
   // vuoto: l'API rifiuta l'intera richiesta con 400 "user messages must have non-empty

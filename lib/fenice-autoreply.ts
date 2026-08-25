@@ -1,5 +1,6 @@
 import type { getSupabaseAdmin } from './supabase/admin';
 import { generateMarioReply, type MarioTurn } from './mario';
+import { datePiene, tettoGiornaliero } from './booking-capienza';
 import { gdoContextNote } from './gdo-context-note';
 import { gdoVideoText } from './gdo-agenda';
 import { sendFreeText } from './twilio';
@@ -302,6 +303,9 @@ export async function drainMarioReplies(
   }
 
   let finalStatus = 'active';
+  // Giornate già al completo: il bot non le propone. Si legge una volta per drain,
+  // non per turno. Senza BOOKING_DAILY_CAP la lista è vuota e non si tocca il DB.
+  const giorniPieni = await datePiene(supabase, tettoGiornaliero(process.env.BOOKING_DAILY_CAP), new Date());
   try {
     for (let round = 0; round < MAX_ROUNDS_PER_DRAIN; round++) {
       const before = await loadHistory();
@@ -381,6 +385,7 @@ export async function drainMarioReplies(
           : 'mario';
       const result = await generateMarioReply(history, {
         personaName: PERSONA_NAME[persona],
+        giorniPieni,
         // I promemoria pendenti (video non confermato, Noemi non ancora spiegata)
         // viaggiano dentro il contesto: il modello li integra nel discorso invece di
         // farli arrivare come un messaggio programmato addosso.
@@ -427,6 +432,7 @@ export async function drainMarioReplies(
         try {
           const retry = await generateMarioReply(history, {
             personaName: PERSONA_NAME[persona],
+            giorniPieni,
             contextNote: gdoContextNote({
               gdoVideoSentAt: gdoVideoSentAt,
               gdoVideoWatchedAt: watchedAt, // appena confermato: sopprime NOTA_VIDEO nella nota
@@ -585,6 +591,25 @@ export async function drainMarioReplies(
               payload: { conversationId, crmLeadId, error: esito.error ?? null, status: esito.status ?? null } as never,
               message: `[bot-fissatore] conv ${conversationId}: passaggio a una persona non segnalato al CRM (${esito.error ?? esito.status})`,
               level: 'error',
+            });
+          }
+        }
+        // Quando e con che parole il lead ha chiesto la persona. Senza questo, per
+        // ricostruire il motivo si finisce sull'ULTIMO messaggio in ingresso — che
+        // nelle chat vere e' quasi sempre "Ok" o "Grazie", e a chi deve richiamare non
+        // dice niente. L'errore non si propaga: se la colonna non c'e' ancora (migration
+        // 20260825000001 non applicata) il passaggio a una persona avviene lo stesso.
+        {
+          const ultimoDelLead = [...history].reverse().find((t) => t.role === 'user')?.content ?? null;
+          const { error: errHandoff } = await supabase.from('conversations')
+            .update({ handed_off_at: new Date().toISOString(), handed_off_reason: ultimoDelLead })
+            .eq('id', conversationId);
+          if (errHandoff) {
+            await supabase.from('event_log').insert({
+              type: 'handed_off_non_registrato',
+              payload: { conversationId, error: errHandoff.message } as never,
+              message: `[bot-fissatore] conv ${conversationId}: motivo del passaggio non registrato (${errHandoff.message})`,
+              level: 'warn',
             });
           }
         }

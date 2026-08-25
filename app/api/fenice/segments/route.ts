@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServer } from '@/lib/supabase/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
+import { fetchAllRows } from '@/lib/supabase/paginate';
 import { segmentOf, fermaReason, type LeadSegment } from '@/lib/lead-segments';
 
 export const runtime = 'nodejs';
@@ -28,23 +29,30 @@ export async function GET(req: NextRequest) {
   const now = new Date().toISOString();
 
   const admin = getSupabaseAdmin();
-  let query = admin
-    .from('conversations')
-    .select('id, ai_status, bot_outcome, bot_scheduled_at, last_message_at, last_inbound_at, created_at, leads(phone_e164, first_name, last_name)')
-    .eq('ai_owner', 'mario')
-    .order('last_message_at', { ascending: false })
-    .limit(1000);
-
+  // Paginato: al tetto di 1.000 righe i conteggi per segmento erano tagliati e le
+  // conversazioni più vecchie sparivano dall'elenco senza dirlo.
   const since = periodStartIso(period);
-  if (since) query = query.gte('created_at', since);
-
-  const { data, error } = await query;
-  if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+  let data: any[];
+  try {
+    data = await fetchAllRows<any>((from, to) => {
+      let q = admin
+        .from('conversations')
+        .select('id, ai_status, bot_outcome, bot_scheduled_at, last_message_at, last_inbound_at, created_at, leads(phone_e164, first_name, last_name)')
+        .eq('ai_owner', 'mario')
+        .order('last_message_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(from, to);
+      if (since) q = q.gte('created_at', since);
+      return q;
+    });
+  } catch (e) {
+    return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : 'errore' }, { status: 500 });
+  }
 
   const counts = { PRESO: 0, MAI_RISPOSTO: 0, ATTIVA: 0, FERMA: 0, total: 0 };
   const rows: Array<{ id: number; phone: string; name: string; segment: LeadSegment; reason: string | null; lastMessageAt: string; lastInboundAt: string | null; status: string | null; scheduledAt: string | null }> = [];
 
-  for (const c of (data ?? []) as any[]) {
+  for (const c of data) {
     const input = { bot_outcome: c.bot_outcome ?? null, last_inbound_at: c.last_inbound_at ?? null, ai_status: c.ai_status ?? null };
     const seg = segmentOf(input, now);
     counts[seg]++;
