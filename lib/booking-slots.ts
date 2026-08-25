@@ -54,18 +54,28 @@ type Step = {
   chiusuraScavalcata: Ymd | null;
 };
 
+/** Giorni già al completo: si saltano come le domeniche, ma non sono una chiusura. */
+export type GiorniPieni = ReadonlySet<string> | readonly string[];
+
+const ePieno = (iso: string, pieni?: GiorniPieni): boolean =>
+  pieni instanceof Set ? pieni.has(iso) : Array.isArray(pieni) ? pieni.includes(iso) : false;
+
 /**
  * Primo giorno successivo a `v` che non sia domenica né chiuso.
  *
  * Se entro `MAX_SEARCH_DAYS` non trova niente, ignora le chiusure e torna al calcolo
  * semplice: meglio un bot che fissa nel giorno sbagliato che un bot che non fissa più.
  */
-function nextBookable(v: Ymd, ranges: BlackoutRange[]): Step {
+function nextBookable(v: Ymd, ranges: BlackoutRange[], pieni?: GiorniPieni): Step {
   let chiusuraScavalcata: Ymd | null = null;
   let candidate = addDays(v, 1);
   for (let i = 0; i < MAX_SEARCH_DAYS; i++) {
-    const chiuso = !isBookableDate(isoDate(candidate), ranges);
-    if (candidate.wd !== 0 && !chiuso) return { day: candidate, chiusuraScavalcata };
+    const iso = isoDate(candidate);
+    const chiuso = !isBookableDate(iso, ranges);
+    // Al completo: si salta, ma non finisce in `chiusuraScavalcata`. Al lead non si
+    // dice che siamo chiusi quando l'agenda di quel giorno è solo piena.
+    const pieno = ePieno(iso, pieni);
+    if (candidate.wd !== 0 && !chiuso && !pieno) return { day: candidate, chiusuraScavalcata };
     if (chiuso) chiusuraScavalcata = candidate;
     candidate = addDays(candidate, 1);
   }
@@ -88,15 +98,15 @@ export type BookingDays = {
 const toBookingDay = (v: Ymd): BookingDay => ({ label: labelIt(v), date: isoDate(v) });
 
 /** I due (e soli due) giorni prenotabili a partire da `now`: niente domeniche, niente giorni chiusi. */
-export function computeBookingDays(now: Date, ranges?: BlackoutRange[]): BookingDays {
+export function computeBookingDays(now: Date, ranges?: BlackoutRange[], pieni?: GiorniPieni): BookingDays {
   const chiusure = ranges ?? bookingBlackout(process.env.BOOKING_BLACKOUT);
   let today = romeYmd(now);
   // Dopo le 20:00 l'agenda del giorno corrente non è più prenotabile: entra in
   // vigore quella del giorno successivo. Anticipiamo l'anchor di un giorno.
   if (romeHour(now) >= 20) today = addDays(today, 1);
 
-  const s1 = nextBookable(today, chiusure);
-  const s2 = nextBookable(s1.day, chiusure);
+  const s1 = nextBookable(today, chiusure, pieni);
+  const s2 = nextBookable(s1.day, chiusure, pieni);
 
   return {
     day1: toBookingDay(s1.day),
@@ -132,8 +142,12 @@ const UNO_ALLA_VOLTA = (primo: string) =>
  * fissaggio e call è 44 ore e il 39% supera le 48h — più la call è lontana, più
  * l'imprevisto di lavoro se la mangia (28% dei motivi di disdetta).
  */
-export function bookingSlotsContext(now: Date): string {
-  const { day1, day2, day1Imminente, chiusuraPrimaDiDay1, chiusuraDopoDay1 } = computeBookingDays(now);
+export function bookingSlotsContext(
+  now: Date,
+  opts?: { ranges?: BlackoutRange[]; pieni?: GiorniPieni },
+): string {
+  const { day1, day2, day1Imminente, chiusuraPrimaDiDay1, chiusuraDopoDay1 } =
+    computeBookingDays(now, opts?.ranges, opts?.pieni);
   const off = romeOffset(now);
   const tag = `Nel tag [ESITO:APPUNTAMENTO|...] usa la data ISO 8601 del giorno scelto (${day1.date} oppure ${day2.date}) con l'ora concordata e fuso ${off}.`;
 

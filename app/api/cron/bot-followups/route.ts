@@ -6,6 +6,7 @@ import { classifyInterrupted } from '@/lib/interrotto-note';
 import type { MarioTurn } from '@/lib/mario';
 import { drainMarioReplies, lastIsUnansweredInbound, isOrphanedReplyingLock, isLockStale, LOCK_TTL_MS, serveRedrive } from '@/lib/fenice-autoreply';
 import { runAgendaFollowups } from '@/lib/agenda-followup';
+import { alertUnaVolta } from '@/lib/alert-una-volta';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -181,22 +182,13 @@ export async function GET(req: NextRequest) {
       // 2c. Watchdog handed_off: passato all'umano ma mai chiuso col CRM.
       if (c.ai_status === 'handed_off') {
         if (!c.bot_outcome && now - lastActivityAtMs > STALE_HANDED_OFF_MS) {
-          // Alert una volta sola per conversazione.
-          const { data: prior } = await supabase
-            .from('event_log')
-            .select('id')
-            .eq('type', 'stale_handed_off')
-            .contains('payload', { conversationId: c.id })
-            .limit(1);
-          if (!prior || prior.length === 0) {
-            await supabase.from('event_log').insert({
-              type: 'stale_handed_off',
-              payload: { conversationId: c.id } as never,
-              message: `[bot-fissatore] conv ${c.id} handed_off da >48h senza esito CRM: serve chiusura manuale`,
-              level: 'warn',
-            });
-            report.push({ id: c.id, action: 'stale_handed_off' });
-          }
+          const scritto = await alertUnaVolta(supabase, {
+            type: 'stale_handed_off',
+            conversationId: c.id,
+            message: `[bot-fissatore] conv ${c.id} handed_off da >48h senza esito CRM: serve chiusura manuale`,
+            level: 'warn',
+          });
+          if (scritto) report.push({ id: c.id, action: 'stale_handed_off' });
         }
         continue;
       }
@@ -204,14 +196,16 @@ export async function GET(req: NextRequest) {
       // 2d. Watchdog booked: appuntamento preso ma esito CRM mai registrato.
       // La data appuntamento non è ricostruibile qui: serve intervento, l'alert è il fix.
       if (c.ai_status === 'booked') {
+        // Una volta sola: senza guardia il cron orario ha scritto 100 righe uguali
+        // per la sola conv 3401, e un alert che si ripete non lo legge più nessuno.
         if (!c.bot_outcome && now - lastActivityAtMs > STALE_BOOKED_MS) {
-          await supabase.from('event_log').insert({
+          const scritto = await alertUnaVolta(supabase, {
             type: 'stale_booked_no_outcome',
-            payload: { conversationId: c.id } as never,
+            conversationId: c.id,
             message: `[bot-fissatore] conv ${c.id} booked da >24h senza bot_outcome: esito CRM mai inviato`,
             level: 'error',
           });
-          report.push({ id: c.id, action: 'stale_booked_no_outcome' });
+          if (scritto) report.push({ id: c.id, action: 'stale_booked_no_outcome' });
         }
         continue;
       }

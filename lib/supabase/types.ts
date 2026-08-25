@@ -91,6 +91,8 @@ export type Database = {
           bot_scheduled_at: string | null
           campaign_id: number | null
           cancel_requested_at: string | null
+          handed_off_at: string | null
+          handed_off_reason: string | null
           created_at: string
           crm_funnel: string | null
           crm_lead_id: string | null
@@ -129,6 +131,8 @@ export type Database = {
           bot_scheduled_at?: string | null
           campaign_id?: number | null
           cancel_requested_at?: string | null
+          handed_off_at?: string | null
+          handed_off_reason?: string | null
           created_at?: string
           crm_funnel?: string | null
           crm_lead_id?: string | null
@@ -167,6 +171,8 @@ export type Database = {
           bot_scheduled_at?: string | null
           campaign_id?: number | null
           cancel_requested_at?: string | null
+          handed_off_at?: string | null
+          handed_off_reason?: string | null
           created_at?: string
           crm_funnel?: string | null
           crm_lead_id?: string | null
