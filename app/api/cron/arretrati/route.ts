@@ -64,10 +64,17 @@ async function agendaDelivery(admin: Supa, secret: string, esegui: boolean, max:
   const ancora = await fetchAllRows<any>((from, to) => admin
     .from('conversations').select('id').eq('gdo_agenda_esito', 'inviato').not('crm_lead_id', 'is', null).range(from, to));
 
+  // Gia' smaltite in un giro precedente. Senza questa marcatura le "consegne tardive"
+  // rientrerebbero a ogni passata: allineare `gdo_agenda_esito` le toglie dal secondo
+  // insieme ma non dal primo, e con 638 arretrati servono piu' giri.
+  const smaltite = await fetchAllRows<any>((from, to) => admin
+    .from('event_log').select('payload').eq('type', 'arretrato_agenda_avvisata').range(from, to));
+  const fatte = new Set(smaltite.map((e: any) => Number(e.payload?.conversationId)));
+
   const ids = [...new Set([
     ...tardive.map((e: any) => e.payload?.conversationId).filter((x: unknown): x is number => typeof x === 'number'),
     ...ancora.map((c: any) => c.id),
-  ])];
+  ])].filter((id) => !fatte.has(id));
 
   const convs: Array<{ id: number; crm_lead_id: string | null }> = [];
   for (let i = 0; i < ids.length; i += 80) {
@@ -103,6 +110,12 @@ async function agendaDelivery(admin: Supa, secret: string, esegui: boolean, max:
         // Il nostro esito si allinea solo se il CRM ha davvero preso l'avviso:
         // altrimenti perderemmo la possibilita' di riprovare.
         await admin.from('conversations').update({ gdo_agenda_esito: 'consegnato' }).eq('id', c.id);
+        await admin.from('event_log').insert({
+          type: 'arretrato_agenda_avvisata',
+          payload: { conversationId: c.id, crmLeadId: c.crm_lead_id, sid: riga.twilio_sid } as never,
+          message: `[bot-fissatore] avviso di consegna arretrato accettato dal CRM per lead ${c.crm_lead_id}`,
+          level: 'info',
+        });
         avvisate++;
       } else { fallite++; }
     } catch { fallite++; }
