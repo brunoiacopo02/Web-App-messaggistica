@@ -12,6 +12,8 @@ import {
   resolveOutcomeAction,
 } from './bot-outcome-rules';
 import { bookingBlackout } from './booking-blackout';
+import { estraiPeriodo } from './periodo-richiamo';
+import { categoriaPerCrm, disponibilitaDalTesto, motivoRichiesta } from './contatti-umani';
 import { noteFingerprint } from './note-dedup';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
@@ -181,9 +183,29 @@ async function inviaContattoUmano(
   crmLeadId: string,
   args: SendOutcomeArgs,
   secret: string,
+  waNumber?: string | null,
 ): Promise<{ sent: boolean; status?: number; error?: string; notifySuppressed?: true }> {
   const note = buildContattoUmanoNote({ leadWords: args.note, motivo: args.discardReason });
-  const body: BotOutcomeBody = { leadId: crmLeadId, outcome: 'CONTATTO_UMANO', note };
+  // Contratto v1.5: oltre alle parole del lead viaggiano la categoria e i pochi fatti
+  // che sappiamo. Una notifica senza questi arriva comunque, ma chi richiama parte
+  // alla cieca — ed e' il motivo per cui 52 richieste su 53 non erano state lavorate.
+  // La categoria esce dalle stesse regole dell'elenco in `/api/bot/contatti-umani`,
+  // applicate alle parole con cui il lead ha chiesto la persona.
+  const motivo = categoriaPerCrm(
+    motivoRichiesta([{ body: args.note ?? '', created_at: new Date().toISOString() }]).categoria,
+  );
+  const disponibilita = disponibilitaDalTesto(args.note);
+  const info = {
+    ...(disponibilita ? { disponibilita } : {}),
+    ...(waNumber ? { telefonoPreferito: waNumber } : {}),
+  };
+  const body: BotOutcomeBody = {
+    leadId: crmLeadId,
+    outcome: 'CONTATTO_UMANO',
+    note,
+    motivo,
+    ...(Object.keys(info).length > 0 ? { info } : {}),
+  };
   const valid = validateOutcomeBody(body);
   if (!valid.ok) {
     await supabase.from('event_log').insert({
@@ -210,7 +232,7 @@ async function inviaContattoUmano(
       try { soppressa = (JSON.parse(testo) as { notifySuppressed?: boolean })?.notifySuppressed === true; } catch { /* niente */ }
       await supabase.from('event_log').insert({
         type: soppressa ? 'bot_contatto_umano_soppresso' : 'bot_contatto_umano_inviato',
-        payload: { conversationId, crmLeadId, note } as never,
+        payload: { conversationId, crmLeadId, note, motivo, info } as never,
         message: soppressa
           ? `[bot-fissatore] contatto umano già segnalato nelle ultime 24h per lead ${crmLeadId}: notifica soppressa dal CRM`
           : `[bot-fissatore] contatto umano segnalato al CRM per lead ${crmLeadId}`,
@@ -298,13 +320,14 @@ export async function sendOutcome(
 
   const { data: conv } = await supabase
     .from('conversations')
-    .select('crm_lead_id, bot_outcome, bot_scheduled_at, gdo_appuntamento_at')
+    .select('crm_lead_id, bot_outcome, bot_scheduled_at, gdo_appuntamento_at, wa_number')
     .eq('id', conversationId)
     .maybeSingle();
   const row = conv as {
     crm_lead_id: string | null;
     bot_outcome: string | null;
     bot_scheduled_at: string | null;
+    wa_number?: string | null;
     gdo_appuntamento_at?: string | null;
   } | null;
   const crmLeadId = row?.crm_lead_id ?? null;
@@ -323,7 +346,7 @@ export async function sendOutcome(
   // locked lo tradurrebbe in una nota generica "appuntamento mantenuto", e la richiesta
   // di parlare con una persona si perderebbe un'altra volta.
   if (args.outcome === 'CONTATTO_UMANO') {
-    return inviaContattoUmano(supabase, conversationId, crmLeadId, args, secret);
+    return inviaContattoUmano(supabase, conversationId, crmLeadId, args, secret, row?.wa_number ?? null);
   }
 
   // Un lead con l'appuntamento già fissato che chiede di annullare o spostare va
@@ -345,7 +368,20 @@ export async function sendOutcome(
   // qualcosa che il lead non ha mai detto. L'interim ha già il suo percorso e le sue
   // regole più sotto (vedi `interim && action.kind !== 'normal'`).
   const dataCheck = args.outcome === 'RICHIAMO' && !interim ? checkDataRichiamo(args.date, Date.now()) : { ok: true as const };
-  if (!dataCheck.ok) {
+  // Dal contratto v1.5 un richiamo senza data certa non deve piu' degradare a nota: se
+  // il lead ha detto QUANDO con parole sue ("a settembre"), quelle parole viaggiano nel
+  // campo `periodo` e il CRM lo registra come RICHIAMO vero. Nessuna deduzione: senza
+  // un'espressione di tempo nelle sue parole si resta sulla nota di prima.
+  const periodo = !dataCheck.ok ? estraiPeriodo(args.note) : null;
+  if (!dataCheck.ok && periodo) {
+    await supabase.from('event_log').insert({
+      type: 'richiamo_con_periodo',
+      payload: { conversationId, crmLeadId, motivo: dataCheck.motivo, dataScartata: args.date ?? null, periodo } as never,
+      message: `[bot-fissatore] RICHIAMO senza data (${dataCheck.motivo}) per lead ${crmLeadId}: mandato come periodo "${periodo}"`,
+      level: 'info',
+    });
+  }
+  if (!dataCheck.ok && !periodo) {
     const note = buildRichiamoSenzaDataNote({ motivo: dataCheck.motivo, leadWords: args.note });
     await supabase.from('event_log').insert({
       type: 'richiamo_senza_data',
@@ -379,7 +415,7 @@ export async function sendOutcome(
   // questo esito è una richiesta di spostamento, non un nuovo fissaggio, e ha già il
   // suo percorso (`locked` → NOTA). Qui si guarda solo il fissaggio vero.
   const appuntamentoCheck =
-    args.outcome === 'APPUNTAMENTO' && !interim && action.kind === 'normal'
+    args.outcome === 'APPUNTAMENTO' && !interim && (action.kind === 'normal' || action.kind === 'reschedule')
       ? checkDataAppuntamento(args.date, Date.now(), bookingBlackout(process.env.BOOKING_BLACKOUT))
       : { ok: true as const };
   if (!appuntamentoCheck.ok) {
@@ -435,7 +471,8 @@ export async function sendOutcome(
     : {
         leadId: crmLeadId,
         outcome: args.outcome,
-        ...(args.date ? { date: args.date } : {}),
+        // Col periodo la data non parte: e' proprio quella che non ci fidavamo a mandare.
+        ...(periodo ? { periodo } : args.date ? { date: args.date } : {}),
         ...(args.note ? { note: args.note } : {}),
         ...(args.discardReason ? { discardReason: args.discardReason } : {}),
         ...(args.report ? { report: args.report } : {}),
@@ -472,11 +509,28 @@ export async function sendOutcome(
         });
         return { sent: true, status: res.status };
       }
-      if (action.kind === 'normal') {
+      if (action.kind === 'reschedule') {
+        // Si aggiorna la DATA, non l'esito. `bot_outcome_at` resta quello del primo
+        // fissaggio di proposito: un lead spostato tre volte comparirebbe tre volte
+        // fra gli appuntamenti presi oggi, e i nostri numeri direbbero il falso.
+        // `cancel_requested_at` si azzera: l'appuntamento e' di nuovo vivo e i
+        // promemoria pre-call devono ripartire sulla data nuova.
+        await supabase.from('conversations').update({
+          bot_scheduled_at: action.date,
+          cancel_requested_at: null,
+          ai_status: 'closed',
+        }).eq('id', conversationId);
+        await supabase.from('event_log').insert({
+          type: 'bot_appuntamento_rifissato',
+          payload: { conversationId, crmLeadId, da: row?.bot_scheduled_at ?? null, a: action.date } as never,
+          message: `[bot-fissatore] appuntamento del lead ${crmLeadId} spostato al ${action.date}`,
+          level: 'info',
+        });
+      } else if (action.kind === 'normal') {
         await supabase.from('conversations').update({
           bot_outcome: args.outcome,
           bot_outcome_at: new Date().toISOString(),
-          bot_scheduled_at: args.date ?? null,
+          bot_scheduled_at: periodo ? null : (args.date ?? null),
           bot_report: (args.report ?? null) as never,
           ai_status: 'closed',
         }).eq('id', conversationId);
@@ -510,7 +564,7 @@ export async function sendOutcome(
         await supabase.from('conversations').update({
           bot_outcome: args.outcome,
           bot_outcome_at: new Date().toISOString(),
-          bot_scheduled_at: args.date ?? null,
+          bot_scheduled_at: periodo ? null : (args.date ?? null),
           bot_report: (args.report ?? null) as never,
           ai_status: 'closed',
         }).eq('id', conversationId);

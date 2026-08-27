@@ -95,3 +95,56 @@ export function motivoRichiesta(messaggi: MessaggioIn[]): Motivo {
   const parole = norm(scelto.body ?? '');
   return { richiestoIl: scelto.created_at, parole, categoria: categoriaDi(parole) };
 }
+
+// --- Contratto v1.5: quello che il CRM si aspetta insieme alla richiesta ------------
+
+/** Le categorie che il CRM riconosce. Un valore che non riconosce diventa `altro` da
+ *  parte loro, mai un 400: una categoria sbagliata e' un fastidio, una richiesta persa
+ *  e' un lead perso. */
+export type CategoriaCrm =
+  | 'richiamo' | 'prezzo' | 'programma' | 'sfiducia_bot' | 'problema_tecnico' | 'disdetta' | 'altro';
+
+/**
+ * Dalle nostre sette categorie alle loro sette. Si traduce solo dove il significato
+ * coincide davvero; tutto il resto va in `altro`. Forzare una corrispondenza (una
+ * lamentela letta come sfiducia nel bot, quando magari il lead protesta perche' un GDO
+ * l'ha chiamato cinque volte) manderebbe chi richiama con l'idea sbagliata in testa —
+ * ed e' esattamente il motivo per cui le parole del lead viaggiano sempre a fianco.
+ */
+export function categoriaPerCrm(c: CategoriaContatto): CategoriaCrm {
+  switch (c) {
+    case 'vuole_essere_chiamato': return 'richiamo';
+    case 'disdetta_o_spostamento': return 'disdetta';
+    case 'prezzo_o_pagamento': return 'prezzo';
+    case 'problema_prenotazione': return 'problema_tecnico';
+    default: return 'altro';
+  }
+}
+
+/** Fasce che il lead nomina esplicitamente. Prefissi larghi, niente deduzioni. */
+const DISPONIBILITA: RegExp[] = [
+  /\b(?:dopo|prima)\s+(?:le|l')?\s*\d{1,2}(?:[:.]\d{2})?\b/,
+  /\b(?:dopo|prima)\s+(?:cena|pranzo|le\s+ferie|il\s+lavoro)\b/,
+  /\b(?:di|la|al|nel|in)\s+(?:mattin[ao]|pomeriggio|serata|sera)\b/,
+  /\bvers[oa]\s+le\s+\d{1,2}(?:[:.]\d{2})?\b/,
+  /\btra\s+le\s+\d{1,2}\s+e\s+le\s+\d{1,2}\b/,
+  /\bnei\s+(?:giorni\s+)?(?:feriali|festivi|weekend)\b/,
+  /\b(?:solo|soltanto)\s+(?:di\s+)?(?:mattin[ao]|pomeriggio|sera)\b/,
+];
+
+/**
+ * Quando il lead ha detto di essere raggiungibile, con le sue parole. `null` se non
+ * l'ha detto: un orario dedotto manderebbe la telefonata a vuoto e sembrerebbe un dato.
+ */
+export function disponibilitaDalTesto(parole: string | null | undefined): string | null {
+  if (!parole) return null;
+  const testo = parole.replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!testo) return null;
+  let migliore: string | null = null;
+  let dove = Number.POSITIVE_INFINITY;
+  for (const re of DISPONIBILITA) {
+    const m = testo.match(re);
+    if (m && m.index !== undefined && m.index < dove) { dove = m.index; migliore = m[0].trim(); }
+  }
+  return migliore;
+}

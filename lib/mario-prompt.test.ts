@@ -226,8 +226,12 @@ describe('appuntamento già fissato — gestione della disdetta', () => {
     expect(p).toMatch(/una domanda sola/i);
   });
 
-  it('non riprende a proporre orari: non li gestisce lui', () => {
-    expect(p).toContain('giorno e ora non li gestisci tu');
+  // Fino al contratto v1.5 il bot aveva il divieto di toccare giorno e ora di una call
+  // gia' fissata, perche' il CRM scartava in silenzio le date diverse. Da quando le
+  // registra, il divieto e' diventato il vicolo cieco: adesso propone lui gli slot.
+  it('propone lui i nuovi orari quando il lead insiste per spostare', () => {
+    expect(p).toContain('SE INSISTE PER SPOSTARE, SPOSTALO TU');
+    expect(p).not.toContain('giorno e ora non li gestisci tu');
   });
 });
 
@@ -582,5 +586,35 @@ describe('SE RIMANDA LA CALL — il rimando prima del fissaggio', () => {
 
   it('INTERROTTO non esce alla prima frase di rimando', () => {
     expect(p).toMatch(/\[ESITO:INTERROTTO\|<motivo breve>\][^\n]*NON alla prima frase/);
+  });
+});
+
+// Contratto v1.5: il bot puo' rifissare. Prima diceva "ti ricontatta una collega" e
+// il lead restava con un appuntamento che non gli andava bene.
+describe('buildMarioSystem — spostamento di una call gia\' fissata', () => {
+  const p = () => buildMarioSystem('Marta');
+
+  it('dice al bot di proporre lui i nuovi slot', () => {
+    expect(p()).toContain('SE INSISTE PER SPOSTARE');
+    expect(p()).toContain('SLOT APPUNTAMENTO');
+  });
+
+  it('lo spostamento si chiude con APPUNTAMENTO, non con RICHIAMO', () => {
+    expect(p()).toContain('[ESITO:APPUNTAMENTO|<data ISO del nuovo orario>]');
+  });
+
+  it('non promette piu\' la collega per far spostare', () => {
+    expect(p()).toContain('Non rimandarlo mai a una collega per farlo spostare');
+  });
+
+  it('tiene separato lo spostamento dal caso "mi dice quando e\' la call che ha"', () => {
+    // Il bug del 26/08: il bot correggeva il giorno della call gia' fissata dal GDO
+    // usando i propri slot e convinceva il lead della data sbagliata.
+    expect(p()).toContain('LA DATA DI UNA CALL GIÀ FISSATA NON SI CORREGGE');
+    expect(p()).toContain('SPOSTARE è quando il lead CHIEDE lui un altro giorno');
+  });
+
+  it('senza un quando resta un RICHIAMO', () => {
+    expect(p()).toContain('se vuole spostare ma non ti dice quando');
   });
 });
