@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
 
   const convs = await fetchAllRows<any>((from, to) => admin
     .from('conversations')
-    .select('id, wa_number, crm_lead_id, crm_funnel, lead_id, ai_status, bot_outcome')
+    .select('id, crm_lead_id, crm_funnel, lead_id, ai_status, bot_outcome')
     .eq('ai_owner', 'mario')
     .gte('ai_started_at', dal)
     .order('id', { ascending: true })
@@ -71,15 +71,18 @@ export async function POST(req: NextRequest) {
 
   // Un lead gia' esitato non si riapre: e' stato chiuso per una ragione.
   const mute = convs.filter((c: any) =>
-    tentato.has(c.id) && !partito.has(c.id) && !c.bot_outcome && c.wa_number);
+    tentato.has(c.id) && !partito.has(c.id) && !c.bot_outcome && c.lead_id);
 
-  const nomi = new Map<number, { first_name: string | null; email: string | null }>();
+  // Il numero del lead sta su `leads.phone_e164`, NON su `conversations.wa_number`:
+  // quella colonna contiene il nostro mittente (whatsapp:+39352...), e usarla come
+  // destinatario vorrebbe dire mandare le aperture a noi stessi.
+  const anagrafica = new Map<number, { phone: string; first_name: string | null; email: string | null }>();
   const leadIds = [...new Set(mute.map((c: any) => c.lead_id).filter(Boolean))];
   for (let i = 0; i < leadIds.length; i += 100) {
     const { data } = await admin.from('leads')
-      .select('id, first_name, email').in('id', leadIds.slice(i, i + 100));
-    for (const l of (data ?? []) as Array<{ id: number; first_name: string | null; email: string | null }>) {
-      nomi.set(l.id, { first_name: l.first_name, email: l.email });
+      .select('id, phone_e164, first_name, email').in('id', leadIds.slice(i, i + 100));
+    for (const l of (data ?? []) as Array<{ id: number; phone_e164: string; first_name: string | null; email: string | null }>) {
+      if (l.phone_e164) anagrafica.set(l.id, { phone: l.phone_e164, first_name: l.first_name, email: l.email });
     }
   }
 
@@ -90,10 +93,11 @@ export async function POST(req: NextRequest) {
   if (esegui) {
     for (const c of mute) {
       if (inviati + falliti >= max || Date.now() - started > BUDGET_MS) break;
-      const l = nomi.get(c.lead_id) ?? { first_name: null, email: null };
+      const l = anagrafica.get(c.lead_id);
+      if (!l) { falliti++; if (errori.length < 5) errori.push(`conv ${c.id}: nessun numero`); continue; }
       try {
         const res = await enrollLeadIntoMario(admin, {
-          phone: c.wa_number,
+          phone: l.phone,
           firstName: l.first_name,
           email: l.email,
           crmLeadId: c.crm_lead_id,
