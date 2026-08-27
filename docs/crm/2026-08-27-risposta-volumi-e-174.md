@@ -46,7 +46,8 @@ Li abbiamo incrociati uno per uno. Oggi i lead `NEW` sull'account bot sono **177
   e non le ha fatte nessuno.
 - **12 hanno già un altro esito nostro** (NON_RISPOSTO, DA_SCARTARE, RICHIAMO,
   INTERROTTO) che vi è stato mandato.
-- **Circa 5 sono davvero fermi da parte nostra.** Quelli li chiudiamo noi.
+- **6 in tutto sono davvero fermi da parte nostra** (contati su tutte le nostre chat, non
+  solo su questa lista). Quelli li chiudiamo noi.
 
 Quindi: su 177, quelli su cui la sequenza è "interrotta senza chiudersi" sono una
 manciata. Il resto è, in ordine di peso, **duplicati di persone già lavorate**,
@@ -92,10 +93,11 @@ Sul volume in sé non abbiamo dubbi: **il 15 e il 16 agosto abbiamo preso in car
 Vi diciamo però una cosa che abbiamo scoperto oggi proprio guardando questi numeri.
 **Dal 24 agosto una parte dei lead non riceve nessun primo messaggio**: una configurazione
 rimasta indietro quando abbiamo introdotto sei nuovi modelli di apertura blocca l'invio, e
-il lead cade nel vuoto senza che se ne accorga nessuno. Sono **75 lead in quattro giorni**,
-circa 19 al giorno su 40: a 150 al giorno diventerebbero una settantina.
+il lead cade nel vuoto senza che se ne accorga nessuno. Sono **27 lead in quattro
+giorni**, circa 7 al giorno su 40: alla stessa proporzione, a 150 lead al giorno
+diventerebbero **una venticinquina al giorno**.
 
-È un fix di una riga e lo chiudiamo oggi. Ve lo diciamo lo stesso perché parte di quei 75
+È un fix di una riga e lo chiudiamo oggi. Ve lo diciamo lo stesso perché parte di quei 27
 sono probabilmente nella lista che ci avete mandato, e perché se domani vedete lead
 assegnati al bot senza nessuna attività, adesso sapete cos'era.
 
