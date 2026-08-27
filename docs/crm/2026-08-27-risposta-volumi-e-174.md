@@ -89,19 +89,19 @@ Sul volume in sé non abbiamo dubbi: **il 15 e il 16 agosto abbiamo preso in car
 214 lead in un giorno** e li abbiamo lavorati tutti, senza code e senza rallentamenti.
 150 al giorno è dentro quello che abbiamo già dimostrato di reggere.
 
-Vi diciamo però una cosa che abbiamo scoperto stamattina proprio guardando questi numeri,
-perché a 150 al giorno diventa grossa. **Dal 24 agosto stiamo perdendo 14-15 lead al
-giorno per un problema nostro**: tre modelli di primo messaggio che abbiamo introdotto in
-quella data sono stati classificati da Meta come MARKETING, e il nostro presidio — attivo
-perché il numero è ancora in riabilitazione dopo l'invio di massa di luglio — li blocca.
-Quei lead non ricevono nessun primo messaggio. Sono circa 50 finora, e a 150 lead al
-giorno diventerebbero **50 al giorno**.
+Vi diciamo però una cosa che abbiamo scoperto oggi proprio guardando questi numeri.
+**Dal 24 agosto una parte dei lead non riceve nessun primo messaggio**: una configurazione
+rimasta indietro quando abbiamo introdotto sei nuovi modelli di apertura blocca l'invio, e
+il lead cade nel vuoto senza che se ne accorga nessuno. Sono **75 lead in quattro giorni**,
+circa 19 al giorno su 40: a 150 al giorno diventerebbero una settantina.
 
-Lo stiamo chiudendo noi ed è una cosa di giorni, non di settimane. Ma è il motivo per cui
-vi chiediamo di **salire per gradi invece che in un colpo solo**: portateci a ~80 al
-giorno adesso, e a 150 quando vi diciamo che è chiuso. Se preferite andare subito a 150
-va bene lo stesso, ma sappiate che una parte non verrebbe contattata, e preferiamo dirvelo
-prima che scoprirlo insieme fra due settimane.
+È un fix di una riga e lo chiudiamo oggi. Ve lo diciamo lo stesso perché parte di quei 75
+sono probabilmente nella lista che ci avete mandato, e perché se domani vedete lead
+assegnati al bot senza nessuna attività, adesso sapete cos'era.
+
+Sul resto siamo pronti: il numero regge **10.000 destinatari nelle 24 ore** e negli ultimi
+sette giorni ha fatto 9.738 messaggi con il **98,5% consegnati e il 77,8% letti**. 150 al
+giorno è l'1,5% di quel limite.
 
 Una cosa che invece ci aiuta molto: **le fasce che avete scelto sono quelle giuste**. Il
 bot lavora meglio proprio la sera e la notte, quando il lead è appena arrivato e ha il
