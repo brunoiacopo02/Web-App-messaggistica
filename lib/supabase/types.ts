@@ -209,6 +209,74 @@ export type Database = {
           },
         ]
       }
+      // NB: tabella aggiunta a mano (migration 20260827000001_crm_lead_status) in attesa
+      // del prossimo `npm run supabase:gen-types`, che la riprodurrà identica.
+      crm_lead_status: {
+        Row: {
+          agenda_status: string | null
+          appointment_created_at: string | null
+          appointment_date: string | null
+          conferme_discard_reason: string | null
+          conferme_outcome: string | null
+          conferme_outcome_at: string | null
+          conversation_id: number | null
+          crm_updated_at: string
+          discard_reason: string | null
+          lead_id: string
+          presented: boolean
+          presented_at: string | null
+          sales_outcome: string | null
+          sales_outcome_at: string | null
+          sold: boolean
+          sold_amount_eur: number | null
+          sold_product: string | null
+          status: string | null
+          synced_at: string
+        }
+        Insert: {
+          agenda_status?: string | null
+          appointment_created_at?: string | null
+          appointment_date?: string | null
+          conferme_discard_reason?: string | null
+          conferme_outcome?: string | null
+          conferme_outcome_at?: string | null
+          conversation_id?: number | null
+          crm_updated_at: string
+          discard_reason?: string | null
+          lead_id: string
+          presented?: boolean
+          presented_at?: string | null
+          sales_outcome?: string | null
+          sales_outcome_at?: string | null
+          sold?: boolean
+          sold_amount_eur?: number | null
+          sold_product?: string | null
+          status?: string | null
+          synced_at?: string
+        }
+        Update: {
+          agenda_status?: string | null
+          appointment_created_at?: string | null
+          appointment_date?: string | null
+          conferme_discard_reason?: string | null
+          conferme_outcome?: string | null
+          conferme_outcome_at?: string | null
+          conversation_id?: number | null
+          crm_updated_at?: string
+          discard_reason?: string | null
+          lead_id?: string
+          presented?: boolean
+          presented_at?: string | null
+          sales_outcome?: string | null
+          sales_outcome_at?: string | null
+          sold?: boolean
+          sold_amount_eur?: number | null
+          sold_product?: string | null
+          status?: string | null
+          synced_at?: string
+        }
+        Relationships: []
+      }
       event_log: {
         Row: {
           created_at: string

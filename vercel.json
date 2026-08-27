@@ -52,6 +52,10 @@
     {
       "path": "/api/cron/gdo-video-followups",
       "schedule": "0,30 6-21 * * *"
+    },
+    {
+      "path": "/api/cron/crm-lead-status",
+      "schedule": "15,45 * * * *"
     }
   ]
 }
