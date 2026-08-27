@@ -51,18 +51,27 @@ export async function POST(req: NextRequest) {
     .order('id', { ascending: true })
     .range(from, to));
 
-  // Chi ha almeno un messaggio in uscita davvero partito non va toccato.
-  const conMessaggio = new Set<number>();
+  // Servono due insiemi distinti, e la differenza e' tutta qui:
+  //  - chi ha un messaggio in uscita PARTITO (con SID Twilio) non va toccato;
+  //  - chi non ha nessuna riga in uscita non e' un caso da recuperare, e' un lead
+  //    arruolato fuori fascia che aspetta le 08:30: il cron lo apre da solo.
+  // Il caso nostro e' il terzo: abbiamo PROVATO a mandare e non e' mai partito.
+  const partito = new Set<number>();
+  const tentato = new Set<number>();
   const ids = convs.map((c: any) => c.id);
   for (let i = 0; i < ids.length; i += 100) {
     const { data } = await admin.from('messages')
-      .select('conversation_id').eq('direction', 'out')
-      .not('twilio_sid', 'is', null).in('conversation_id', ids.slice(i, i + 100));
-    for (const m of (data ?? []) as Array<{ conversation_id: number }>) conMessaggio.add(m.conversation_id);
+      .select('conversation_id, twilio_sid').eq('direction', 'out')
+      .in('conversation_id', ids.slice(i, i + 100));
+    for (const m of (data ?? []) as Array<{ conversation_id: number; twilio_sid: string | null }>) {
+      tentato.add(m.conversation_id);
+      if (m.twilio_sid) partito.add(m.conversation_id);
+    }
   }
 
   // Un lead gia' esitato non si riapre: e' stato chiuso per una ragione.
-  const mute = convs.filter((c: any) => !conMessaggio.has(c.id) && !c.bot_outcome && c.wa_number);
+  const mute = convs.filter((c: any) =>
+    tentato.has(c.id) && !partito.has(c.id) && !c.bot_outcome && c.wa_number);
 
   const nomi = new Map<number, { first_name: string | null; email: string | null }>();
   const leadIds = [...new Set(mute.map((c: any) => c.lead_id).filter(Boolean))];
