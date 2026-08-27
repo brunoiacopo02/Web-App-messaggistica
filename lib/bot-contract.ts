@@ -34,9 +34,18 @@ export interface BotOutcomeBody {
   leadId: string;
   outcome: BotOutcome;
   date?: string;
+  /** RICHIAMO senza data certa (contratto v1.5): "a settembre", con le parole del lead.
+   *  Sostituisce `date`; mandarne almeno uno dei due o il CRM risponde 400. */
+  periodo?: string;
   note?: string;
   discardReason?: string;
   report?: BotReport;
+  /** CONTATTO_UMANO (v1.5): categoria della richiesta. Il CRM normalizza e non
+   *  restituisce mai 400 su un valore che non riconosce. */
+  motivo?: string;
+  /** CONTATTO_UMANO (v1.5): quello che sappiamo per far partire la telefonata giusta.
+   *  Solo fatti — niente parafrasi del modello. */
+  info?: { sintesi?: string; disponibilita?: string; telefonoPreferito?: string; urgenza?: string; argomenti?: string[] };
 }
 
 const OUTCOMES: BotOutcome[] = ['APPUNTAMENTO', 'DA_SCARTARE', 'RICHIAMO', 'NON_RISPOSTO', 'INTERROTTO', 'NOTA', 'CONTATTO_UMANO'];
@@ -151,7 +160,11 @@ export function validateOutcomeBody(
   if (!b || typeof b.leadId !== 'string' || !b.leadId.trim()) return { ok: false, reason: 'bad_request' };
   if (!OUTCOMES.includes(b.outcome)) return { ok: false, reason: 'bad_request' };
   if (DATE_REQUIRED.includes(b.outcome)) {
-    if (!b.date || !isoWithOffset(b.date)) return { ok: false, reason: 'bad_request' };
+    // Dal contratto v1.5 un RICHIAMO puo' viaggiare con `periodo` al posto di `date`:
+    // e' il rimedio all'ora inventata (22 RICHIAMO su 26 cadevano su ore tonde che
+    // nessun lead aveva mai detto). L'APPUNTAMENTO no: li' la data serve davvero.
+    const periodoOk = b.outcome === 'RICHIAMO' && typeof b.periodo === 'string' && b.periodo.trim() !== '';
+    if (!periodoOk && (!b.date || !isoWithOffset(b.date))) return { ok: false, reason: 'bad_request' };
   }
   // La nota È il contenuto per questi due esiti: senza, il CRM risponde 400.
   if ((b.outcome === 'NOTA' || b.outcome === 'CONTATTO_UMANO') && (!b.note || !b.note.trim())) {

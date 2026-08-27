@@ -447,3 +447,44 @@ describe('buildAppuntamentoNonFissabileNote — il lead può credere di avere la
     expect(n.toLowerCase()).toContain('conferma in chat');
   });
 });
+
+// Contratto v1.5: un APPUNTAMENTO con una data DIVERSA su un lead gia' fissato non e'
+// piu' un declassamento da bloccare, e' uno spostamento che il CRM sa registrare.
+// Prima il bot rispondeva "ti ricontatta una collega" e la richiesta moriva li'.
+describe('resolveOutcomeAction — rifissaggio (v1.5)', () => {
+  const domani = () => new Date(Date.now() + 30 * 3600_000).toISOString();
+  const fra3giorni = () => new Date(Date.now() + 3 * 24 * 3600_000).toISOString();
+
+  it('una data diversa su un lead gia\' fissato e\' un rifissaggio', () => {
+    const nuova = fra3giorni();
+    const a = resolveOutcomeAction('APPUNTAMENTO', { outcome: 'APPUNTAMENTO', date: nuova }, domani());
+    expect(a.kind).toBe('reschedule');
+    if (a.kind === 'reschedule') expect(a.date).toBe(nuova);
+  });
+
+  it('la stessa data resta una riconferma, non uno spostamento', () => {
+    const quando = domani();
+    const a = resolveOutcomeAction('APPUNTAMENTO', { outcome: 'APPUNTAMENTO', date: quando }, quando);
+    expect(a.kind).toBe('locked');
+  });
+
+  it('senza data non si sposta niente', () => {
+    const a = resolveOutcomeAction('APPUNTAMENTO', { outcome: 'APPUNTAMENTO' }, domani());
+    expect(a.kind).toBe('locked');
+  });
+
+  it('senza un appuntamento in agenda non c\'e\' niente da spostare', () => {
+    const a = resolveOutcomeAction('APPUNTAMENTO', { outcome: 'APPUNTAMENTO', date: fra3giorni() }, null);
+    expect(a.kind).toBe('locked');
+  });
+
+  it('gli altri esiti su un lead fissato restano bloccati come prima', () => {
+    for (const o of ['DA_SCARTARE', 'RICHIAMO', 'NON_RISPOSTO', 'INTERROTTO'] as const) {
+      expect(resolveOutcomeAction('APPUNTAMENTO', { outcome: o, date: fra3giorni() }, domani()).kind).toBe('locked');
+    }
+  });
+
+  it('su un lead non ancora fissato resta un fissaggio normale', () => {
+    expect(resolveOutcomeAction(null, { outcome: 'APPUNTAMENTO', date: fra3giorni() }, null).kind).toBe('normal');
+  });
+});

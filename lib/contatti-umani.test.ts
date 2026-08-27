@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { motivoRichiesta, CATEGORIE, type MessaggioIn } from './contatti-umani';
+import { motivoRichiesta, CATEGORIE, type MessaggioIn, categoriaPerCrm, disponibilitaDalTesto } from './contatti-umani';
 
 const m = (body: string, created_at: string): MessaggioIn => ({ body, created_at });
 
@@ -102,5 +102,40 @@ describe('motivoRichiesta', () => {
         expect(CATEGORIE).toContain(caso(t));
       }
     });
+  });
+});
+
+describe('categoriaPerCrm', () => {
+  it('traduce le categorie che coincidono davvero', () => {
+    expect(categoriaPerCrm('vuole_essere_chiamato')).toBe('richiamo');
+    expect(categoriaPerCrm('disdetta_o_spostamento')).toBe('disdetta');
+    expect(categoriaPerCrm('prezzo_o_pagamento')).toBe('prezzo');
+    expect(categoriaPerCrm('problema_prenotazione')).toBe('problema_tecnico');
+  });
+
+  it('non forza una corrispondenza dove non c\'e\': tutto il resto e\' altro', () => {
+    expect(categoriaPerCrm('chiede_una_persona')).toBe('altro');
+    expect(categoriaPerCrm('lamentela')).toBe('altro');
+    expect(categoriaPerCrm('altro')).toBe('altro');
+  });
+
+  it('ogni nostra categoria ha una destinazione valida', () => {
+    const valide = ['richiamo', 'prezzo', 'programma', 'sfiducia_bot', 'problema_tecnico', 'disdetta', 'altro'];
+    for (const c of CATEGORIE) expect(valide).toContain(categoriaPerCrm(c));
+  });
+});
+
+describe('disponibilitaDalTesto', () => {
+  it('prende la fascia quando il lead la dice', () => {
+    expect(disponibilitaDalTesto('Mi puoi chiamare dopo le 18?')).toBe('dopo le 18');
+    expect(disponibilitaDalTesto('Chiamami di mattina che sono libera')).toBe('di mattina');
+    expect(disponibilitaDalTesto('meglio dopo cena')).toBe('dopo cena');
+    expect(disponibilitaDalTesto('verso le 15 va bene')).toBe('verso le 15');
+  });
+
+  it('non inventa una fascia quando il lead non la dice', () => {
+    expect(disponibilitaDalTesto('Mi puoi chiamare?')).toBeNull();
+    expect(disponibilitaDalTesto('')).toBeNull();
+    expect(disponibilitaDalTesto(null)).toBeNull();
   });
 });

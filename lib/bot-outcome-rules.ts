@@ -15,7 +15,9 @@ export type OutcomeArgs = {
 
 export type OutcomeAction =
   | { kind: 'normal' }
-  | { kind: 'locked'; outcome: 'NOTA'; note: string; date: null };
+  | { kind: 'locked'; outcome: 'NOTA'; note: string; date: null }
+  /** Il lead ha chiesto di spostare e ha detto quando: si rifissa (contratto v1.5). */
+  | { kind: 'reschedule'; outcome: 'APPUNTAMENTO'; date: string };
 
 /**
  * Costruisce la nota da inviare al CRM quando un lead GIÀ fissato genera un esito
@@ -97,6 +99,20 @@ export function resolveOutcomeAction(
   existingDate: string | null,
 ): OutcomeAction {
   if (current === 'APPUNTAMENTO') {
+    // Dal 26/08/2026 il CRM sa registrare uno spostamento: stesso lead, data diversa,
+    // e rispondono `rescheduled`. Prima lo scartavano in silenzio, quindi noi lo
+    // traducevamo in una nota e al lead il bot diceva "ti ricontatta una collega" —
+    // un vicolo cieco su una persona che stava chiedendo di esserci.
+    // Serve una data NUOVA e un appuntamento gia' in agenda da cui spostarsi: senza,
+    // e' una riconferma e resta bloccata come prima.
+    if (
+      args.outcome === 'APPUNTAMENTO' &&
+      args.date &&
+      existingDate &&
+      !sameInstant(args.date, existingDate)
+    ) {
+      return { kind: 'reschedule', outcome: 'APPUNTAMENTO', date: args.date };
+    }
     return { kind: 'locked', outcome: 'NOTA', note: buildLockedNote(args, existingDate), date: null };
   }
   return { kind: 'normal' };

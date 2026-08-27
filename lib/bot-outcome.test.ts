@@ -329,14 +329,29 @@ describe('sendOutcome — RICHIAMO con data non utilizzabile', () => {
   const attivo = { crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null };
   const bodyInviato = () => JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string);
 
-  it('parte come NOTA con le parole del lead, mai come RICHIAMO con data', async () => {
+  // Dal contratto v1.5: se il lead dice QUANDO con parole sue, quelle parole partono
+  // nel campo `periodo` e il richiamo resta un richiamo. Prima diventava una nota, e
+  // il CRM non aveva modo di rimetterlo in agenda.
+  it('col periodo detto dal lead parte come RICHIAMO, senza data inventata', async () => {
     const { supabase } = makeSupabase(attivo);
     const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', note: 'ci risentiamo a settembre' });
 
     const body = bodyInviato();
+    expect(body.outcome).toBe('RICHIAMO');
+    expect(body.periodo).toBe('a settembre');
+    expect(body.date).toBeUndefined();
+    expect(res.sent).toBe(true);
+  });
+
+  it("senza un'espressione di tempo resta una NOTA: non si deduce un periodo", async () => {
+    const { supabase } = makeSupabase(attivo);
+    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', note: 'ora non posso parlare' });
+
+    const body = bodyInviato();
     expect(body.outcome).toBe('NOTA');
     expect(body.date).toBeUndefined();
-    expect(body.note).toContain('"ci risentiamo a settembre"');
+    expect(body.periodo).toBeUndefined();
+    expect(body.note).toContain('"ora non posso parlare"');
     expect(res.sent).toBe(true);
     expect(res.keepOpen).toBe(true);
   });
@@ -346,6 +361,19 @@ describe('sendOutcome — RICHIAMO con data non utilizzabile', () => {
     await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: '2026-01-27T09:00:00+01:00' });
     const body = bodyInviato();
     expect(body.outcome).toBe('NOTA');
+    expect(JSON.stringify(body)).not.toContain('2026-01-27');
+  });
+
+  it('una data sbagliata non parte nemmeno quando il periodo la sostituisce', async () => {
+    const { supabase } = makeSupabase(attivo);
+    await sendOutcome(supabase, 1, {
+      outcome: 'RICHIAMO',
+      date: '2026-01-27T09:00:00+01:00',
+      note: 'mi richiami la settimana prossima',
+    });
+    const body = bodyInviato();
+    expect(body.outcome).toBe('RICHIAMO');
+    expect(body.periodo).toBe('la settimana prossima');
     expect(JSON.stringify(body)).not.toContain('2026-01-27');
   });
 
@@ -686,12 +714,73 @@ describe('sendOutcome — APPUNTAMENTO in un giorno o a un\'ora impossibili', ()
     expect(ev.level).toBe('warn');
   });
 
-  it('su un lead che ha GIÀ un appuntamento la guardia non si intromette: decide resolveOutcomeAction', async () => {
+  // Da v1.5 un lead gia' fissato puo' essere SPOSTATO, e quindi la guardia deve
+  // valere anche li': spostare una call alle 02:00 e' sbagliato quanto fissarcela.
+  it('anche uno spostamento passa dalla guardia: le 02:00 non diventano un appuntamento', async () => {
     const giaFissato = { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE };
     const { supabase, calls } = makeSupabase(giaFissato);
     await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: giornoUtile(2) });
 
-    expect(calls.events.some((e: { type: string }) => e.type === 'appuntamento_non_fissabile')).toBe(false);
-    expect(bodyInviato().note).not.toContain('APPUNTAMENTO NON FISSATO');
+    expect(bodyInviato().outcome).toBe('NOTA');
+    expect(bodyInviato().note).toContain('APPUNTAMENTO NON FISSATO');
+    expect(calls.events.some((e: { type: string }) => e.type === 'appuntamento_non_fissabile')).toBe(true);
+    // E l'appuntamento in agenda non si muove.
+    for (const u of calls.updates) expect(u).not.toHaveProperty('bot_scheduled_at');
+  });
+});
+
+// Contratto v1.5: il lead gia' fissato che chiede di spostare non finisce piu' in un
+// vicolo cieco. Il CRM registra la data nuova e avvisa le Conferme.
+describe('sendOutcome — rifissaggio di un appuntamento (v1.5)', () => {
+  const domani = new Date(Date.now() + 30 * 3600_000).toISOString();
+  const fissato = { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: domani };
+  const bodyInviato = () => JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string);
+  // Un mercoledi' alle 15 dentro la fascia 09-21, lontano da domeniche e chiusure.
+  const nuovaData = () => {
+    const d = new Date(Date.now() + 5 * 24 * 3600_000);
+    while (d.getUTCDay() === 0) d.setUTCDate(d.getUTCDate() + 1);
+    d.setUTCHours(13, 0, 0, 0);
+    return d.toISOString();
+  };
+
+  it('la data nuova parte come APPUNTAMENTO, non come nota', async () => {
+    const { supabase } = makeSupabase(fissato);
+    const res = await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: nuovaData() });
+    const body = bodyInviato();
+    expect(body.outcome).toBe('APPUNTAMENTO');
+    expect(body.date).toBe(nuovaData());
+    expect(res.sent).toBe(true);
+  });
+
+  it('aggiorna la data ma non ricconta il fissaggio', async () => {
+    const { supabase, calls } = makeSupabase(fissato);
+    await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: nuovaData() });
+    const agg = calls.updates.find((u: any) => 'bot_scheduled_at' in u);
+    expect(agg.bot_scheduled_at).toBe(nuovaData());
+    // Se `bot_outcome_at` si aggiornasse, un lead spostato tre volte comparirebbe tre
+    // volte fra gli appuntamenti presi oggi.
+    for (const u of calls.updates) expect(u).not.toHaveProperty('bot_outcome_at');
+  });
+
+  it('riaccende i promemoria: l\'appuntamento e\' di nuovo vivo', async () => {
+    const { supabase, calls } = makeSupabase(fissato);
+    await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: nuovaData() });
+    const agg = calls.updates.find((u: any) => 'cancel_requested_at' in u);
+    expect(agg.cancel_requested_at).toBeNull();
+  });
+
+  it('uno spostamento di domenica non passa, come un primo fissaggio', async () => {
+    const { supabase } = makeSupabase(fissato);
+    const domenica = new Date(Date.now() + 3 * 24 * 3600_000);
+    while (domenica.getUTCDay() !== 0) domenica.setUTCDate(domenica.getUTCDate() + 1);
+    domenica.setUTCHours(13, 0, 0, 0);
+    await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: domenica.toISOString() });
+    expect(bodyInviato().outcome).toBe('NOTA');
+  });
+
+  it('la stessa data resta una riconferma e non rimbalza al CRM come nuovo fissaggio', async () => {
+    const { supabase } = makeSupabase(fissato);
+    await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: domani });
+    expect(bodyInviato().outcome).toBe('NOTA');
   });
 });
