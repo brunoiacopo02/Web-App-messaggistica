@@ -192,6 +192,20 @@ describe('buildSollecitoHistory', () => {
     ]);
   });
 
+  // Lo stesso identico problema si presenta nel recupero delle mancate risposte al
+  // telefono (`/api/bot/call-attempt`): stessa cura, parole diverse, perche' li' il
+  // motivo della ripresa non e' il silenzio del lead ma una telefonata a vuoto.
+  it('il turno di ripresa si puo sostituire, e la cronologia resta la stessa', () => {
+    const MIO = '[nota di sistema: scrivi tu.]';
+    const history = buildSollecitoHistory(chat, MIO);
+    expect(history[history.length - 1]).toEqual({ role: 'user', content: MIO });
+    expect(history.slice(0, -1)).toEqual(buildSollecitoHistory(chat).slice(0, -1));
+  });
+
+  it('cronologia vuota: nessun turno di ripresa, nemmeno quello su misura', () => {
+    expect(buildSollecitoHistory([], '[nota di sistema: scrivi tu.]')).toEqual([]);
+  });
+
   it('il turno di ripresa non si spaccia per un messaggio del lead', () => {
     expect(TURNO_RIPRESA_SOLLECITO).toMatch(/non è un messaggio del lead/i);
   });

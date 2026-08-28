@@ -102,10 +102,24 @@ const MEDIA_SENZA_TESTO =
 /** Genera la prossima risposta del bot data la cronologia. Inietta l'ora di Roma.
  *  `personaName` (default 'Mario') parametrizza SOLO il nome nel system prompt.
  *  `contextNote` aggiunge in coda al system un contesto specifico della conversazione.
- *  `giorniPieni` (date ISO) sono le giornate già al completo: il bot non le propone. */
+ *  `giorniPieni` (date ISO) sono le giornate già al completo: il bot non le propone.
+ *
+ *  `timeoutMs` e `maxRetries` sovrascrivono, SOLO per questa chiamata, i valori con cui
+ *  nasce il client (60s e 5 tentativi). Servono a chi gira dentro una funzione con un
+ *  `maxDuration`: col default un singolo tentativo può bruciare l'intero budget della
+ *  funzione, che viene uccisa a metà — e chi ha già mandato qualcosa al lead resta
+ *  senza il modo di scriverselo da nessuna parte. Chi non li passa non cambia
+ *  comportamento. */
 export async function generateMarioReply(
   history: MarioTurn[],
-  opts?: { now?: Date; personaName?: string; contextNote?: string; giorniPieni?: readonly string[] },
+  opts?: {
+    now?: Date;
+    personaName?: string;
+    contextNote?: string;
+    giorniPieni?: readonly string[];
+    timeoutMs?: number;
+    maxRetries?: number;
+  },
 ): Promise<MarioResult> {
   // Un media senza didascalia (foto, sticker, documento) entra in `messages` con body
   // vuoto: l'API rifiuta l'intera richiesta con 400 "user messages must have non-empty
@@ -131,13 +145,21 @@ export async function generateMarioReply(
   const contextNote = opts?.contextNote ? `\n\n${opts.contextNote}` : '';
   const system = `${buildMarioSystem(opts?.personaName ?? 'Mario')}\n\n${romeNowContext(now)}\n\n${bookingSlotsContext(now)}${contextNote}`;
 
-  const response = await getClient().messages.create({
-    model: MARIO_MODEL,
-    max_tokens: 1024,
-    thinking: { type: 'disabled' },
-    system,
-    messages,
-  } as Anthropic.MessageCreateParamsNonStreaming);
+  const requestOptions = {
+    ...(opts?.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : {}),
+    ...(opts?.maxRetries !== undefined ? { maxRetries: opts.maxRetries } : {}),
+  };
+
+  const response = await getClient().messages.create(
+    {
+      model: MARIO_MODEL,
+      max_tokens: 1024,
+      thinking: { type: 'disabled' },
+      system,
+      messages,
+    } as Anthropic.MessageCreateParamsNonStreaming,
+    Object.keys(requestOptions).length > 0 ? requestOptions : undefined,
+  );
 
   const textBlock = response.content.find((b) => b.type === 'text');
   const raw = textBlock && 'text' in textBlock ? textBlock.text : '';
