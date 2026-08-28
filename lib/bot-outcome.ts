@@ -351,7 +351,21 @@ export async function sendOutcome(
   // locked lo tradurrebbe in una nota generica "appuntamento mantenuto", e la richiesta
   // di parlare con una persona si perderebbe un'altra volta.
   if (args.outcome === 'CONTATTO_UMANO') {
-    return inviaContattoUmano(supabase, conversationId, crmLeadId, args, secret, row?.wa_number ?? null, row?.bot_scheduled_at ?? null);
+    // Quale appuntamento ha davvero questo lead, e solo se ce l'ha.
+    //
+    // `bot_scheduled_at` da sola non basta e non basta nemmeno da sola: la valorizza il
+    // ramo normale per QUALSIASI esito con una data, RICHIAMO compreso, e un lead con
+    // un richiamo arriverebbe al CRM marcato "gia' fissato" e finirebbe alle Conferme
+    // per un appuntamento che non esiste. Vale quindi solo quando l'esito e'
+    // APPUNTAMENTO, come fa il cron dei promemoria pre-call.
+    // `gdo_appuntamento_at` invece e' gia' di per se' un appuntamento -- l'ha preso un
+    // commerciale al telefono e ce lo manda il CRM -- ed e' l'unica data che i lead
+    // postino hanno: senza, escono senza data e il CRM li instrada al GDO invece che
+    // alle Conferme, cioe' esattamente il caso che questo campo esiste per chiudere.
+    const appuntamento =
+      ((row?.bot_outcome ?? null) === 'APPUNTAMENTO' ? row?.bot_scheduled_at ?? null : null)
+      ?? row?.gdo_appuntamento_at ?? null;
+    return inviaContattoUmano(supabase, conversationId, crmLeadId, args, secret, row?.wa_number ?? null, appuntamento);
   }
 
   // Un lead con l'appuntamento già fissato che chiede di annullare o spostare va

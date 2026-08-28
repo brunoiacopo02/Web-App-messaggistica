@@ -532,6 +532,37 @@ describe('sendOutcome — CONTATTO_UMANO', () => {
     expect(body.info.appuntamento).toBe(DATE);
   });
 
+  /** Il corpo del POST al CRM, senza `any`: e' l'unica cosa che questi test guardano. */
+  const corpoFetch = () => {
+    const fetchFinto = globalThis.fetch as unknown as { mock: { calls: [string, { body: string }][] } };
+    return JSON.parse(fetchFinto.mock.calls[0][1].body) as { info: Record<string, string | undefined> };
+  };
+
+  // `bot_scheduled_at` la valorizza il ramo normale per QUALSIASI esito con una data,
+  // RICHIAMO compreso: senza la condizione sull'esito, un lead con un richiamo arriva
+  // al CRM marcato "gia' fissato + data" e finisce alle Conferme per un appuntamento
+  // che non esiste.
+  it('un RICHIAMO con una data non e un appuntamento: il campo non parte', async () => {
+    const CONV_RICHIAMO = { crm_lead_id: 'crm1', bot_outcome: 'RICHIAMO', bot_scheduled_at: DATE };
+    const { supabase } = makeSupabase(CONV_RICHIAMO);
+    const res = await sendOutcome(supabase, 1, { outcome: 'CONTATTO_UMANO', note: 'voglio una persona' });
+
+    expect(res.sent).toBe(true);
+    expect(corpoFetch().info?.appuntamento).toBeUndefined();
+  });
+
+  // I lead "postino" hanno l'appuntamento su `gdo_appuntamento_at` e niente su
+  // `bot_scheduled_at`: uscivano senza data, e il CRM li instradava al GDO invece che
+  // alle Conferme — esattamente il caso che questo campo esiste per chiudere.
+  it('appuntamento preso da un GDO: la data viaggia lo stesso', async () => {
+    const CONV_GDO_APP = { crm_lead_id: 'gdo1', bot_outcome: null, bot_scheduled_at: null, gdo_appuntamento_at: DATE };
+    const { supabase } = makeSupabase(CONV_GDO_APP);
+    const res = await sendOutcome(supabase, 1, { outcome: 'CONTATTO_UMANO', note: 'aspetto la call' });
+
+    expect(res.sent).toBe(true);
+    expect(corpoFetch().info.appuntamento).toBe(DATE);
+  });
+
   it('senza un appuntamento fissato, il campo non compare affatto (niente null, niente stringa vuota)', async () => {
     const { supabase } = makeSupabase(CONV_UMANO);
     const res = await sendOutcome(supabase, 1, { outcome: 'CONTATTO_UMANO', note: 'voglio parlare con una persona' });
