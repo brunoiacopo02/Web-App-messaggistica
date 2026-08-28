@@ -64,8 +64,8 @@ messaggio scritto dal lead**, non sul nostro:
 | **fuori dalle 24h** | 21% dei casi | parte un **template approvato da Meta** |
 
 Il 79/21 non è una stima: l'abbiamo calcolato sui 371 appuntamenti fissati dal bot
-usando **i vostri orari di chiamata** — pomeriggio stesso giorno per gli appuntamenti del
-pomeriggio, pomeriggio prima per quelli della mattina.
+usando **i vostri orari di chiamata** — il pomeriggio stesso (13-20) per gli appuntamenti
+del pomeriggio, il pomeriggio prima per quelli della mattina.
 
 I due template li facciamo approvare noi come **UTILITY**: sono messaggi transazionali su
 un appuntamento che esiste, quindi passano anche con il nostro numero ancora in
@@ -82,13 +82,13 @@ riabilitazione.
 **Dopo il terzo tentativo:**
 
 > Ciao {{1}}, abbiamo provato a chiamarti tre volte per la call di {{2}} con Noemi e non
-> siamo riusciti a sentirti. Se ti interessa ancora, scrivimi qui che confermi e la
-> teniamo: sono 5 minuti al telefono. Altrimenti non ti disturbiamo più e annulliamo
-> l'appuntamento.
+> siamo riusciti a sentirti. Se la vuoi ancora scrivimi qui, bastano due righe e la
+> confermiamo: sono 5 minuti al telefono. Senza una tua risposta l'appuntamento lo
+> annulliamo.
 
-Il secondo dice le cose come stanno: senza una risposta esplicita il lead non viene più
-chiamato e l'appuntamento salta. Non è una minaccia, è l'informazione che gli serve per
-decidere — e gli dà anche il modo di dire di no senza sentirsi braccato.
+Il secondo dice le cose come stanno: senza una risposta esplicita l'appuntamento salta.
+Non è una minaccia, è l'informazione che gli serve per decidere, e gli lascia una strada
+per dire di sì in due righe.
 
 Dentro la finestra Marta dice le stesse cose con parole sue, agganciandosi a com'era
 andata la conversazione.
@@ -155,5 +155,3 @@ Conferma, la richiesta si chiude e il bot non ci scrive sopra.
    `appointmentAt`.
 2. La sezione Conferme con il pallino rosso, e l'instradamento a Conferme (non ai GDO)
    dei lead già fissati.
-3. Confermarci che il primo tentativo parte davvero il pomeriggio prima / lo stesso
-   pomeriggio: è quello che regge il calcolo 79/21.
