@@ -37,9 +37,28 @@ Content-Type: application/json
 }
 ```
 
-Rispondiamo `200 { ok: true, inviato: true | false, motivo?: "…" }`. Se `inviato` è
-`false` il motivo dice perché il bot si è fermato (vedi il punto 4): non è un errore,
-è la risposta giusta in quei casi.
+Rispondiamo `200 { ok: true, inviato: true | false, ramo?: "libero" | "template", motivo?: "…" }`.
+Se `inviato` è `false` il motivo dice perché il bot si è fermato: non è un errore, è la
+risposta giusta in quei casi. I motivi possibili:
+
+| `motivo` | cosa è successo |
+|---|---|
+| `non_nostro` | quel lead non è in carico al bot |
+| `bot_fermato` | una persona ha fermato il bot su quella chat dal pannello |
+| `disdetta_chiesta` | il lead aveva già chiesto di disdire o spostare |
+| `passato_a_persona` | la chat è già passata a una persona e ci sta ancora |
+| `gia_risposto` | il lead ha già scritto dopo la vostra chiamata: non c'è niente da recuperare |
+| `appuntamento_non_valido` | l'appuntamento è passato, oppure non ce n'è uno |
+| `appuntamento_gia_passato` | l'`appointmentAt` che ci avete mandato è nel passato |
+| `appointment_at_illeggibile` | l'`appointmentAt` non è una data leggibile |
+| `gia_inviato` | per quel lead e quel tentativo il messaggio è già partito |
+| `lead_sconosciuto` | quel `leadId` non risulta a noi |
+| `tentativo_non_gestito` | tentativo diverso da 1 e 3 (per esempio il secondo): accettato e ignorato di proposito |
+| `template_non_configurato` | serviva il template ma non è ancora attivo da parte nostra |
+| `invio_fallito` | WhatsApp non ha accettato il messaggio; potete richiamarci più tardi |
+
+Gli ultimi tre sono problemi nostri, non vostri: ve li diciamo per trasparenza, non
+perché dobbiate farci qualcosa.
 
 La chiamata è **idempotente su `leadId` + `tentativo`**: un doppio clic non manda due
 messaggi.
@@ -108,17 +127,24 @@ noi in chat invece che al centralino.
 
 ## 4. Quando il bot NON scrive, anche se premete il tasto
 
-Questa è la parte da blindare, perché è dove si fanno i pasticci. Sono **quattro
-condizioni secche e verificabili**, non un giudizio del modello:
+Questa è la parte da blindare, perché è dove si fanno i pasticci. Sono **sette condizioni
+secche e verificabili**, non un giudizio del modello:
 
-1. il lead ha **chiesto di disdire o spostare** (ce l'abbiamo già registrato);
-2. la chat è **già passata a una persona** ed è ancora lì;
-3. il lead **ha già risposto** dopo l'orario della chiamata persa — non c'è niente da
+1. il lead **non è in carico al bot**;
+2. una **persona ha fermato il bot** su quella chat dal nostro pannello;
+3. il lead ha **chiesto di disdire o spostare** (ce l'abbiamo già registrato);
+4. la chat è **già passata a una persona** ed è ancora lì;
+5. il lead **ha già risposto** dopo l'orario della chiamata persa — non c'è niente da
    recuperare;
-4. l'appuntamento è **già passato o annullato**.
+6. l'appuntamento è **già passato**, oppure non ce n'è uno;
+7. per quel lead e quel tentativo **il messaggio è già partito**.
 
-Oggi le prime due valgono 13 lead su 371 (3,5%): pochi, ma sono esattamente quelli su cui
-un messaggio sbagliato fa danno.
+Nella specifica che vi avevamo anticipato erano quattro: le altre tre sono venute fuori
+rivedendo il codice, e sono tutte della stessa famiglia — non scrivere a chi ci aveva
+chiesto di smettere.
+
+Oggi la terza e la quarta valgono 13 lead su 371 (3,5%): pochi, ma sono esattamente quelli
+su cui un messaggio sbagliato fa danno.
 
 Una scelta deliberata: **non chiediamo al modello di capire se il lead "non è più
 interessato"**. Riconoscerlo dalle parole della chat vuol dire sbagliare qualche volta, e
