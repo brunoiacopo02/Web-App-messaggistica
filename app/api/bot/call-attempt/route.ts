@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { verifySignature } from '@/lib/bot-hmac';
-import { checkRateLimit } from '@/lib/rate-limit';
 import { parseCallAttempt, tentativoGestito } from '@/lib/call-attempt';
 import { puoScrivere, type StatoConversazione } from '@/lib/recupero-nr';
 
@@ -19,11 +18,12 @@ type Supa = ReturnType<typeof getSupabaseAdmin>;
  * su firma/config/parse: il CRM non ritenta, e un 500 nostro perderebbe il lead senza
  * lasciare traccia da nessuna parte.
  */
+// Niente rate limit qui, a differenza degli altri endpoint /api/bot/*: un 429 sarebbe
+// un quinto codice di risposta oltre ai tre ammessi (firma/config/parse), e su un
+// evento di mancata risposta che il CRM non ritenta si perderebbe senza lasciare
+// traccia — lo stesso danno che il vincolo "sempre 200" esiste per evitare. La difesa
+// contro il traffico non autenticato è già la firma HMAC, verificata prima di tutto.
 export async function POST(req: NextRequest) {
-  const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
-  const rl = checkRateLimit(`callattempt:${ip}`, 60, 60_000);
-  if (!rl.ok) return new NextResponse('rate limit', { status: 429 });
-
   const secret = process.env.BOT_WEBHOOK_SECRET;
   if (!secret) return NextResponse.json({ ok: false, error: 'not_configured' }, { status: 503 });
 

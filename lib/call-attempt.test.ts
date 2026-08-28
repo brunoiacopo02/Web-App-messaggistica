@@ -46,8 +46,37 @@ describe('parseCallAttempt', () => {
     if (!r.ok) expect(r.reason).toMatch(/tentativo/i);
   });
 
-  it('rifiuta tentativo non numerico', () => {
+  // Non abbiamo la loro implementazione sotto mano: un CRM che manda il tentativo come
+  // stringa non deve costare un lead. Il precedente in casa è parseAppointmentSetPayload
+  // in lib/bot-contract.ts, tollerante sui formati per lo stesso motivo.
+  it('accetta il tentativo come stringa numerica', () => {
     const r = parseCallAttempt({ ...base, tentativo: '1' });
+    expect(r).toEqual({ ok: true, value: { ...base, tentativo: 1 } });
+  });
+
+  it('accetta la stringa numerica con spazi attorno', () => {
+    const r = parseCallAttempt({ ...base, tentativo: ' 3 ' });
+    expect(r).toEqual({ ok: true, value: { ...base, tentativo: 3 } });
+  });
+
+  it('rifiuta una stringa non numerica', () => {
+    const r = parseCallAttempt({ ...base, tentativo: 'uno' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/tentativo/i);
+  });
+
+  it('rifiuta una stringa con un decimale', () => {
+    const r = parseCallAttempt({ ...base, tentativo: '1.5' });
+    expect(r.ok).toBe(false);
+  });
+
+  it('rifiuta la stringa vuota', () => {
+    const r = parseCallAttempt({ ...base, tentativo: '' });
+    expect(r.ok).toBe(false);
+  });
+
+  it('rifiuta null', () => {
+    const r = parseCallAttempt({ ...base, tentativo: null });
     expect(r.ok).toBe(false);
   });
 

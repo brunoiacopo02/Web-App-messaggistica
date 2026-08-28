@@ -14,6 +14,19 @@ export type CallAttempt = {
   appointmentAt: string;
 };
 
+/**
+ * Accetta un intero, o una stringa che rappresenta un intero (spazi attorno ammessi:
+ * `" 3 "`). Non abbiamo la loro implementazione sotto mano, e un dettaglio di
+ * serializzazione JSON — un CRM che manda `"1"` invece di `1` — non deve costare un
+ * lead: il CRM non ritenta. `1.5`, `"1.5"`, `"uno"`, `""` restano fuori: quello non è
+ * un dettaglio di formato, è un valore che non rappresenta un tentativo.
+ */
+function tentativoDaValore(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isInteger(v) ? v : null;
+  if (typeof v === 'string' && /^-?\d+$/.test(v.trim())) return Number(v.trim());
+  return null;
+}
+
 export function parseCallAttempt(
   raw: unknown,
 ): { ok: true; value: CallAttempt } | { ok: false; reason: string } {
@@ -25,11 +38,8 @@ export function parseCallAttempt(
 
   if (o.esito !== 'no_answer') return { ok: false, reason: 'esito_non_valido' };
 
-  // Number.isInteger scarta anche le stringhe numeriche: un CRM che manda "1" invece di
-  // 1 deve fallire in modo esplicito, non passare per conversione implicita.
-  if (typeof o.tentativo !== 'number' || !Number.isInteger(o.tentativo)) {
-    return { ok: false, reason: 'tentativo_non_valido' };
-  }
+  const tentativo = tentativoDaValore(o.tentativo);
+  if (tentativo === null) return { ok: false, reason: 'tentativo_non_valido' };
 
   if (typeof o.at !== 'string' || !isoWithOffset(o.at)) return { ok: false, reason: 'at_non_valido' };
   if (typeof o.appointmentAt !== 'string' || !isoWithOffset(o.appointmentAt)) {
@@ -38,7 +48,7 @@ export function parseCallAttempt(
 
   return {
     ok: true,
-    value: { leadId, esito: 'no_answer', tentativo: o.tentativo, at: o.at, appointmentAt: o.appointmentAt },
+    value: { leadId, esito: 'no_answer', tentativo, at: o.at, appointmentAt: o.appointmentAt },
   };
 }
 
