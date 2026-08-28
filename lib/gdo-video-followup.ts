@@ -93,7 +93,8 @@ export const TURNO_RIPRESA_SOLLECITO =
   'Riprendi tu il filo del discorso seguendo le note di contesto.]';
 
 /**
- * Cronologia da passare al modello per un sollecito libero.
+ * Cronologia da passare al modello quando siamo NOI a riprendere il filo, senza un
+ * messaggio del lead a cui rispondere.
  *
  * `decideGdoVideoFollowup` restituisce un'azione solo quando l'ultimo messaggio della
  * chat è nostro (`lastMessageIsInbound === false`): la cronologia grezza finirebbe
@@ -102,19 +103,26 @@ export const TURNO_RIPRESA_SOLLECITO =
  * sintetico in coda chiude la cronologia lato `user` ed è anche più onesto: qui non c'è
  * un messaggio a cui rispondere, c'è una nostra decisione di riagganciare.
  *
+ * `turnoDiRipresa` è parametrico perché il problema non è solo dei solleciti GDO: il
+ * recupero delle mancate risposte al telefono (`/api/bot/call-attempt`) scrive nello
+ * stesso identico punto — dopo un nostro messaggio — e ha bisogno dello stesso turno
+ * sintetico, ma con le sue parole (là non è "il lead non risponde da qualche ora", è
+ * "le Conferme hanno appena provato a chiamarlo").
+ *
  * Cronologia vuota (tutte le righe precedono `ai_started_at`): si lascia vuota, così
  * `generateMarioReply` usa la sua apertura — il turno sintetico da solo, senza nessun
  * filo da riprendere, direbbe al modello una cosa falsa.
  */
 export function buildSollecitoHistory(
   rows: { direction: string; body: string }[],
+  turnoDiRipresa: string = TURNO_RIPRESA_SOLLECITO,
 ): MarioTurn[] {
   const history: MarioTurn[] = rows.map((m) => ({
     role: m.direction === 'in' ? 'user' : 'assistant',
     content: m.body,
   }));
   if (history.length === 0) return history;
-  return [...history, { role: 'user', content: TURNO_RIPRESA_SOLLECITO }];
+  return [...history, { role: 'user', content: turnoDiRipresa }];
 }
 
 /** Pausa prima di una bolla, come nel drain: la riga dopo non arriva addosso alla prima. */

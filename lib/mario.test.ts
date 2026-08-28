@@ -53,6 +53,21 @@ describe('generateMarioReply', () => {
     expect(typeof arg.system).toBe('string');
   });
 
+  // Il client nasce con `timeout: 60_000, maxRetries: 5`: dentro una funzione con un
+  // `maxDuration` di 60s un solo tentativo puo' bruciarla tutta, e chi ha gia' mandato
+  // qualcosa al lead viene ucciso prima di poterselo scrivere da qualche parte.
+  it('timeoutMs e maxRetries arrivano all SDK come opzioni della singola richiesta', async () => {
+    messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'ok' }] });
+    await generateMarioReply([{ role: 'user', content: 'ciao' }], { timeoutMs: 20_000, maxRetries: 1 });
+    expect(messagesCreate.mock.calls[0][1]).toEqual({ timeout: 20_000, maxRetries: 1 });
+  });
+
+  it('chi non chiede un budget non cambia comportamento: nessuna opzione, valgono quelle del client', async () => {
+    messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'ok' }] });
+    await generateMarioReply([{ role: 'user', content: 'ciao' }]);
+    expect(messagesCreate.mock.calls[0][1]).toBeUndefined();
+  });
+
   it('history vuota: usa il seed di apertura', async () => {
     messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'Ciao!' }] });
     await generateMarioReply([]);

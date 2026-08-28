@@ -44,8 +44,11 @@ export interface BotOutcomeBody {
    *  restituisce mai 400 su un valore che non riconosce. */
   motivo?: string;
   /** CONTATTO_UMANO (v1.5): quello che sappiamo per far partire la telefonata giusta.
-   *  Solo fatti — niente parafrasi del modello. */
-  info?: { sintesi?: string; disponibilita?: string; telefonoPreferito?: string; urgenza?: string; argomenti?: string[] };
+   *  Solo fatti — niente parafrasi del modello. `appuntamento` è la data che il lead ha
+   *  già fissato: senza, il CRM instrada la segnalazione al GDO invece che alle
+   *  Conferme, che sono le sole competenti su un lead già fissato (13 su 66 finivano
+   *  così). Assente, mai null, se non c'è un appuntamento. */
+  info?: { sintesi?: string; disponibilita?: string; telefonoPreferito?: string; urgenza?: string; argomenti?: string[]; appuntamento?: string };
 }
 
 const OUTCOMES: BotOutcome[] = ['APPUNTAMENTO', 'DA_SCARTARE', 'RICHIAMO', 'NON_RISPOSTO', 'INTERROTTO', 'NOTA', 'CONTATTO_UMANO'];

@@ -97,8 +97,40 @@ describe('motivoRichiesta', () => {
       expect(caso('Vorrei parlare con un operatore per capire il costo')).toBe('chiede_una_persona');
     });
 
+    // Il CRM instrada 13 segnalazioni su 66 alla coda sbagliata (GDO invece delle
+    // Conferme) perché non sa che il lead sta solo aspettando la call che ha già:
+    // prima finivano tutte in "altro", indistinguibili da chi non ha detto niente.
+    it('aspetta la call', () => {
+      expect(caso('Aspetto la call')).toBe('aspetta_la_call');
+      expect(caso('Ci sentiamo in call')).toBe('aspetta_la_call');
+      expect(caso('Sono in attesa della videochiamata')).toBe('aspetta_la_call');
+      expect(caso('Va bene, ci vediamo giovedì')).toBe('aspetta_la_call');
+    });
+
+    // Il messaggio di recupero delle mancate risposte chiede "quando ti va bene?", e
+    // moltiplica proprio le risposte che dicono due cose insieme. Fra le due conta
+    // quella che chiede qualcosa a qualcuno: `aspetta_la_call` diventa `altro` per il
+    // CRM, cioè la coda meno azionabile, e una disdetta finita lì non la lavora
+    // nessuno.
+    it('aspetta la call ma vuole spostarla: conta la disdetta, non l attesa', () => {
+      expect(caso('Aspetto ancora la call ma vorrei spostarla')).toBe('disdetta_o_spostamento');
+      expect(caso('Sono in attesa della videochiamata, però devo annullarla')).toBe('disdetta_o_spostamento');
+    });
+
+    it('aspetta la call: non si aggancia a chi non nomina la call', () => {
+      // "Aspetto" da solo non basta: senza la call è solo un lead che aspetta
+      // qualcos'altro (una risposta, un pagamento, un link).
+      expect(caso('Aspetto una vostra risposta')).toBe('altro');
+      expect(caso('Sto aspettando il pagamento')).toBe('prezzo_o_pagamento');
+      // "ci vediamo" senza un giorno o "call" accanto non basta a dedurre la videocall.
+      expect(caso('Ci vediamo domani')).toBe('altro');
+      // "chiamata" da sola (senza "video") resta ambigua con chi la sta chiedendo:
+      // qui non deve scattare, per non sovrapporsi a vuole_essere_chiamato.
+      expect(caso('Aspetto la chiamata')).toBe('altro');
+    });
+
     it('tutte le categorie prodotte stanno nell\'insieme chiuso', () => {
-      for (const t of ['Ok', 'Chiamami', 'Siete imbarazzanti', 'Parlavi di rate']) {
+      for (const t of ['Ok', 'Chiamami', 'Siete imbarazzanti', 'Parlavi di rate', 'Aspetto la call']) {
         expect(CATEGORIE).toContain(caso(t));
       }
     });
@@ -117,6 +149,9 @@ describe('categoriaPerCrm', () => {
     expect(categoriaPerCrm('chiede_una_persona')).toBe('altro');
     expect(categoriaPerCrm('lamentela')).toBe('altro');
     expect(categoriaPerCrm('altro')).toBe('altro');
+    // Il CRM non ha una coda per "sta aspettando la call che ha già": non è una
+    // richiesta nuova, quindi non ha un corrispondente fra le loro sette.
+    expect(categoriaPerCrm('aspetta_la_call')).toBe('altro');
   });
 
   it('ogni nostra categoria ha una destinazione valida', () => {
