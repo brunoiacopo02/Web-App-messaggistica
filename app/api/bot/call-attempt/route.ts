@@ -14,6 +14,12 @@ import { martaSidsFromEnv } from '@/lib/fenice-autoreply';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// Il ramo dentro-finestra chiama il modello in sincrono, coi retry dentro il client:
+// col default di Vercel la funzione può essere uccisa a metà generazione, e il CRM si
+// prende un 504 che non ritenta — il lead sparirebbe senza lasciare traccia, cioè
+// esattamente il danno per cui qui si risponde sempre 200. Stesso valore dell'altro
+// webhook del CRM (`/api/bot/contatti-umani`).
+export const maxDuration = 60;
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -88,7 +94,8 @@ export async function POST(req: NextRequest) {
 
 type ConversazioneTrovata = Pick<
   StatoConversazione,
-  'ai_owner' | 'ai_status' | 'bot_outcome' | 'bot_scheduled_at' | 'cancel_requested_at'
+  'ai_owner' | 'ai_status' | 'ai_paused_at' | 'bot_outcome' | 'bot_scheduled_at'
+  | 'gdo_appuntamento_at' | 'cancel_requested_at'
 > & {
   id: number;
   /** Da dove parte la cronologia che il modello deve leggere: prima c'è un'altra storia. */
@@ -102,7 +109,10 @@ async function trovaConversazione(supabase: Supa, leadId: string): Promise<Conve
     .from('conversations')
     // Il destinatario è `leads.phone_e164`, non `conversations.wa_number`: quello è il
     // NOSTRO numero, non il suo.
-    .select('id, ai_owner, ai_status, bot_outcome, bot_scheduled_at, cancel_requested_at, ai_started_at, leads(phone_e164, first_name)')
+    // `gdo_appuntamento_at` serve alla guardia (i lead postino hanno l'appuntamento
+    // lì e non su `bot_scheduled_at`) ed è in SOLA LETTURA, come le altre colonne
+    // dell'appuntamento: qui non si scrive mai.
+    .select('id, ai_owner, ai_status, ai_paused_at, bot_outcome, bot_scheduled_at, gdo_appuntamento_at, cancel_requested_at, ai_started_at, leads(phone_e164, first_name)')
     .eq('crm_lead_id', leadId)
     .order('id', { ascending: false })
     .limit(1);
@@ -136,8 +146,10 @@ async function costruisciStato(supabase: Supa, conv: ConversazioneTrovata, tenta
   return {
     ai_owner: conv.ai_owner,
     ai_status: conv.ai_status,
+    ai_paused_at: conv.ai_paused_at,
     bot_outcome: conv.bot_outcome,
     bot_scheduled_at: conv.bot_scheduled_at,
+    gdo_appuntamento_at: conv.gdo_appuntamento_at,
     cancel_requested_at: conv.cancel_requested_at,
     ultimoInboundAt,
     giaInviatoTentativo,
@@ -185,6 +197,8 @@ async function inviaRecuperoNr(supabase: Supa, ctx: ContestoInvio): Promise<Esit
   // non sono in env, ed è una condizione normale, non un guasto: si dice che il
   // messaggio non è partito e non si scrive il lucchetto, così questi lead ripartono
   // da soli il giorno dell'approvazione.
+  // Il ternario regge perché `tentativoGestito` a monte lascia passare solo 1 e 3: se
+  // un giorno si gestisse un quarto tentativo, questa riga gli darebbe NR3 in silenzio.
   const templateSid = ctx.tentativo === 1 ? process.env.NR1_TEMPLATE_SID : process.env.NR3_TEMPLATE_SID;
   if (ramo === 'template' && !templateSid) {
     await supabase.from('event_log').insert({
@@ -293,16 +307,34 @@ async function scriviMessaggioLibero(
   if (parts.length === 0) return { errore: 'il modello non ha prodotto nessun messaggio da inviare' };
 
   let primo: string | undefined;
-  for (const body of parts) {
-    const sent = await sendFreeText({ to: ctx.phone as string, body, from });
-    primo ??= sent.sid;
-    await supabase.from('messages').insert({
-      conversation_id: ctx.conversationId,
-      direction: 'out',
-      body,
-      twilio_sid: sent.sid,
-      twilio_status: sent.status,
-      sender: 'bot',
+  try {
+    for (const body of parts) {
+      const sent = await sendFreeText({ to: ctx.phone as string, body, from });
+      primo ??= sent.sid;
+      await supabase.from('messages').insert({
+        conversation_id: ctx.conversationId,
+        direction: 'out',
+        body,
+        twilio_sid: sent.sid,
+        twilio_status: sent.status,
+        sender: 'bot',
+      });
+    }
+  } catch (err) {
+    // Se non è uscito niente il fallimento è pulito e si ritenta: rilancia.
+    if (!primo) throw err;
+    // Se invece una bolla è già arrivata, il lead È stato contattato: trattarlo come
+    // fallimento lascerebbe il recupero senza lucchetto e al prossimo giro del CRM
+    // gliene arriverebbe un secondo, sopra il primo. Meglio un messaggio troncato che
+    // due messaggi. Il pezzo mancante si registra a parte, per poterlo ritrovare.
+    await supabase.from('event_log').insert({
+      type: 'recupero_nr_invio_parziale',
+      payload: {
+        conversationId: ctx.conversationId, crmLeadId: ctx.crmLeadId, tentativo: ctx.tentativo,
+        bolle: parts.length, error: err instanceof Error ? err.message : 'errore sconosciuto',
+      } as never,
+      message: `[crm] recupero non-risposta al lead ${ctx.crmLeadId}: prima bolla inviata, il resto del messaggio no`,
+      level: 'warn',
     });
   }
   return { sid: primo as string };

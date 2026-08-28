@@ -37,10 +37,14 @@ export function quandoLeggibile(appointmentAt: string): string {
  * parole sue, dentro una conversazione che ha già una sua storia. Un testo fisso qui
  * arriverebbe addosso a chi magari stava parlando d'altro.
  *
- * Due cose che NON stanno qui, di proposito: le regole sulle date (sono già nel prompt
- * di sistema, ripeterle in coda le mette in concorrenza con sé stesse) e la parola
- * "disturbo" — chi si scusa di aver chiamato per un appuntamento che il lead ha
- * chiesto sta insegnando al lead che quella chiamata era un fastidio.
+ * Sulle date la nota dice una cosa sola: che questo appuntamento non si tocca. Come si
+ * leggono e si calcolano le date sta nel prompt di sistema e non va ripetuto qui —
+ * ripeterlo lo metterebbe in concorrenza con sé stesso — ma "non spostare quello già
+ * fissato" è un vincolo di QUESTA conversazione, e senza il modello tratterebbe la
+ * richiesta di richiamo come un'occasione per riaprire l'agenda.
+ *
+ * La parola "disturbo" invece non c'è di proposito: chi si scusa di aver chiamato per
+ * un appuntamento che il lead ha chiesto gli sta insegnando che era un fastidio.
  */
 export function notaRecuperoNr(quando: string, tentativo: number): string {
   const parti = [

@@ -68,6 +68,9 @@ import { signPayload } from '@/lib/bot-hmac';
 
 const SEGRETO = 'segreto-di-test';
 const LEAD = 'crm-1';
+// L'orologio è congelato: `puoScrivere` boccia un appuntamento nel passato, e con una
+// data fissa contro l'ora vera questi test si sarebbero suicidati il 29 agosto.
+const ADESSO = new Date('2026-08-28T12:00:00+02:00');
 const APPUNTAMENTO = '2026-08-29T15:00:00+02:00';
 const QUANDO = 'sabato 29 agosto alle 15:00';
 const NR1 = 'HX111';
@@ -96,8 +99,10 @@ function scenario(oreFa: number | null) {
     id: 42,
     ai_owner: 'mario',
     ai_status: 'closed',
+    ai_paused_at: null,
     bot_outcome: 'APPUNTAMENTO',
     bot_scheduled_at: APPUNTAMENTO,
+    gdo_appuntamento_at: null,
     cancel_requested_at: null,
     ai_started_at: '2026-08-20T09:00:00+02:00',
     leads: { phone_e164: '+393331112233', first_name: 'mario rossi' },
@@ -116,6 +121,9 @@ const aggiornamenti = () => chiamate.filter((c) => c.table === 'conversations' &
   .map((c) => c.arg as Record<string, unknown>);
 
 beforeEach(() => {
+  // Solo `Date`: i timer veri restano veri, così niente attese da sbloccare a mano.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(ADESSO);
   vi.stubEnv('BOT_WEBHOOK_SECRET', SEGRETO);
   vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+393520158061');
   vi.stubEnv('NR1_TEMPLATE_SID', NR1);
@@ -129,7 +137,7 @@ beforeEach(() => {
   });
   scenario(2);
 });
-afterEach(() => { vi.unstubAllEnvs(); });
+afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers(); });
 
 describe('POST /api/bot/call-attempt — i due rami di invio', () => {
   it('dentro la finestra: messaggio libero di Marta, nessun template', async () => {
@@ -211,14 +219,36 @@ describe('POST /api/bot/call-attempt — l\'invariante: una volta fissato resta 
     expect(aggiornamenti()).toEqual([]);
   });
 
-  it('invio fallito: nessuna update tocca l\'esito, e ai_status resta com\'era', async () => {
+  it('invio fallito: non si scrive proprio niente su conversations', async () => {
     scenario(2);
     sendFreeText.mockRejectedValue(new Error('twilio giù'));
     await firmato(evento(1));
+    expect(aggiornamenti()).toEqual([]);
+  });
+
+  it('lead postino (appuntamento del GDO): si scrive, e il suo appuntamento non si tocca', async () => {
+    // L'appuntamento sta su gdo_appuntamento_at, non su bot_scheduled_at: questi lead
+    // sono metà del problema, e con la vecchia guardia li respingevamo tutti.
+    scenario(2);
+    righe.conversazione = [{
+      ...(righe.conversazione[0] as object),
+      bot_scheduled_at: null,
+      gdo_appuntamento_at: APPUNTAMENTO,
+    }];
+    const res = await firmato(evento(1));
+    await expect(res.json()).resolves.toMatchObject({ inviato: true });
     for (const u of aggiornamenti()) {
-      for (const k of VIETATE) expect(u).not.toHaveProperty(k);
-      expect(u).not.toHaveProperty('ai_status');
+      for (const k of [...VIETATE, 'gdo_appuntamento_at']) expect(u).not.toHaveProperty(k);
     }
+  });
+
+  it('bot fermato a mano dal pannello: non si scrive e non si riapre', async () => {
+    scenario(2);
+    righe.conversazione = [{ ...(righe.conversazione[0] as object), ai_paused_at: '2026-08-28T09:30:00+02:00' }];
+    const res = await firmato(evento(1));
+    await expect(res.json()).resolves.toMatchObject({ inviato: false, motivo: 'bot_fermato' });
+    expect(sendFreeText).not.toHaveBeenCalled();
+    expect(aggiornamenti()).toEqual([]);
   });
 });
 
@@ -258,6 +288,34 @@ describe('POST /api/bot/call-attempt — riapertura e lucchetto', () => {
     await expect(res.json()).resolves.toEqual({ ok: true, inviato: false, motivo: 'invio_fallito' });
     expect(eventiScritti().map((e) => e.type)).toContain('send_error');
     expect(eventiScritti().map((e) => e.type)).not.toContain('recupero_nr_inviato');
+  });
+
+  it('prima bolla partita e seconda no: vale come inviato, altrimenti il lead ne riceve due', async () => {
+    scenario(2);
+    generateMarioReply.mockResolvedValue({
+      visibleReply: 'Ciao Mario, ti abbiamo provato a chiamare.\nQuando ti richiamiamo?',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+    sendFreeText
+      .mockResolvedValueOnce({ sid: 'SMlibero', status: 'queued' })
+      .mockRejectedValueOnce(new Error('twilio giù a metà'));
+
+    const res = await firmato(evento(1));
+    await expect(res.json()).resolves.toEqual({ ok: true, inviato: true, ramo: 'libero' });
+    // Il lucchetto c'è: al prossimo giro del CRM non gliene arriva un secondo.
+    expect(eventiScritti().map((e) => e.type)).toContain('recupero_nr_inviato');
+    expect(aggiornamenti().some((u) => u.ai_status === 'active')).toBe(true);
+    // E il pezzo mancante resta ritrovabile.
+    expect(eventiScritti().map((e) => e.type)).toContain('recupero_nr_invio_parziale');
+  });
+
+  it('prima bolla fallita: nessun lucchetto, il recupero si ritenta per intero', async () => {
+    scenario(2);
+    sendFreeText.mockRejectedValueOnce(new Error('twilio giù'));
+    const res = await firmato(evento(1));
+    await expect(res.json()).resolves.toEqual({ ok: true, inviato: false, motivo: 'invio_fallito' });
+    expect(eventiScritti().map((e) => e.type)).not.toContain('recupero_nr_inviato');
+    expect(eventiScritti().map((e) => e.type)).not.toContain('recupero_nr_invio_parziale');
   });
 
   it('invio template fallito: nessun lucchetto, motivo invio_fallito', async () => {
