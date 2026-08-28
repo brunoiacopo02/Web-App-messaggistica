@@ -16,6 +16,7 @@ export type MessaggioIn = { body: string | null; created_at: string };
 export const CATEGORIE = [
   'vuole_essere_chiamato',
   'chiede_una_persona',
+  'aspetta_la_call',
   'disdetta_o_spostamento',
   'problema_prenotazione',
   'prezzo_o_pagamento',
@@ -47,6 +48,14 @@ const RICHIAMO = /\b(chiamami|chiamatemi|mi (puoi|potete|puo|può) chiamare|mi c
 const PERSONA =
   /(parlare|parlarci|parlarne|parlo|sentire|passa(mi|temi)|mi pass[ia]|metter(e|mi) in contatto|contattare|farmi (parlare|sentire))[^.?!]{0,40}(operatore|operatrice|persona|collega|responsabile|consulente|qualcuno|umano|marta|noemi)/;
 
+/** Il lead conferma che sta aspettando la videocall già fissata, o si prepara a
+ *  connettersi: non chiede niente, ma finiva comunque in "altro" insieme a chi non ha
+ *  detto niente — ed è proprio questo il 20% di segnalazioni che il CRM instrada al GDO
+ *  invece che alle Conferme, perché non sa che il lead è già un lead fissato.
+ *  Niente "chiamata" da sola: si sovrapporrebbe a chi la sta chiedendo (RICHIAMO). */
+const ASPETTA_CALL =
+  /\b(?:aspetto|aspettando|sto aspettando|attendo|in attesa d(?:i|ella))\b[^.?!]{0,30}\b(?:call|videocall|video ?chiamata)\b|\bci (?:sentiamo|vediamo)\b[^.?!]{0,30}\b(?:in call|video ?call|lunedi|martedi|mercoledi|giovedi|venerdi|sabato|domenica)\b/;
+
 /** Disdetta o spostamento di una call già presa. Prefissi, non parole intere: nelle
  * chat vere è quasi sempre flesso ("annullarla", "spostarla", "l'ho disdetta"). */
 const DISDETTA = /\b(annull|disdi|disdet|cancell|rimand|spost|rinvi|posticip)|non posso piu|non riesco piu/;
@@ -70,6 +79,7 @@ function categoriaDi(testo: string): CategoriaContatto {
   // parlare del prezzo, all'operatore serve sapere che lo sta aspettando.
   if (PERSONA.test(t)) return 'chiede_una_persona';
   if (RICHIAMO.test(t)) return 'vuole_essere_chiamato';
+  if (ASPETTA_CALL.test(t)) return 'aspetta_la_call';
   if (PRENOTAZIONE.test(t)) return 'problema_prenotazione';
   if (DISDETTA.test(t)) return 'disdetta_o_spostamento';
   if (LAMENTELA.test(t)) return 'lamentela';
@@ -117,6 +127,7 @@ export function categoriaPerCrm(c: CategoriaContatto): CategoriaCrm {
     case 'disdetta_o_spostamento': return 'disdetta';
     case 'prezzo_o_pagamento': return 'prezzo';
     case 'problema_prenotazione': return 'problema_tecnico';
+    // 'aspetta_la_call' non chiede niente di nuovo: non ha una coda loro, resta 'altro'.
     default: return 'altro';
   }
 }

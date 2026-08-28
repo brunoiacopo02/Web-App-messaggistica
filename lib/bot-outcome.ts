@@ -184,6 +184,7 @@ async function inviaContattoUmano(
   args: SendOutcomeArgs,
   secret: string,
   waNumber?: string | null,
+  scheduledAt?: string | null,
 ): Promise<{ sent: boolean; status?: number; error?: string; notifySuppressed?: true }> {
   const note = buildContattoUmanoNote({ leadWords: args.note, motivo: args.discardReason });
   // Contratto v1.5: oltre alle parole del lead viaggiano la categoria e i pochi fatti
@@ -195,9 +196,13 @@ async function inviaContattoUmano(
     motivoRichiesta([{ body: args.note ?? '', created_at: new Date().toISOString() }]).categoria,
   );
   const disponibilita = disponibilitaDalTesto(args.note);
+  // Un lead con l'appuntamento già fissato è di competenza delle Conferme, non di chi
+  // fissa: senza questo campo il CRM non ha modo di saperlo e instrada la segnalazione
+  // al GDO come tutte le altre (13 su 66 finivano così). Solo se c'è: niente null.
   const info = {
     ...(disponibilita ? { disponibilita } : {}),
     ...(waNumber ? { telefonoPreferito: waNumber } : {}),
+    ...(scheduledAt ? { appuntamento: scheduledAt } : {}),
   };
   const body: BotOutcomeBody = {
     leadId: crmLeadId,
@@ -346,7 +351,7 @@ export async function sendOutcome(
   // locked lo tradurrebbe in una nota generica "appuntamento mantenuto", e la richiesta
   // di parlare con una persona si perderebbe un'altra volta.
   if (args.outcome === 'CONTATTO_UMANO') {
-    return inviaContattoUmano(supabase, conversationId, crmLeadId, args, secret, row?.wa_number ?? null);
+    return inviaContattoUmano(supabase, conversationId, crmLeadId, args, secret, row?.wa_number ?? null, row?.bot_scheduled_at ?? null);
   }
 
   // Un lead con l'appuntamento già fissato che chiede di annullare o spostare va

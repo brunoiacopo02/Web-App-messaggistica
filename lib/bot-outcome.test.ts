@@ -517,6 +517,31 @@ describe('sendOutcome — CONTATTO_UMANO', () => {
     expect(res.notifySuppressed).toBeUndefined();
     expect(calls.events.some((e: { type: string }) => e.type === 'bot_contatto_umano_inviato')).toBe(true);
   });
+
+  // Il CRM instrada 13 segnalazioni su 66 alla coda sbagliata (GDO invece delle
+  // Conferme) perché non sa che il lead ha già un appuntamento fissato: senza questo
+  // campo non può capire che la richiesta è di competenza di chi conferma, non di chi
+  // fissa.
+  it('con un appuntamento già fissato, la data viaggia in info.appuntamento', async () => {
+    const CONV_CON_APPUNTAMENTO = { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE };
+    const { supabase } = makeSupabase(CONV_CON_APPUNTAMENTO);
+    const res = await sendOutcome(supabase, 1, { outcome: 'CONTATTO_UMANO', note: 'aspetto la call' });
+
+    expect(res.sent).toBe(true);
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(body.info.appuntamento).toBe(DATE);
+  });
+
+  it('senza un appuntamento fissato, il campo non compare affatto (niente null, niente stringa vuota)', async () => {
+    const { supabase } = makeSupabase(CONV_UMANO);
+    const res = await sendOutcome(supabase, 1, { outcome: 'CONTATTO_UMANO', note: 'voglio parlare con una persona' });
+
+    expect(res.sent).toBe(true);
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    // `info` può anche non esserci del tutto (nessun altro fatto noto): quello che
+    // conta è che `appuntamento` non ci sia mai come null o stringa vuota.
+    expect(body.info?.appuntamento).toBeUndefined();
+  });
 });
 
 describe('sendOutcome — canale solo-NOTA per i lead dei GDO (noteOnly)', () => {
