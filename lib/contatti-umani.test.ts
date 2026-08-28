@@ -107,6 +107,16 @@ describe('motivoRichiesta', () => {
       expect(caso('Va bene, ci vediamo giovedì')).toBe('aspetta_la_call');
     });
 
+    // Il messaggio di recupero delle mancate risposte chiede "quando ti va bene?", e
+    // moltiplica proprio le risposte che dicono due cose insieme. Fra le due conta
+    // quella che chiede qualcosa a qualcuno: `aspetta_la_call` diventa `altro` per il
+    // CRM, cioè la coda meno azionabile, e una disdetta finita lì non la lavora
+    // nessuno.
+    it('aspetta la call ma vuole spostarla: conta la disdetta, non l attesa', () => {
+      expect(caso('Aspetto ancora la call ma vorrei spostarla')).toBe('disdetta_o_spostamento');
+      expect(caso('Sono in attesa della videochiamata, però devo annullarla')).toBe('disdetta_o_spostamento');
+    });
+
     it('aspetta la call: non si aggancia a chi non nomina la call', () => {
       // "Aspetto" da solo non basta: senza la call è solo un lead che aspetta
       // qualcos'altro (una risposta, un pagamento, un link).

@@ -79,9 +79,14 @@ function categoriaDi(testo: string): CategoriaContatto {
   // parlare del prezzo, all'operatore serve sapere che lo sta aspettando.
   if (PERSONA.test(t)) return 'chiede_una_persona';
   if (RICHIAMO.test(t)) return 'vuole_essere_chiamato';
-  if (ASPETTA_CALL.test(t)) return 'aspetta_la_call';
   if (PRENOTAZIONE.test(t)) return 'problema_prenotazione';
+  // La disdetta viene PRIMA dell'attesa: "aspetto ancora la call ma vorrei spostarla"
+  // dice due cose, e solo una delle due chiede qualcosa a qualcuno. Nell'ordine
+  // opposto quel messaggio finiva in `aspetta_la_call`, che il CRM traduce in `altro`
+  // — la coda meno azionabile — mentre e' una disdetta da lavorare. E' proprio la
+  // frase che il messaggio di recupero ("quando ti va bene?") moltiplica.
   if (DISDETTA.test(t)) return 'disdetta_o_spostamento';
+  if (ASPETTA_CALL.test(t)) return 'aspetta_la_call';
   if (LAMENTELA.test(t)) return 'lamentela';
   if (PREZZO.test(t)) return 'prezzo_o_pagamento';
   return 'altro';
