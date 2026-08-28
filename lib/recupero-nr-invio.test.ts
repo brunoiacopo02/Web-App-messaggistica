@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { dentroFinestra, quandoLeggibile, notaRecuperoNr } from './recupero-nr-invio';
+import {
+  dentroFinestra, quandoLeggibile, notaRecuperoNr,
+  controllaAppointmentAt, TURNO_RIPRESA_RECUPERO_NR, SCARTO_DATE_TOLLERATO_MS,
+} from './recupero-nr-invio';
 
 const H = 3600_000;
 const NOW = Date.parse('2026-08-28T12:00:00+02:00');
@@ -69,5 +72,55 @@ describe('notaRecuperoNr', () => {
       const n = notaRecuperoNr(QUANDO, t);
       expect(n).toMatch(/non (cambiare|spostare|proporre)/i);
     }
+  });
+});
+
+describe('controllaAppointmentAt', () => {
+  const NOSTRO = Date.parse('2026-08-29T15:00:00+02:00');
+
+  it('stessa data del CRM e nostra: passa, nessuna incoerenza', () => {
+    const r = controllaAppointmentAt('2026-08-29T15:00:00+02:00', NOSTRO, NOW);
+    expect(r).toEqual({ ok: true, scartoMs: 0, incoerente: false });
+  });
+
+  it('appuntamento gia passato: si rifiuta, e il motivo si legge', () => {
+    // Confermare una call di ieri e peggio del silenzio: il lead capisce che il
+    // sistema non sa cosa sta dicendo.
+    const r = controllaAppointmentAt('2026-08-27T15:00:00+02:00', NOSTRO, NOW);
+    expect(r).toEqual({ ok: false, motivo: 'appuntamento_gia_passato' });
+  });
+
+  it('data illeggibile: si rifiuta invece di scrivere una data a caso', () => {
+    const r = controllaAppointmentAt('non-una-data', NOSTRO, NOW);
+    expect(r).toEqual({ ok: false, motivo: 'appointment_at_illeggibile' });
+  });
+
+  it('slot spostato di un ora: passa e non e incoerente, la loro e la fonte di verita', () => {
+    const r = controllaAppointmentAt('2026-08-29T16:00:00+02:00', NOSTRO, NOW);
+    expect(r).toMatchObject({ ok: true, incoerente: false });
+  });
+
+  it('un giorno di scarto: si manda comunque, ma resta scritto', () => {
+    const r = controllaAppointmentAt('2026-08-30T15:00:00+02:00', NOSTRO, NOW);
+    expect(r).toMatchObject({ ok: true, incoerente: true });
+    expect((r as { scartoMs: number }).scartoMs).toBeGreaterThan(SCARTO_DATE_TOLLERATO_MS);
+  });
+
+  it('non abbiamo nessuna data nostra: niente con cui confrontarsi, niente allarme', () => {
+    // I lead che il CRM ci manda senza che noi abbiamo mai visto l'appuntamento: il
+    // confronto non si puo fare, e inventarsi un allarme sarebbe rumore.
+    const r = controllaAppointmentAt('2026-08-30T15:00:00+02:00', null, NOW);
+    expect(r).toEqual({ ok: true, scartoMs: null, incoerente: false });
+  });
+});
+
+describe('TURNO_RIPRESA_RECUPERO_NR', () => {
+  it('si dichiara nota di sistema: il modello non deve scambiarlo per il lead', () => {
+    expect(TURNO_RIPRESA_RECUPERO_NR).toMatch(/nota di sistema/);
+    expect(TURNO_RIPRESA_RECUPERO_NR).toMatch(/non . un messaggio del lead/);
+  });
+
+  it('dice il motivo vero della ripresa: la telefonata a vuoto, non il silenzio', () => {
+    expect(TURNO_RIPRESA_RECUPERO_NR).toMatch(/telefon/i);
   });
 });

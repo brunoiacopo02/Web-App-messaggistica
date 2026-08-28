@@ -2,15 +2,20 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { verifySignature } from '@/lib/bot-hmac';
 import { parseCallAttempt, tentativoGestito } from '@/lib/call-attempt';
-import { puoScrivere, type StatoConversazione } from '@/lib/recupero-nr';
-import { dentroFinestra, quandoLeggibile, notaRecuperoNr } from '@/lib/recupero-nr-invio';
-import { generateMarioReply, type MarioTurn } from '@/lib/mario';
+import { puoScrivere, appuntamentoDaConfermare, type StatoConversazione } from '@/lib/recupero-nr';
+import {
+  dentroFinestra, quandoLeggibile, notaRecuperoNr,
+  controllaAppointmentAt, TURNO_RIPRESA_RECUPERO_NR,
+} from '@/lib/recupero-nr-invio';
+import { generateMarioReply } from '@/lib/mario';
+import { buildSollecitoHistory } from '@/lib/gdo-video-followup';
 import { splitMarioMessages } from '@/lib/mario-split';
+import { unknownFeniceLinks } from '@/lib/outbound-sanitize';
 import { sendFreeText } from '@/lib/twilio';
 import { sendTemplateAndLog } from '@/lib/messaging';
 import { templateName } from '@/lib/name';
 import { PERSONA_NAME, personaForConversation } from '@/lib/persona';
-import { martaSidsFromEnv } from '@/lib/fenice-autoreply';
+import { martaSidsFromEnv, shouldReopen } from '@/lib/fenice-autoreply';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -20,6 +25,17 @@ export const dynamic = 'force-dynamic';
 // esattamente il danno per cui qui si risponde sempre 200. Stesso valore dell'altro
 // webhook del CRM (`/api/bot/contatti-umani`).
 export const maxDuration = 60;
+
+// Il budget della chiamata al modello, esplicito perché quello di casa non ci sta.
+// `lib/mario.ts` costruisce il client con `timeout: 60_000, maxRetries: 5`: un solo
+// tentativo può consumare da solo tutti i 60 secondi della funzione, e sui 429/529 i
+// retry ci arrivano davvero. Una funzione uccisa fra l'invio e la scrittura del
+// lucchetto lascerebbe il lead col messaggio e noi senza traccia — al giro dopo il CRM
+// gliene farebbe arrivare un secondo. Due tentativi da 20s stanno comodi dentro i 60 e
+// lasciano il tempo per gli invii Twilio e per le scritture.
+const BUDGET_MODELLO_MS = 20_000;
+/** Tentativi OLTRE il primo: 1 ⇒ due chiamate in tutto. */
+const RETRY_MODELLO = 1;
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -77,6 +93,38 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, inviato: false, motivo: verdetto.motivo });
   }
 
+  // La data che finisce NEL MESSAGGIO al lead arriva dal CRM e fin qui non la
+  // controllava nessuno: le sette guardie validano le nostre colonne. Un
+  // `appointmentAt` sbagliato manda al lead la data sbagliata della sua call — il danno
+  // che questo progetto ha già visto con le date dei GDO.
+  const controllo = controllaAppointmentAt(
+    evento.appointmentAt, appuntamentoDaConfermare(stato), Date.now(),
+  );
+  if (!controllo.ok) {
+    await supabase.from('event_log').insert({
+      type: 'recupero_nr_saltato',
+      payload: { conversationId: conv.id, crmLeadId: evento.leadId, tentativo: evento.tentativo, motivo: controllo.motivo, appointmentAt: evento.appointmentAt } as never,
+      message: `[crm] recupero non-risposta saltato per il lead ${evento.leadId} (tentativo ${evento.tentativo}): ${controllo.motivo}`,
+      level: 'warn',
+    });
+    return NextResponse.json({ ok: true, inviato: false, motivo: controllo.motivo });
+  }
+  // Non ferma l'invio — sull'agenda delle Conferme la fonte di verità è la loro — ma
+  // resta scritto: uno dei due sistemi ha la riga sbagliata e va guardato.
+  if (controllo.incoerente) {
+    await supabase.from('event_log').insert({
+      type: 'recupero_nr_data_incoerente',
+      payload: {
+        conversationId: conv.id, crmLeadId: evento.leadId, tentativo: evento.tentativo,
+        appointmentAt: evento.appointmentAt,
+        bot_scheduled_at: stato.bot_scheduled_at, gdo_appuntamento_at: stato.gdo_appuntamento_at,
+        scartoMs: controllo.scartoMs,
+      } as never,
+      message: `[crm] recupero non-risposta per il lead ${evento.leadId}: la data del CRM (${evento.appointmentAt}) non coincide con la nostra`,
+      level: 'warn',
+    });
+  }
+
   const esito = await inviaRecuperoNr(supabase, {
     conversationId: conv.id,
     crmLeadId: evento.leadId,
@@ -84,6 +132,9 @@ export async function POST(req: NextRequest) {
     phone: conv.leads?.phone_e164 ?? null,
     nome: conv.leads?.first_name ?? null,
     aiStartedAt: conv.ai_started_at,
+    aiOwner: conv.ai_owner,
+    aiStatus: conv.ai_status,
+    aiPausedAt: conv.ai_paused_at,
     appointmentAt: evento.appointmentAt,
     ultimoInboundAt: stato.ultimoInboundAt,
   });
@@ -166,6 +217,10 @@ type ContestoInvio = {
   phone: string | null;
   nome: string | null;
   aiStartedAt: string | null;
+  /** Servono a `shouldReopen`: si riapre solo quello che era davvero chiuso. */
+  aiOwner: string | null;
+  aiStatus: string | null;
+  aiPausedAt: string | null;
   appointmentAt: string;
   ultimoInboundAt: string | null;
 };
@@ -210,47 +265,101 @@ async function inviaRecuperoNr(supabase: Supa, ctx: ContestoInvio): Promise<Esit
     return { inviato: false, motivo: 'template_non_configurato' };
   }
 
+  // Il lucchetto si prende PRIMA di scrivere al lead, non dopo. Leggerlo prima e
+  // scriverlo dopo non è un lucchetto: in mezzo ci sono la chiamata al modello e gli
+  // invii Twilio, cioè secondi, e due POST ravvicinati (il doppio clic che la specifica
+  // promette innocuo) leggerebbero entrambi "non inviato" e manderebbero entrambi.
+  // Il claim è la insert stessa: la migration 20260828000001 mette un indice unique
+  // parziale su (type, payload->>conversationId, payload->>tentativo) per questo solo
+  // tipo, quindi chi arriva secondo si prende un 23505 ed esce senza scrivere niente.
+  const payloadLucchetto = {
+    conversationId: ctx.conversationId, crmLeadId: ctx.crmLeadId, tentativo: ctx.tentativo, ramo,
+  };
+  const { error: erroreClaim } = await supabase.from('event_log').insert({
+    type: 'recupero_nr_inviato',
+    payload: payloadLucchetto as never,
+    message: `[crm] recupero non-risposta inviato al lead ${ctx.crmLeadId} (tentativo ${ctx.tentativo}, ${ramo})`,
+    level: 'info',
+  });
+  if (erroreClaim) {
+    // 23505 = unique_violation: il lucchetto ce l'ha già qualcun altro, e il lead il
+    // suo messaggio ce l'ha (o sta per averlo). Qualsiasi altro errore è un guasto del
+    // database e non va confuso con un duplicato: si dice che l'invio è fallito, così
+    // il caso resta ritentabile e visibile.
+    if ((erroreClaim as { code?: string }).code === '23505') {
+      return { inviato: false, motivo: 'gia_inviato' };
+    }
+    await logInvioFallito(supabase, ctx, `lucchetto non scrivibile: ${erroreClaim.message ?? 'errore sconosciuto'}`);
+    return { inviato: false, motivo: 'invio_fallito' };
+  }
+
   let sid: string;
   try {
     const res = ramo === 'libero'
       ? await scriviMessaggioLibero(supabase, ctx, from, quando)
       : await scriviTemplate(supabase, ctx, from, quando, templateSid as string);
     if ('errore' in res) {
+      await rilasciaLucchetto(supabase, ctx);
       await logInvioFallito(supabase, ctx, res.errore);
       return { inviato: false, motivo: 'invio_fallito' };
     }
     sid = res.sid;
   } catch (err) {
+    await rilasciaLucchetto(supabase, ctx);
     await logInvioFallito(supabase, ctx, err instanceof Error ? err.message : 'errore sconosciuto');
     return { inviato: false, motivo: 'invio_fallito' };
   }
 
-  // Il lucchetto prima della riapertura, non dopo: se il processo muore fra le due
-  // scritture, una conversazione rimasta chiusa è un guaio che una persona vede e
-  // recupera dal pannello, mentre un secondo messaggio identico al lead è già partito
-  // e non lo si può più riprendere.
-  await supabase.from('event_log').insert({
-    type: 'recupero_nr_inviato',
-    payload: { conversationId: ctx.conversationId, crmLeadId: ctx.crmLeadId, tentativo: ctx.tentativo, ramo, sid } as never,
-    message: `[crm] recupero non-risposta inviato al lead ${ctx.crmLeadId} (tentativo ${ctx.tentativo}, ${ramo})`,
-    level: 'info',
-  });
+  // Il SID si conosce solo adesso e completa la riga del lucchetto: è la sola cosa che
+  // lega l'evento al messaggio davvero uscito da Twilio. Se questa update non passa
+  // resta un lucchetto senza SID, che è comunque un lucchetto valido.
+  await supabase
+    .from('event_log')
+    .update({ payload: { ...payloadLucchetto, sid } as never })
+    .eq('type', 'recupero_nr_inviato')
+    .eq('payload->>conversationId', String(ctx.conversationId))
+    .eq('payload->>tentativo', String(ctx.tentativo));
 
   // Riapertura: la conversazione di un lead appuntato è chiusa, e su una chat chiusa
   // la sua risposta non verrebbe lavorata da nessuno — gli avremmo chiesto quando
   // richiamarlo per poi non leggere la risposta.
+  //
+  // Si riapre SOLO quello che era chiuso, ed è `shouldReopen` a dirlo: scrivere
+  // `active` incondizionatamente cancellerebbe uno stato che vale più di questo invio
+  // ('booked', 'handed_off'), ed è proprio per non perderli che quella funzione riapre
+  // solo da 'closed'.
   //
   // Si tocca SOLO `ai_status`. Né `bot_outcome`, né `bot_outcome_at`, né
   // `bot_scheduled_at`: l'appuntamento è già preso e resta preso. Declassarlo qui lo
   // rimetterebbe fra quelli da fissare e lo farebbe ricomparire come "preso oggi" al
   // prossimo esito — è il bug che l'invariante "una volta fissato resta Preso" è nata
   // per chiudere.
+  const riapri = shouldReopen({ aiOwner: ctx.aiOwner, aiStatus: ctx.aiStatus, aiPausedAt: ctx.aiPausedAt });
   await supabase
     .from('conversations')
-    .update({ ai_status: 'active', last_message_at: new Date().toISOString() })
+    .update({ ...(riapri ? { ai_status: 'active' } : {}), last_message_at: new Date().toISOString() })
     .eq('id', ctx.conversationId);
 
   return { inviato: true, ramo };
+}
+
+/**
+ * Toglie il lucchetto quando il messaggio non è partito.
+ *
+ * Tenerlo significherebbe che una singola sbandata di Twilio (o del modello) chiude per
+ * sempre quel tentativo: al giro dopo il CRM si sentirebbe rispondere `gia_inviato` per
+ * un messaggio che il lead non ha mai visto. Il rischio simmetrico — l'altra richiesta
+ * del doppio clic che nel frattempo si è già presa un `gia_inviato` e quindi tace anche
+ * lei — costa un recupero mancato, non un doppio messaggio: fra i due si sceglie
+ * questo.
+ */
+async function rilasciaLucchetto(supabase: Supa, ctx: ContestoInvio): Promise<void> {
+  await supabase
+    .from('event_log')
+    .delete()
+    .eq('type', 'recupero_nr_inviato')
+    .eq('payload->>conversationId', String(ctx.conversationId))
+    .eq('payload->>tentativo', String(ctx.tentativo));
 }
 
 /** Un fallimento d'invio si registra come ovunque nel resto del codice. */
@@ -291,20 +400,41 @@ async function scriviMessaggioLibero(
   const martaSids = martaSidsFromEnv();
   const persona = martaSids.size > 0 ? personaForConversation(rows, martaSids) : 'mario';
 
-  const history: MarioTurn[] = rows.map((m) => ({
-    role: m.direction === 'in' ? 'user' : 'assistant',
-    content: m.body ?? '',
-  }));
+  // La cronologia grezza qui finisce quasi sempre su un turno `assistant`: la guardia
+  // `gia_risposto` esclude i lead che hanno scritto dopo la chiamata a vuoto, e al loro
+  // ultimo messaggio il drain ha già risposto. Sonnet 4.6 rifiuta quella forma con un
+  // 400 che l'SDK non ritenta. `buildSollecitoHistory` è la cura già scritta in casa
+  // per lo stesso problema sui solleciti GDO: chiude la cronologia con un turno `user`
+  // sintetico, qui con le parole del recupero (vedi TURNO_RIPRESA_RECUPERO_NR).
+  const history = buildSollecitoHistory(
+    rows.map((m) => ({ direction: m.direction, body: m.body ?? '' })),
+    TURNO_RIPRESA_RECUPERO_NR,
+  );
 
   const result = await generateMarioReply(history, {
     personaName: PERSONA_NAME[persona],
     contextNote: notaRecuperoNr(quando, ctx.tentativo),
+    timeoutMs: BUDGET_MODELLO_MS,
+    maxRetries: RETRY_MODELLO,
   });
 
   // Niente pausa fra le bolle come nel drain: qui dall'altra parte c'è il CRM che
   // aspetta la risposta HTTP, e il recupero è un messaggio corto.
   const parts = splitMarioMessages(result.visibleReply ?? '');
   if (parts.length === 0) return { errore: 'il modello non ha prodotto nessun messaggio da inviare' };
+
+  // Stesso presidio del drain su ogni uscita del modello: un link Fenice inventato è
+  // un lead mandato su una pagina che non esiste, e senza questa riga partirebbe da qui
+  // senza lasciare traccia da nessuna parte.
+  const linkInventati = parts.flatMap((b) => unknownFeniceLinks(b));
+  if (linkInventati.length > 0) {
+    await supabase.from('event_log').insert({
+      type: 'unknown_fenice_link',
+      payload: { conversationId: ctx.conversationId, links: linkInventati } as never,
+      message: `[crm] conv ${ctx.conversationId}: link Fenice non ufficiale nel recupero non-risposta: ${linkInventati.join(', ')}`,
+      level: 'warn',
+    });
+  }
 
   let primo: string | undefined;
   try {
