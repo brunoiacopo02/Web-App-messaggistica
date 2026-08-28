@@ -72,6 +72,17 @@ describe('puoScrivere', () => {
     expect(puoScrivere(stato, EVENTO, NOW)).toEqual({ ok: false, motivo: 'gia_risposto' });
   });
 
+  it('5) un `at` nel futuro vale come adesso: la risposta appena arrivata resta una risposta', () => {
+    // L'orologio del CRM non è il nostro, e `at` arriva da loro: spostato di sei ore in
+    // avanti, QUALSIASI risposta del lead sembra "precedente" alla chiamata e la
+    // guardia non scatta più — gli scriveremmo sopra. Il timestamp del messaggio qui lo
+    // mette il database, che può stare avanti di qualche secondo rispetto al nostro
+    // `Date.now()`: è il caso limite, ed è quello che senza il taglio passava.
+    const evento: CallAttempt = { ...EVENTO, at: '2026-08-28T18:00:00+02:00' };
+    const stato = statoPulito({ ultimoInboundAt: new Date(NOW + 30_000).toISOString() });
+    expect(puoScrivere(stato, evento, NOW)).toEqual({ ok: false, motivo: 'gia_risposto' });
+  });
+
   it('6) nessuno dei due appuntamenti → appuntamento_non_valido', () => {
     const stato = statoPulito({ bot_scheduled_at: null, gdo_appuntamento_at: null });
     expect(puoScrivere(stato, EVENTO, NOW)).toEqual({ ok: false, motivo: 'appuntamento_non_valido' });

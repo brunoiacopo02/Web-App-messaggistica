@@ -40,7 +40,7 @@ export type Verdetto = { ok: true } | { ok: false; motivo: MotivoStop };
  * Una data illeggibile conta come assente — meglio non scrivere che scrivere di un
  * appuntamento che non sappiamo quando sia.
  */
-function appuntamentoDaConfermare(stato: StatoConversazione): number | null {
+export function appuntamentoDaConfermare(stato: StatoConversazione): number | null {
   const ms = [stato.bot_scheduled_at, stato.gdo_appuntamento_at]
     .map((d) => (d ? Date.parse(d) : NaN))
     .filter((t) => !Number.isNaN(t));
@@ -68,7 +68,13 @@ export function puoScrivere(stato: StatoConversazione, evento: CallAttempt, nowM
 
   // Ha già risposto DOPO la chiamata persa: non c'è niente da recuperare. Se ha
   // scritto prima (o mai), la chiamata a vuoto resta un buco da colmare.
-  if (stato.ultimoInboundAt && Date.parse(stato.ultimoInboundAt) > Date.parse(evento.at)) {
+  //
+  // `evento.at` è l'orologio del CRM, non il nostro: se il loro è avanti (o mandano una
+  // data nel futuro) una risposta appena arrivata sembrerebbe "precedente" alla
+  // chiamata, e scriveremmo sopra a un lead che ci ha appena risposto. Una chiamata non
+  // può essere stata fatta dopo adesso: al massimo è adesso.
+  const chiamataMs = Math.min(Date.parse(evento.at), nowMs);
+  if (stato.ultimoInboundAt && Date.parse(stato.ultimoInboundAt) > chiamataMs) {
     return { ok: false, motivo: 'gia_risposto' };
   }
 
