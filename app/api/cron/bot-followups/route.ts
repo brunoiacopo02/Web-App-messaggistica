@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendOutcome } from '@/lib/bot-outcome';
 import { decideFollowupAction } from '@/lib/bot-followups';
 import { classifyInterrupted } from '@/lib/interrotto-note';
+import { buildConfermaPersaNote } from '@/lib/bot-outcome-rules';
 import type { MarioTurn } from '@/lib/mario';
 import { drainMarioReplies, lastIsUnansweredInbound, isOrphanedReplyingLock, isLockStale, LOCK_TTL_MS, serveRedrive } from '@/lib/fenice-autoreply';
 import { runAgendaFollowups } from '@/lib/agenda-followup';
@@ -253,6 +254,20 @@ export async function GET(req: NextRequest) {
           content: r.body ?? '',
         }));
         const v = await classifyInterrupted(history);
+        // Il lead aveva detto sì a un giorno e un'ora, o aveva compilato il form, e
+        // l'appuntamento non è mai partito: restituirlo come "chat interrotta" e basta
+        // butta via un sì già dato. In agosto è successo 49 volte. La segnalazione parte
+        // PRIMA dell'esito, perché l'esito chiude la conversazione; e si aggiunge, non
+        // sostituisce: il lead torna comunque al CRM come sempre.
+        if (v.confermato && c.crm_lead_id) {
+          const ultimoDelLead = [...rows].reverse().find((r) => r.direction === 'in')?.body ?? undefined;
+          await sendOutcome(supabase, c.id, {
+            outcome: 'CONTATTO_UMANO',
+            note: ultimoDelLead,
+            motivoContattoUmano: 'confermato_senza_appuntamento',
+            notaContattoUmano: buildConfermaPersaNote({ leadWords: ultimoDelLead, stage: v.note }),
+          });
+        }
         if (v.discard) {
           await sendOutcome(supabase, c.id, {
             outcome: 'DA_SCARTARE',

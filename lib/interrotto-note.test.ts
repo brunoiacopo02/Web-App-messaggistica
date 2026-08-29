@@ -34,6 +34,7 @@ describe('parseInterruptedVerdict', () => {
     const v = parseInterruptedVerdict('{"discard": true, "stage": ...boom', FALLBACK);
     expect(v).toEqual({
       discard: false,
+      confermato: false,
       note: 'Chat interrotta. Ultimo messaggio del lead: "ok ci sentiamo"',
     });
   });
@@ -42,6 +43,7 @@ describe('parseInterruptedVerdict', () => {
     const v = parseInterruptedVerdict('Non posso rispondere in JSON.', FALLBACK);
     expect(v).toEqual({
       discard: false,
+      confermato: false,
       note: 'Chat interrotta. Ultimo messaggio del lead: "ok ci sentiamo"',
     });
   });
@@ -82,6 +84,7 @@ describe('parseInterruptedVerdict', () => {
     const v = parseInterruptedVerdict(raw, FALLBACK);
     expect(v).toEqual({
       discard: false,
+      confermato: false,
       note: 'Chat interrotta. Ultimo messaggio del lead: "ok ci sentiamo"',
     });
   });
@@ -102,5 +105,40 @@ describe('parseInterruptedVerdict', () => {
     });
     const v = parseInterruptedVerdict(raw, FALLBACK);
     expect(v.discard).toBe(false);
+  });
+});
+
+describe('confermato: il si\' che non e\' diventato un appuntamento', () => {
+  it('lo legge quando il modello lo dice', () => {
+    const raw = JSON.stringify({
+      discard: false, discardReason: null,
+      stage: 'dopo il link del form', lastLeadQuote: 'si esatto confermo mercoledi 19 alle 12',
+      confermato: true,
+    });
+    expect(parseInterruptedVerdict(raw, FALLBACK).confermato).toBe(true);
+  });
+
+  it('senza il campo vale falso: non si segnala una conferma che nessuno ha visto', () => {
+    const raw = JSON.stringify({
+      discard: false, discardReason: null, stage: 'dopo il prezzo', lastLeadQuote: 'ok',
+    });
+    expect(parseInterruptedVerdict(raw, FALLBACK).confermato).toBe(false);
+  });
+
+  it('un valore che non e\' true vale falso', () => {
+    const raw = JSON.stringify({
+      discard: false, discardReason: null, stage: 'x', lastLeadQuote: 'y', confermato: 'si',
+    });
+    expect(parseInterruptedVerdict(raw, FALLBACK).confermato).toBe(false);
+  });
+
+  it('vale anche su uno scarto: il lead aveva confermato e poi ha detto no', () => {
+    const raw = JSON.stringify({
+      discard: true, discardReason: 'non interessato', stage: 'dopo il prezzo',
+      lastLeadQuote: 'no grazie', confermato: true,
+    });
+    const v = parseInterruptedVerdict(raw, FALLBACK);
+    expect(v.discard).toBe(true);
+    expect(v.confermato).toBe(true);
   });
 });

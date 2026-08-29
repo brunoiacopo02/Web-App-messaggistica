@@ -267,6 +267,27 @@ export function buildContattoUmanoNote(input: { leadWords?: string; motivo?: str
 }
 
 /**
+ * Il lead aveva detto sì a un giorno e un'ora — o aveva compilato il form — e
+ * l'appuntamento al CRM non è mai arrivato. Fino al 29/08/2026 una chat così tornava
+ * indietro come "interrotta" e basta: in agosto è successo 49 volte, e su una di quelle
+ * (Giulia, «si esatto confermo mercoledì 19 alle 12») il sì era nero su bianco.
+ *
+ * La nota dice il fatto e riporta le parole, perché chi legge decida se telefonare: non
+ * fissa niente da sola, e la chat resta restituita come prima.
+ */
+export function buildConfermaPersaNote(input: { leadWords?: string; stage?: string }): string {
+  const parole = paroleDelLead(input.leadWords);
+  const dove = input.stage?.replace(/\s+/g, ' ').trim();
+  const coda = parole ? ` Parole del lead: "${parole}".` : '';
+  const contesto = dove ? ` La chat si è fermata ${dove}.` : '';
+  return (
+    "AVEVA CONFERMATO E L'APPUNTAMENTO NON C'È — il lead ha detto sì a un giorno e un'ora " +
+    '(o ha completato il form) ma da noi non è mai partito nessun appuntamento, quindi ' +
+    'in agenda non esiste.' + coda + contesto + " Vale una telefonata: il sì c'era già."
+  );
+}
+
+/**
  * La nota di chi ha risposto DOPO il terzo tentativo di chiamata. È un caso diverso dal
  * `CONTATTO_UMANO` normale e la nota deve dirlo: il bot non si è fatto da parte, e
  * soprattutto dall'altra parte quel lead è già stato scartato in automatico dal terzo

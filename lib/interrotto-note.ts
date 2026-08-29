@@ -7,16 +7,25 @@ const INTERRUPTED_SYSTEM = `Sei un analista che classifica una conversazione Wha
 Il lead ha smesso di rispondere. Devi decidere se il lead va scartato o restituito al venditore, e a che punto dello script si è fermata la chat.
 
 Rispondi SOLO con un oggetto JSON, senza testo prima o dopo, in questo formato esatto:
-{"discard":bool,"discardReason":string|null,"stage":string,"lastLeadQuote":string}
+{"discard":bool,"discardReason":string|null,"stage":string,"lastLeadQuote":string,"confermato":bool}
 
 Regole:
 - "discard" deve essere true SOLO se il lead ha espresso un'obiezione ferrea ESPLICITA: ha dichiarato di non essere interessato, ha chiesto di non essere più ricontattato, oppure ha detto di aver già scelto un altro percorso/altra soluzione. In ogni altro caso, incluso il dubbio, "discard" è false.
 - Se "discard" è true, "discardReason" è una breve motivazione in italiano; altrimenti null.
 - "stage" è il punto dello script raggiunto quando la chat si è interrotta (es. "dopo la domanda sul lavoro", "dopo il prezzo", "dopo il pitch iniziale").
 - "lastLeadQuote" è l'ultima frase scritta dal lead, citata testualmente.
+- "confermato" è true SOLO se nella conversazione il lead ha detto SÌ a un giorno e un'ora precisi della call (es. "confermo mercoledì 19 alle 12"), oppure ha detto di aver completato il form di prenotazione (es. dice quale nome gli è comparso dopo l'invio). Un "va bene" generico, una disponibilità di massima ("dopo il 23", "la settimana prossima") o un semplice "ok" NON sono conferme: in quel caso, e in ogni dubbio, è false.
 Non inventare nulla che non sia nella conversazione.`;
 
-export type InterruptedVerdict = { discard: boolean; discardReason?: string; note: string };
+export type InterruptedVerdict = {
+  discard: boolean;
+  discardReason?: string;
+  note: string;
+  /** Il lead aveva detto sì a un giorno e un'ora, o aveva compilato il form, e
+   *  l'appuntamento non è mai arrivato al CRM. Restituirlo in silenzio come "chat
+   *  interrotta" significa perdere un sì già dato: in agosto è successo 49 volte. */
+  confermato: boolean;
+};
 
 let _client: Anthropic | null = null;
 function getClient(): Anthropic {
@@ -30,6 +39,9 @@ function getClient(): Anthropic {
 function fallbackVerdict(lastLeadMsg: string): InterruptedVerdict {
   return {
     discard: false,
+    // Il fallback non sa niente della conferma: dirla per sbaglio manderebbe una
+    // segnalazione a vuoto, non dirla lascia le cose come stavano prima.
+    confermato: false,
     note: `Chat interrotta. Ultimo messaggio del lead: "${lastLeadMsg}"`,
   };
 }
@@ -76,11 +88,12 @@ export function parseInterruptedVerdict(
   }
   const note = `Interrotta ${stage}. Ultima frase del lead: "${lastLeadQuote}"`;
   const reason = typeof obj.discardReason === 'string' ? obj.discardReason.trim() : '';
+  const confermato = obj.confermato === true;
   // discard=true solo se esplicitamente booleano E motivato: altrimenti si restituisce.
   if (obj.discard === true && reason) {
-    return { discard: true, discardReason: reason, note };
+    return { discard: true, discardReason: reason, note, confermato };
   }
-  return { discard: false, note };
+  return { discard: false, note, confermato };
 }
 
 /**
