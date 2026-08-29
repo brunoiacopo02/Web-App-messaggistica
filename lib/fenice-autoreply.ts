@@ -10,7 +10,8 @@ import { ensureConfirmationBlock, containsVideoLink } from './confirmation-block
 import { unknownFeniceLinks } from './outbound-sanitize';
 import { generateBotReport } from './bot-report';
 import { sendOutcome } from './bot-outcome';
-import { stopDalCrmPerLead } from './stop-crm';
+import { stopDalCrmPerLead, vuolePassaggioAUmano } from './stop-crm';
+import { buildScriveDopoLaCallNote } from './bot-outcome-rules';
 import { personaForConversation, PERSONA_NAME, OPENING_ENV_KEYS } from './persona';
 import { confermaVideoVisto } from './video-visto';
 
@@ -275,8 +276,45 @@ export async function drainMarioReplies(
   // rischiato un "rifissiamo la call?" e ci siamo fermati solo perche' il CRM ha
   // incrociato i dati a mano: questo e' il controllo che quel giro non lo fa fare piu'.
   // Il lucchetto va sciolto a mano, perche' si esce prima del `try`/`finally`.
-  const stopCrm = await stopDalCrmPerLead(supabase, crmLeadId);
+  // Qui il lead ci ha appena scritto, quindi il modo e' 'risposta': uno scarto deciso da
+  // un GDO non ci fa tacere davanti a una persona che si e' fatta viva. Restano fuori
+  // solo i clienti e chi alla call c'e' gia' andato — e per loro il silenzio sarebbe il
+  // peggio dei due mondi: sulle chat vive con uno stop, 39 persone in quello stato ci
+  // hanno scritto negli ultimi 14 giorni. Non risponde il bot: risponde una persona.
+  const stopCrm = await stopDalCrmPerLead(supabase, crmLeadId, 'risposta');
   if (stopCrm) {
+    if (crmLeadId && vuolePassaggioAUmano(stopCrm)) {
+      // Una volta sola per conversazione: il lucchetto e' l'evento stesso, come nel
+      // recupero NR, altrimenti ogni messaggio del cliente rifarebbe la segnalazione.
+      const { data: gia } = await supabase
+        .from('event_log').select('id')
+        .eq('type', 'bot_passa_a_persona_stato_crm')
+        .eq('payload->>conversationId', String(conversationId))
+        .limit(1).maybeSingle();
+      if (!gia) {
+        const { data: ultimo } = await supabase
+          .from('messages').select('body')
+          .eq('conversation_id', conversationId).eq('direction', 'in')
+          .order('created_at', { ascending: false }).limit(1).maybeSingle();
+        const parole = (ultimo as { body: string | null } | null)?.body ?? undefined;
+        await sendOutcome(supabase, conversationId, {
+          outcome: 'CONTATTO_UMANO',
+          note: parole,
+          motivoContattoUmano: stopCrm === 'gia_cliente' ? 'scrive_un_cliente' : 'scrive_chi_si_e_presentato',
+          notaContattoUmano: buildScriveDopoLaCallNote({ leadWords: parole, cliente: stopCrm === 'gia_cliente' }),
+        });
+        await supabase.from('event_log').insert({
+          type: 'bot_passa_a_persona_stato_crm',
+          payload: { conversationId, crmLeadId, motivo: stopCrm } as never,
+          message: `[bot-fissatore] conv ${conversationId}: scrive chi il CRM dice ${stopCrm}, passata a una persona`,
+          level: 'info',
+        });
+      }
+      await supabase.from('conversations')
+        .update({ ai_status: 'handed_off', ai_lock_at: null, handed_off_at: new Date().toISOString() })
+        .eq('id', conversationId).eq('ai_lock_at', nowIso);
+      return;
+    }
     await supabase.from('event_log').insert({
       type: 'bot_fermo_stato_crm',
       payload: { conversationId, crmLeadId, motivo: stopCrm } as never,

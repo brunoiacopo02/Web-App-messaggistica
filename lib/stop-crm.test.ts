@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stopDalCrm } from './stop-crm';
+import { stopDalCrm, vuolePassaggioAUmano } from './stop-crm';
 
 const base = { presented: false, sold: false, discard_reason: null };
 
@@ -40,14 +40,23 @@ describe('stopDalCrm', () => {
 describe('irreperibile non e\' un no', () => {
   const base = { presented: false, sold: false, discard_reason: null };
 
-  it('non ferma su "irreperibile (4 tentativi vuoti)"', () => {
-    // E' un telefono che non risponde, cioe' la stessa cosa dei "3 NR" scritta in un
-    // altro campo. E' il lead per cui la chat WhatsApp vale di piu', non di meno.
-    expect(stopDalCrm({ ...base, discard_reason: 'irreperibile (4 tentativi vuoti)' })).toBeNull();
+  it('di nostra iniziativa non si scrive a nessuno scartato, irreperibile compreso', () => {
+    // Il dato del CRM chiude la discussione: sui lead scartati e ri-pushati al bot gli
+    // appuntamenti recuperati sono zero su 50.380.
+    expect(stopDalCrm({ ...base, discard_reason: 'irreperibile (4 tentativi vuoti)' }))
+      .toBe('scartato_da_persona');
+    expect(stopDalCrm({ ...base, discard_reason: 'irriperebile (3 tentativi vuoti)' }))
+      .toBe('scartato_da_persona');
   });
 
-  it('non ferma nemmeno sulla grafia loro, "irriperebile (3 tentativi vuoti)"', () => {
-    expect(stopDalCrm({ ...base, discard_reason: 'irriperebile (3 tentativi vuoti)' })).toBeNull();
+  it("ma se e' il lead a scriverci, uno scarto non ci fa tacere", () => {
+    expect(stopDalCrm({ ...base, discard_reason: 'non interessato' }, 'risposta')).toBeNull();
+    expect(stopDalCrm({ ...base, discard_reason: 'irreperibile (4 tentativi vuoti)' }, 'risposta')).toBeNull();
+  });
+
+  it("a un cliente non risponde nemmeno se e' lui a scrivere: quella chat vuole una persona", () => {
+    expect(stopDalCrm({ ...base, sold: true }, 'risposta')).toBe('gia_cliente');
+    expect(stopDalCrm({ ...base, presented: true }, 'risposta')).toBe('gia_presentato');
   });
 
   it('ferma su un giudizio vero: non interessato', () => {
@@ -61,5 +70,13 @@ describe('irreperibile non e\' un no', () => {
   it('un cliente resta fermo comunque, qualunque sia la causale', () => {
     expect(stopDalCrm({ presented: true, sold: true, discard_reason: 'irreperibile (4 tentativi vuoti)' }))
       .toBe('gia_cliente');
+  });
+});
+
+describe('vuolePassaggioAUmano', () => {
+  it('cliente e presentato vogliono una persona, lo scarto no', () => {
+    expect(vuolePassaggioAUmano('gia_cliente')).toBe(true);
+    expect(vuolePassaggioAUmano('gia_presentato')).toBe(true);
+    expect(vuolePassaggioAUmano('scartato_da_persona')).toBe(false);
   });
 });

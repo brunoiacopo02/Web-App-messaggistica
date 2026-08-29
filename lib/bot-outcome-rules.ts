@@ -267,6 +267,23 @@ export function buildContattoUmanoNote(input: { leadWords?: string; motivo?: str
 }
 
 /**
+ * Scrive su WhatsApp qualcuno che alla call c'è già andato, o che ha già comprato. Il bot
+ * si toglie di mezzo — non è una conversazione da prequalifica — ma il silenzio sarebbe
+ * peggio: quella persona ha scritto e merita una risposta da chi la segue davvero.
+ */
+export function buildScriveDopoLaCallNote(input: { leadWords?: string; cliente: boolean }): string {
+  const parole = paroleDelLead(input.leadWords);
+  const chi = input.cliente
+    ? 'UN CLIENTE HA SCRITTO IN CHAT'
+    : 'HA SCRITTO CHI SI È GIÀ PRESENTATO ALLA CALL';
+  const coda = parole ? ` Parole del lead: "${parole}".` : '';
+  return (
+    `${chi} — il bot si è tolto di mezzo perché non è una conversazione da prequalifica, ` +
+    'e la chat aspetta una persona.' + coda
+  );
+}
+
+/**
  * Il lead aveva detto sì a un giorno e un'ora — o aveva compilato il form — e
  * l'appuntamento al CRM non è mai arrivato. Fino al 29/08/2026 una chat così tornava
  * indietro come "interrotta" e basta: in agosto è successo 49 volte, e su una di quelle
