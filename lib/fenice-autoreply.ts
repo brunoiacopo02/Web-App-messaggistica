@@ -10,6 +10,7 @@ import { ensureConfirmationBlock, containsVideoLink } from './confirmation-block
 import { unknownFeniceLinks } from './outbound-sanitize';
 import { generateBotReport } from './bot-report';
 import { sendOutcome } from './bot-outcome';
+import { stopDalCrmPerLead } from './stop-crm';
 import { personaForConversation, PERSONA_NAME, OPENING_ENV_KEYS } from './persona';
 import { confermaVideoVisto } from './video-visto';
 
@@ -267,6 +268,24 @@ export async function drainMarioReplies(
   if (!claimed) return;
   const startedAt = (claimed as { ai_started_at: string | null }).ai_started_at;
   const crmLeadId = (claimed as { crm_lead_id: string | null }).crm_lead_id;
+
+  // Lo stop che viene dal CRM, non dalla chat: chi si e' presentato alla call o ha
+  // comprato non deve ricevere piu' niente, e nemmeno chi una persona ha scartato per un
+  // motivo che dalla chat non si vede. Il 29/08/2026 sei clienti da tre settimane hanno
+  // rischiato un "rifissiamo la call?" e ci siamo fermati solo perche' il CRM ha
+  // incrociato i dati a mano: questo e' il controllo che quel giro non lo fa fare piu'.
+  // Il lucchetto va sciolto a mano, perche' si esce prima del `try`/`finally`.
+  const stopCrm = await stopDalCrmPerLead(supabase, crmLeadId);
+  if (stopCrm) {
+    await supabase.from('event_log').insert({
+      type: 'bot_fermo_stato_crm',
+      payload: { conversationId, crmLeadId, motivo: stopCrm } as never,
+      message: `[bot-fissatore] conv ${conversationId}: il bot non risponde, il CRM dice ${stopCrm}`,
+      level: 'info',
+    });
+    await supabase.from('conversations').update({ ai_lock_at: null }).eq('id', conversationId).eq('ai_lock_at', nowIso);
+    return;
+  }
 
   // Modalità postino: lead di un GDO, arruolato da `enrollGdoLeadAsPostino`.
   // Il bot fa da canale ma il lead non è nostro: niente esiti, niente stati terminali.

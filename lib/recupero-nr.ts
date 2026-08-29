@@ -1,4 +1,5 @@
 import type { CallAttempt } from './call-attempt';
+import type { MotivoStopCrm } from './stop-crm';
 
 /**
  * Lo stato della conversazione, già letto dal database, che serve a decidere se
@@ -20,11 +21,15 @@ export type StatoConversazione = {
   ultimoInboundAt: string | null;
   /** Esiste già un recupero per questo tentativo: non si manda due volte lo stesso. */
   giaInviatoTentativo: boolean;
+  /** Lo stop che viene da `lead-status`: presentato, cliente, o scartato da una persona.
+   *  `null` quando il CRM non ci ha ancora detto niente su questo lead. */
+  stopCrm: MotivoStopCrm | null;
 };
 
 export type MotivoStop =
   | 'non_nostro'
   | 'bot_fermato'
+  | 'stato_crm'
   | 'disdetta_chiesta'
   | 'passato_a_persona'
   | 'gia_risposto'
@@ -48,7 +53,7 @@ export function appuntamentoDaConfermare(stato: StatoConversazione): number | nu
 }
 
 /**
- * Le sette condizioni che fermano l'invio del recupero, tutte lette da colonne —
+ * Le otto condizioni che fermano l'invio del recupero, tutte lette da colonne —
  * nessuna dipende dall'interpretazione di un testo. Qui sbagliare significa scrivere a
  * qualcuno che ci aveva chiesto di smettere, quindi l'ordine e le condizioni sono
  * quelli decisi e vanno rispettati alla lettera, non reinterpretati caso per caso.
@@ -62,6 +67,14 @@ export function puoScrivere(stato: StatoConversazione, evento: CallAttempt, nowM
   // proprio per non mostrare "active" su una chat in mano a qualcuno) e qui il
   // percorso farebbe entrambe le cose vietate: scrivere al posto suo e riaprire.
   if (stato.ai_paused_at) return { ok: false, motivo: 'bot_fermato' };
+
+  // Lo stop che viene dal CRM sta qui, subito dopo il fermo manuale, perche' e' della
+  // stessa natura: una decisione presa fuori dalla chat che il testo della chat non puo'
+  // ribaltare. Chi si e' presentato alla call o ha comprato non ha nessuna chiamata da
+  // recuperare; chi e' stato scartato da una persona non va richiamato per un motivo che
+  // dalla conversazione non si vede. Lo scarto delle Conferme per "3 NR" invece NON
+  // arriva qui: quello e' esattamente il lead per cui questo codice esiste.
+  if (stato.stopCrm) return { ok: false, motivo: 'stato_crm' };
 
   if (stato.cancel_requested_at) return { ok: false, motivo: 'disdetta_chiesta' };
   if (stato.ai_status === 'handed_off') return { ok: false, motivo: 'passato_a_persona' };

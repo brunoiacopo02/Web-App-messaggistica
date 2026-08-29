@@ -14,6 +14,7 @@ import {
 } from '@/lib/sequence';
 import { sendOutcome } from '@/lib/bot-outcome';
 import { sendTemplate, sendFreeText, getTemplateBody } from '@/lib/twilio';
+import { stopDalCrmPerLead } from '@/lib/stop-crm';
 import { feniceOpening } from '@/lib/fenice-opening';
 import {
   personaForConversation,
@@ -209,6 +210,22 @@ export async function GET(req: NextRequest) {
       }
       // Conv con esito già inviato al CRM (es. riaperte dal webhook): mai toccare.
       if (c.bot_outcome != null) {
+        skipped++;
+        continue;
+      }
+
+      // Lo stop che arriva dal CRM: presentato alla call, cliente, o scartato da una
+      // persona per un motivo che dalla chat non si vede. Un template di sequenza a un
+      // cliente è il messaggio peggiore che possiamo mandare, ed è anche il più facile
+      // da mandare per sbaglio: qui il bot scrive senza che nessuno abbia detto niente.
+      const stopCrm = await stopDalCrmPerLead(supabase, c.crm_lead_id ?? null);
+      if (stopCrm) {
+        await supabase.from('event_log').insert({
+          type: 'bot_fermo_stato_crm',
+          payload: { conversationId: c.id, crmLeadId: c.crm_lead_id ?? null, motivo: stopCrm, dove: 'sequenza' } as never,
+          message: `[sequenza] conv ${c.id}: nessun touch, il CRM dice ${stopCrm}`,
+          level: 'info',
+        });
         skipped++;
         continue;
       }

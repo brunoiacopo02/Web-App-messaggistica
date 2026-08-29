@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { stopDalCrmPerLead } from '@/lib/stop-crm';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { verifySignature } from '@/lib/bot-hmac';
 import { parseCallAttempt, tentativoGestito } from '@/lib/call-attempt';
@@ -73,7 +74,7 @@ export async function POST(req: NextRequest) {
   const conv = await trovaConversazione(supabase, evento.leadId);
   if (!conv) return NextResponse.json({ ok: true, inviato: false, motivo: 'lead_sconosciuto' });
 
-  const stato = await costruisciStato(supabase, conv, evento.tentativo);
+  const stato = await costruisciStato(supabase, conv, evento.tentativo, evento.leadId);
 
   // Il tentativo 2 (e ogni altro non gestito) è un evento valido che non produce un
   // messaggio: si registra la ricezione nella risposta, senza toccare event_log — non
@@ -175,7 +176,12 @@ async function trovaConversazione(supabase: Supa, leadId: string): Promise<Conve
  * `conversations`: l'ultimo messaggio in arrivo dal lead, e se un recupero per QUESTO
  * tentativo è già partito (dedup: il CRM può richiamarci sullo stesso tentativo).
  */
-async function costruisciStato(supabase: Supa, conv: ConversazioneTrovata, tentativo: number): Promise<StatoConversazione> {
+async function costruisciStato(
+  supabase: Supa,
+  conv: ConversazioneTrovata,
+  tentativo: number,
+  crmLeadId: string,
+): Promise<StatoConversazione> {
   const { data: inbound } = await supabase
     .from('messages')
     .select('created_at')
@@ -194,6 +200,10 @@ async function costruisciStato(supabase: Supa, conv: ConversazioneTrovata, tenta
     .limit(1);
   const giaInviatoTentativo = ((giaInviato ?? []) as unknown as { id: number }[]).length > 0;
 
+  // Il lead lo conosciamo dalla chiamata del CRM: la conversazione l'abbiamo trovata
+  // proprio cercando quel `crm_lead_id`.
+  const stopCrm = await stopDalCrmPerLead(supabase, crmLeadId);
+
   return {
     ai_owner: conv.ai_owner,
     ai_status: conv.ai_status,
@@ -204,6 +214,7 @@ async function costruisciStato(supabase: Supa, conv: ConversazioneTrovata, tenta
     cancel_requested_at: conv.cancel_requested_at,
     ultimoInboundAt,
     giaInviatoTentativo,
+    stopCrm,
   };
 }
 

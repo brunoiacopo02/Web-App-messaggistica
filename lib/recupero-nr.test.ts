@@ -24,6 +24,7 @@ function statoPulito(overrides: Partial<StatoConversazione> = {}): StatoConversa
     cancel_requested_at: null,
     ultimoInboundAt: null,
     giaInviatoTentativo: false,
+    stopCrm: null,
     ...overrides,
   };
 }
@@ -157,5 +158,26 @@ describe('puoScrivere', () => {
       ai_status: 'handed_off',
     });
     expect(puoScrivere(stato, EVENTO, NOW)).toEqual({ ok: false, motivo: 'disdetta_chiesta' });
+  });
+});
+
+describe('lo stop che viene dal CRM', () => {
+  it("a chi si e' presentato alla call non si scrive", () => {
+    expect(puoScrivere(statoPulito({ stopCrm: 'gia_presentato' }), EVENTO, NOW))
+      .toEqual({ ok: false, motivo: 'stato_crm' });
+  });
+
+  it('a un cliente non si scrive', () => {
+    expect(puoScrivere(statoPulito({ stopCrm: 'gia_cliente' }), EVENTO, NOW))
+      .toEqual({ ok: false, motivo: 'stato_crm' });
+  });
+
+  it('a chi una persona ha scartato non si scrive', () => {
+    expect(puoScrivere(statoPulito({ stopCrm: 'scartato_da_persona' }), EVENTO, NOW))
+      .toEqual({ ok: false, motivo: 'stato_crm' });
+  });
+
+  it("senza niente dal CRM il recupero parte: e' il caso normale", () => {
+    expect(puoScrivere(statoPulito({ stopCrm: null }), EVENTO, NOW)).toEqual({ ok: true });
   });
 });
