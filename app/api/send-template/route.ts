@@ -8,7 +8,8 @@ export const dynamic = 'force-dynamic';
 
 // Endpoint generico chiamato dal CRM per inviare UN template a un lead, su trigger.
 // Adatto a tutti i messaggi "manuali/evento" (es. conferme: nr, autoconferma).
-// Body JSON: { phone, templateSid, label?, firstName?, lastName?, email?, acContactId? }
+// Body JSON: { phone, templateSid, label?, firstName?, lastName?, email?, acContactId?,
+//              variables?: {"1":"Mehdi"}, from?: "fenice" | "+39..." }
 
 function authorized(req: NextRequest): boolean {
   const secret = process.env.AGENDA_API_SECRET; // secret condiviso dei trigger CRM
@@ -52,7 +53,22 @@ export async function POST(req: NextRequest) {
     acContactId: (body.acContactId ?? body.contact_id) as string | undefined,
   });
 
-  const res = await sendTemplateAndLog(supabase, conversationId, phone, templateSid, label);
+  // Le variabili del template ({{1}} = nome) e il numero mittente. Senza le prime un
+  // template che saluta per nome parte come "Ciao ,"; senza il secondo esce dal numero
+  // di default e non da quello della chat, cioè da un numero che il lead non conosce.
+  // Servono per gli invii puntuali fatti da noi (il riaggancio di un singolo lead), non
+  // al CRM, che manda template senza variabili: entrambi restano facoltativi.
+  const variables: Record<string, string> = {};
+  const varsRaw = (body.variables ?? body.contentVariables) as unknown;
+  if (varsRaw && typeof varsRaw === 'object') {
+    for (const [k, v] of Object.entries(varsRaw as Record<string, unknown>)) {
+      if (typeof v === 'string' || typeof v === 'number') variables[k] = String(v);
+    }
+  }
+  const fromRaw = (body.from ?? body.sender) as string | undefined;
+  const from = fromRaw === 'fenice' ? process.env.TWILIO_WHATSAPP_NUMBER_FENICE : fromRaw;
+
+  const res = await sendTemplateAndLog(supabase, conversationId, phone, templateSid, label, from, variables);
 
   await supabase.from('event_log').insert({
     type: res.ok ? 'template_sent' : 'send_error',
