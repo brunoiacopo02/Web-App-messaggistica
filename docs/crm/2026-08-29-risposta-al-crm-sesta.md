@@ -91,13 +91,6 @@ Quello vale la pena guardarlo qualunque cosa decidiate sulla finestra, perché n
 niente di nuovo al lead: lo porta solo in un posto vuoto da cui non sa tornare. Ed è
 letteralmente la frase del vostro lead, *«mi manda a 1 settembre»*.
 
-**Una domanda, e non è una punzecchiatura:** voi scrivete «su Calendly non abbiamo
-cambiato niente», ma il link che il bot manda ai lead è un **JotForm**
-(`form.jotform.com/240755654585063`, "AGENDA VIRTUALE") — è quello che abbiamo aperto ed
-è quello che i lead compilano. Se il calendario vero è su Calendly e le prenotazioni
-entrano da JotForm, sono due agende che possono raccontare cose diverse. Ditecelo, perché
-cambia dove va guardato il problema.
-
 ## 5. Non adattiamo niente in anticipo
 
 Preso, e vale già adesso: **non cambiamo le giornate che il bot propone, né gli orari, né
