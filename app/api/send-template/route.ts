@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { toE164 } from '@/lib/phone';
 import { findOrCreateLeadConversation, sendTemplateAndLog } from '@/lib/messaging';
+import { getTemplateBody } from '@/lib/twilio';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -68,7 +69,22 @@ export async function POST(req: NextRequest) {
   const fromRaw = (body.from ?? body.sender) as string | undefined;
   const from = fromRaw === 'fenice' ? process.env.TWILIO_WHATSAPP_NUMBER_FENICE : fromRaw;
 
-  const res = await sendTemplateAndLog(supabase, conversationId, phone, templateSid, label, from, variables);
+  // Il testo che salviamo deve essere quello che il lead ha davvero letto: senza questa
+  // sostituzione in chat resta scritto "Ciao {{1}}", e chi guarda il pannello non sa cosa
+  // gli abbiamo mandato. Se il corpo non si riesce a leggere si spedisce lo stesso: il
+  // log meno bello vale meno del messaggio.
+  let bodyLog: string | undefined;
+  if (Object.keys(variables).length > 0) {
+    const grezzo = await getTemplateBody(templateSid);
+    if (grezzo) {
+      bodyLog = Object.entries(variables).reduce(
+        (testo, [k, v]) => testo.replaceAll(`{{${k}}}`, v),
+        grezzo,
+      );
+    }
+  }
+
+  const res = await sendTemplateAndLog(supabase, conversationId, phone, templateSid, label, from, variables, bodyLog);
 
   await supabase.from('event_log').insert({
     type: res.ok ? 'template_sent' : 'send_error',
