@@ -1,6 +1,8 @@
 # Risposta al team CRM — chiusura, 29/08/2026
 
-*Messaggio unico e ultimo del giro. Resta aperta una cosa sola: il form.*
+*Messaggio unico. **SUPERATO** da `2026-08-29-risposta-al-crm-sesta.md`: la richiesta di
+allargare la finestra del form era sbagliata (una call piu' lontana e' una call a cui si
+presenta meno gente) ed e' stata ritirata. Manda la sesta, non questa.*
 
 ---
 
