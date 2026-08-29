@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { isoWithOffset, parseIntakePayload, parseSendAgendaPayload, validateOutcomeBody, parseAppointmentSetPayload } from './bot-contract';
+import { isoWithOffset, parseIntakePayload, parseSendAgendaPayload, validateOutcomeBody, parseAppointmentSetPayload , parsePreviousLeads,
+} from './bot-contract';
 
 describe('isoWithOffset', () => {
   it('accetta offset esplicito', () => {
@@ -161,6 +162,8 @@ describe('parseSendAgendaPayload', () => {
         email: 'mario@esempio.it',
         funnel: 'Nome funnel',
         companyId: 'fenice',
+        personKey: null,
+        previousLeadIds: [],
         variant: { lavora: true, haFamiglia: false, offertaDelMese: false },
       },
     });
@@ -188,5 +191,52 @@ describe('parseSendAgendaPayload', () => {
 
   it('rifiuta un payload che non è un oggetto', () => {
     expect(parseSendAgendaPayload(null)).toEqual({ ok: false, reason: 'bad_request' });
+  });
+});
+
+describe('personKey e previousLeadIds (contratto 29/08/2026)', () => {
+  const base = { leadId: 'nuovo', phone: '+393331234567', companyId: 'fenice' };
+
+  it('legge la chiave della persona e i giri precedenti', () => {
+    const r = parseIntakePayload({
+      ...base,
+      personKey: '3331234567',
+      previousLeadIds: [
+        { leadId: 'vecchio', status: 'REJECTED', outcome: 'non in target', createdAt: '2026-06-12T10:00:00+02:00' },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.personKey).toBe('3331234567');
+    expect(r.value.previousLeadIds).toEqual([
+      { leadId: 'vecchio', status: 'REJECTED', outcome: 'non in target', createdAt: '2026-06-12T10:00:00+02:00' },
+    ]);
+  });
+
+  it("un push senza i campi nuovi resta valido: sono un di piu', mai una condizione", () => {
+    const r = parseIntakePayload(base);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.personKey).toBeNull();
+    expect(r.value.previousLeadIds).toEqual([]);
+  });
+});
+
+describe('parsePreviousLeads', () => {
+  it('accetta anche la lista di soli id', () => {
+    expect(parsePreviousLeads(['a', 'b'])).toEqual([
+      { leadId: 'a', status: null, outcome: null, createdAt: null },
+      { leadId: 'b', status: null, outcome: null, createdAt: null },
+    ]);
+  });
+
+  it("lascia cadere le voci senza leadId invece di far fallire l'intake", () => {
+    expect(parsePreviousLeads([{ status: 'NEW' }, null, 42, { leadId: '  ' }, { leadId: 'buono' }]))
+      .toEqual([{ leadId: 'buono', status: null, outcome: null, createdAt: null }]);
+  });
+
+  it("un campo che non e' una lista vale lista vuota", () => {
+    expect(parsePreviousLeads('boh')).toEqual([]);
+    expect(parsePreviousLeads(undefined)).toEqual([]);
   });
 });

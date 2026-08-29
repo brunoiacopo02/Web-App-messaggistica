@@ -209,7 +209,8 @@ export type Database = {
           },
         ]
       }
-      // NB: tabella aggiunta a mano (migration 20260827000001_crm_lead_status) in attesa
+      // NB: tabella aggiunta a mano (migration 20260827000001_crm_lead_status, colonne
+      // contatto_umano_* dalla 20260829000001) in attesa
       // del prossimo `npm run supabase:gen-types`, che la riprodurrà identica.
       crm_lead_status: {
         Row: {
@@ -219,6 +220,13 @@ export type Database = {
           conferme_discard_reason: string | null
           conferme_outcome: string | null
           conferme_outcome_at: string | null
+          contatto_umano_esito: string | null
+          contatto_umano_esito_il: string | null
+          contatto_umano_nota: string | null
+          contatto_umano_preso_da: string | null
+          contatto_umano_preso_il: string | null
+          contatto_umano_richiesta_il: string | null
+          contatto_umano_stato: string | null
           conversation_id: number | null
           crm_updated_at: string
           discard_reason: string | null
@@ -240,6 +248,13 @@ export type Database = {
           conferme_discard_reason?: string | null
           conferme_outcome?: string | null
           conferme_outcome_at?: string | null
+          contatto_umano_esito?: string | null
+          contatto_umano_esito_il?: string | null
+          contatto_umano_nota?: string | null
+          contatto_umano_preso_da?: string | null
+          contatto_umano_preso_il?: string | null
+          contatto_umano_richiesta_il?: string | null
+          contatto_umano_stato?: string | null
           conversation_id?: number | null
           crm_updated_at: string
           discard_reason?: string | null
@@ -261,6 +276,13 @@ export type Database = {
           conferme_discard_reason?: string | null
           conferme_outcome?: string | null
           conferme_outcome_at?: string | null
+          contatto_umano_esito?: string | null
+          contatto_umano_esito_il?: string | null
+          contatto_umano_nota?: string | null
+          contatto_umano_preso_da?: string | null
+          contatto_umano_preso_il?: string | null
+          contatto_umano_richiesta_il?: string | null
+          contatto_umano_stato?: string | null
           conversation_id?: number | null
           crm_updated_at?: string
           discard_reason?: string | null

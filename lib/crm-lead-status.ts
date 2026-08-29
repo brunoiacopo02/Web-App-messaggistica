@@ -28,6 +28,26 @@ export type CrmLeadStatus = {
   soldAmountEur?: number | string | null;
   discardReason?: string | null;
   agendaStatus?: string | null;
+  /** Che fine ha fatto la richiesta di parlare con una persona (dal 29/08/2026).
+   *  Assente per i lead che non ne hanno mai fatta una: e' un blocco, non un campo. */
+  contattoUmano?: ContattoUmanoStatus | null;
+};
+
+/**
+ * Il ritorno sulla coda dei contatti umani. Prima di questo il canale era a senso unico:
+ * gli mandavamo la richiesta e non sapevamo se qualcuno l'avesse mai presa.
+ *
+ * `stato` e' quello che conta per noi: `pending` vuol dire che ce l'hanno ma non l'ha
+ * ancora vista nessuno, ed e' gia' piu' di quanto sapessimo prima.
+ */
+export type ContattoUmanoStatus = {
+  stato?: string | null;
+  presoInCaricoDa?: string | null;
+  presoInCaricoIl?: string | null;
+  esito?: string | null;
+  esitoIl?: string | null;
+  nota?: string | null;
+  richiestaIl?: string | null;
 };
 
 export type LeadStatusPage = {
@@ -56,6 +76,13 @@ export type CrmLeadStatusRow = {
   sold_amount_eur: number | null;
   discard_reason: string | null;
   agenda_status: string | null;
+  contatto_umano_stato: string | null;
+  contatto_umano_preso_da: string | null;
+  contatto_umano_preso_il: string | null;
+  contatto_umano_esito: string | null;
+  contatto_umano_esito_il: string | null;
+  contatto_umano_nota: string | null;
+  contatto_umano_richiesta_il: string | null;
   crm_updated_at: string;
   synced_at: string;
 };
@@ -127,6 +154,16 @@ export function toRow(lead: CrmLeadStatus, conversationId: number | null): CrmLe
     sold_amount_eur: importo(lead.soldAmountEur),
     discard_reason: testo(lead.discardReason),
     agenda_status: testo(lead.agendaStatus),
+    // Il blocco puo' non esserci (lead che non ha mai chiesto una persona) o arrivare
+    // mezzo vuoto (richiesta ancora `pending`, quindi senza esito): si legge campo per
+    // campo, senza pretendere l'oggetto intero.
+    contatto_umano_stato: testo(lead.contattoUmano?.stato),
+    contatto_umano_preso_da: testo(lead.contattoUmano?.presoInCaricoDa),
+    contatto_umano_preso_il: testo(lead.contattoUmano?.presoInCaricoIl),
+    contatto_umano_esito: testo(lead.contattoUmano?.esito),
+    contatto_umano_esito_il: testo(lead.contattoUmano?.esitoIl),
+    contatto_umano_nota: testo(lead.contattoUmano?.nota),
+    contatto_umano_richiesta_il: testo(lead.contattoUmano?.richiestaIl),
     crm_updated_at: lead.updatedAt,
     synced_at: new Date().toISOString(),
   };

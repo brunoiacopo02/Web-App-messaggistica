@@ -267,6 +267,24 @@ export function buildContattoUmanoNote(input: { leadWords?: string; motivo?: str
 }
 
 /**
+ * La nota di chi ha risposto DOPO il terzo tentativo di chiamata. È un caso diverso dal
+ * `CONTATTO_UMANO` normale e la nota deve dirlo: il bot non si è fatto da parte, e
+ * soprattutto dall'altra parte quel lead è già stato scartato in automatico dal terzo
+ * NR. Chi legge deve capire in una riga che c'è un lead da RIAPRIRE, non da richiamare
+ * come tutti gli altri.
+ */
+export function buildRispostaPostNrNote(input: { leadWords?: string; quandoNrIso: string }): string {
+  const parole = paroleDelLead(input.leadWords);
+  const coda = parole ? ` Parole del lead: "${parole}".` : '';
+  return (
+    'IL LEAD HA RISPOSTO DOPO IL TERZO TENTATIVO DI CHIAMATA — gli avevamo scritto ' +
+    `${formatRomeDateTime(input.quandoNrIso)} dicendogli che senza una risposta ` +
+    "l'appuntamento sarebbe stato annullato, e lui ha risposto." +
+    `${coda} Da riaprire dalle Conferme: l'appuntamento è ancora recuperabile.`
+  );
+}
+
+/**
  * Il lead era già stato restituito al CRM e ha riscritto. Da qui in poi due canali
  * lavorano la stessa persona senza vedersi, ed è esattamente com'è andata a Marina
  * Destefanis: restituita il 26/07, riassegnata a un GDO che l'ha chiamata tre volte e

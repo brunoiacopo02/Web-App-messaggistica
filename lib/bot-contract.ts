@@ -5,6 +5,50 @@ export interface BotIntakePayload {
   email: string | null;
   funnel: string | null;
   companyId: string;
+  /** Le ultime 10 cifre del telefono normalizzato: la stessa persona ha sempre la stessa
+   *  chiave, anche quando dal lato CRM diventa un lead nuovo (dal 29/08/2026).
+   *  Opzionali entrambi: i push precedenti al 29/08 non li hanno, e un payload che non
+   *  li porta resta un payload valido. */
+  personKey?: string | null;
+  /** I lead precedenti della stessa persona, dal piu' recente, con il loro esito.
+   *  Vuoto quando il CRM non lo manda: e' un di piu', mai una condizione. */
+  previousLeadIds?: PreviousLead[];
+}
+
+/** Un giro precedente della stessa persona, come lo racconta il CRM. */
+export interface PreviousLead {
+  leadId: string;
+  status: string | null;
+  outcome: string | null;
+  createdAt: string | null;
+}
+
+/**
+ * I lead precedenti, letti senza pretese: qualsiasi voce che non porti almeno un
+ * `leadId` leggibile viene lasciata cadere. Il campo serve a capire chi abbiamo davanti,
+ * e un formato inatteso non deve mai impedire l'arruolamento di un lead vero.
+ */
+export function parsePreviousLeads(raw: unknown): PreviousLead[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PreviousLead[] = [];
+  for (const item of raw) {
+    if (typeof item === 'string') {
+      const id = item.trim();
+      if (id) out.push({ leadId: id, status: null, outcome: null, createdAt: null });
+      continue;
+    }
+    if (!item || typeof item !== 'object') continue;
+    const o = item as Record<string, unknown>;
+    const leadId = typeof o.leadId === 'string' ? o.leadId.trim() : '';
+    if (!leadId) continue;
+    out.push({
+      leadId,
+      status: typeof o.status === 'string' ? o.status : null,
+      outcome: typeof o.outcome === 'string' ? o.outcome : null,
+      createdAt: typeof o.createdAt === 'string' ? o.createdAt : null,
+    });
+  }
+  return out;
 }
 
 /** Profilo del lead raccolto dal GDO al telefono: decide quale video mandare. */
@@ -84,6 +128,8 @@ export function parseIntakePayload(
       name: typeof o.name === 'string' ? o.name : null,
       email: typeof o.email === 'string' ? o.email : null,
       funnel: typeof o.funnel === 'string' ? o.funnel : null,
+      personKey: typeof o.personKey === 'string' && o.personKey.trim() ? o.personKey.trim() : null,
+      previousLeadIds: parsePreviousLeads(o.previousLeadIds),
     },
   };
 }

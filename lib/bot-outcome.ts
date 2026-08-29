@@ -186,13 +186,14 @@ async function inviaContattoUmano(
   waNumber?: string | null,
   scheduledAt?: string | null,
 ): Promise<{ sent: boolean; status?: number; error?: string; notifySuppressed?: true }> {
-  const note = buildContattoUmanoNote({ leadWords: args.note, motivo: args.discardReason });
+  const note = args.notaContattoUmano
+    ?? buildContattoUmanoNote({ leadWords: args.note, motivo: args.discardReason });
   // Contratto v1.5: oltre alle parole del lead viaggiano la categoria e i pochi fatti
   // che sappiamo. Una notifica senza questi arriva comunque, ma chi richiama parte
   // alla cieca — ed e' il motivo per cui 52 richieste su 53 non erano state lavorate.
   // La categoria esce dalle stesse regole dell'elenco in `/api/bot/contatti-umani`,
   // applicate alle parole con cui il lead ha chiesto la persona.
-  const motivo = categoriaPerCrm(
+  const motivo = args.motivoContattoUmano ?? categoriaPerCrm(
     motivoRichiesta([{ body: args.note ?? '', created_at: new Date().toISOString() }]).categoria,
   );
   const disponibilita = disponibilitaDalTesto(args.note);
@@ -276,6 +277,14 @@ export type SendOutcomeArgs = {
    *  `note` e `discardReason` sono la sintesi del modello, cioè una parafrasi — le
    *  Conferme hanno chiesto anche le parole vere. */
   leadWords?: string;
+  /** Solo per `CONTATTO_UMANO`: la categoria da mandare al CRM al posto di quella
+   *  dedotta dalle parole del lead. Serve ai casi che non nascono da una richiesta —
+   *  la risposta dopo il terzo tentativo di chiamata, che le regole leggerebbero come
+   *  un "altro" qualunque mentre per le Conferme è un lead da riaprire. */
+  motivoContattoUmano?: string;
+  /** Solo per `CONTATTO_UMANO`: la nota già scritta, al posto di quella standard che
+   *  dice "il bot si è fatto da parte" — cosa che in quei casi non è vera. */
+  notaContattoUmano?: string;
 };
 
 /**

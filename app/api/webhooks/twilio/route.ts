@@ -9,6 +9,7 @@ import { isAudioInbound, transcribeTwilioAudio } from '@/lib/transcribe';
 import { handleGdoDeliveryUpdate } from '@/lib/send-agenda-gdo';
 import { sendCrmNota } from '@/lib/bot-outcome';
 import { buildBotRipresoNote } from '@/lib/bot-outcome-rules';
+import { segnalaRispostaDopoTerzoNr } from '@/lib/risposta-post-nr';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -181,6 +182,16 @@ export async function POST(req: NextRequest) {
         .select('ai_owner, ai_status, ai_paused_at, crm_lead_id, bot_outcome')
         .eq('id', conversationId)
         .single();
+
+      // Il lead ha risposto dopo il messaggio del terzo tentativo di chiamata: da parte
+      // del CRM è già stato scartato in automatico e solo le Conferme possono riaprirlo.
+      // Sta PRIMA della riapertura e fuori da `shouldAutoReply` apposta: deve partire
+      // anche da una chat rimasta 'booked' o messa in pausa a mano, cioè proprio da
+      // quella di un lead con l'appuntamento in piedi, che è il caso per cui esiste.
+      // Dopo la risposta a Twilio: la rete del CRM non deve rallentare il webhook.
+      if (conv?.crm_lead_id) {
+        after(segnalaRispostaDopoTerzoNr(supabase, conversationId, conv.crm_lead_id));
+      }
 
       if (conv && shouldReopen({ aiOwner: conv.ai_owner, aiStatus: conv.ai_status, aiPausedAt: conv.ai_paused_at })) {
         await supabase.from('conversations').update({ ai_status: 'active' }).eq('id', conversationId);

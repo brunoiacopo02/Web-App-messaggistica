@@ -65,6 +65,48 @@ describe('parseLeadStatusPage', () => {
   });
 });
 
+describe('toRow: il ritorno sui contatti umani', () => {
+  const conRitorno = {
+    leadId: 'abc',
+    updatedAt: '2026-08-29T11:03:00.000Z',
+    contattoUmano: {
+      stato: 'closed',
+      presoInCaricoDa: 'Giulia',
+      presoInCaricoIl: '2026-08-29T10:12:00.000Z',
+      esito: 'chiamato_ok',
+      esitoIl: '2026-08-29T11:03:00.000Z',
+      nota: 'richiamata, conferma la call',
+      richiestaIl: '2026-08-28T18:40:00.000Z',
+    },
+  };
+
+  it('porta il blocco sulle colonne', () => {
+    expect(toRow(conRitorno as never, 7)).toMatchObject({
+      contatto_umano_stato: 'closed',
+      contatto_umano_preso_da: 'Giulia',
+      contatto_umano_preso_il: '2026-08-29T10:12:00.000Z',
+      contatto_umano_esito: 'chiamato_ok',
+      contatto_umano_esito_il: '2026-08-29T11:03:00.000Z',
+      contatto_umano_nota: 'richiamata, conferma la call',
+      contatto_umano_richiesta_il: '2026-08-28T18:40:00.000Z',
+    });
+  });
+
+  it("una richiesta ancora pending non ha esito, e va bene: dice che l'hanno ricevuta", () => {
+    const row = toRow({ leadId: 'abc', updatedAt: '2026-08-29T11:03:00.000Z',
+      contattoUmano: { stato: 'pending', richiestaIl: '2026-08-28T18:40:00.000Z' } } as never, 7);
+    expect(row.contatto_umano_stato).toBe('pending');
+    expect(row.contatto_umano_esito).toBeNull();
+    expect(row.contatto_umano_preso_da).toBeNull();
+  });
+
+  it('un lead che non ha mai chiesto una persona non ha il blocco: tutto null, nessun errore', () => {
+    const row = toRow({ leadId: 'abc', updatedAt: '2026-08-29T11:03:00.000Z' } as never, 7);
+    expect(row.contatto_umano_stato).toBeNull();
+    expect(row.contatto_umano_richiesta_il).toBeNull();
+  });
+});
+
 describe('toRow', () => {
   it('mappa il payload sulle colonne', () => {
     const row = toRow(parseLeadStatusPage({ leads: [LEAD], hasMore: false }).ok
