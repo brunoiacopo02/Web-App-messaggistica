@@ -49,19 +49,20 @@ capienza**, e nessuno dei due lo stava guardando:
 - **107 su 312 (il 34%) sono prima delle 15:00**, cioè in fasce che il primo giorno
   disponibile non offre proprio.
 
-Il tetto giornaliero da parte nostra esiste già nel codice (`BOOKING_DAILY_CAP`) ma **in
-produzione è spento**: senza, il bot propone "domani" a tutti e nessuno conta quante ne
-stanno dentro. Lo accendiamo appena ci dite il numero giusto — è un numero di Fenice, non
-del software, e adesso abbiamo l'ordine di grandezza: 7 il primo giorno, 13 il secondo.
+**Un tetto da parte nostra non serve, e non lo mettiamo.** Di persone per fare le call ce
+ne sono: il collo di bottiglia non è quante ne fissiamo, è quante il form ne lascia
+prenotare. Un limite dal lato bot ridurrebbe gli appuntamenti per adattarli a una
+finestra che è stretta per un bug, che è il modo peggiore di risolverlo.
 
 **Cosa vi chiediamo, in ordine di quanto pesa:**
 
 1. **La finestra a due giorni**: allargatela. Con sette giorni prenotabili chi apre il
    link in ritardo trova ancora qualcosa, e il 34% di call che il bot fissa la mattina
    smette di essere un problema.
-2. **La freccia che salta di mese**: è un bug, e mangia i lead che ci arrivano più
+2. **La freccia che salta di mese**: è un bug, e mangia proprio i lead che arrivano più
    vicini alla prenotazione.
-3. **Il numero per il tetto**: quante call al giorno reggete davvero.
+3. **Le fasce del primo giorno**: sette contro tredici. Se è una scelta ci sta, ma
+   ditecelo, perché il bot il primo giorno lo propone a tutti.
 
 ## 2. "Irreperibile": avete ragione, l'eccezione è già tolta
 
@@ -94,9 +95,15 @@ non abbiamo visibilità e non possiamo applicarlo.
 
 **Sul test dei 500:** la soglia del 3% a 30 giorni ci sembra onesta e la accettiamo così
 com'è, decisa prima e non dopo. Ma dopo la vostra evidenza non siamo più noi a chiederlo:
-se volete farlo lo misuriamo volentieri, e vi proponiamo una sola modifica — prendete i
-500 fra chi ha **una chat ancora aperta con noi**, non a freddo. Se il canale non esiste,
-il test misura la nostra capacità di riaprire una conversazione, non il valore del lead.
+se volete farlo lo misuriamo volentieri, con due condizioni.
+
+La prima: prendete i 500 fra chi ha **una chat ancora aperta con noi**, non a freddo. Se
+il canale non esiste, il test misura la nostra capacità di riaprire una conversazione,
+non il valore di quei lead.
+
+La seconda, ed è la più importante: **fatelo dopo il form**. Con la finestra a due giorni,
+un irreperibile che dicesse di sì non riuscirebbe a prenotare — e il test misurerebbe il
+form invece delle persone, dandoci un "no" che non vuol dire niente.
 
 ## 3. Il resto, in breve
 
@@ -128,11 +135,11 @@ corretto; Mehdi riagganciato.
 
 **Ci serve da voi:**
 
-1. **La finestra del form** allargata, e la **freccia che salta di mese** sistemata.
-2. **Il numero di call al giorno** che reggete, per accendere il tetto da parte nostra.
-3. I **39**, quando volete.
-4. Il **test sui 500**, se lo volete fare: soglia accettata, lotto da prendere fra chi ha
-   una chat aperta.
+1. **La finestra del form** allargata, la **freccia che salta di mese** sistemata, e due
+   parole sulle **fasce del primo giorno**.
+2. I **39**, quando volete.
+3. Il **test sui 500**, se lo volete fare: soglia accettata, lotto fra chi ha una chat
+   aperta, e dopo che il form è sistemato.
 
 A presto,
 Bruno
