@@ -1,6 +1,7 @@
 # Messaggio al team CRM — 28/08/2026
 
-*Bozza pronta da inviare. Non è stata mandata a nessuno.*
+*Bozza mai inviata. **Superata da `2026-08-29-messaggio-al-crm.md`**, che la include
+tutta con i numeri aggiornati e la richiesta sul ritorno dei contatti umani.*
 
 ---
 
