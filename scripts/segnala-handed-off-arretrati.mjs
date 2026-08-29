@@ -22,11 +22,24 @@ const q = async (p) => {
   return r.json();
 };
 
-const convs = await q(
-  'conversations?select=id,crm_lead_id,last_inbound_at' +
-  '&ai_status=eq.handed_off&bot_outcome=is.null&crm_lead_id=not.is.null' +
-  '&order=id.asc&limit=1000',
-);
+// `--conv=3319,3312,...` manda SOLO quelle conversazioni, senza gli altri filtri.
+// Serve quando l'elenco lo decide il CRM e non la nostra query: il 29/08 ci hanno
+// chiesto le 12 richieste di cui non avevano traccia, e tre di quelle hanno gia' un
+// esito APPUNTAMENTO -- il filtro `bot_outcome is null` le avrebbe saltate proprio
+// mentre ce le chiedevano.
+const scelte = (process.argv.find((a) => a.startsWith('--conv=')) ?? '')
+  .replace('--conv=', '')
+  .split(',')
+  .map((n) => n.trim())
+  .filter(Boolean);
+
+const convs = scelte.length > 0
+  ? await q(`conversations?select=id,crm_lead_id,last_inbound_at&id=in.(${scelte.join(',')})&order=id.asc`)
+  : await q(
+    'conversations?select=id,crm_lead_id,last_inbound_at' +
+    '&ai_status=eq.handed_off&bot_outcome=is.null&crm_lead_id=not.is.null' +
+    '&order=id.asc&limit=1000',
+  );
 console.log(`conversazioni handed_off senza esito CRM: ${convs.length}\n`);
 
 let mandate = 0;
