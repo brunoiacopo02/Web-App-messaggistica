@@ -36,3 +36,30 @@ describe('stopDalCrm', () => {
     expect(stopDalCrm({ presented: false, sold: false, discard_reason: null })).toBeNull();
   });
 });
+
+describe('irreperibile non e\' un no', () => {
+  const base = { presented: false, sold: false, discard_reason: null };
+
+  it('non ferma su "irreperibile (4 tentativi vuoti)"', () => {
+    // E' un telefono che non risponde, cioe' la stessa cosa dei "3 NR" scritta in un
+    // altro campo. E' il lead per cui la chat WhatsApp vale di piu', non di meno.
+    expect(stopDalCrm({ ...base, discard_reason: 'irreperibile (4 tentativi vuoti)' })).toBeNull();
+  });
+
+  it('non ferma nemmeno sulla grafia loro, "irriperebile (3 tentativi vuoti)"', () => {
+    expect(stopDalCrm({ ...base, discard_reason: 'irriperebile (3 tentativi vuoti)' })).toBeNull();
+  });
+
+  it('ferma su un giudizio vero: non interessato', () => {
+    expect(stopDalCrm({ ...base, discard_reason: 'non interessato' })).toBe('scartato_da_persona');
+  });
+
+  it('ferma su numero inesistente', () => {
+    expect(stopDalCrm({ ...base, discard_reason: 'numero inesistente' })).toBe('scartato_da_persona');
+  });
+
+  it('un cliente resta fermo comunque, qualunque sia la causale', () => {
+    expect(stopDalCrm({ presented: true, sold: true, discard_reason: 'irreperibile (4 tentativi vuoti)' }))
+      .toBe('gia_cliente');
+  });
+});

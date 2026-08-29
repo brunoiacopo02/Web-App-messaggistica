@@ -22,6 +22,15 @@ type Supa = ReturnType<typeof getSupabaseAdmin>;
  * `confermeOutcome: 'scartato'` **non** ferma niente, ed è la distinzione che conta:
  * quello dice solo che al telefono non l'hanno preso, ed è esattamente il caso in cui
  * vogliamo scrivere. È tutto il senso del recupero delle mancate risposte.
+ *
+ * Per la stessa ragione non ferma nemmeno una `discardReason` che dice *irreperibile*.
+ * Sui dati veri (29/08/2026) le causali di scarto sono 2.626 e quasi mille di quelle
+ * sono "irreperibile (3 o 4 tentativi vuoti)": non è un giudizio sul lead, è un telefono
+ * che non risponde — la stessa cosa dei "3 NR", scritta in un altro campo. Fermarci lì
+ * vorrebbe dire spegnere il bot proprio dove vale di più, sulle 119 chat vive di persone
+ * che al telefono non prendono e su WhatsApp invece rispondono. Tutte le altre causali
+ * sono giudizi presi da una persona ("non interessato", "non ha soldi", "straniero") e
+ * quelle fermano.
  */
 export type StatoCrm = {
   presented: boolean | null;
@@ -31,6 +40,10 @@ export type StatoCrm = {
 
 export type MotivoStopCrm = 'gia_cliente' | 'gia_presentato' | 'scartato_da_persona';
 
+/** Le causali che dicono "al telefono non risponde", nelle grafie che il CRM usa davvero
+ *  (`irriperebile` compreso: è la loro, e vale come le altre). Non sono un no del lead. */
+const IRREPERIBILE = /irr[ei]per[ei]bile|tentativi\s+vuoti|non\s+risponde|mai\s+rispost/i;
+
 /** `null` = si può scrivere. Nessuno stato noto vale come "si può": il bot non deve
  *  tacere per un dato che non è mai arrivato. */
 export function stopDalCrm(s: StatoCrm | null | undefined): MotivoStopCrm | null {
@@ -38,7 +51,7 @@ export function stopDalCrm(s: StatoCrm | null | undefined): MotivoStopCrm | null
   if (s.sold === true) return 'gia_cliente';
   if (s.presented === true) return 'gia_presentato';
   const scarto = (s.discard_reason ?? '').trim();
-  if (scarto !== '') return 'scartato_da_persona';
+  if (scarto !== '' && !IRREPERIBILE.test(scarto)) return 'scartato_da_persona';
   return null;
 }
 
