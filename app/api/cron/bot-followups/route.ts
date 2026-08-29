@@ -264,7 +264,12 @@ export async function GET(req: NextRequest) {
           await sendOutcome(supabase, c.id, {
             outcome: 'CONTATTO_UMANO',
             note: ultimoDelLead,
-            motivoContattoUmano: 'confermato_senza_appuntamento',
+            // Il nome esatto conta: e' l'unico punto del contratto in cui un valore
+            // diverso cambia il comportamento dall'altra parte. Con questo il CRM marca
+            // la card con "Aveva detto si'" e mette il lead in cima alla lista di chi lo
+            // ha in mano; con qualsiasi altro finisce in 'altro', la marcatura non
+            // scatta e il lead torna invisibile come prima (loro messaggio del 29/08).
+            motivoContattoUmano: 'conferma_senza_appuntamento',
             notaContattoUmano: buildConfermaPersaNote({ leadWords: ultimoDelLead, stage: v.note }),
           });
         }
