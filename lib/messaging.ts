@@ -18,7 +18,7 @@ export type LeadInfo = {
 export async function findOrCreateLeadConversation(
   supabase: Supa,
   info: LeadInfo,
-): Promise<{ leadId: number; conversationId: number }> {
+): Promise<{ leadId: number; conversationId: number; waNumber?: string | null }> {
   const payload: Record<string, unknown> = { phone_e164: info.phone };
   if (info.firstName != null) payload.first_name = info.firstName;
   if (info.lastName != null) payload.last_name = info.lastName;
@@ -32,12 +32,16 @@ export async function findOrCreateLeadConversation(
     .single();
   if (error || !leadRow) throw new Error(`lead upsert fallito: ${error?.message}`);
 
+  // `wa_number` serve a chi invia: una conversazione gia' esistente va continuata dal
+  // numero con cui e' nata, mai da quello di default.
   const { data: convExisting } = await supabase
     .from('conversations')
-    .select('id')
+    .select('id, wa_number')
     .eq('lead_id', leadRow.id)
     .maybeSingle();
-  if (convExisting) return { leadId: leadRow.id, conversationId: convExisting.id };
+  if (convExisting) {
+    return { leadId: leadRow.id, conversationId: convExisting.id, waNumber: convExisting.wa_number };
+  }
 
   const { data: convNew, error: convErr } = await supabase
     .from('conversations')

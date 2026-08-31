@@ -16,6 +16,7 @@ import { sendOutcome } from '@/lib/bot-outcome';
 import { sendTemplate, sendFreeText, getTemplateBody } from '@/lib/twilio';
 import { stopDalCrmPerLead } from '@/lib/stop-crm';
 import { feniceOpening } from '@/lib/fenice-opening';
+import { numeroMittente } from '@/lib/wa-mittente';
 import {
   personaForConversation,
   normalizeFunnel,
@@ -178,7 +179,7 @@ export async function GET(req: NextRequest) {
   for (let fromRow = 0; ; fromRow += 1000) {
     const { data } = await supabase
       .from('conversations')
-      .select('id, ai_status, ai_started_at, crm_lead_id, crm_funnel, bot_outcome, bot_followups_sent, leads(phone_e164, first_name)')
+      .select('id, wa_number, ai_status, ai_started_at, crm_lead_id, crm_funnel, bot_outcome, bot_followups_sent, leads(phone_e164, first_name)')
       .not('crm_lead_id', 'is', null)
       .in('ai_status', ['active'])
       // Lead dei GDO (modalità postino): hanno già l'appuntamento, la sequenza di
@@ -272,7 +273,7 @@ export async function GET(req: NextRequest) {
             if (newSid) {
               sent++;
               await sendSequenceTemplate(
-                supabase, c.id, phone, newSid, `Apertura ${envKey}`, openingFrom,
+                supabase, c.id, phone, newSid, `Apertura ${envKey}`, numeroMittente(c) ?? openingFrom,
                 { '1': templateName(firstName) },
                 openingBody(funnel, variant, firstName),
               );
@@ -290,7 +291,7 @@ export async function GET(req: NextRequest) {
           const variables: Record<string, string> = cleanName ? { '3': cleanName } : {};
           sent++;
           await sendSequenceTemplate(
-            supabase, c.id, phone, openingSid, 'Fenice apertura', openingFrom, variables, feniceOpening(firstName),
+            supabase, c.id, phone, openingSid, 'Fenice apertura', numeroMittente(c) ?? openingFrom, variables, feniceOpening(firstName),
           );
         } else if (action.kind === 'send_touch') {
           const sid =
@@ -307,7 +308,7 @@ export async function GET(req: NextRequest) {
           }
           sent++;
           const touchRes = await sendSequenceTemplate(
-            supabase, c.id, phone, sid, `Sequenza touch ${action.touchIndex}`, followupFrom, { '1': templateName(firstName) },
+            supabase, c.id, phone, sid, `Sequenza touch ${action.touchIndex}`, c.wa_number ?? followupFrom, { '1': templateName(firstName) },
           );
           // Dopo il primo follow-up riuscito: RICHIAMO interim (una volta sola,
           // perché il touch 1 parte una volta sola) con data = fine sequenza, così
@@ -363,7 +364,7 @@ export async function GET(req: NextRequest) {
       }
       const body = pickNudgeText(c.id, firstName, PERSONA_NAME[persona]);
       sent++;
-      const res = await sendFreeText({ to: phone, body, from: followupFrom });
+      const res = await sendFreeText({ to: phone, body, from: c.wa_number ?? followupFrom });
       await supabase.from('messages').insert({
         conversation_id: c.id,
         direction: 'out',

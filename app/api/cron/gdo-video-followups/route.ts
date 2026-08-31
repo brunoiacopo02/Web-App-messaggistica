@@ -14,6 +14,7 @@ import {
   VIDEO_TEMPLATE_ENV_BY_LINK,
   type GdoSlot,
 } from '@/lib/gdo-video-followup';
+import { numeroMittente } from '@/lib/wa-mittente';
 import { romeHour, romeMinute, romeDaysBetween } from '@/lib/rome-time';
 import { templateName } from '@/lib/name';
 
@@ -88,7 +89,7 @@ export async function GET(req: NextRequest) {
   const { data } = await supabase
     .from('conversations')
     .select(`
-      id, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at,
+      id, wa_number, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at,
       gdo_video_followups_sent, gdo_noemi_reminded_at, gdo_appuntamento_at, ai_started_at,
       leads(phone_e164, first_name)
     `)
@@ -221,7 +222,7 @@ export async function GET(req: NextRequest) {
           continue;
         }
         const res = await sendTemplateAndLog(
-          supabase, c.id, phone, sid, 'video gdo', from,
+          supabase, c.id, phone, sid, 'video gdo', numeroMittente(c) ?? from,
           { 1: templateName(nome) },
           gdoVideoText(nome, link as string),
         );
@@ -245,7 +246,7 @@ export async function GET(req: NextRequest) {
           continue;
         }
         const res = await sendTemplateAndLog(
-          supabase, c.id, phone, solleciteSid, 'sollecito video gdo', from,
+          supabase, c.id, phone, solleciteSid, 'sollecito video gdo', numeroMittente(c) ?? from,
           { 1: templateName(nome) },
         );
         inviato = res.ok;
@@ -285,7 +286,7 @@ export async function GET(req: NextRequest) {
 
         if (parts.length > 0) {
           const spedite = await inviaBolleSollecito(parts, {
-            invia: (body) => sendFreeText({ to: phone, body, from }),
+            invia: (body) => sendFreeText({ to: phone, body, from: numeroMittente(c) ?? from }),
             dopoInvio: async (b) => {
               // Il touch si segna appena la PRIMA bolla è uscita: se il giro si
               // interrompe più avanti il lead resta con un sollecito troncato, ma

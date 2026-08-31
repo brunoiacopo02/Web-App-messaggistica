@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendTemplateAndLog } from '@/lib/messaging';
+import { numeroMittente } from '@/lib/wa-mittente';
 import { dueReminder, slotLabel, pickReminder24Template, type ReminderKind } from '@/lib/precall-reminders';
 import { templateName } from '@/lib/name';
 
@@ -67,7 +68,7 @@ export async function GET(req: NextRequest) {
   // Appuntamenti fissati (terminali) la cui data cade nella finestra utile ai promemoria.
   const { data: convData } = await supabase
     .from('conversations')
-    .select('id, bot_scheduled_at, leads(phone_e164, first_name)')
+    .select('id, wa_number, bot_scheduled_at, leads(phone_e164, first_name)')
     .eq('bot_outcome', 'APPUNTAMENTO')
     // Fermo manuale dal pannello: nessun invio automatico su una chat presa in
     // carico da una persona, promemoria pre-call compresi.
@@ -177,7 +178,7 @@ export async function GET(req: NextRequest) {
       const label = kind === 'r24' ? 'Promemoria T-24h' : 'Promemoria T-3h';
       const firstName = (c.leads?.first_name as string | null | undefined) ?? null;
 
-      const res = await sendTemplateAndLog(supabase, c.id as number, phone, sid, label, from, {
+      const res = await sendTemplateAndLog(supabase, c.id as number, phone, sid, label, numeroMittente(c as { wa_number?: string | null }) ?? from, {
         '1': templateName(firstName),
         '2': slotLabel(scheduledAt, now),
       });

@@ -4,6 +4,7 @@ import { datePiene, tettoGiornaliero } from './booking-capienza';
 import { gdoContextNote } from './gdo-context-note';
 import { gdoVideoText } from './gdo-agenda';
 import { sendFreeText } from './twilio';
+import { numeroMittente } from './wa-mittente';
 import { marioDelayMs } from './mario-latency';
 import { splitMarioMessages } from './mario-split';
 import { ensureConfirmationBlock, containsVideoLink } from './confirmation-block';
@@ -240,15 +241,6 @@ export async function drainMarioReplies(
   phone: string,
   delayMs: () => number = marioDelayMs,
 ): Promise<void> {
-  const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
-  if (!from) {
-    await supabase.from('event_log').insert({
-      type: 'fenice_ai_error', payload: { conversationId } as never,
-      message: 'TWILIO_WHATSAPP_NUMBER_FENICE non configurato', level: 'error',
-    });
-    return;
-  }
-
   // Lock: claim del turno. Se un'altra esecuzione sta già rispondendo, esci:
   // quel drain ricontrolla i messaggi e gestirà anche questo inbound.
   // Il lucchetto vive su ai_lock_at: ai_status resta lo stato di prodotto, così una
@@ -264,9 +256,21 @@ export async function drainMarioReplies(
     .eq('ai_status', 'active')
     .is('ai_paused_at', null) // fermo manuale: la chat è di un umano, non si claima
     .or(`ai_lock_at.is.null,ai_lock_at.lt.${staleCutoff}`)
-    .select('id, ai_started_at, crm_lead_id, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, leads(first_name)')
+    .select('id, wa_number, ai_started_at, crm_lead_id, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, leads(first_name)')
     .single();
   if (!claimed) return;
+
+  // Si risponde dal numero della conversazione: e' quello che il lead ha in rubrica e
+  // l'unico per cui la finestra 24h e' aperta.
+  const from = numeroMittente(claimed as { wa_number?: string | null });
+  if (!from) {
+    await supabase.from('conversations').update({ ai_lock_at: null }).eq('id', conversationId).eq('ai_lock_at', nowIso);
+    await supabase.from('event_log').insert({
+      type: 'fenice_ai_error', payload: { conversationId } as never,
+      message: 'TWILIO_WHATSAPP_NUMBER_FENICE non configurato', level: 'error',
+    });
+    return;
+  }
   const startedAt = (claimed as { ai_started_at: string | null }).ai_started_at;
   const crmLeadId = (claimed as { crm_lead_id: string | null }).crm_lead_id;
 

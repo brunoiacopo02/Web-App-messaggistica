@@ -572,3 +572,27 @@ describe('POST /api/bot/call-attempt — la riapertura non calpesta gli stati', 
     expect(aggiornamenti().some((u) => 'last_message_at' in u)).toBe(true);
   });
 });
+
+describe('POST /api/bot/call-attempt — numero mittente', () => {
+  // Il recupero NR entra in una chat che esiste gia'. Uscire dal numero di default
+  // aprirebbe un secondo thread proprio nel momento piu' delicato: il lead ha appena
+  // perso una chiamata e riceve un messaggio da uno sconosciuto.
+  it('scrive dal numero della conversazione, non da quello di default', async () => {
+    scenario(2);
+    (righe.conversazione[0] as Record<string, unknown>).wa_number = 'whatsapp:+391111111111';
+
+    const res = await firmato(evento(1));
+
+    expect(res.status).toBe(200);
+    expect(sendFreeText.mock.calls[0][0]).toMatchObject({ from: 'whatsapp:+391111111111' });
+  });
+
+  it('senza numero salvato resta sul primario', async () => {
+    scenario(2);
+
+    const res = await firmato(evento(1));
+
+    expect(res.status).toBe(200);
+    expect(sendFreeText.mock.calls[0][0]).toMatchObject({ from: 'whatsapp:+393520158061' });
+  });
+});

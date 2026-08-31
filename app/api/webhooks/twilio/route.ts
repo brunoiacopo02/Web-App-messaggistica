@@ -5,6 +5,7 @@ import { toE164 } from '@/lib/phone';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getAutoReply } from '@/lib/fenice-settings';
 import { shouldAutoReply, shouldReopen, drainMarioReplies } from '@/lib/fenice-autoreply';
+import { eNumeroDelBot } from '@/lib/wa-mittente';
 import { isAudioInbound, transcribeTwilioAudio } from '@/lib/transcribe';
 import { handleGdoDeliveryUpdate } from '@/lib/send-agenda-gdo';
 import { sendCrmNota } from '@/lib/bot-outcome';
@@ -173,9 +174,10 @@ export async function POST(req: NextRequest) {
       message: `Inbound ricevuto da ${phone}`, level: 'info',
     });
 
-    // Auto-risposta Mario (solo numero Fenice + lead arruolato + switch ON)
-    const feniceNumber = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
-    const toMatchesFenice = !!feniceNumber && (params.To ?? '') === feniceNumber;
+    // Auto-risposta Mario (solo numeri del bot + lead arruolato + switch ON).
+    // Sono piu' di uno: la chat va svegliata anche quando il lead risponde al secondo
+    // numero (vedi lib/wa-mittente.ts).
+    const toMatchesFenice = eNumeroDelBot(params.To);
     if (toMatchesFenice) {
       const { data: conv } = await supabase
         .from('conversations')

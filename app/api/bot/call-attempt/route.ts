@@ -17,6 +17,7 @@ import { sendTemplateAndLog } from '@/lib/messaging';
 import { templateName } from '@/lib/name';
 import { PERSONA_NAME, personaForConversation } from '@/lib/persona';
 import { martaSidsFromEnv, shouldReopen } from '@/lib/fenice-autoreply';
+import { numeroMittente } from '@/lib/wa-mittente';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -138,6 +139,7 @@ export async function POST(req: NextRequest) {
     aiPausedAt: conv.ai_paused_at,
     appointmentAt: evento.appointmentAt,
     ultimoInboundAt: stato.ultimoInboundAt,
+    waNumber: conv.wa_number ?? null,
   });
   return esito.inviato
     ? NextResponse.json({ ok: true, inviato: true, ramo: esito.ramo })
@@ -150,6 +152,8 @@ type ConversazioneTrovata = Pick<
   | 'gdo_appuntamento_at' | 'cancel_requested_at'
 > & {
   id: number;
+  /** Il NOSTRO numero su cui vive la chat: da li' deve uscire anche il recupero NR. */
+  wa_number: string | null;
   /** Da dove parte la cronologia che il modello deve leggere: prima c'è un'altra storia. */
   ai_started_at: string | null;
   leads: { phone_e164: string | null; first_name: string | null } | null;
@@ -164,7 +168,7 @@ async function trovaConversazione(supabase: Supa, leadId: string): Promise<Conve
     // `gdo_appuntamento_at` serve alla guardia (i lead postino hanno l'appuntamento
     // lì e non su `bot_scheduled_at`) ed è in SOLA LETTURA, come le altre colonne
     // dell'appuntamento: qui non si scrive mai.
-    .select('id, ai_owner, ai_status, ai_paused_at, bot_outcome, bot_scheduled_at, gdo_appuntamento_at, cancel_requested_at, ai_started_at, leads(phone_e164, first_name)')
+    .select('id, wa_number, ai_owner, ai_status, ai_paused_at, bot_outcome, bot_scheduled_at, gdo_appuntamento_at, cancel_requested_at, ai_started_at, leads(phone_e164, first_name)')
     .eq('crm_lead_id', leadId)
     .order('id', { ascending: false })
     .limit(1);
@@ -234,6 +238,8 @@ type ContestoInvio = {
   aiPausedAt: string | null;
   appointmentAt: string;
   ultimoInboundAt: string | null;
+  /** Il numero da cui e' nata la chat: si risponde sempre da li'. */
+  waNumber: string | null;
 };
 
 type EsitoInvio = { inviato: true; ramo: Ramo } | { inviato: false; motivo: string };
@@ -247,7 +253,7 @@ type EsitoInvio = { inviato: true; ramo: Ramo } | { inviato: false; motivo: stri
  * trovare domani mattina la risposta a una chiamata di ieri sera.
  */
 async function inviaRecuperoNr(supabase: Supa, ctx: ContestoInvio): Promise<EsitoInvio> {
-  const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
+  const from = numeroMittente({ wa_number: ctx.waNumber });
   if (!from || !ctx.phone) {
     // Mandare dal numero sbagliato spezzerebbe la conversazione in due thread agli
     // occhi del lead; senza destinatario non c'è proprio invio. In entrambi i casi si

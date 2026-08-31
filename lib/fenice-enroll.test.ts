@@ -390,3 +390,80 @@ describe('enrollGdoLeadAsPostino — arruolamento in modalità postino', () => {
     expect(sendTemplateAndLog).not.toHaveBeenCalled();
   });
 });
+
+describe('enrollLeadIntoMario — scelta del numero mittente', () => {
+  // Il numero va deciso all'iscrizione e scritto sulla conversazione: e' quello che
+  // tutti gli invii successivi rileggeranno per non spezzare il thread del lead.
+  it('assegna il secondo numero e lo salva sulla conversazione', async () => {
+    vi.mocked(inSendWindow).mockReturnValue(true);
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE_2', 'whatsapp:+391111111111');
+    vi.stubEnv('FENICE_NUMERO2_QUOTA', '100');
+    const { supabase, calls } = makeSupabase();
+
+    await enrollLeadIntoMario(supabase, { phone: '+393331234567', firstName: 'Anna', crmLeadId: 'crm-1' });
+
+    expect(vi.mocked(sendTemplateAndLog).mock.calls[0][5]).toBe('whatsapp:+391111111111');
+    expect(calls.updates[0].wa_number).toBe('whatsapp:+391111111111');
+  });
+
+  // Riarruolamento di un lead che il bot aveva gia' contattato: il numero resta il suo,
+  // qualunque cosa dica la quota di oggi.
+  it('una conversazione che ha gia\' un numero continua da quello', async () => {
+    vi.mocked(inSendWindow).mockReturnValue(true);
+    vi.mocked(findOrCreateLeadConversation).mockResolvedValueOnce(
+      { leadId: 7, conversationId: 42, waNumber: 'whatsapp:+392222222222' } as never,
+    );
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE_2', 'whatsapp:+391111111111');
+    vi.stubEnv('FENICE_NUMERO2_QUOTA', '100');
+    const { supabase, calls } = makeSupabase();
+
+    await enrollLeadIntoMario(supabase, { phone: '+393331234567', firstName: 'Anna', crmLeadId: 'crm-1' });
+
+    expect(vi.mocked(sendTemplateAndLog).mock.calls[0][5]).toBe('whatsapp:+392222222222');
+    expect(calls.updates[0].wa_number).toBe('whatsapp:+392222222222');
+  });
+
+  // Anche quando l'apertura e' differita il numero va fissato subito: sara' il cron a
+  // inviare, e deve sapere da dove.
+  it('fissa il numero anche quando l\'apertura e\' differita', async () => {
+    vi.mocked(inSendWindow).mockReturnValue(false);
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE_2', 'whatsapp:+391111111111');
+    vi.stubEnv('FENICE_NUMERO2_QUOTA', '100');
+    const { supabase, calls } = makeSupabase();
+
+    await enrollLeadIntoMario(supabase, { phone: '+393331234567', firstName: 'Anna', crmLeadId: 'crm-1' });
+
+    expect(calls.updates[0].wa_number).toBe('whatsapp:+391111111111');
+  });
+});
+
+describe('enrollGdoLeadAsPostino — numero mittente', () => {
+  // Il postino non partecipa allo split: manda dal numero storico. Ma se il lead era
+  // gia' del bot su un altro numero, l'agenda deve arrivare in QUELLA chat.
+  it('usa il numero gia\' assegnato alla conversazione', async () => {
+    vi.mocked(findOrCreateLeadConversation).mockResolvedValueOnce(
+      { leadId: 7, conversationId: 42, waNumber: 'whatsapp:+392222222222' } as never,
+    );
+    vi.stubEnv('AGENDA_GDO_TEMPLATE_SID', 'HX_AGENDA');
+    const { supabase } = makeSupabase();
+
+    await enrollGdoLeadAsPostino(supabase, {
+      phone: '+393331234567', name: 'Anna', crmLeadId: 'crm-1', variant: 'A' as never,
+    });
+
+    expect(vi.mocked(sendTemplateAndLog).mock.calls[0][5]).toBe('whatsapp:+392222222222');
+  });
+
+  it('senza numero assegnato resta sul primario', async () => {
+    vi.stubEnv('AGENDA_GDO_TEMPLATE_SID', 'HX_AGENDA');
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE_2', 'whatsapp:+391111111111');
+    vi.stubEnv('FENICE_NUMERO2_QUOTA', '100');
+    const { supabase } = makeSupabase();
+
+    await enrollGdoLeadAsPostino(supabase, {
+      phone: '+393331234567', name: 'Anna', crmLeadId: 'crm-1', variant: 'A' as never,
+    });
+
+    expect(vi.mocked(sendTemplateAndLog).mock.calls[0][5]).toBe('whatsapp:+390000000000');
+  });
+});

@@ -1,5 +1,6 @@
 import type { getSupabaseAdmin } from './supabase/admin';
 import { sendFreeText } from './twilio';
+import { numeroMittente } from './wa-mittente';
 import { romeHour } from './rome-time';
 import { firstNameOf } from './name';
 
@@ -69,9 +70,6 @@ export async function runAgendaFollowups(
   supabase: Supa,
   now: Date = new Date(),
 ): Promise<{ sent: number; skipped: number }> {
-  const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
-  if (!from) return { sent: 0, skipped: 0 };
-
   const nowMs = now.getTime();
   const twoHAgo = new Date(nowMs - AGENDA_FOLLOWUP_DELAY_MS).toISOString();
   const dayAgo = new Date(nowMs - WINDOW_MS).toISOString();
@@ -99,7 +97,7 @@ export async function runAgendaFollowups(
   // 2. Stato delle conversazioni candidate.
   const { data: convs } = await supabase
     .from('conversations')
-    .select('id, lead_id, ai_status, bot_outcome, bot_followups_sent, gdo_agenda_at')
+    .select('id, lead_id, wa_number, ai_status, bot_outcome, bot_followups_sent, gdo_agenda_at')
     .in('id', convIds);
 
   const leadIds = [...new Set((convs ?? []).map((c) => c.lead_id))];
@@ -153,7 +151,10 @@ export async function runAgendaFollowups(
       gdoPostino: c.gdo_agenda_at != null,
     });
 
-    if (decision === 'none' || !phone) { skipped++; continue; }
+    // Il follow-up esce dal numero della conversazione: e' la stessa chat, e la
+    // finestra 24h vale solo per quella coppia numero-lead.
+    const from = numeroMittente(c);
+    if (decision === 'none' || !phone || !from) { skipped++; continue; }
 
     const body = agendaFollowupText((lead?.first_name as string | null) ?? null);
     const msg = await sendFreeText({ to: phone, body, from });

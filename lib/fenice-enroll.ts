@@ -2,6 +2,7 @@ import type { getSupabaseAdmin } from './supabase/admin';
 import { findOrCreateLeadConversation, sendTemplateAndLog } from './messaging';
 import { feniceOpening } from './fenice-opening';
 import { inSendWindow } from './sequence';
+import { assegnaNumeroMittente } from './wa-mittente';
 import { normalizeFunnel, variantIndexFor, openingEnvKey, openingBody, openingWaysFor } from './persona';
 import { firstNameOf, templateName } from './name';
 import type { GdoVariant } from './bot-contract';
@@ -31,20 +32,23 @@ export async function enrollLeadIntoMario(
   args: EnrollArgs,
 ): Promise<{ ok: boolean; conversationId: number; sid?: string; error?: string; deferred?: boolean }> {
   const templateSid = process.env.FENICE_OPENING_TEMPLATE_SID;
-  const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
-  if (!templateSid || !from) {
-    throw new Error('FENICE_OPENING_TEMPLATE_SID o TWILIO_WHATSAPP_NUMBER_FENICE non configurati');
-  }
+  if (!templateSid) throw new Error('FENICE_OPENING_TEMPLATE_SID non configurato');
 
   const firstName = args.firstName ?? undefined;
-  const { conversationId } = await findOrCreateLeadConversation(supabase, {
+  const { conversationId, waNumber } = await findOrCreateLeadConversation(supabase, {
     phone: args.phone,
     firstName,
     lastName: args.lastName ?? undefined,
     email: args.email ?? undefined,
   });
 
+  // Il numero si sceglie qui, una volta sola, e viaggia con la conversazione: gli invii
+  // successivi lo rileggono da `wa_number` (vedi lib/wa-mittente.ts).
+  const from = waNumber ?? assegnaNumeroMittente();
+  if (!from) throw new Error('TWILIO_WHATSAPP_NUMBER_FENICE non configurato');
+
   const convUpdate = {
+    wa_number: from,
     ai_owner: 'mario',
     ai_status: 'active',
     ai_started_at: new Date().toISOString(),
@@ -142,15 +146,19 @@ export async function enrollGdoLeadAsPostino(
   args: GdoEnrollArgs,
 ): Promise<{ ok: boolean; conversationId: number; sid?: string; error?: string }> {
   const templateSid = process.env.AGENDA_GDO_TEMPLATE_SID;
-  const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
   if (!templateSid) throw new Error('AGENDA_GDO_TEMPLATE_SID non configurato');
-  if (!from) throw new Error('TWILIO_WHATSAPP_NUMBER_FENICE non configurato');
 
-  const { conversationId } = await findOrCreateLeadConversation(supabase, {
+  const { conversationId, waNumber } = await findOrCreateLeadConversation(supabase, {
     phone: args.phone,
     firstName: args.name ?? undefined,
     email: args.email ?? undefined,
   });
+
+  // Il postino non entra nello split: manda dal numero storico. Ma se il lead era gia'
+  // del bot su un altro numero, l'agenda deve arrivare in quella chat, non aprirne una
+  // seconda.
+  const from = waNumber ?? process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
+  if (!from) throw new Error('TWILIO_WHATSAPP_NUMBER_FENICE non configurato');
 
   const res = await sendTemplateAndLog(
     supabase,

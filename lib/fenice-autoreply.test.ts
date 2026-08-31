@@ -8,6 +8,7 @@ vi.mock('./bot-outcome', () => ({ sendOutcome: vi.fn(async () => ({ sent: true }
 
 import { generateMarioReply, GDO_CONTEXT_NOTE } from './mario';
 import { sendOutcome } from './bot-outcome';
+import { sendFreeText } from './twilio';
 import { NOTA_VIDEO, NOTA_NOEMI } from './gdo-context-note';
 import { OPENING_ENV_KEYS, personaForConversation } from './persona';
 
@@ -244,6 +245,7 @@ describe('martaSidsFromEnv — aperture dichiarate', () => {
 
 type ClaimedRow = {
   id: number;
+  wa_number?: string | null;
   ai_started_at: string | null;
   crm_lead_id: string | null;
   bot_outcome: string | null;
@@ -1481,5 +1483,54 @@ describe('fermo manuale del bot su una singola chat', () => {
 
     expect(conv.ai_status).toBe('booked');
     expect(conv.ai_lock_at).toBe('2026-08-01T12:31:00Z'); // il lucchetto altrui resta
+  });
+});
+
+describe('drainMarioReplies — numero mittente della conversazione', () => {
+  const OPENING: FakeMsgRow = { direction: 'out', body: 'apertura', template_sid: null, created_at: '2026-07-01T10:00:00Z' };
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(sendFreeText).mockClear();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  // Se il bot rispondesse dal numero di default a una chat nata su un altro numero, il
+  // lead vedrebbe arrivare la risposta da uno sconosciuto, in un secondo thread, e la
+  // finestra 24h (che vale per coppia numero-lead) sarebbe chiusa.
+  it('risponde dal numero con cui la conversazione e nata', async () => {
+    const claimedRow: ClaimedRow = {
+      id: 44, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null,
+      wa_number: 'whatsapp:+391111111111',
+    };
+    const rows: FakeMsgRow[] = [
+      OPENING,
+      { direction: 'in', body: 'ciao', template_sid: null, created_at: '2026-07-25T09:00:00Z' },
+    ];
+    const { supabase } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Ciao!', appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 44, '+391234567890', () => 0);
+
+    expect(vi.mocked(sendFreeText).mock.calls[0][0]).toMatchObject({ from: 'whatsapp:+391111111111' });
+  });
+
+  it('senza numero salvato resta sul primario', async () => {
+    const claimedRow: ClaimedRow = { id: 45, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const rows: FakeMsgRow[] = [
+      OPENING,
+      { direction: 'in', body: 'ciao', template_sid: null, created_at: '2026-07-25T09:00:00Z' },
+    ];
+    const { supabase } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Ciao!', appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 45, '+391234567890', () => 0);
+
+    expect(vi.mocked(sendFreeText).mock.calls[0][0]).toMatchObject({ from: 'whatsapp:+390000000000' });
   });
 });
