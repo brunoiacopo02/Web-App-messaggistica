@@ -4,12 +4,13 @@ import { validateTwilioSignature } from '@/lib/twilio';
 import { toE164 } from '@/lib/phone';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getAutoReply } from '@/lib/fenice-settings';
-import { shouldAutoReply, shouldReopen, drainMarioReplies } from '@/lib/fenice-autoreply';
+import { shouldAutoReply, shouldReopen, shouldAdoptInbound, drainMarioReplies } from '@/lib/fenice-autoreply';
 import { isAudioInbound, transcribeTwilioAudio } from '@/lib/transcribe';
 import { handleGdoDeliveryUpdate } from '@/lib/send-agenda-gdo';
 import { sendCrmNota } from '@/lib/bot-outcome';
 import { buildBotRipresoNote } from '@/lib/bot-outcome-rules';
 import { segnalaRispostaDopoTerzoNr } from '@/lib/risposta-post-nr';
+import { funnelDaPrimoMessaggio } from '@/lib/persona';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -179,9 +180,47 @@ export async function POST(req: NextRequest) {
     if (toMatchesFenice) {
       const { data: conv } = await supabase
         .from('conversations')
-        .select('ai_owner, ai_status, ai_paused_at, crm_lead_id, bot_outcome')
+        .select('ai_owner, ai_status, ai_paused_at, handed_off_at, crm_lead_id, bot_outcome')
         .eq('id', conversationId)
         .single();
+
+      // Adozione: il lead ha scritto per primo e questa chat non e' di nessuno.
+      //
+      // Il conteggio degli outbound si fa SOLO quando `ai_owner` e' nullo: sulle chat
+      // gia' arruolate (la stragrande maggioranza degli inbound) non si aggiunge nessuna
+      // query al webhook, che deve restare veloce perche' Twilio ritenta.
+      if (conv && conv.ai_owner === null) {
+        const { count } = await supabase
+          .from('messages')
+          .select('id', { count: 'exact', head: true })
+          .eq('conversation_id', conversationId)
+          .eq('direction', 'out');
+        if (shouldAdoptInbound({
+          toMatchesFenice,
+          adoptionOn: process.env.INBOUND_ADOPTION_ENABLED === '1',
+          aiOwner: conv.ai_owner,
+          aiPausedAt: conv.ai_paused_at,
+          handedOffAt: conv.handed_off_at,
+          hasOutbound: (count ?? 0) > 0,
+        })) {
+          const provenienza = funnelDaPrimoMessaggio(messageBody);
+          await supabase.from('conversations').update({
+            ai_owner: 'mario',
+            ai_status: 'active',
+            ai_started_at: now,
+            crm_funnel: provenienza,
+          }).eq('id', conversationId);
+          // La copia in memoria serve subito dopo: e' quella che `shouldAutoReply` legge.
+          conv.ai_owner = 'mario';
+          conv.ai_status = 'active';
+          await supabase.from('event_log').insert({
+            type: 'inbound_adottato',
+            payload: { conversationId, phone, provenienza } as never,
+            message: `[bot-fissatore] adottato ${phone}: ha scritto per primo (${provenienza})`,
+            level: 'info',
+          });
+        }
+      }
 
       // Il lead ha risposto dopo il messaggio del terzo tentativo di chiamata: da parte
       // del CRM è già stato scartato in automatico e solo le Conferme possono riaprirlo.
