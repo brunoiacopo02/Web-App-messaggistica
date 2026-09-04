@@ -9,9 +9,10 @@ import { splitMarioMessages } from './mario-split';
 import { ensureConfirmationBlock, containsVideoLink } from './confirmation-block';
 import { unknownFeniceLinks } from './outbound-sanitize';
 import { generateBotReport } from './bot-report';
-import { sendOutcome, inviaNotaAlCrm } from './bot-outcome';
+import { registraEsitoSenzaLeadId, sendOutcome } from './bot-outcome';
 import { stopDalCrmPerLead, vuolePassaggioAUmano } from './stop-crm';
 import { buildScriveDopoLaCallNote } from './bot-outcome-rules';
+import type { BotOutcome } from './bot-contract';
 import { personaForConversation, PERSONA_NAME, OPENING_ENV_KEYS } from './persona';
 import { confermaVideoVisto } from './video-visto';
 import { notaPrimoContatto } from './primo-contatto-note';
@@ -306,11 +307,16 @@ export async function drainMarioReplies(
     .eq('ai_status', 'active')
     .is('ai_paused_at', null) // fermo manuale: la chat è di un umano, non si claima
     .or(`ai_lock_at.is.null,ai_lock_at.lt.${staleCutoff}`)
-    .select('id, ai_started_at, crm_lead_id, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, bot_scheduled_at, gdo_appuntamento_at, leads(first_name)')
+    // `bot_outcome` e `bot_scheduled_at` servono al ramo degli esiti senza leadId
+    // (`registraEsitoSenzaLeadId`): senza di loro non saprebbe che su questa
+    // conversazione c'e' gia' un appuntamento in piedi, e lo declasserebbe.
+    .select('id, ai_started_at, crm_lead_id, bot_outcome, bot_scheduled_at, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, leads(first_name)')
     .single();
   if (!claimed) return;
   const startedAt = (claimed as { ai_started_at: string | null }).ai_started_at;
   const crmLeadId = (claimed as { crm_lead_id: string | null }).crm_lead_id;
+  const esitoInPiedi = (claimed as { bot_outcome?: BotOutcome | null }).bot_outcome ?? null;
+  const dataInPiedi = (claimed as { bot_scheduled_at?: string | null }).bot_scheduled_at ?? null;
 
   // Lo stop che viene dal CRM, non dalla chat: chi si e' presentato alla call o ha
   // comprato non deve ricevere piu' niente, e nemmeno chi una persona ha scartato per un
@@ -376,8 +382,6 @@ export async function drainMarioReplies(
     gdo_video_watched_at?: string | null;
     gdo_video_followups_sent?: number | null;
     gdo_noemi_reminded_at?: string | null;
-    bot_scheduled_at?: string | null;
-    gdo_appuntamento_at?: string | null;
     leads?: { first_name?: string | null } | null;
   };
   const gdoAgendaAt = gdo.gdo_agenda_at ?? null;
@@ -388,9 +392,6 @@ export async function drainMarioReplies(
   // Non incrementato qui: il contatore dei solleciti lo muove solo il cron dedicato.
   const gdoFollowupsSent = gdo.gdo_video_followups_sent ?? 0;
   let gdoNoemiRemindedAt = gdo.gdo_noemi_reminded_at ?? null;
-  // Ora vera della call: serve a dire a quando chiama Noemi (mattina ⇒ pomeriggio prima).
-  const botScheduledAt = gdo.bot_scheduled_at ?? null;
-  const gdoAppuntamentoAt = gdo.gdo_appuntamento_at ?? null;
   let gdoVideoMissingLogged = false;
 
   // Carica i messaggi della conversazione dall'arruolamento in poi (in ordine).
@@ -508,8 +509,6 @@ export async function drainMarioReplies(
                 followupsSent: gdoFollowupsSent,
                 videoAppenaConfermato: false,
                 videoInUscita: videoInsiemeAllaRisposta,
-                botScheduledAt: botScheduledAt,
-                gdoAppuntamentoAt: gdoAppuntamentoAt,
               }),
             }
           : notaPrimo
@@ -554,8 +553,6 @@ export async function drainMarioReplies(
               followupsSent: gdoFollowupsSent,
               videoAppenaConfermato: true, // forza NOTA_NOEMI anche a followupsSent 0
               videoInUscita: videoInsiemeAllaRisposta,
-              botScheduledAt: botScheduledAt,
-              gdoAppuntamentoAt: gdoAppuntamentoAt,
             }),
           });
           // Fail-safe: una rigenerazione vuota non vale meno di zero, vale come un
@@ -648,39 +645,6 @@ export async function drainMarioReplies(
         message: `Mario ha risposto a ${phone}`, level: 'info',
       });
 
-      // Il secondo recapito che il lead dà in chat moriva qui: il bot rispondeva "lo
-      // segno, avviso Noemi" e non lo segnava nessuno. [NOTA|...] è il canale già vivo
-      // (lo stesso delle disdette): non è un esito, non tocca lo stato del lead, e la
-      // conversazione prosegue esattamente come prima — per questo sta PRIMA della
-      // gestione degli esiti, non al loro posto. Il messaggio al lead è già partito
-      // sopra: un errore qui non deve mai propagarsi, altrimenti il `catch` del drain
-      // rimetterebbe la conversazione 'active' e il prossimo giro rimanderebbe la
-      // stessa risposta al lead una seconda volta.
-      if (result.notaCrm && crmLeadId) {
-        try {
-          const secret = process.env.BOT_WEBHOOK_SECRET;
-          const esitoNota = secret
-            ? await inviaNotaAlCrm(supabase, conversationId, crmLeadId, result.notaCrm, undefined, secret)
-            : { sent: false, error: 'not_configured' };
-          if (!esitoNota.sent) {
-            await supabase.from('event_log').insert({
-              type: 'nota_secondo_recapito_non_inviata',
-              payload: { conversationId, crmLeadId, error: esitoNota.error ?? null, status: esitoNota.status ?? null } as never,
-              message: `[bot-fissatore] conv ${conversationId}: nota col secondo recapito del lead non inviata al CRM (${esitoNota.error ?? esitoNota.status})`,
-              level: 'error',
-            });
-          }
-        } catch (err) {
-          const m = err instanceof Error ? err.message : 'errore';
-          await supabase.from('event_log').insert({
-            type: 'nota_secondo_recapito_non_inviata',
-            payload: { conversationId, crmLeadId, error: m } as never,
-            message: `[bot-fissatore] conv ${conversationId}: eccezione inviando la nota col secondo recapito del lead — ${m}`,
-            level: 'error',
-          });
-        }
-      }
-
       if (result.outcome) {
         // Il drain claima solo da 'active' (vedi il lock CAS sopra): aiStatus qui è
         // sempre 'active'. Il ramo 'booked' di canSendOutcome resta comunque la rete
@@ -700,11 +664,6 @@ export async function drainMarioReplies(
             // cronologia, l'unica cosa che non e' una parafrasi.
             leadWords: [...history].reverse().find((t) => t.role === 'user')?.content,
             report,
-            // I due giorni prenotabili che il modello ha visto in QUESTO turno: la
-            // guardia sulla data li usa al posto di ricalcolarli. Alle 20:00 l'ancora
-            // dei giorni ruota, e una call promessa alle 19:45 veniva scartata dopo
-            // essere già stata confermata al lead in chat.
-            bookingDays: result.bookingDays,
           }, postino ? { noteOnly: true } : {});
           // Esito CRM: chiudiamo se il callback è andato a buon fine; altrimenti
           // restiamo 'active' (ritentabile). In ogni caso usciamo: i rami legacy
@@ -730,29 +689,26 @@ export async function drainMarioReplies(
           // `sendOutcome` dopo un 2xx — e l'appuntamento appena fissato non esisteva
           // da nessuna parte: ne' sulla riga, ne' negli eventi, ne' in
           // `/api/bot/lead-entranti`, che quelle tre colonne le legge per dire al CRM
-          // che quella persona ha gia' una call in agenda. E il bot continuava a
-          // parlare come se non avesse fissato niente.
+          // che quella persona ha gia' una call in agenda.
           //
-          // Si replica la sola persistenza locale del ramo normale di
-          // `lib/bot-outcome.ts` (mai la rete): `bot_scheduled_at` solo per un
-          // APPUNTAMENTO, perche' la data di un RICHIAMO su quella colonna verrebbe
-          // letta come una call presa che non esiste.
-          const quando = new Date().toISOString();
-          const appuntamento = result.outcome === 'APPUNTAMENTO' ? (result.scheduledAt ?? null) : null;
-          await supabase.from('conversations').update({
-            bot_outcome: result.outcome,
-            bot_outcome_at: quando,
-            ...(appuntamento ? { bot_scheduled_at: appuntamento } : {}),
-          }).eq('id', conversationId);
-          await supabase.from('event_log').insert({
-            type: 'bot_outcome_senza_leadid',
-            payload: { conversationId, esito: result.outcome, appuntamento } as never,
-            message: `[bot-fissatore] conv ${conversationId}: esito ${result.outcome} registrato solo da noi, il CRM non ha ancora un leadId per questo lead`,
-            level: 'warn',
-          });
-          // Come il ramo normale: fissato l'esito, il bot smette di parlare. Alla
-          // riapertura ci pensa `shouldReopen`, che lavora anche senza `crm_lead_id`.
-          finalStatus = 'closed';
+          // Le decisioni sono le STESSE del ramo normale (declassamento, guardia sulla
+          // data, richiamo senza data): vivono in `registraEsitoSenzaLeadId`, accanto a
+          // `sendOutcome`, e qui si salta solo la rete. Se `chiudi` e' falso la
+          // conversazione resta viva apposta: il bot deve poter ancora chiedere una
+          // data buona invece di sparire.
+          const locale = await registraEsitoSenzaLeadId(
+            supabase,
+            conversationId,
+            {
+              outcome: result.outcome,
+              date: result.scheduledAt,
+              discardReason: result.discardReason,
+              note: result.note,
+              leadWords: [...history].reverse().find((t) => t.role === 'user')?.content,
+            },
+            { botOutcome: esitoInPiedi, botScheduledAt: dataInPiedi },
+          );
+          if (locale.chiudi) finalStatus = 'closed';
           break;
         }
       }
