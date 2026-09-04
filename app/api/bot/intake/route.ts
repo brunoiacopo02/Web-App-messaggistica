@@ -163,6 +163,10 @@ export async function POST(req: NextRequest) {
       // Fuori dalla fascia 08:30–20:30 il lead è preso in carico ma l'apertura parte al
       // primo run in fascia: dirlo evita che risulti "senza attività" per qualche ora.
       ...(res.deferred ? { apertura: 'differita' } : {}),
+      // Il lead sta gia' parlando col bot (ci ha scritto lui per primo): l'apertura non
+      // parte, ma il lead e' preso in carico. Dirlo evita che dal loro lato risulti muto,
+      // che e' la radice della disputa sui "lead fermi al bot" del 29/08.
+      ...(res.aperturaSaltata ? { apertura: 'saltata_chat_in_corso' } : {}),
     });
   } catch (e) {
     await supabase.from('event_log').insert({

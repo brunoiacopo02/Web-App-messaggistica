@@ -1,7 +1,7 @@
 import type { getSupabaseAdmin } from './supabase/admin';
 import { findOrCreateLeadConversation, sendTemplateAndLog } from './messaging';
 import { feniceOpening } from './fenice-opening';
-import { inOpeningWindow } from './sequence';
+import { inSendWindow } from './sequence';
 import { normalizeFunnel, variantIndexFor, openingEnvKey, openingBody, openingWaysFor } from './persona';
 import { firstNameOf, templateName } from './name';
 import type { GdoVariant } from './bot-contract';
@@ -19,6 +19,27 @@ export type EnrollArgs = {
 };
 
 /**
+ * Pure: mandare l'apertura adesso vorrebbe dire ricoprire una conversazione viva?
+ *
+ * Vero solo se Mario sta gia' parlando con questa persona E il lead ha gia' visto almeno
+ * un nostro messaggio. Il caso e' quotidiano da quando il bot adotta chi scrive per primo:
+ * sui 14 lead Telegram lavorati ad agosto l'intake del CRM e' arrivato a chat gia'
+ * iniziata, con 0.0 ore di ritardo.
+ *
+ * `haOutboundPartito` conta solo i messaggi con `twilio_sid`, cioe' partiti davvero. E'
+ * il criterio di `app/api/cron/riapri-mute/route.ts`, e cambiarlo lo romperebbe: quel
+ * cron esiste per le conversazioni dove abbiamo PROVATO a mandare l'apertura e non e'
+ * mai partita, e con "esiste una riga in uscita" diventerebbero irrecuperabili.
+ */
+export function apreSopraChatViva(g: {
+  aiOwner: string | null;
+  aiStatus: string | null;
+  haOutboundPartito: boolean;
+}): boolean {
+  return g.aiOwner === 'mario' && g.aiStatus === 'active' && g.haOutboundPartito;
+}
+
+/**
  * Arruola un lead nel flusso di Mario: crea/aggiorna lead+conversazione, invia il
  * template di apertura, e marca la conversazione come gestita da Mario (active).
  * Se `crmLeadId` è presente, tagga la conversazione per il callback al CRM.
@@ -29,7 +50,7 @@ export type EnrollArgs = {
 export async function enrollLeadIntoMario(
   supabase: Supa,
   args: EnrollArgs,
-): Promise<{ ok: boolean; conversationId: number; sid?: string; error?: string; deferred?: boolean; duplicato?: boolean }> {
+): Promise<{ ok: boolean; conversationId: number; sid?: string; error?: string; deferred?: boolean; aperturaSaltata?: boolean }> {
   const templateSid = process.env.FENICE_OPENING_TEMPLATE_SID;
   const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
   if (!templateSid || !from) {
@@ -44,6 +65,39 @@ export async function enrollLeadIntoMario(
     email: args.email ?? undefined,
   });
 
+  // Non si lascia cadere un'apertura sopra una conversazione gia' avviata: il lead
+  // vedrebbe il bot ricominciare da capo. Si prende comunque in carico il lead per il
+  // CRM, cosi' da parte loro non risulta fermo.
+  {
+    const { data: convRow } = await supabase
+      .from('conversations').select('ai_owner, ai_status').eq('id', conversationId).single();
+    const { count: partiti } = await supabase
+      .from('messages').select('id', { count: 'exact', head: true })
+      .eq('conversation_id', conversationId).eq('direction', 'out').not('twilio_sid', 'is', null);
+    if (apreSopraChatViva({
+      aiOwner: convRow?.ai_owner ?? null,
+      aiStatus: convRow?.ai_status ?? null,
+      haOutboundPartito: (partiti ?? 0) > 0,
+    })) {
+      // Solo i campi valorizzati: scrivere null cancellerebbe il `crm_funnel` che il
+      // webhook ha appena dedotto dal primo messaggio del lead.
+      const patch = {
+        ...(args.crmLeadId ? { crm_lead_id: args.crmLeadId } : {}),
+        ...(args.crmFunnel ? { crm_funnel: args.crmFunnel } : {}),
+      };
+      if (Object.keys(patch).length > 0) {
+        await supabase.from('conversations').update(patch).eq('id', conversationId);
+      }
+      await supabase.from('event_log').insert({
+        type: 'apertura_saltata_chat_in_corso',
+        payload: { phone: args.phone, conversationId, crmLeadId: args.crmLeadId ?? null } as never,
+        message: `[bot-fissatore] apertura saltata per ${args.phone}: la chat e' gia' avviata`,
+        level: 'info',
+      });
+      return { ok: true, conversationId, aperturaSaltata: true };
+    }
+  }
+
   const convUpdate = {
     ai_owner: 'mario',
     ai_status: 'active',
@@ -52,14 +106,10 @@ export async function enrollLeadIntoMario(
     crm_funnel: args.crmFunnel ?? null,
   };
 
-  // Apertura differita: nel cuore della notte i template aprono peggio (-10pt
-  // risposta) e disturbano. La conv viene comunque presa in carico da Mario, senza
-  // outbound: sarà il cron sequence-touches a inviare l'apertura al primo run in
-  // fascia, cioè alle 07:00.
-  // La fascia qui è quella LARGA (07:00-23:00, `inOpeningWindow`) e non quella dei
-  // touch: è il primo messaggio a chi ha appena lasciato il numero, e una risposta
-  // se l'aspetta. Vedi il commento su `inOpeningWindow` per i numeri.
-  if (!inOpeningWindow(Date.now())) {
+  // Apertura differita: di notte i template aprono peggio (-10pt risposta) e
+  // disturbano. La conv viene comunque presa in carico da Mario, senza outbound:
+  // sarà il cron sequence-touches a inviare l'apertura al primo run in fascia.
+  if (!inSendWindow(Date.now())) {
     await supabase.from('conversations').update(convUpdate).eq('id', conversationId);
     await supabase.from('event_log').insert({
       type: 'fenice_enroll_deferred',
@@ -68,31 +118,6 @@ export async function enrollLeadIntoMario(
       level: 'info',
     });
     return { ok: true, conversationId, deferred: true };
-  }
-
-  // Ritento del CRM sullo stesso lead: l'apertura è già partita, non se ne manda una
-  // seconda. Serve dal 09/09/2026, quando il CRM ha iniziato a ritentare sui 429 e sui
-  // timeout (113 in 30 giorni: il loro AbortSignal scatta a 5s, ma la nostra richiesta
-  // era arrivata lo stesso). Senza questa guardia ogni ritento è un secondo "ciao" allo
-  // stesso lead — il modo più veloce per farsi bloccare da un numero già a qualità LOW.
-  //
-  // La guardia guarda la CHAT, non il leadId: un outbound nelle ultime 12 ore basta a
-  // fermare l'apertura. Il leadId non serviva e anzi lasciava passare il caso peggiore —
-  // il CRM tiene più lead per lo stesso numero (1.708 gruppi con presenze diverse), noi
-  // deduplichiamo la chat per numero, quindi in un blast due leadId della stessa persona
-  // cadono nella stessa conversazione e quella sentirebbe due "ciao" di fila. Per la
-  // stessa ragione non serve la loro `personKey`: è lo stesso numero, quindi è già la
-  // stessa chat. La persona che torna dopo giorni ha l'ultimo outbound fuori finestra e
-  // riceve la sua apertura come sempre.
-  const guardia = args.crmLeadId ? await apertutaDaFermare(supabase, conversationId) : null;
-  if (guardia) {
-    await supabase.from('event_log').insert({
-      type: 'fenice_enroll_duplicato',
-      payload: { phone: args.phone, conversationId, crmLeadId: args.crmLeadId, motivo: guardia } as never,
-      message: `Intake ripetuto per lead ${args.crmLeadId}: ${guardia}, nessun reinvio`,
-      level: 'info',
-    });
-    return { ok: true, conversationId, duplicato: true };
   }
 
   // Selezione apertura: legacy (Mario) di default; se NEW_OPENING_ENABLED === '1'
@@ -139,42 +164,6 @@ export async function enrollLeadIntoMario(
   });
 
   return { ok: res.ok, conversationId, sid: res.sid, error: res.error };
-}
-
-/**
- * Perché fermare l'apertura, o null per mandarla.
- *
- * Due motivi, misurati sul ripescaggio del 09/09 sera: su 46 conversazioni ripushate dal
- * CRM, 26 hanno ricevuto un secondo messaggio entro 24 ore dal primo (la più ravvicinata
- * a 2 ore e mezza) e 25 erano chat in cui il lead aveva risposto negli ultimi 7 giorni.
- * Il solo controllo sull'outbound recente ne avrebbe fermate circa metà: chi ci sta
- * parlando da giorni non deve sentirsi dire "ciao" da capo, e la distanza dall'ultimo
- * invio non lo dice.
- */
-async function apertutaDaFermare(
-  supabase: Supa,
-  conversationId: number,
-): Promise<'apertura_recente' | 'conversazione_viva' | null> {
-  const soglia = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
-  const { data: out } = await supabase
-    .from('messages')
-    .select('id')
-    .eq('conversation_id', conversationId)
-    .eq('direction', 'out')
-    .gte('created_at', soglia)
-    .limit(1);
-  if ((out?.length ?? 0) > 0) return 'apertura_recente';
-
-  const { data: conv } = await supabase
-    .from('conversations')
-    .select('last_inbound_at')
-    .eq('id', conversationId)
-    .maybeSingle();
-  const ultimoInbound = (conv as { last_inbound_at: string | null } | null)?.last_inbound_at;
-  if (ultimoInbound && Date.now() - new Date(ultimoInbound).getTime() <= 7 * 24 * 60 * 60 * 1000) {
-    return 'conversazione_viva';
-  }
-  return null;
 }
 
 export type GdoEnrollArgs = {

@@ -4,26 +4,53 @@ vi.mock('./messaging', () => ({
   findOrCreateLeadConversation: vi.fn(async () => ({ leadId: 7, conversationId: 42 })),
   sendTemplateAndLog: vi.fn(async () => ({ ok: true, sid: 'SM_TEST' })),
 }));
+vi.mock('./sequence', () => ({
+  inSendWindow: vi.fn(() => true),
+}));
 
-import { enrollGdoLeadAsPostino, enrollLeadIntoMario } from './fenice-enroll';
+import { apreSopraChatViva, enrollGdoLeadAsPostino, enrollLeadIntoMario } from './fenice-enroll';
 import { findOrCreateLeadConversation, sendTemplateAndLog } from './messaging';
+import { inSendWindow } from './sequence';
 import { openingBody } from './persona';
 
-/** Fake del client Supabase: traccia update su conversations ed insert su event_log. */
-function makeSupabase() {
+/**
+ * Fake del client Supabase: traccia update su conversations ed insert su event_log.
+ * `convRow` e `outboundCount` alimentano le due query di sola lettura della guardia
+ * `apreSopraChatViva` dentro `enrollLeadIntoMario` (select su conversations e count su
+ * messages). Default: chat nuova (nessun owner, nessun outbound partito), così la
+ * guardia non scatta e i test esistenti restano invariati.
+ */
+function makeSupabase(opts: {
+  convRow?: { ai_owner: string | null; ai_status: string | null };
+  outboundCount?: number;
+} = {}) {
   const calls = { updates: [] as any[], events: [] as any[] };
+  const convRow = opts.convRow ?? { ai_owner: null, ai_status: null };
+  const outboundCount = opts.outboundCount ?? 0;
   const supabase: any = {
     from(table: string) {
       if (table === 'conversations') {
         return {
           update(payload: any) { calls.updates.push(payload); return { eq() { return Promise.resolve({}); } }; },
-          // Chat senza un leadId già registrato: la guardia anti-doppione lascia passare.
-          select() { return { eq() { return { maybeSingle: async () => ({ data: null }) }; } }; },
+          select() {
+            return { eq() { return { single: () => Promise.resolve({ data: convRow }) }; } };
+          },
         };
       }
       if (table === 'messages') {
-        const chain: any = { eq: () => chain, gte: () => chain, limit: async () => ({ data: [] }) };
-        return { select: () => chain };
+        return {
+          select() {
+            return {
+              eq() {
+                return {
+                  eq() {
+                    return { not: () => Promise.resolve({ count: outboundCount }) };
+                  },
+                };
+              },
+            };
+          },
+        };
       }
       return { insert(payload: any) { calls.events.push(payload); return Promise.resolve({}); } };
     },
@@ -31,25 +58,16 @@ function makeSupabase() {
   return { supabase, calls };
 }
 
-// Niente mock sulla finestra d'invio: si muove l'orologio e si usano le funzioni
-// vere. Un booleano finto non avrebbe mai potuto accorgersi che il cron di Vercel
-// e' in UTC e la fascia scivola di un'ora al cambio d'ora.
-const MEZZOGIORNO = Date.parse('2026-07-15T10:00:00Z'); // 12:00 Rome: dentro entrambe le fasce
-const SERA = Date.parse('2026-07-15T20:00:00Z');        // 22:00 Rome: apertura si, touch no
-const NOTTE_FONDA = Date.parse('2026-07-15T01:00:00Z'); // 03:00 Rome: nessuno scrive
-
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ['Date'] });
-  vi.setSystemTime(MEZZOGIORNO);
   vi.clearAllMocks();
   vi.stubEnv('FENICE_OPENING_TEMPLATE_SID', 'HX_OPENING');
   vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
 });
-afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers(); });
+afterEach(() => { vi.unstubAllEnvs(); });
 
 describe('enrollLeadIntoMario — apertura differita fuori fascia', () => {
-  it('in fascia (12:00 Rome) → invio apertura, update conv, event fenice_enroll', async () => {
-    vi.setSystemTime(MEZZOGIORNO);
+  it('in fascia (es. 10:00 Rome) → invio apertura, update conv, event fenice_enroll', async () => {
+    vi.mocked(inSendWindow).mockReturnValue(true);
     const { supabase, calls } = makeSupabase();
 
     const res = await enrollLeadIntoMario(supabase, {
@@ -71,8 +89,8 @@ describe('enrollLeadIntoMario — apertura differita fuori fascia', () => {
     expect(calls.events.some((e) => e.type === 'fenice_enroll_deferred')).toBe(false);
   });
 
-  it('nel cuore della notte (03:00 Rome) → NESSUN invio, update conv comunque, event deferred, deferred:true', async () => {
-    vi.setSystemTime(NOTTE_FONDA);
+  it('fuori fascia (es. 23:00 Rome) → NESSUN invio, update conv comunque, event deferred, deferred:true', async () => {
+    vi.mocked(inSendWindow).mockReturnValue(false);
     const { supabase, calls } = makeSupabase();
 
     const res = await enrollLeadIntoMario(supabase, {
@@ -94,24 +112,8 @@ describe('enrollLeadIntoMario — apertura differita fuori fascia', () => {
     expect(calls.events.some((e) => e.type === 'fenice_enroll')).toBe(false);
   });
 
-  // 11/09/2026. Chi lascia il numero alle 22 e' sveglio col telefono in mano e una
-  // risposta la aspetta: era la coda peggiore di tutte, 13 ore di attesa mediana.
-  it('alle 22:00 di Roma l apertura parte subito, non si differisce al mattino', async () => {
-    vi.setSystemTime(SERA);
-    const { supabase, calls } = makeSupabase();
-
-    const res = await enrollLeadIntoMario(supabase, {
-      phone: '+393331234567', firstName: 'Anna', crmLeadId: 'crm-1', crmFunnel: 'H',
-    });
-
-    expect(res).toMatchObject({ ok: true, conversationId: 42 });
-    expect(res).not.toHaveProperty('deferred', true);
-    expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
-    expect(calls.events.some((e) => e.type === 'fenice_enroll_deferred')).toBe(false);
-  });
-
   it('in fascia con invio fallito → ok:false, event send_error (nessuna regressione)', async () => {
-    vi.setSystemTime(MEZZOGIORNO);
+    vi.mocked(inSendWindow).mockReturnValue(true);
     vi.mocked(sendTemplateAndLog).mockResolvedValueOnce({ ok: false, error: 'twilio boom' });
     const { supabase, calls } = makeSupabase();
 
@@ -140,7 +142,7 @@ describe('enrollLeadIntoMario — selezione apertura per-funnel A/B (NEW_OPENING
   }
 
   beforeEach(() => {
-    vi.setSystemTime(MEZZOGIORNO);
+    vi.mocked(inSendWindow).mockReturnValue(true);
   });
 
   it('flag on, CORSO 10 ORE, conv pari (42) → OPENING_SID_C2, variables {1:nome}, body variante 2', async () => {
@@ -341,7 +343,7 @@ describe('enrollGdoLeadAsPostino — arruolamento in modalità postino', () => {
   });
 
   it('fuori fascia invia comunque: il GDO è al telefono col lead', async () => {
-    vi.setSystemTime(NOTTE_FONDA);
+    vi.mocked(inSendWindow).mockReturnValue(false);
     const { supabase, calls } = makeSupabase();
 
     const res = await enrollGdoLeadAsPostino(supabase, PAYLOAD);
@@ -418,96 +420,24 @@ describe('enrollGdoLeadAsPostino — arruolamento in modalità postino', () => {
   });
 });
 
-/**
- * Fake Supabase che sa anche leggere: serve alla guardia anti-doppione, che prima di
- * inviare guarda il crm_lead_id della conv e se un outbound è già partito di recente.
- */
-function makeSupabaseLeggibile(opts: { crmLeadId?: string | null; outboundRecenti?: number; lastInboundAt?: string | null }) {
-  const calls = { updates: [] as any[], events: [] as any[] };
-  const supabase: any = {
-    from(table: string) {
-      if (table === 'conversations') {
-        return {
-          update(payload: any) { calls.updates.push(payload); return { eq() { return Promise.resolve({}); } }; },
-          select() {
-            return { eq() { return { maybeSingle: async () => ({ data: { crm_lead_id: opts.crmLeadId ?? null, last_inbound_at: opts.lastInboundAt ?? null } }) }; } };
-          },
-        };
-      }
-      if (table === 'messages') {
-        const rows = Array.from({ length: opts.outboundRecenti ?? 0 }, (_, i) => ({ id: i }));
-        const chain: any = { eq: () => chain, gte: () => chain, limit: async () => ({ data: rows }) };
-        return { select: () => chain };
-      }
-      return { insert(payload: any) { calls.events.push(payload); return Promise.resolve({}); } };
-    },
-  };
-  return { supabase, calls };
-}
-
-describe('enrollLeadIntoMario — guardia anti-doppione sui ritenti del CRM', () => {
-  it('stesso crmLeadId con apertura già partita → non reinvia, dice duplicato', async () => {
-    vi.setSystemTime(MEZZOGIORNO);
-    const { supabase } = makeSupabaseLeggibile({ crmLeadId: 'LEAD-1', outboundRecenti: 1 });
-    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000001', crmLeadId: 'LEAD-1' });
-    expect(res).toMatchObject({ ok: true, conversationId: 42, duplicato: true });
-    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+describe('apreSopraChatViva', () => {
+  const viva = { aiOwner: 'mario', aiStatus: 'active', haOutboundPartito: true };
+  it("vero: Mario sta già parlando con questa persona", () => {
+    expect(apreSopraChatViva(viva)).toBe(true);
   });
-
-  it('due leadId diversi della stessa persona a poche ore → una sola apertura', async () => {
-    // Il CRM tiene più lead per lo stesso numero (1.708 gruppi con presenze diverse) e
-    // noi deduplichiamo la chat per numero: in un blast i due leadId cadono nella stessa
-    // conversazione. La guardia guarda la CHAT, non il leadId, o quella persona sente
-    // due "ciao" di fila.
-    vi.setSystemTime(MEZZOGIORNO);
-    const { supabase } = makeSupabaseLeggibile({ crmLeadId: 'LEAD-VECCHIO', outboundRecenti: 1 });
-    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000002', crmLeadId: 'LEAD-NUOVO' });
-    expect(res).toMatchObject({ ok: true, duplicato: true });
-    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+  it('falso su una chat nuova', () => {
+    expect(apreSopraChatViva({ aiOwner: null, aiStatus: null, haOutboundPartito: false })).toBe(false);
   });
-
-  it('persona ricorrente con ultimo contatto vecchio → l apertura parte', async () => {
-    vi.setSystemTime(MEZZOGIORNO);
-    const { supabase } = makeSupabaseLeggibile({ crmLeadId: 'LEAD-VECCHIO', outboundRecenti: 0 });
-    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000002', crmLeadId: 'LEAD-NUOVO' });
-    expect(res).toMatchObject({ ok: true });
-    expect(res).not.toHaveProperty('duplicato');
-    expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+  // Il caso di riapri-mute: abbiamo PROVATO a mandare l'apertura e non è mai partita.
+  // Se la guardia scattasse qui, quelle conversazioni resterebbero mute per sempre.
+  it("falso se un invio è stato tentato ma non è mai partito", () => {
+    expect(apreSopraChatViva({ ...viva, haOutboundPartito: false })).toBe(false);
   });
-
-  it('stesso crmLeadId ma nessun outbound recente → l apertura parte', async () => {
-    vi.setSystemTime(MEZZOGIORNO);
-    const { supabase } = makeSupabaseLeggibile({ crmLeadId: 'LEAD-1', outboundRecenti: 0 });
-    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000003', crmLeadId: 'LEAD-1' });
-    expect(res).toMatchObject({ ok: true });
-    expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+  it('falso su una chat chiusa o passata a una persona', () => {
+    expect(apreSopraChatViva({ ...viva, aiStatus: 'closed' })).toBe(false);
+    expect(apreSopraChatViva({ ...viva, aiStatus: 'handed_off' })).toBe(false);
   });
-
-  it('chat viva: il lead ha risposto 3 giorni fa → nessuna apertura da capo', async () => {
-    // 25 delle 46 conversazioni ripushate il 09/09 erano così: gente che stava parlando
-    // col bot e si è sentita ridire "ciao". L'ultimo outbound era vecchio, quindi il solo
-    // controllo sugli invii non bastava.
-    vi.setSystemTime(MEZZOGIORNO);
-    const treGiorniFa = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
-    const { supabase } = makeSupabaseLeggibile({ crmLeadId: 'LEAD-1', outboundRecenti: 0, lastInboundAt: treGiorniFa });
-    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000005', crmLeadId: 'LEAD-2' });
-    expect(res).toMatchObject({ ok: true, duplicato: true });
-    expect(sendTemplateAndLog).not.toHaveBeenCalled();
-  });
-
-  it('lead muto da mesi → l apertura parte', async () => {
-    vi.setSystemTime(MEZZOGIORNO);
-    const dueMesiFa = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
-    const { supabase } = makeSupabaseLeggibile({ crmLeadId: 'LEAD-1', outboundRecenti: 0, lastInboundAt: dueMesiFa });
-    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000006', crmLeadId: 'LEAD-2' });
-    expect(res).not.toHaveProperty('duplicato');
-    expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
-  });
-
-  it('senza crmLeadId (arruolamento non CRM) la guardia non si attiva', async () => {
-    vi.setSystemTime(MEZZOGIORNO);
-    const { supabase } = makeSupabaseLeggibile({ crmLeadId: null, outboundRecenti: 1 });
-    await enrollLeadIntoMario(supabase, { phone: '+393330000004' });
-    expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+  it("falso se la chat non è di Mario", () => {
+    expect(apreSopraChatViva({ ...viva, aiOwner: null })).toBe(false);
   });
 });

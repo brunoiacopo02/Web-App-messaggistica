@@ -94,9 +94,9 @@ export type AdoptGate = {
  * `hasOutbound` conta QUALUNQUE riga in uscita, anche di un invio fallito: se qualcuno ha
  * provato a scrivere a questa persona, la chat ha una storia che qui non conosciamo. È
  * anche ciò che tiene fuori le campagne e la inbox, dove il primo messaggio è sempre
- * nostro. È il criterio OPPOSTO a quello della guardia sull'apertura in
- * `enrollLeadIntoMario`, che guarda solo agli outbound partiti davvero: là serve sapere
- * se il lead ha visto qualcosa, qui se qualcuno ha provato.
+ * nostro. È il criterio OPPOSTO a quello di `apreSopraChatViva` (in `fenice-enroll.ts`),
+ * la guardia sull'apertura dentro `enrollLeadIntoMario`, che guarda solo agli outbound
+ * partiti davvero: là serve sapere se il lead ha visto qualcosa, qui se qualcuno ha provato.
  */
 export function shouldAdoptInbound(g: AdoptGate): boolean {
   if (!g.toMatchesFenice || !g.adoptionOn) return false;
