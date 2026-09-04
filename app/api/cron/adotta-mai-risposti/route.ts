@@ -5,6 +5,7 @@ import { sendTemplateAndLog } from '@/lib/messaging';
 import { funnelDaPrimoMessaggio } from '@/lib/persona';
 import { templateName } from '@/lib/name';
 import { inSendWindow } from '@/lib/sequence';
+import { assertTemplateSendable } from '@/lib/twilio';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -70,12 +71,19 @@ export async function POST(req: NextRequest) {
     .order('id', { ascending: true })
     .range(from_, to));
 
+  // Paginata con fetchAllRows: senza, PostgREST taglia in silenzio a 1.000 righe (il
+  // tetto documentato in lib/supabase/paginate.ts). Bastano una decina di messaggi in
+  // uscita a conversazione su un chunk da 100 per superarlo — le conversazioni le cui
+  // righe cadono oltre la millesima sparirebbero da `conOutbound` e risulterebbero
+  // "mai risposte", prendendosi il riaggancio pur avendo gia' una storia.
   const conOutbound = new Set<number>();
   const ids = convs.map((c: any) => c.id);
   for (let i = 0; i < ids.length; i += 100) {
-    const { data } = await admin.from('messages')
-      .select('conversation_id').eq('direction', 'out').in('conversation_id', ids.slice(i, i + 100));
-    for (const m of (data ?? []) as Array<{ conversation_id: number }>) conOutbound.add(m.conversation_id);
+    const chunk = ids.slice(i, i + 100);
+    const righe = await fetchAllRows<{ conversation_id: number }>((f, t) => admin
+      .from('messages').select('id, conversation_id').eq('direction', 'out')
+      .in('conversation_id', chunk).order('id', { ascending: true }).range(f, t));
+    for (const m of righe) conOutbound.add(m.conversation_id);
   }
   const muti = convs.filter((c: any) => !conOutbound.has(c.id) && c.lead_id);
 
@@ -100,8 +108,22 @@ export async function POST(req: NextRequest) {
     if (!inSendWindow(Date.now())) {
       return NextResponse.json({ ok: true, candidate: muti.length, inviati: 0, falliti: 0, esegui, fuoriFascia: true, esempi });
     }
+    // Verifica una volta sola, prima del ciclo: se UTILITY_ONLY e' attivo e il SID del
+    // riaggancio non e' in UTILITY_ONLY_ALLOW, senza questo controllo tutti gli invii
+    // falliscono uno per uno — e ognuno che fallisce regala quella persona a
+    // riapri-mute, che le manderebbe l'apertura vietata per questa lista.
+    try {
+      await assertTemplateSendable(templateSid);
+    } catch (e) {
+      return NextResponse.json({
+        ok: false, error: e instanceof Error ? e.message : 'template non spedibile',
+        candidate: muti.length, inviati: 0,
+      }, { status: 503 });
+    }
     for (const c of muti) {
-      if (inviati + falliti >= max || Date.now() - started > BUDGET_MS) break;
+      // La fascia va ricontrollata anche qui: il ciclo ha 240s di budget, un run
+      // partito a ridosso delle 20:30 puo' arrivare a consegnare dopo la chiusura.
+      if (inviati + falliti >= max || Date.now() - started > BUDGET_MS || !inSendWindow(Date.now())) break;
       const l = anagrafica.get(c.lead_id);
       if (!l) { falliti++; if (errori.length < 5) errori.push(`conv ${c.id}: nessun numero`); continue; }
 
@@ -111,9 +133,18 @@ export async function POST(req: NextRequest) {
       const provenienza = funnelDaPrimoMessaggio(((primi ?? [])[0] as { body: string | null } | undefined)?.body);
 
       const now = new Date().toISOString();
-      await admin.from('conversations').update({
+      const { error: adoptError } = await admin.from('conversations').update({
         ai_owner: 'mario', ai_status: 'active', ai_started_at: now, crm_funnel: provenienza,
       }).eq('id', c.id);
+      // Se l'adozione non si scrive, l'invio NON parte: altrimenti la conversazione
+      // resta senza padrone ma con una riga in uscita, e al prossimo messaggio del
+      // lead il webhook la vede gia' "risposta" e non la adotta piu' — si ricrea
+      // esattamente il silenzio che questa rotta esiste per chiudere.
+      if (adoptError) {
+        falliti++;
+        if (errori.length < 5) errori.push(`conv ${c.id}: adozione fallita — ${adoptError.message}`);
+        continue;
+      }
 
       const nome = templateName(l.first_name);
       const res = await sendTemplateAndLog(
