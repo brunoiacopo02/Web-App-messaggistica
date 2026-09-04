@@ -221,7 +221,23 @@ export async function POST(req: NextRequest) {
           handedOffAt: conv.handed_off_at,
           hasOutbound,
         })) {
-          const provenienza = funnelDaPrimoMessaggio(messageBody);
+          // La provenienza si legge dal PRIMO messaggio della conversazione, non da
+          // quello appena arrivato: chi e' in arretrato e riscrive "Scusa poi risponde"
+          // verrebbe classificato INBOUND invece di TELEGRAM, e la sua provenienza sulle
+          // statistiche del CRM sarebbe falsa. E' quello che fa gia'
+          // `app/api/cron/adotta-mai-risposti/route.ts`. La query sta dentro il ramo
+          // dell'adozione, che e' raro: il webhook normale non paga niente.
+          const { data: primiInbound } = await supabase
+            .from('messages')
+            .select('body')
+            .eq('conversation_id', conversationId)
+            .eq('direction', 'in')
+            .order('created_at', { ascending: true })
+            .limit(1);
+          const primoInbound = ((primiInbound ?? [])[0] as { body: string | null } | undefined)?.body;
+          // Il messaggio corrente e' il fallback: se la lettura fallisce o la riga non si
+          // vede ancora, e' comunque il primo inbound di questa conversazione.
+          const provenienza = funnelDaPrimoMessaggio(primoInbound ?? messageBody);
           // Cinque minuti indietro, e non `now`: il messaggio che ha innescato questa
           // adozione e' stato inserito qui sopra col `created_at` di default, cioe'
           // l'orologio di Postgres, mentre `now` viene da quello di Node. Con

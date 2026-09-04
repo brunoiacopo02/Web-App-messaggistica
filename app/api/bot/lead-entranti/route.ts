@@ -40,20 +40,29 @@ export async function POST(req: NextRequest) {
   }
   const limit = Math.min(Math.max(Number(opts.limit) || 500, 1), 2000);
 
+  const feniceNumber = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
+  if (!feniceNumber) return NextResponse.json({ ok: false, error: 'not_configured' }, { status: 503 });
+
   const admin = getSupabaseAdmin();
   let convs: any[];
   try {
-    // Il criterio e' esattamente "lo lavoriamo noi e voi non lo conoscete": preso in
-    // carico da Mario, senza `crm_lead_id`. Ci finiscono sia gli adottati dal webhook
-    // sia i pochi arruolati a mano da /api/fenice/enroll — anche quelli il CRM non li ha.
+    // Il criterio e' quello della spec, parola per parola: conversazioni sul numero
+    // Fenice, con almeno un messaggio in ingresso, senza `crm_lead_id`, non passate a
+    // una persona.
+    //  - `last_inbound_at` non nullo tiene fuori gli arruolati a mano che un inbound non
+    //    ce l'hanno: uscivano con `primoMessaggio` e `scrittoIl` nulli, due casi che il
+    //    documento mandato al CRM non descrive;
+    //  - `handed_off_at` nullo perche' quelle chat le sta lavorando una persona e il CRM
+    //    non deve mandarci un intake sopra;
+    //  - `wa_number` perche' la lista parla solo del numero Fenice.
     convs = await fetchAllRows<any>((from, to) => admin
       .from('conversations')
       .select('id, crm_funnel, ai_status, bot_outcome, bot_scheduled_at, ai_started_at, last_message_at, leads(phone_e164, first_name, last_name)')
       .eq('ai_owner', 'mario')
       .is('crm_lead_id', null)
-      // Chi e' passato a una persona non entra nella lista: il CRM ci manderebbe
-      // l'intake sopra una chat che sta lavorando qualcuno in carne e ossa.
       .is('handed_off_at', null)
+      .eq('wa_number', feniceNumber)
+      .not('last_inbound_at', 'is', null)
       .order('ai_started_at', { ascending: true, nullsFirst: true })
       .range(from, to));
   } catch (e) {
@@ -90,5 +99,7 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  return NextResponse.json({ ok: true, totale: lead.length, lead });
+  // `totaleCompleto` e' il numero PRIMA del taglio a `limit`: senza, il CRM non ha
+  // modo di sapere che la lista e' troncata e crederebbe di averli visti tutti.
+  return NextResponse.json({ ok: true, totale: lead.length, totaleCompleto: convs.length, lead });
 }

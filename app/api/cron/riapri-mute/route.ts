@@ -65,10 +65,20 @@ export async function POST(req: NextRequest) {
   const giaRiagganciato = new Set<number>();
   const ids = convs.map((c: any) => c.id);
   for (let i = 0; i < ids.length; i += 100) {
-    const { data } = await admin.from('messages')
-      .select('conversation_id, twilio_sid, template_sid').eq('direction', 'out')
-      .in('conversation_id', ids.slice(i, i + 100));
-    for (const m of (data ?? []) as Array<{ conversation_id: number; twilio_sid: string | null; template_sid: string | null }>) {
+    // Paginata con fetchAllRows: PostgREST taglia ogni select a 1.000 righe in
+    // silenzio (il tetto documentato in lib/supabase/paginate.ts), e bastano una
+    // decina di messaggi in uscita per conversazione su un chunk da 100 per
+    // superarlo. Le righe oltre la millesima sparivano, e con loro la protezione
+    // di `giaRiagganciato`: a chi il riaggancio l'ha gia' ricevuto sarebbe partita
+    // proprio l'apertura vietata per quella lista. `id` fra le colonne e ordine
+    // stabile su `id` perche' la paginazione regga, come in `adotta-mai-risposti`.
+    const righe = await fetchAllRows<{ conversation_id: number; twilio_sid: string | null; template_sid: string | null }>((f, t) => admin
+      .from('messages')
+      .select('id, conversation_id, twilio_sid, template_sid').eq('direction', 'out')
+      .in('conversation_id', ids.slice(i, i + 100))
+      .order('id', { ascending: true })
+      .range(f, t));
+    for (const m of righe) {
       tentato.add(m.conversation_id);
       if (m.twilio_sid) partito.add(m.conversation_id);
       if (reengageSid && m.template_sid === reengageSid) giaRiagganciato.add(m.conversation_id);

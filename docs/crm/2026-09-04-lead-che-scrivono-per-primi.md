@@ -75,12 +75,18 @@ La lista è **tutti** i lead che stiamo lavorando e di cui voi non avete un `lea
 più vecchio. Non c'è un filtro di stato: anche uno già concluso dal bot vi serve, ed è
 anzi quello che vi serve di più — se ha un appuntamento, lo vedete nel campo `esito`.
 
+Il criterio esatto: conversazioni sul numero Fenice, con almeno un messaggio in ingresso,
+senza `leadId` vostro, non passate a una persona. Chi è finito in mano a un umano da parte
+nostra resta fuori: quella chat la sta già lavorando qualcuno, e un intake sopra ci
+manderebbe a scriverle entrambi.
+
 ### Risposta
 
 ```json
 {
   "ok": true,
   "totale": 29,
+  "totaleCompleto": 29,
   "lead": [
     {
       "telefono": "+393200431888",
@@ -97,10 +103,16 @@ anzi quello che vi serve di più — se ha un appuntamento, lo vedete nel campo 
 }
 ```
 
-- **`statoBot`** — dove sta la conversazione da parte nostra: `active` il bot ci sta parlando adesso, `closed` ha chiuso con un esito, `booked` ha fissato l'appuntamento, `handed_off` è passata a una persona. Sono i nostri stati interni e ve li diamo grezzi apposta: tradurli vorrebbe dire appiattire distinzioni che vi servono.
+- **`totale` e `totaleCompleto`** — `totale` è quanti lead ci sono in questa risposta,
+  `totaleCompleto` quanti ce ne sono in tutto. Se il secondo è più grande del primo la
+  lista è tagliata dal vostro `limit`: rifate la chiamata con un `limit` più alto.
+- **`statoBot`** — dove sta la conversazione da parte nostra: `active` il bot ci sta parlando adesso, `replying` sta scrivendo la risposta in questo momento (è lo stesso di `active` per voi, ma in produzione restano righe ferme su quel valore e vi arriverebbero grezze), `closed` ha chiuso con un esito, `booked` ha fissato l'appuntamento, `handed_off` è passata a una persona. Sono i nostri stati interni e ve li diamo grezzi apposta: tradurli vorrebbe dire appiattire distinzioni che vi servono. Se ci fate uno switch sopra, tenete un ramo di default.
 - **`provenienza`** — `"TELEGRAM"` per chi apre con la frase del canale, `"INBOUND"` per
   chiunque altro scriva spontaneamente. Non mettiamo tutti su Telegram: sulle vostre
-  statistiche di funnel deve restare vero.
+  statistiche di funnel deve restare vero. Può contenere anche uno dei **vostri** nomi di
+  funnel (`CORSO 10 ORE`, `JOB SIMULATOR`…): succede quando quella persona era già stata
+  arruolata da un vostro intake in passato, e in quel caso il funnel è quello che ci
+  avevate mandato voi.
 - **`nome`** — quasi sempre `null`. Il messaggio è precompilato e non contiene il nome; a
   volte lo dicono nel secondo messaggio e allora ve lo passiamo.
 - **`esito` e `appuntamento`** — valorizzati quando il bot ha già concluso prima che voi

@@ -101,6 +101,8 @@ export async function POST(req: NextRequest) {
   }
 
   let inviati = 0, falliti = 0;
+  // Prese dal webhook mentre il ciclo era in corso: non sono ne' invii ne' fallimenti.
+  let giaPrese = 0;
   const errori: string[] = [];
   const esempi = muti.slice(0, 5).map((c: any) => ({ conv: c.id, scrittoIl: c.last_inbound_at }));
 
@@ -133,9 +135,16 @@ export async function POST(req: NextRequest) {
       const provenienza = funnelDaPrimoMessaggio(((primi ?? [])[0] as { body: string | null } | undefined)?.body);
 
       const now = new Date().toISOString();
-      const { error: adoptError } = await admin.from('conversations').update({
+      // Compare-and-set su `ai_owner`: la lista dei candidati si calcola all'inizio e
+      // il ciclo dura fino a 240 secondi. Se in quel mentre uno dei 29 riscrive, il
+      // webhook lo adotta e gli risponde a testo libero; senza questa condizione qui
+      // arriverebbe subito dopo anche il riaggancio "ci eravamo persi a meta'
+      // discorso", sopra una risposta appena data. Sei di quelle persone hanno gia'
+      // dimostrato di riscrivere nel vuoto. Nessuna riga tornata = l'ha presa
+      // qualcun altro: si salta senza inviare, e non e' un fallimento.
+      const { data: adottate, error: adoptError } = await admin.from('conversations').update({
         ai_owner: 'mario', ai_status: 'active', ai_started_at: now, crm_funnel: provenienza,
-      }).eq('id', c.id);
+      }).eq('id', c.id).is('ai_owner', null).select('id');
       // Se l'adozione non si scrive, l'invio NON parte: altrimenti la conversazione
       // resta senza padrone ma con una riga in uscita, e al prossimo messaggio del
       // lead il webhook la vede gia' "risposta" e non la adotta piu' — si ricrea
@@ -145,6 +154,7 @@ export async function POST(req: NextRequest) {
         if (errori.length < 5) errori.push(`conv ${c.id}: adozione fallita — ${adoptError.message}`);
         continue;
       }
+      if (!adottate || adottate.length === 0) { giaPrese++; continue; }
 
       const nome = templateName(l.first_name);
       const res = await sendTemplateAndLog(
@@ -158,13 +168,13 @@ export async function POST(req: NextRequest) {
 
     await admin.from('event_log').insert({
       type: 'adotta_mai_risposti',
-      payload: { candidate: muti.length, inviati, falliti, dal } as never,
-      message: `[bot-fissatore] recupero di chi ci ha scritto per primo: ${inviati} riaggancio partiti, ${falliti} falliti`,
+      payload: { candidate: muti.length, inviati, falliti, giaPrese, dal } as never,
+      message: `[bot-fissatore] recupero di chi ci ha scritto per primo: ${inviati} riaggancio partiti, ${falliti} falliti, ${giaPrese} gia' prese dal webhook`,
       level: falliti > 0 ? 'warn' : 'info',
     });
   }
 
   return NextResponse.json({
-    ok: true, dal, candidate: muti.length, esaminate: convs.length, inviati, falliti, esegui, errori, esempi,
+    ok: true, dal, candidate: muti.length, esaminate: convs.length, inviati, falliti, giaPrese, esegui, errori, esempi,
   });
 }
