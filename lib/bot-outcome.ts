@@ -12,6 +12,7 @@ import {
   resolveOutcomeAction,
 } from './bot-outcome-rules';
 import { bookingBlackout } from './booking-blackout';
+import { sameInstant } from './rome-time';
 import { categoriaPerCrm, disponibilitaDalTesto, motivoRichiesta } from './contatti-umani';
 import { noteFingerprint, divergiChiaveDaNotePrecedenti, type NotaCrmPrecedente } from './note-dedup';
 import {
@@ -614,7 +615,7 @@ export async function registraEsitoSenzaLeadId(
   //    senza, la guardia li ricalcola, e alle 20:00 l'ancora ruota — la call promessa al
   //    lead alle 19:45 e accettata alle 20:10 uscirebbe `fuori_finestra`. Stesso
   //    argomento che il drain passa gia' a `sendOutcome`.
-  if (args.outcome === 'APPUNTAMENTO' && (action.kind === 'normal' || action.kind === 'reschedule')) {
+  if (args.outcome === 'APPUNTAMENTO' && action.kind === 'normal') {
     const check = checkDataAppuntamento(
       args.date,
       Date.now(),
@@ -646,17 +647,7 @@ export async function registraEsitoSenzaLeadId(
     return { decisione, chiudi: false };
   }
 
-  // 4. Spostamento: cambia la DATA, non l'esito. `bot_outcome_at` resta quello del primo
-  //    fissaggio, come nel ramo normale.
-  if (action.kind === 'reschedule') {
-    await supabase.from('conversations')
-      .update({ bot_scheduled_at: action.date, cancel_requested_at: null })
-      .eq('id', conversationId);
-    const decisione = await registra('spostato', { da: stato.botScheduledAt, a: action.date });
-    return { decisione, chiudi: true };
-  }
-
-  // 5. Il caso normale. `bot_scheduled_at` si scrive sempre, null compreso: lasciarlo
+  // 4. Il caso normale. `bot_scheduled_at` si scrive sempre, null compreso: lasciarlo
   //    fuori dalla patch terrebbe in piedi la data di un appuntamento precedente accanto
   //    a un esito che appuntamento non e'.
   await supabase.from('conversations')
@@ -741,8 +732,15 @@ export async function sendOutcome(
   // arrivare a resolveOutcomeAction) e perderebbe la marcatura se non lo facessimo
   // qui. L'interim è un aggiornamento automatico della sequenza, non una richiesta
   // del lead: non marca mai.
+  // Un APPUNTAMENTO con una data DIVERSA da quella in agenda è la stessa richiesta
+  // detta in un altro modo — "spostami al giovedì" — e da quando il bot non rifissa
+  // più finisce anch'esso in una nota: senza la marcatura i promemoria continuerebbero
+  // a spingere la vecchia data addosso a chi ha appena chiesto di cambiarla.
   const holdsAppointment = (row?.bot_outcome ?? null) === 'APPUNTAMENTO';
-  if (holdsAppointment && !interim && isRichiestaDisdetta(args.outcome)) {
+  const chiedeSpostamento =
+    isRichiestaDisdetta(args.outcome) ||
+    (args.outcome === 'APPUNTAMENTO' && !!args.date && !sameInstant(args.date, row?.bot_scheduled_at ?? null));
+  if (holdsAppointment && !interim && chiedeSpostamento) {
     await marcaDisdetta(supabase, conversationId, crmLeadId, args.outcome);
   }
 
@@ -955,7 +953,7 @@ export async function sendOutcome(
   // questo esito è una richiesta di spostamento, non un nuovo fissaggio, e ha già il
   // suo percorso (`locked` → NOTA). Qui si guarda solo il fissaggio vero.
   const appuntamentoCheck =
-    args.outcome === 'APPUNTAMENTO' && !interim && (action.kind === 'normal' || action.kind === 'reschedule')
+    args.outcome === 'APPUNTAMENTO' && !interim && action.kind === 'normal'
       ? checkDataAppuntamento(
           args.date,
           Date.now(),
@@ -968,7 +966,7 @@ export async function sendOutcome(
     // registrato, e la nota deve dirlo: la versione "in agenda non c'è niente" ha
     // fatto cancellare appuntamenti vivi a chi la leggeva.
     const inAgenda =
-      action.kind === 'reschedule' || (row?.bot_outcome ?? null) === 'APPUNTAMENTO'
+      (row?.bot_outcome ?? null) === 'APPUNTAMENTO'
         ? row?.bot_scheduled_at ?? null
         : null;
     const note = buildAppuntamentoNonFissabileNote({
@@ -1070,24 +1068,7 @@ export async function sendOutcome(
         });
         return { sent: true, status: res.status, corpo };
       }
-      if (action.kind === 'reschedule') {
-        // Si aggiorna la DATA, non l'esito. `bot_outcome_at` resta quello del primo
-        // fissaggio di proposito: un lead spostato tre volte comparirebbe tre volte
-        // fra gli appuntamenti presi oggi, e i nostri numeri direbbero il falso.
-        // `cancel_requested_at` si azzera: l'appuntamento e' di nuovo vivo e i
-        // promemoria pre-call devono ripartire sulla data nuova.
-        await supabase.from('conversations').update({
-          bot_scheduled_at: action.date,
-          cancel_requested_at: null,
-          ai_status: 'closed',
-        }).eq('id', conversationId);
-        await supabase.from('event_log').insert({
-          type: 'bot_appuntamento_rifissato',
-          payload: { conversationId, crmLeadId, da: row?.bot_scheduled_at ?? null, a: action.date } as never,
-          message: `[bot-fissatore] appuntamento del lead ${crmLeadId} spostato al ${action.date}`,
-          level: 'info',
-        });
-      } else if (action.kind === 'normal') {
+      if (action.kind === 'normal') {
         await supabase.from('conversations').update({
           bot_outcome: args.outcome,
           bot_outcome_at: new Date().toISOString(),

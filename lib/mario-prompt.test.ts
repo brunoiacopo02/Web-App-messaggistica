@@ -294,12 +294,10 @@ describe('appuntamento già fissato — gestione della disdetta', () => {
     expect(p).toMatch(/una domanda sola/i);
   });
 
-  // Fino al contratto v1.5 il bot aveva il divieto di toccare giorno e ora di una call
-  // gia' fissata, perche' il CRM scartava in silenzio le date diverse. Da quando le
-  // registra, il divieto e' diventato il vicolo cieco: adesso propone lui gli slot.
-  it('propone lui i nuovi orari quando il lead insiste per spostare', () => {
-    expect(p).toContain('SE INSISTE PER SPOSTARE, SPOSTALO TU');
-    expect(p).not.toContain('giorno e ora non li gestisci tu');
+  // Il divieto e' tornato (PO): il bot non propone orari suoi per spostare una call.
+  it('non propone orari suoi quando il lead insiste per spostare', () => {
+    expect(p).toContain('NON LI SPOSTI TU, MAI, PER NESSUN MOTIVO');
+    expect(p).not.toContain('SE INSISTE PER SPOSTARE, SPOSTALO TU');
   });
 });
 
@@ -774,22 +772,29 @@ describe('SE RIMANDA LA CALL — il rimando prima del fissaggio', () => {
   });
 });
 
-// Contratto v1.5: il bot puo' rifissare. Prima diceva "ti ricontatta una collega" e
-// il lead restava con un appuntamento che non gli andava bene.
+// Il bot NON rifissa (PO, ribadito il 25/09/2026): il permesso del contratto v1.5 gli ha
+// fatto spostare da solo 28 call in una settimana ad agosto, e il 25/09 ha spostato una
+// call rispondendo al promemoria. Giorno e ora nuovi si decidono con Noemi.
 describe('buildMarioSystem — spostamento di una call gia\' fissata', () => {
   const p = () => buildMarioSystem('Marta');
 
-  it('dice al bot di proporre lui i nuovi slot', () => {
-    expect(p()).toContain('SE INSISTE PER SPOSTARE');
-    expect(p()).toContain('SLOT APPUNTAMENTO');
+  it('vieta al bot di spostare una call gia\' fissata', () => {
+    expect(p()).toContain('GIORNO E ORA DI UNA CALL GIÀ FISSATA NON LI SPOSTI TU, MAI');
+    expect(p()).not.toContain('SE INSISTE PER SPOSTARE, SPOSTALO TU');
+    expect(p()).not.toContain('puoi rifissare');
   });
 
-  it('lo spostamento si chiude con APPUNTAMENTO, non con RICHIAMO', () => {
-    expect(p()).toContain('[ESITO:APPUNTAMENTO|<data ISO del nuovo orario>]');
+  it('vale anche quando il lead risponde al promemoria', () => {
+    expect(p()).toContain('Vale anche quando il lead risponde a un promemoria');
   });
 
-  it('non promette piu\' la collega per far spostare', () => {
-    expect(p()).toContain('Non rimandarlo mai a una collega per farlo spostare');
+  it('lo spostamento si chiude con RICHIAMO, mai con APPUNTAMENTO', () => {
+    expect(p()).toContain('lo spostamento è SEMPRE un RICHIAMO');
+    expect(p()).not.toContain('[ESITO:APPUNTAMENTO|<data ISO del nuovo orario>]');
+  });
+
+  it('manda il nuovo orario alla chiamata di Noemi', () => {
+    expect(p()).toContain('Il posto dove si sposta è la chiamata di Noemi');
   });
 
   it('tiene separato lo spostamento dal caso "mi dice quando e\' la call che ha"', () => {
@@ -800,7 +805,7 @@ describe('buildMarioSystem — spostamento di una call gia\' fissata', () => {
   });
 
   it('senza un quando resta un RICHIAMO', () => {
-    expect(p()).toContain('se vuole spostare ma non ti dice quando');
+    expect(p()).toContain('[ESITO:RICHIAMO|<data ISO se te l\'ha data, altrimenti le sue parole testuali sul quando>] se vuole spostare');
   });
 });
 

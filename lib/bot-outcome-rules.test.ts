@@ -500,18 +500,23 @@ describe('buildAppuntamentoNonFissabileNote — il lead può credere di avere la
   });
 });
 
-// Contratto v1.5: un APPUNTAMENTO con una data DIVERSA su un lead gia' fissato non e'
-// piu' un declassamento da bloccare, e' uno spostamento che il CRM sa registrare.
-// Prima il bot rispondeva "ti ricontatta una collega" e la richiesta moriva li'.
-describe('resolveOutcomeAction — rifissaggio (v1.5)', () => {
+// Il bot non sposta piu' giorno e ora di una call gia' fissata: dal 28/08 al 04/09 ne
+// ha spostati 28 da solo, dando al lead un orario che l'agenda di chi lo chiama non
+// conosceva. Lo spostamento torna a essere una NOTA al CRM, e in chat il lead viene
+// rimandato alla chiamata di preselezione.
+describe('resolveOutcomeAction — il bot non sposta gli appuntamenti', () => {
   const domani = () => new Date(Date.now() + 30 * 3600_000).toISOString();
   const fra3giorni = () => new Date(Date.now() + 3 * 24 * 3600_000).toISOString();
 
-  it('una data diversa su un lead gia\' fissato e\' un rifissaggio', () => {
+  it('una data diversa su un lead gia\' fissato non sposta niente: resta una nota', () => {
     const nuova = fra3giorni();
     const a = resolveOutcomeAction('APPUNTAMENTO', { outcome: 'APPUNTAMENTO', date: nuova }, domani());
-    expect(a.kind).toBe('reschedule');
-    if (a.kind === 'reschedule') expect(a.date).toBe(nuova);
+    expect(a.kind).toBe('locked');
+    if (a.kind === 'locked') {
+      expect(a.date).toBeNull();
+      expect(a.note).toContain('SPOSTAMENTO CHIESTO');
+      expect(a.note).toContain('mantenuto finché non lo spostate voi');
+    }
   });
 
   it('la stessa data resta una riconferma, non uno spostamento', () => {

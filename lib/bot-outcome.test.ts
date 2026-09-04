@@ -915,27 +915,23 @@ describe('sendOutcome — APPUNTAMENTO in un giorno o a un\'ora impossibili', ()
     expect(ev.level).toBe('warn');
   });
 
-  // Da v1.5 un lead gia' fissato puo' essere SPOSTATO, e quindi la guardia deve
-  // valere anche li': spostare una call alle 02:00 e' sbagliato quanto fissarcela.
-  // Aggiornato col fix del 10/09: la nota diceva "APPUNTAMENTO NON FISSATO — in agenda
-  // non c'è niente" anche quando una call c'era, e chi la leggeva poteva cancellarla.
-  // Su uno spostamento scartato la verità è un'altra: in agenda resta la data vecchia.
-  it('anche uno spostamento passa dalla guardia: le 02:00 non diventano un appuntamento', async () => {
+  // Su un lead gia' fissato la guardia non serve piu': il bot non sposta niente, quindi
+  // le 02:00 non entrano in agenda per la strada piu' corta, cioe' nessuna scrittura.
+  // Al CRM arriva la richiesta con l'ora che ha detto il lead, e decidono loro.
+  it('le 02:00 su un lead già fissato restano una richiesta, non un appuntamento', async () => {
     const giaFissato = { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE };
     const { supabase, calls } = makeSupabase(giaFissato);
     await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: giornoUtile(2) });
 
     expect(bodyInviato().outcome).toBe('NOTA');
-    expect(bodyInviato().note).toContain('SPOSTAMENTO NON REGISTRATO');
-    expect(calls.events.some((e: { type: string }) => e.type === 'appuntamento_non_fissabile')).toBe(true);
+    expect(bodyInviato().note).toContain('SPOSTAMENTO CHIESTO');
     // E l'appuntamento in agenda non si muove.
     for (const u of calls.updates) expect(u).not.toHaveProperty('bot_scheduled_at');
   });
 
-  // Caso reale: lead con la call di mercoledì, lunedì chiede venerdì, il modello
-  // conferma, la guardia scarta. Alle Conferme deve arrivare la data che resta viva,
-  // non "in agenda non c'è niente".
-  it('lo spostamento scartato dice QUALE call resta in agenda e di non cancellarla', async () => {
+  // Caso reale: lead con la call di mercoledì, lunedì chiede venerdì. Il bot non sposta
+  // niente: alle Conferme arriva la richiesta, con la data che resta viva in agenda.
+  it('lo spostamento chiesto dice QUALE call resta in agenda e che la spostano loro', async () => {
     const giaFissato = { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE };
     const { supabase } = makeSupabase(giaFissato);
     await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: giornoUtile(2) });
@@ -943,7 +939,7 @@ describe('sendOutcome — APPUNTAMENTO in un giorno o a un\'ora impossibili', ()
     const note = bodyInviato().note as string;
     expect(note).toContain(formatRomeDateTime(DATE));
     expect(note).not.toContain("in agenda non c'è niente");
-    expect(note).toContain('NON cancellate');
+    expect(note).toContain('finché non lo spostate voi');
   });
 
   it('sul primo fissaggio la nota resta quella di prima: lì in agenda non c\'è davvero niente', async () => {
@@ -975,9 +971,10 @@ describe('sendOutcome — APPUNTAMENTO in un giorno o a un\'ora impossibili', ()
   });
 });
 
-// Contratto v1.5: il lead gia' fissato che chiede di spostare non finisce piu' in un
-// vicolo cieco. Il CRM registra la data nuova e avvisa le Conferme.
-describe('sendOutcome — rifissaggio di un appuntamento (v1.5)', () => {
+// Il bot non muove piu' giorno e ora di una call gia' fissata: la data nuova arriva al
+// CRM come NOTA ("SPOSTAMENTO CHIESTO"), l'agenda la sposta chi ce l'ha davvero, e in
+// chat il lead viene rimandato alla chiamata di preselezione.
+describe('sendOutcome — una call gia\' fissata non la sposta il bot', () => {
   const domani = new Date(Date.now() + 30 * 3600_000).toISOString();
   const fissato = { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: domani };
   const bodyInviato = () => JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string);
@@ -988,39 +985,30 @@ describe('sendOutcome — rifissaggio di un appuntamento (v1.5)', () => {
     return conOra(day2.date, 13);
   };
 
-  it('la data nuova parte come APPUNTAMENTO, non come nota', async () => {
+  it('la data nuova parte come NOTA, non come APPUNTAMENTO', async () => {
     const { supabase } = makeSupabase(fissato);
     const res = await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: nuovaData() });
     const body = bodyInviato();
-    expect(body.outcome).toBe('APPUNTAMENTO');
-    expect(body.date).toBe(nuovaData());
+    expect(body.outcome).toBe('NOTA');
+    expect(body.note).toContain('SPOSTAMENTO CHIESTO');
+    expect(body.note).toContain('mantenuto finché non lo spostate voi');
     expect(res.sent).toBe(true);
   });
 
-  it('aggiorna la data ma non ricconta il fissaggio', async () => {
+  it('la nostra data in agenda non si muove', async () => {
     const { supabase, calls } = makeSupabase(fissato);
     await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: nuovaData() });
-    const agg = calls.updates.find((u: any) => 'bot_scheduled_at' in u);
-    expect(agg.bot_scheduled_at).toBe(nuovaData());
-    // Se `bot_outcome_at` si aggiornasse, un lead spostato tre volte comparirebbe tre
-    // volte fra gli appuntamenti presi oggi.
-    for (const u of calls.updates) expect(u).not.toHaveProperty('bot_outcome_at');
+    for (const u of calls.updates) {
+      expect(u).not.toHaveProperty('bot_scheduled_at');
+      expect(u).not.toHaveProperty('bot_outcome_at');
+    }
   });
 
-  it('riaccende i promemoria: l\'appuntamento e\' di nuovo vivo', async () => {
+  it('spegne i promemoria: il lead ha appena chiesto un altro orario', async () => {
     const { supabase, calls } = makeSupabase(fissato);
     await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: nuovaData() });
     const agg = calls.updates.find((u: any) => 'cancel_requested_at' in u);
-    expect(agg.cancel_requested_at).toBeNull();
-  });
-
-  it('uno spostamento di domenica non passa, come un primo fissaggio', async () => {
-    const { supabase } = makeSupabase(fissato);
-    const domenica = new Date(Date.now() + 3 * 24 * 3600_000);
-    while (domenica.getUTCDay() !== 0) domenica.setUTCDate(domenica.getUTCDate() + 1);
-    domenica.setUTCHours(13, 0, 0, 0);
-    await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: domenica.toISOString() });
-    expect(bodyInviato().outcome).toBe('NOTA');
+    expect(agg.cancel_requested_at).toBeTruthy();
   });
 
   it('la stessa data resta una riconferma e non rimbalza al CRM come nuovo fissaggio', async () => {
@@ -1342,7 +1330,9 @@ describe('registraEsitoSenzaLeadId', () => {
     expect(calls.updates[0].bot_scheduled_at).toBe(FRA_TRE_GIORNI);
   });
 
-  it('spostamento: cambia la data, l\'esito non si tocca e i promemoria ripartono', async () => {
+  // 25/09/2026, chat reale: il lead risponde al promemoria "va bene anche domani alle 15?"
+  // e il bot gli sposta la call da solo. Una call gia' fissata non si muove da qui.
+  it('spostamento chiesto: la data in agenda non si muove, resta una nota', async () => {
     const { supabase, calls } = makeSupabase(null);
     const nuova = giornoUtile(16, 2);
 
@@ -1351,10 +1341,8 @@ describe('registraEsitoSenzaLeadId', () => {
       { botOutcome: 'APPUNTAMENTO', botScheduledAt: giornoUtile(15, 1) },
     );
 
-    expect(res).toEqual({ decisione: 'spostato', chiudi: true });
-    expect(calls.updates).toHaveLength(1);
-    expect(calls.updates[0]).toEqual({ bot_scheduled_at: nuova, cancel_requested_at: null });
-    expect(calls.updates[0]).not.toHaveProperty('bot_outcome');
+    expect(res).toEqual({ decisione: 'appuntamento_intatto', chiudi: false });
+    for (const u of calls.updates) expect(u).not.toHaveProperty('bot_scheduled_at');
   });
 
   // Il bug che ha reso necessario questo giro: un esito senza data non deve lasciare
