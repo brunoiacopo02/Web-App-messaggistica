@@ -203,14 +203,18 @@ export async function inviaNotaAlCrm(
 }
 
 /** Segna che il lead ha chiesto di annullare o spostare. Non tocca bot_outcome: è un
- *  marcatore, non un declassamento. Spegne promemoria pre-call e solleciti GDO. */
-async function marcaDisdetta(supabase: Supa, conversationId: number, crmLeadId: string, outcome: BotOutcome): Promise<void> {
+ *  marcatore, non un declassamento. Spegne promemoria pre-call e solleciti GDO.
+ *
+ *  `crmLeadId` può essere nullo: i lead adottati dal webhook non ne hanno uno, ma il
+ *  marcatore serve a loro esattamente come agli altri — `app/api/cron/precall-reminders`
+ *  seleziona su `bot_outcome` e `cancel_requested_at`, non sul `crm_lead_id`. */
+async function marcaDisdetta(supabase: Supa, conversationId: number, crmLeadId: string | null, outcome: BotOutcome): Promise<void> {
   const at = new Date().toISOString();
   await supabase.from('conversations').update({ cancel_requested_at: at }).eq('id', conversationId);
   await supabase.from('event_log').insert({
     type: 'cancel_requested',
     payload: { conversationId, crmLeadId, outcome, at } as never,
-    message: `[bot-fissatore] il lead ${crmLeadId} ha chiesto di annullare/spostare: automatismi spenti su questa chat`,
+    message: `[bot-fissatore] il lead ${crmLeadId ?? `della conv ${conversationId}`} ha chiesto di annullare/spostare: automatismi spenti su questa chat`,
     level: 'info',
   });
 }
@@ -514,6 +518,18 @@ export async function registraEsitoSenzaLeadId(
   };
 
   // Stesso ordine di `sendOutcome`, perche' l'ordine E' la decisione.
+
+  // 0. Chi ha l'appuntamento in piedi e chiede di annullare o spostare va marcato
+  //    SUBITO, prima di ogni ritorno anticipato: `cancel_requested_at` e' quello che
+  //    spegne i promemoria pre-call, e `app/api/cron/precall-reminders/route.ts`
+  //    seleziona su `bot_outcome` e `cancel_requested_at` — del `crm_lead_id` non sa
+  //    niente. Sugli adottati questo caso e' diventato raggiungibile solo adesso, da
+  //    quando `bot_outcome` viene persistito anche senza leadId: senza il marcatore, a
+  //    chi ha appena scritto "annullate" arriverebbe "ti ricordo la call di domani"
+  //    (10 casi su 23 misurati il 04/08/2026, prima che il marcatore esistesse).
+  if (stato.botOutcome === 'APPUNTAMENTO' && isRichiestaDisdetta(args.outcome)) {
+    await marcaDisdetta(supabase, conversationId, null, args.outcome);
+  }
 
   // 1. Un RICHIAMO senza una data che regga non e' un richiamo. Col periodo detto a
   //    parole si registra comunque (senza data); senza, non e' un esito e il bot deve

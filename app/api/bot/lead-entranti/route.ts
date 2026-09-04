@@ -109,7 +109,13 @@ export async function POST(req: NextRequest) {
       // cosi' al momento della creazione sanno che quella persona ha gia' una call in
       // agenda, invece di scoprirlo al giro dopo.
       esito: (c.bot_outcome ?? null) as string | null,
-      appuntamento: (c.bot_scheduled_at ?? null) as string | null,
+      // Solo se l'esito e' davvero un appuntamento. `bot_scheduled_at` porta la data di
+      // QUALUNQUE esito con un quando, RICHIAMO compreso: consegnarla grezza qui vorrebbe
+      // dire mandare alle Conferme una call che non esiste. E' la stessa trappola che
+      // `lib/bot-outcome.ts` chiude per i lead del CRM (vedi il commento su
+      // `inviaContattoUmano`), e nel documento mandato a loro questo campo significa
+      // "ha gia' una call in agenda".
+      appuntamento: (c.bot_outcome === 'APPUNTAMENTO' ? (c.bot_scheduled_at ?? null) : null) as string | null,
     });
   }
 

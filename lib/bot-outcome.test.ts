@@ -882,9 +882,59 @@ describe('registraEsitoSenzaLeadId', () => {
     );
 
     expect(res).toEqual({ decisione: 'appuntamento_intatto', chiudi: false });
-    expect(calls.updates).toHaveLength(0);
+    // L'unica scrittura ammessa e' il marcatore della disdetta: ne' l'esito ne' la
+    // data dell'appuntamento si toccano.
+    for (const u of calls.updates) {
+      expect(u).not.toHaveProperty('bot_outcome');
+      expect(u).not.toHaveProperty('bot_scheduled_at');
+    }
     const evt = calls.events.find((e: { type: string }) => e.type === 'bot_outcome_senza_leadid');
     expect(evt.payload).toMatchObject({ decisione: 'appuntamento_intatto', esitoMantenuto: 'APPUNTAMENTO' });
+  });
+
+  // `precall-reminders` seleziona su bot_outcome e cancel_requested_at, NON sul
+  // crm_lead_id: senza il marcatore, a chi ha appena scritto "annullate" arriverebbe
+  // "ti ricordo la call di domani". Sugli adottati il caso e' diventato raggiungibile
+  // da quando bot_outcome viene persistito anche senza leadId.
+  it('chi disdice un appuntamento in piedi si spegne i promemoria, anche senza leadId', async () => {
+    const { supabase, calls } = makeSupabase(null);
+
+    const res = await registraEsitoSenzaLeadId(
+      supabase, 7246,
+      { outcome: 'DA_SCARTARE', discardReason: 'non me la sento piu' },
+      { botOutcome: 'APPUNTAMENTO', botScheduledAt: giornoUtile() },
+    );
+
+    // L'esito resta comunque bloccato: il marcatore non e' un declassamento.
+    expect(res.decisione).toBe('appuntamento_intatto');
+    expect(calls.updates).toHaveLength(1);
+    expect(typeof calls.updates[0].cancel_requested_at).toBe('string');
+    expect(calls.updates[0]).not.toHaveProperty('bot_outcome');
+    const evt = calls.events.find((e: { type: string }) => e.type === 'cancel_requested');
+    expect(evt).toBeTruthy();
+    expect(evt.payload.crmLeadId).toBeNull();
+  });
+
+  it('lo stesso vale per un RICHIAMO su un appuntamento che era gia\' preso', async () => {
+    const { supabase, calls } = makeSupabase(null);
+
+    await registraEsitoSenzaLeadId(
+      supabase, 7246, { outcome: 'RICHIAMO', date: FRA_TRE_GIORNI },
+      { botOutcome: 'APPUNTAMENTO', botScheduledAt: giornoUtile() },
+    );
+
+    expect(calls.updates.some((u: { cancel_requested_at?: string }) => typeof u.cancel_requested_at === 'string')).toBe(true);
+  });
+
+  it('senza un appuntamento in piedi non si marca niente', async () => {
+    const { supabase, calls } = makeSupabase(null);
+
+    await registraEsitoSenzaLeadId(
+      supabase, 7246, { outcome: 'DA_SCARTARE', discardReason: 'non interessato' }, nessunEsito,
+    );
+
+    expect(calls.updates.every((u: { cancel_requested_at?: string }) => !('cancel_requested_at' in u))).toBe(true);
+    expect(calls.events.some((e: { type: string }) => e.type === 'cancel_requested')).toBe(false);
   });
 
   // Gli adottati sono proprio i lead che lo slot se lo propongono da soli.
