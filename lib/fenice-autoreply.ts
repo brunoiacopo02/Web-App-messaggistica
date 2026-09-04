@@ -715,6 +715,38 @@ export async function drainMarioReplies(
           }
           break;
         }
+        if (!postino) {
+          // Lead adottato: il CRM non lo conosce, quindi `crm_lead_id` e' nullo e
+          // l'esito non ha dove andare. Senza questo ramo non veniva scritto NIENTE —
+          // `bot_outcome`, `bot_outcome_at` e `bot_scheduled_at` li tocca solo
+          // `sendOutcome` dopo un 2xx — e l'appuntamento appena fissato non esisteva
+          // da nessuna parte: ne' sulla riga, ne' negli eventi, ne' in
+          // `/api/bot/lead-entranti`, che quelle tre colonne le legge per dire al CRM
+          // che quella persona ha gia' una call in agenda. E il bot continuava a
+          // parlare come se non avesse fissato niente.
+          //
+          // Si replica la sola persistenza locale del ramo normale di
+          // `lib/bot-outcome.ts` (mai la rete): `bot_scheduled_at` solo per un
+          // APPUNTAMENTO, perche' la data di un RICHIAMO su quella colonna verrebbe
+          // letta come una call presa che non esiste.
+          const quando = new Date().toISOString();
+          const appuntamento = result.outcome === 'APPUNTAMENTO' ? (result.scheduledAt ?? null) : null;
+          await supabase.from('conversations').update({
+            bot_outcome: result.outcome,
+            bot_outcome_at: quando,
+            ...(appuntamento ? { bot_scheduled_at: appuntamento } : {}),
+          }).eq('id', conversationId);
+          await supabase.from('event_log').insert({
+            type: 'bot_outcome_senza_leadid',
+            payload: { conversationId, esito: result.outcome, appuntamento } as never,
+            message: `[bot-fissatore] conv ${conversationId}: esito ${result.outcome} registrato solo da noi, il CRM non ha ancora un leadId per questo lead`,
+            level: 'warn',
+          });
+          // Come il ramo normale: fissato l'esito, il bot smette di parlare. Alla
+          // riapertura ci pensa `shouldReopen`, che lavora anche senza `crm_lead_id`.
+          finalStatus = 'closed';
+          break;
+        }
       }
 
       if (result.passToHuman) {

@@ -562,6 +562,76 @@ describe('drainMarioReplies — guardia canSendOutcome dal vivo', () => {
   });
 });
 
+// Un lead adottato dal webhook non ha `crm_lead_id`: il CRM non lo conosce ancora.
+// Prima l'intero ramo dell'esito veniva saltato e non restava traccia da nessuna
+// parte — l'appuntamento fissato non esisteva ne' sulla riga ne' negli eventi, e
+// `/api/bot/lead-entranti` lo mandava al CRM con esito e appuntamento nulli.
+describe('drainMarioReplies — esito di un lead che il CRM non conosce', () => {
+  const OPENING: FakeMsgRow = { direction: 'out', body: 'apertura', template_sid: null, created_at: '2026-09-01T10:00:00Z' };
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(sendOutcome).mockClear();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('appuntamento senza leadId: colonne scritte, evento bot_outcome_senza_leadid, conversazione chiusa', async () => {
+    const claimedRow: ClaimedRow = { id: 7246, ai_started_at: null, crm_lead_id: null, bot_outcome: null };
+    const rows: FakeMsgRow[] = [
+      OPENING,
+      { direction: 'in', body: 'va bene giovedì alle 15', template_sid: null, created_at: '2026-09-04T09:00:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto, ti ho fissato giovedì alle 15.',
+      appointmentFixed: true, passToHuman: false, videoWatched: false,
+      outcome: 'APPUNTAMENTO', scheduledAt: '2026-09-10T15:00:00+02:00',
+    });
+
+    await drainMarioReplies(supabase, 7246, '+391234567890', () => 0);
+
+    // Niente rete verso il CRM: senza leadId non c'e' dove consegnare.
+    expect(sendOutcome).not.toHaveBeenCalled();
+    const persistito = calls.convUpdates.find((u) => u.bot_outcome === 'APPUNTAMENTO');
+    expect(persistito).toBeTruthy();
+    expect(persistito.bot_scheduled_at).toBe('2026-09-10T15:00:00+02:00');
+    expect(typeof persistito.bot_outcome_at).toBe('string');
+    const evento = calls.events.find((e) => e.type === 'bot_outcome_senza_leadid');
+    expect(evento).toBeTruthy();
+    expect(evento.level).toBe('warn');
+    expect(evento.payload).toMatchObject({
+      conversationId: 7246, esito: 'APPUNTAMENTO', appuntamento: '2026-09-10T15:00:00+02:00',
+    });
+    // Fissato l'esito il bot smette di parlare, come sui lead del CRM.
+    expect(calls.finalStatusWrites).toEqual(['closed']);
+  });
+
+  it('esito non-appuntamento senza leadId: nessuna data finisce su bot_scheduled_at', async () => {
+    // La data di un RICHIAMO su quella colonna verrebbe letta come una call presa.
+    const claimedRow: ClaimedRow = { id: 7247, ai_started_at: null, crm_lead_id: null, bot_outcome: null };
+    const rows: FakeMsgRow[] = [
+      OPENING,
+      { direction: 'in', body: 'richiamatemi la prossima settimana', template_sid: null, created_at: '2026-09-04T09:00:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Va bene, ci risentiamo la prossima settimana.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+      outcome: 'RICHIAMO', scheduledAt: '2026-09-11T10:00:00+02:00',
+    });
+
+    await drainMarioReplies(supabase, 7247, '+391234567890', () => 0);
+
+    const persistito = calls.convUpdates.find((u) => u.bot_outcome === 'RICHIAMO');
+    expect(persistito).toBeTruthy();
+    expect('bot_scheduled_at' in persistito).toBe(false);
+    const evento = calls.events.find((e) => e.type === 'bot_outcome_senza_leadid');
+    expect(evento.payload).toMatchObject({ esito: 'RICHIAMO', appuntamento: null });
+    expect(calls.finalStatusWrites).toEqual(['closed']);
+  });
+});
+
 describe('drainMarioReplies — il lucchetto viene sempre rilasciato', () => {
   beforeEach(() => {
     vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
