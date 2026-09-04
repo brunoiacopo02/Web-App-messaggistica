@@ -19,6 +19,24 @@ export function normalizeFunnel(f: string | null | undefined): FunnelKey {
   return 'other';
 }
 
+/** Provenienza di chi ci scrive per primo, senza passare dal CRM. */
+export type ProvenienzaInbound = 'TELEGRAM' | 'INBOUND';
+
+/**
+ * Il link del canale Telegram consegna al lead un messaggio GIÀ SCRITTO: fra il 26/08 e
+ * il 04/09 è arrivato 47 volte su 51 identico parola per parola. Riconoscerlo è l'unico
+ * modo onesto di attribuire il funnel a chi non è mai passato da un form.
+ *
+ * Il match è sulla frase precompilata, NON sulle parole "canale telegram": chi chiede
+ * come entrare nel canale, o chi si lamenta che non c'è un recapito telefonico, nomina
+ * Telegram senza venire da lì. Metterlo su TELEGRAM falserebbe il confronto fra canali.
+ */
+const LINK_TELEGRAM = /sono nel canale telegram e mi hanno indicato/i;
+
+export function funnelDaPrimoMessaggio(body: string | null | undefined): ProvenienzaInbound {
+  return LINK_TELEGRAM.test(body ?? '') ? 'TELEGRAM' : 'INBOUND';
+}
+
 /** Variante A/B di un'apertura. 1 e 2 sono le storiche; 3 e 4 dichiarano l'IA
  *  (AI Act art. 50) e sono cloni della 1 con la sola presentazione cambiata. */
 export type OpeningVariant = 1 | 2 | 3 | 4;

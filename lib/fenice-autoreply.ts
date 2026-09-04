@@ -71,6 +71,39 @@ export function shouldReopen(g: {
   return g.aiStatus === 'closed';
 }
 
+export type AdoptGate = {
+  toMatchesFenice: boolean;
+  /** INBOUND_ADOPTION_ENABLED === '1' */
+  adoptionOn: boolean;
+  aiOwner: string | null;
+  aiPausedAt?: string | null;
+  handedOffAt?: string | null;
+  /** Esiste una QUALUNQUE riga in uscita su questa conversazione, anche senza SID. */
+  hasOutbound: boolean;
+};
+
+/**
+ * Pure: il bot prende in carico una conversazione che nessuno possiede?
+ *
+ * Fino al 04/09/2026 rispondeva solo ai lead arruolati dall'intake del CRM: chi scriveva
+ * per primo non aveva padrone e restava zitto. 29 persone su 43 arrivate dal canale
+ * Telegram fra il 26/08 e il 04/09 non hanno mai ricevuto una risposta, con un silenzio
+ * mediano di 113 ore.
+ *
+ * `hasOutbound` conta QUALUNQUE riga in uscita, anche di un invio fallito: se qualcuno ha
+ * provato a scrivere a questa persona, la chat ha una storia che qui non conosciamo. È
+ * anche ciò che tiene fuori le campagne e la inbox, dove il primo messaggio è sempre
+ * nostro. È il criterio OPPOSTO a quello della guardia sull'apertura in
+ * `enrollLeadIntoMario`, che guarda solo agli outbound partiti davvero: là serve sapere
+ * se il lead ha visto qualcosa, qui se qualcuno ha provato.
+ */
+export function shouldAdoptInbound(g: AdoptGate): boolean {
+  if (!g.toMatchesFenice || !g.adoptionOn) return false;
+  if (g.aiOwner !== null) return false;
+  if (g.aiPausedAt || g.handedOffAt) return false;
+  return !g.hasOutbound;
+}
+
 /**
  * Pure: possiamo mandare un esito al CRM per questa conversazione?
  * 'booked' non è un veto sul CRM ma sul lucchetto: ai_status fa anche da lock del

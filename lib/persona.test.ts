@@ -6,6 +6,7 @@ import {
   openingBody,
   openingWaysFor,
   personaForConversation,
+  funnelDaPrimoMessaggio,
   PERSONA_NAME,
   OPENING_ENV_KEYS,
   type FunnelKey,
@@ -313,5 +314,34 @@ describe('personaForConversation', () => {
 describe('PERSONA_NAME', () => {
   it('mappa persona → nome visualizzato', () => {
     expect(PERSONA_NAME).toEqual({ mario: 'Mario', marta: 'Marta' });
+  });
+});
+
+describe('funnelDaPrimoMessaggio', () => {
+  const linkTelegram =
+    'Buongiorno, sono nel canale Telegram e mi hanno indicato questo contatto per più informazioni su Fenice Academy';
+
+  it('riconosce il messaggio precompilato del canale', () => {
+    expect(funnelDaPrimoMessaggio(linkTelegram)).toBe('TELEGRAM');
+  });
+  it('riconosce anche la variante col refuso "qusto"', () => {
+    expect(funnelDaPrimoMessaggio(linkTelegram.replace('questo', 'qusto'))).toBe('TELEGRAM');
+  });
+  it('riconosce il precompilato con una riga aggiunta dal lead', () => {
+    expect(funnelDaPrimoMessaggio(`${linkTelegram}.Sono a metà percorso di studi per diventare Copy`)).toBe('TELEGRAM');
+  });
+  // Nomina Telegram ma non viene dal link: sulle statistiche di funnel non deve
+  // finire su TELEGRAM, o il confronto fra canali diventa falso.
+  it('chi nomina Telegram per altro non è TELEGRAM', () => {
+    expect(funnelDaPrimoMessaggio('Vorrei entrare nel canale telegram')).toBe('INBOUND');
+    expect(funnelDaPrimoMessaggio('Per caso avete un recapito che non sia un canale Telegram/WhatsApp?')).toBe('INBOUND');
+  });
+  it('vuoto o nullo è INBOUND', () => {
+    expect(funnelDaPrimoMessaggio(null)).toBe('INBOUND');
+    expect(funnelDaPrimoMessaggio('')).toBe('INBOUND');
+  });
+  it("il risultato è mangiabile da normalizeFunnel", () => {
+    expect(normalizeFunnel(funnelDaPrimoMessaggio(linkTelegram))).toBe('telegram');
+    expect(normalizeFunnel(funnelDaPrimoMessaggio('ciao'))).toBe('other');
   });
 });

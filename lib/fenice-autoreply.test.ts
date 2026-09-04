@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { shouldAutoReply, shouldReopen, nextUnansweredInboundIndex, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS, canSendOutcome, drainMarioReplies, isLockStale, LOCK_TTL_MS, shouldSendGdoVideo, martaSidsFromEnv, isSoloPresaDAtto, serveRedrive } from './fenice-autoreply';
+import { shouldAutoReply, shouldReopen, shouldAdoptInbound, nextUnansweredInboundIndex, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS, canSendOutcome, drainMarioReplies, isLockStale, LOCK_TTL_MS, shouldSendGdoVideo, martaSidsFromEnv, isSoloPresaDAtto, serveRedrive } from './fenice-autoreply';
 
 vi.mock('./mario', () => ({ generateMarioReply: vi.fn(), GDO_CONTEXT_NOTE: 'CONTESTO-GDO' }));
 vi.mock('./twilio', () => ({ sendFreeText: vi.fn(async () => ({ sid: 'SM_fake', status: 'queued' })) }));
@@ -34,6 +34,38 @@ describe('shouldAutoReply', () => {
   it('falso se handed_off o booked', () => {
     expect(shouldAutoReply({ ...ok, aiStatus: 'handed_off' })).toBe(false);
     expect(shouldAutoReply({ ...ok, aiStatus: 'booked' })).toBe(false);
+  });
+});
+
+describe('shouldAdoptInbound', () => {
+  const ok = {
+    toMatchesFenice: true,
+    adoptionOn: true,
+    aiOwner: null,
+    aiPausedAt: null,
+    handedOffAt: null,
+    hasOutbound: false,
+  };
+  it('vero: il lead ha scritto per primo e la chat non è di nessuno', () => {
+    expect(shouldAdoptInbound(ok)).toBe(true);
+  });
+  it('falso se il numero non è quello di Fenice', () => {
+    expect(shouldAdoptInbound({ ...ok, toMatchesFenice: false })).toBe(false);
+  });
+  it('falso a interruttore spento', () => {
+    expect(shouldAdoptInbound({ ...ok, adoptionOn: false })).toBe(false);
+  });
+  it('falso se la chat è già di qualcuno', () => {
+    expect(shouldAdoptInbound({ ...ok, aiOwner: 'mario' })).toBe(false);
+  });
+  it('falso col fermo manuale o con la chat passata a una persona', () => {
+    expect(shouldAdoptInbound({ ...ok, aiPausedAt: '2026-09-04T10:00:00Z' })).toBe(false);
+    expect(shouldAdoptInbound({ ...ok, handedOffAt: '2026-09-04T10:00:00Z' })).toBe(false);
+  });
+  // Il caso che conta di più: una chat di campagna ha ai_owner nullo e un outbound
+  // partito. Adottarla vorrebbe dire mettere il bot sopra 2.680 conversazioni.
+  it('falso se un messaggio nostro è già partito (campagne, invii a mano)', () => {
+    expect(shouldAdoptInbound({ ...ok, hasOutbound: true })).toBe(false);
   });
 });
 
