@@ -14,6 +14,7 @@ import { stopDalCrmPerLead, vuolePassaggioAUmano } from './stop-crm';
 import { buildScriveDopoLaCallNote } from './bot-outcome-rules';
 import { personaForConversation, PERSONA_NAME, OPENING_ENV_KEYS } from './persona';
 import { confermaVideoVisto } from './video-visto';
+import { notaPrimoContatto } from './primo-contatto-note';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -478,12 +479,18 @@ export async function drainMarioReplies(
         : martaSids.size > 0
           ? personaForConversation(rows, martaSids)
           : 'mario';
+      // Sui lead adottati (non postino) la nota e' la dichiarazione IA: se sulla
+      // conversazione non e' mai uscito niente da parte nostra, il lead non sa mai
+      // con chi sta parlando senza questa nota.
+      const notaPrimo = notaPrimoContatto(rows);
       const result = await generateMarioReply(history, {
         personaName: PERSONA_NAME[persona],
         giorniPieni,
         // I promemoria pendenti (video non confermato, Noemi non ancora spiegata)
         // viaggiano dentro il contesto: il modello li integra nel discorso invece di
-        // farli arrivare come un messaggio programmato addosso.
+        // farli arrivare come un messaggio programmato addosso. Sui lead adottati la
+        // nota e' un'altra, la dichiarazione IA: un postino ha sempre ricevuto l'agenda,
+        // quindi i due casi non si incontrano mai.
         ...(postino
           ? {
               contextNote: gdoContextNote({
@@ -497,7 +504,9 @@ export async function drainMarioReplies(
                 gdoAppuntamentoAt: gdoAppuntamentoAt,
               }),
             }
-          : {}),
+          : notaPrimo
+            ? { contextNote: notaPrimo }
+            : {}),
       });
 
       // Il lead può confermare di aver visto il video PRIMA che gli sia mai arrivato
