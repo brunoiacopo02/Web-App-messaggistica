@@ -65,11 +65,15 @@ POST https://web-app-messaggistica.vercel.app/api/bot/lead-entranti
 
 Stessa autenticazione di `/api/bot/intake` e `/api/bot/contatti-umani`, che già usate:
 header `x-bot-signature: sha256=<HMAC-SHA256 del corpo grezzo>` con il
-`BOT_WEBHOOK_SECRET` concordato. Corpo:
+`BOT_WEBHOOK_SECRET` concordato. Corpo, opzionale:
 
 ```json
-{ "stato": "aperti", "limit": 500 }
+{ "limit": 500 }
 ```
+
+La lista è **tutti** i lead che stiamo lavorando e di cui voi non avete un `leadId`, dal
+più vecchio. Non c'è un filtro di stato: anche uno già concluso dal bot vi serve, ed è
+anzi quello che vi serve di più — se ha un appuntamento, lo vedete nel campo `esito`.
 
 ### Risposta
 
