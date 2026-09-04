@@ -186,39 +186,59 @@ export async function POST(req: NextRequest) {
 
       // Adozione: il lead ha scritto per primo e questa chat non e' di nessuno.
       //
+      // Il gate dell'interruttore va valutato PRIMA del conteggio: a bot spento (come in
+      // produzione) non deve costare nessuna query in piu' al webhook, che deve restare
+      // veloce perche' Twilio ritenta.
+      const adozioneAttiva = process.env.INBOUND_ADOPTION_ENABLED === '1';
       // Il conteggio degli outbound si fa SOLO quando `ai_owner` e' nullo: sulle chat
       // gia' arruolate (la stragrande maggioranza degli inbound) non si aggiunge nessuna
-      // query al webhook, che deve restare veloce perche' Twilio ritenta.
-      if (conv && conv.ai_owner === null) {
-        const { count } = await supabase
+      // query al webhook.
+      if (adozioneAttiva && conv && conv.ai_owner === null) {
+        const { count, error: erroreCount } = await supabase
           .from('messages')
           .select('id', { count: 'exact', head: true })
           .eq('conversation_id', conversationId)
           .eq('direction', 'out');
+        // Se il conteggio fallisce non sappiamo se questa chat ha una storia (un lead GDO,
+        // una campagna, una chat lavorata a mano): senza la certezza che nessuno abbia mai
+        // scritto, non si adotta. L'incertezza chiude, non apre.
+        const hasOutbound = erroreCount ? true : (count ?? 0) > 0;
         if (shouldAdoptInbound({
           toMatchesFenice,
-          adoptionOn: process.env.INBOUND_ADOPTION_ENABLED === '1',
+          adoptionOn: adozioneAttiva,
           aiOwner: conv.ai_owner,
           aiPausedAt: conv.ai_paused_at,
           handedOffAt: conv.handed_off_at,
-          hasOutbound: (count ?? 0) > 0,
+          hasOutbound,
         })) {
           const provenienza = funnelDaPrimoMessaggio(messageBody);
-          await supabase.from('conversations').update({
+          const { error: erroreAdozione } = await supabase.from('conversations').update({
             ai_owner: 'mario',
             ai_status: 'active',
             ai_started_at: now,
             crm_funnel: provenienza,
           }).eq('id', conversationId);
-          // La copia in memoria serve subito dopo: e' quella che `shouldAutoReply` legge.
-          conv.ai_owner = 'mario';
-          conv.ai_status = 'active';
-          await supabase.from('event_log').insert({
-            type: 'inbound_adottato',
-            payload: { conversationId, phone, provenienza } as never,
-            message: `[bot-fissatore] adottato ${phone}: ha scritto per primo (${provenienza})`,
-            level: 'info',
-          });
+          if (erroreAdozione) {
+            // Sul database lo stato e' rimasto quello vecchio: NON si muta la copia in
+            // memoria e NON si scrive il log di adozione, altrimenti mentirebbe (il claim
+            // di `drainMarioReplies` su ai_status='active' non passerebbe comunque).
+            await supabase.from('event_log').insert({
+              type: 'inbound_adozione_fallita',
+              payload: { conversationId, phone, provenienza, error: erroreAdozione.message } as never,
+              message: `[bot-fissatore] adozione fallita per ${phone}: ${erroreAdozione.message}`,
+              level: 'error',
+            });
+          } else {
+            // La copia in memoria serve subito dopo: e' quella che `shouldAutoReply` legge.
+            conv.ai_owner = 'mario';
+            conv.ai_status = 'active';
+            await supabase.from('event_log').insert({
+              type: 'inbound_adottato',
+              payload: { conversationId, phone, provenienza } as never,
+              message: `[bot-fissatore] adottato ${phone}: ha scritto per primo (${provenienza})`,
+              level: 'info',
+            });
+          }
         }
       }
 
