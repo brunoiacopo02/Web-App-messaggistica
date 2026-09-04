@@ -21,7 +21,7 @@ export type EnrollArgs = {
 /**
  * Pure: mandare l'apertura adesso vorrebbe dire ricoprire una conversazione viva?
  *
- * Vero solo se Mario sta gia' parlando con questa persona E il lead ha gia' visto almeno
+ * Vero se Mario sta gia' parlando con questa persona E il lead ha gia' visto almeno
  * un nostro messaggio. Il caso e' quotidiano da quando il bot adotta chi scrive per primo:
  * sui 14 lead Telegram lavorati ad agosto l'intake del CRM e' arrivato a chat gia'
  * iniziata, con 0.0 ore di ritardo.
@@ -31,6 +31,17 @@ export type EnrollArgs = {
  * cron esiste per le conversazioni dove abbiamo PROVATO a mandare l'apertura e non e'
  * mai partita, e con "esiste una riga in uscita" diventerebbero irrecuperabili.
  *
+ * Su un **adottato** — `crmLeadId` nullo e un nostro messaggio gia' partito — la guardia
+ * scatta QUALUNQUE sia `aiStatus`. Il CRM legge la lista di `/api/bot/lead-entranti`
+ * giorni dopo, come gli abbiamo chiesto, e quella lista contiene anche chi il bot ha gia'
+ * portato a `booked`, `closed` o `handed_off`: con la sola condizione su 'active' partiva
+ * "Ciao, sono Marta... le tue 10 ore gratuite" a chi aveva gia' la call in agenda, e
+ * l'update dell'arruolamento riportava la conversazione ad 'active' facendole perdere il
+ * lucchetto sull'appuntamento.
+ *
+ * Il caso legittimo "il CRM ri-arruola un lead gia' suo che era stato chiuso" resta
+ * intatto: li' `crmLeadId` c'e' gia', e vale la regola di prima.
+ *
  * `aiStatus` vale 'active' o 'replying': 'replying' e' il lock del drain, non uno stato
  * a parte — una chat che sta rispondendo e' viva quanto una attiva (vedi
  * `shouldAutoReply` in `lib/fenice-autoreply.ts`), e in produzione restano righe ferme
@@ -39,11 +50,13 @@ export type EnrollArgs = {
 export function apreSopraChatViva(g: {
   aiOwner: string | null;
   aiStatus: string | null;
+  /** `crm_lead_id` della conversazione: nullo = il CRM non conosce questo lead. */
+  crmLeadId: string | null;
   haOutboundPartito: boolean;
 }): boolean {
-  return g.aiOwner === 'mario'
-    && (g.aiStatus === 'active' || g.aiStatus === 'replying')
-    && g.haOutboundPartito;
+  if (g.aiOwner !== 'mario' || !g.haOutboundPartito) return false;
+  if (g.crmLeadId === null) return true;
+  return g.aiStatus === 'active' || g.aiStatus === 'replying';
 }
 
 /**
@@ -82,13 +95,14 @@ export async function enrollLeadIntoMario(
     // un'apertura di troppo — ma è implicito: non invertirlo con un `?? true` senza
     // toccare anche questo commento.
     const { data: convRow } = await supabase
-      .from('conversations').select('ai_owner, ai_status').eq('id', conversationId).single();
+      .from('conversations').select('ai_owner, ai_status, crm_lead_id').eq('id', conversationId).single();
     const { count: partiti } = await supabase
       .from('messages').select('id', { count: 'exact', head: true })
       .eq('conversation_id', conversationId).eq('direction', 'out').not('twilio_sid', 'is', null);
     if (apreSopraChatViva({
       aiOwner: convRow?.ai_owner ?? null,
       aiStatus: convRow?.ai_status ?? null,
+      crmLeadId: (convRow as { crm_lead_id?: string | null } | null)?.crm_lead_id ?? null,
       haOutboundPartito: (partiti ?? 0) > 0,
     })) {
       // Solo i campi valorizzati: scrivere null cancellerebbe il `crm_funnel` che il
@@ -115,7 +129,11 @@ export async function enrollLeadIntoMario(
     ai_status: 'active',
     ai_started_at: new Date().toISOString(),
     crm_lead_id: args.crmLeadId ?? null,
-    crm_funnel: args.crmFunnel ?? null,
+    // Il funnel si scrive solo se c'e': un intake che non lo manda cancellerebbe il
+    // `crm_funnel` (TELEGRAM) che il webhook ha dedotto dal primo messaggio del lead.
+    // Stessa regola del ramo guardia qui sopra. `crm_lead_id` invece resta come prima:
+    // e' proprio il campo che questo arruolamento porta.
+    ...(args.crmFunnel ? { crm_funnel: args.crmFunnel } : {}),
   };
 
   // Apertura differita: di notte i template aprono peggio (-10pt risposta) e

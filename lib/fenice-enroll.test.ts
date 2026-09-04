@@ -21,11 +21,11 @@ import { openingBody } from './persona';
  * guardia non scatta e i test esistenti restano invariati.
  */
 function makeSupabase(opts: {
-  convRow?: { ai_owner: string | null; ai_status: string | null };
+  convRow?: { ai_owner: string | null; ai_status: string | null; crm_lead_id?: string | null };
   outboundCount?: number;
 } = {}) {
   const calls = { updates: [] as any[], events: [] as any[] };
-  const convRow = opts.convRow ?? { ai_owner: null, ai_status: null };
+  const convRow = opts.convRow ?? { ai_owner: null, ai_status: null, crm_lead_id: null };
   const outboundCount = opts.outboundCount ?? 0;
   const supabase: any = {
     from(table: string) {
@@ -129,7 +129,7 @@ describe('enrollLeadIntoMario — guardia chat gia\' avviata (apreSopraChatViva)
   it('chat viva (mario/active, outbound partito) → nessun invio, aperturaSaltata:true, patch solo campi valorizzati', async () => {
     vi.mocked(inSendWindow).mockReturnValue(true);
     const { supabase, calls } = makeSupabase({
-      convRow: { ai_owner: 'mario', ai_status: 'active' }, outboundCount: 1,
+      convRow: { ai_owner: 'mario', ai_status: 'active', crm_lead_id: 'crm-1' }, outboundCount: 1,
     });
 
     const res = await enrollLeadIntoMario(supabase, {
@@ -147,7 +147,7 @@ describe('enrollLeadIntoMario — guardia chat gia\' avviata (apreSopraChatViva)
   it('chat viva fuori fascia → vince la guardia, non il ramo differito: aperturaSaltata:true, niente deferred', async () => {
     vi.mocked(inSendWindow).mockReturnValue(false);
     const { supabase, calls } = makeSupabase({
-      convRow: { ai_owner: 'mario', ai_status: 'active' }, outboundCount: 1,
+      convRow: { ai_owner: 'mario', ai_status: 'active', crm_lead_id: 'crm-1' }, outboundCount: 1,
     });
 
     const res = await enrollLeadIntoMario(supabase, {
@@ -158,6 +158,37 @@ describe('enrollLeadIntoMario — guardia chat gia\' avviata (apreSopraChatViva)
     expect(res.deferred).toBeUndefined();
     expect(sendTemplateAndLog).not.toHaveBeenCalled();
     expect(calls.events.some((e) => e.type === 'fenice_enroll_deferred')).toBe(false);
+  });
+
+  // Il caso vero: il bot adotta e fissa la call, il CRM legge la lista giorni dopo,
+  // crea il lead e manda l'intake. Senza la guardia l'apertura "le tue 10 ore
+  // gratuite" arrivava a chi ha gia' la call in agenda, e l'update la riportava ad
+  // 'active' facendole perdere il lucchetto sull'appuntamento.
+  it("adottato con l'appuntamento gia' preso (booked) → l'apertura non parte", async () => {
+    vi.mocked(inSendWindow).mockReturnValue(true);
+    const { supabase, calls } = makeSupabase({
+      convRow: { ai_owner: 'mario', ai_status: 'booked', crm_lead_id: null }, outboundCount: 1,
+    });
+
+    const res = await enrollLeadIntoMario(supabase, {
+      phone: '+393331234567', crmLeadId: 'crm-9', crmFunnel: 'TELEGRAM',
+    });
+
+    expect(res).toMatchObject({ ok: true, aperturaSaltata: true });
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+    // Nessun ai_status/ai_started_at riscritto: l'appuntamento tiene il suo lucchetto.
+    expect(calls.updates[0]).toEqual({ crm_lead_id: 'crm-9', crm_funnel: 'TELEGRAM' });
+  });
+
+  it("un intake senza funnel non cancella il TELEGRAM dedotto dal webhook", async () => {
+    vi.mocked(inSendWindow).mockReturnValue(true);
+    const { supabase, calls } = makeSupabase();
+
+    await enrollLeadIntoMario(supabase, { phone: '+393331234567', crmLeadId: 'crm-9' });
+
+    // Ramo normale, non guardia: `crm_funnel` non compare affatto nella patch.
+    expect('crm_funnel' in calls.updates[0]).toBe(false);
+    expect(calls.updates[0]).toMatchObject({ crm_lead_id: 'crm-9' });
   });
 });
 
@@ -457,7 +488,7 @@ describe('enrollGdoLeadAsPostino — arruolamento in modalità postino', () => {
 });
 
 describe('apreSopraChatViva', () => {
-  const viva = { aiOwner: 'mario', aiStatus: 'active', haOutboundPartito: true };
+  const viva = { aiOwner: 'mario', aiStatus: 'active', crmLeadId: 'crm-1', haOutboundPartito: true };
   it("vero: Mario sta già parlando con questa persona", () => {
     expect(apreSopraChatViva(viva)).toBe(true);
   });
@@ -467,18 +498,38 @@ describe('apreSopraChatViva', () => {
     expect(apreSopraChatViva({ ...viva, aiStatus: 'replying' })).toBe(true);
   });
   it('falso su una chat nuova', () => {
-    expect(apreSopraChatViva({ aiOwner: null, aiStatus: null, haOutboundPartito: false })).toBe(false);
+    expect(apreSopraChatViva({ aiOwner: null, aiStatus: null, crmLeadId: null, haOutboundPartito: false })).toBe(false);
   });
   // Il caso di riapri-mute: abbiamo PROVATO a mandare l'apertura e non è mai partita.
   // Se la guardia scattasse qui, quelle conversazioni resterebbero mute per sempre.
   it("falso se un invio è stato tentato ma non è mai partito", () => {
     expect(apreSopraChatViva({ ...viva, haOutboundPartito: false })).toBe(false);
   });
-  it('falso su una chat chiusa o passata a una persona', () => {
+  // Un lead del CRM chiuso e ri-arruolato: e' il caso legittimo, l'apertura parte.
+  it('falso su una chat del CRM chiusa o passata a una persona', () => {
     expect(apreSopraChatViva({ ...viva, aiStatus: 'closed' })).toBe(false);
     expect(apreSopraChatViva({ ...viva, aiStatus: 'handed_off' })).toBe(false);
   });
   it("falso se la chat non è di Mario", () => {
     expect(apreSopraChatViva({ ...viva, aiOwner: null })).toBe(false);
+  });
+
+  // Adottato = nessun leadId del CRM e un nostro messaggio gia' partito. La lista di
+  // /api/bot/lead-entranti li manda al CRM anche da booked/closed/handed_off, e
+  // l'intake arriva giorni dopo: l'apertura non deve partire in nessuno di quegli stati.
+  const adottato = { aiOwner: 'mario', aiStatus: 'active', crmLeadId: null, haOutboundPartito: true };
+  it("vero su un adottato che ha gia' l'appuntamento in agenda (booked)", () => {
+    expect(apreSopraChatViva({ ...adottato, aiStatus: 'booked' })).toBe(true);
+  });
+  it('vero su un adottato passato a una persona (handed_off)', () => {
+    expect(apreSopraChatViva({ ...adottato, aiStatus: 'handed_off' })).toBe(true);
+  });
+  it('vero su un adottato chiuso con un esito (closed)', () => {
+    expect(apreSopraChatViva({ ...adottato, aiStatus: 'closed' })).toBe(true);
+  });
+  // La regola vale solo per chi ha gia' visto un nostro messaggio: senza outbound
+  // partito resta il caso di riapri-mute, dove l'apertura non e' mai uscita.
+  it("falso su un adottato a cui non e' mai partito niente", () => {
+    expect(apreSopraChatViva({ ...adottato, haOutboundPartito: false })).toBe(false);
   });
 });

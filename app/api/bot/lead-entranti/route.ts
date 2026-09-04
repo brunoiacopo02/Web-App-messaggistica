@@ -51,6 +51,9 @@ export async function POST(req: NextRequest) {
       .select('id, crm_funnel, ai_status, bot_outcome, bot_scheduled_at, ai_started_at, last_message_at, leads(phone_e164, first_name, last_name)')
       .eq('ai_owner', 'mario')
       .is('crm_lead_id', null)
+      // Chi e' passato a una persona non entra nella lista: il CRM ci manderebbe
+      // l'intake sopra una chat che sta lavorando qualcuno in carne e ossa.
+      .is('handed_off_at', null)
       .order('ai_started_at', { ascending: true, nullsFirst: true })
       .range(from, to));
   } catch (e) {
