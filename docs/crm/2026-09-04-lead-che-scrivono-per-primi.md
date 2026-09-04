@@ -89,7 +89,7 @@ anzi quello che vi serve di più — se ha un appuntamento, lo vedete nel campo 
       "primoMessaggio": "Buongiorno, sono nel canale Telegram e mi hanno indicato questo contatto per più informazioni su Fenice Academy",
       "scrittoIl": "2026-08-26T21:51:52+02:00",
       "conversationId": 7246,
-      "statoBot": "attivo",
+      "statoBot": "active",
       "esito": null,
       "appuntamento": null
     }
@@ -97,6 +97,7 @@ anzi quello che vi serve di più — se ha un appuntamento, lo vedete nel campo 
 }
 ```
 
+- **`statoBot`** — dove sta la conversazione da parte nostra: `active` il bot ci sta parlando adesso, `closed` ha chiuso con un esito, `booked` ha fissato l'appuntamento, `handed_off` è passata a una persona. Sono i nostri stati interni e ve li diamo grezzi apposta: tradurli vorrebbe dire appiattire distinzioni che vi servono.
 - **`provenienza`** — `"TELEGRAM"` per chi apre con la frase del canale, `"INBOUND"` per
   chiunque altro scriva spontaneamente. Non mettiamo tutti su Telegram: sulle vostre
   statistiche di funnel deve restare vero.

@@ -40,7 +40,7 @@ esiti, note, appuntamenti, call-attempt.
     "primoMessaggio": "Buongiorno, sono nel canale Telegram e mi hanno indicato questo contatto per piu' informazioni su Fenice Academy",
     "scrittoIl": "2026-08-26T21:51:52+02:00",
     "conversationId": 7246,
-    "statoBot": "attivo",
+    "statoBot": "active",
     "esito": null,
     "appuntamento": null } ] }
 ```
