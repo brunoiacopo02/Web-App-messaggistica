@@ -76,6 +76,8 @@ export type AdoptGate = {
   toMatchesFenice: boolean;
   /** INBOUND_ADOPTION_ENABLED === '1' */
   adoptionOn: boolean;
+  /** L'interruttore generale dell'auto-risposta, dal pannello (vedi `shouldAutoReply`). */
+  autoReplyOn: boolean;
   aiOwner: string | null;
   aiPausedAt?: string | null;
   handedOffAt?: string | null;
@@ -97,9 +99,15 @@ export type AdoptGate = {
  * nostro. È il criterio OPPOSTO a quello di `apreSopraChatViva` (in `fenice-enroll.ts`),
  * la guardia sull'apertura dentro `enrollLeadIntoMario`, che guarda solo agli outbound
  * partiti davvero: là serve sapere se il lead ha visto qualcosa, qui se qualcuno ha provato.
+ *
+ * `autoReplyOn` è l'interruttore generale del pannello, e qui è un veto come gli altri:
+ * non si adotta chi non si può servire. Lo si spegne durante un incidente, cioè proprio
+ * quando il bot non deve rispondere — e una conversazione adottata ma muta è fuori da
+ * tutte e tre le reti di recupero (`adotta-mai-risposti` cerca `ai_owner` nullo,
+ * `bot-followups` un `crm_lead_id` valorizzato, `riapri-mute` una riga in uscita).
  */
 export function shouldAdoptInbound(g: AdoptGate): boolean {
-  if (!g.toMatchesFenice || !g.adoptionOn) return false;
+  if (!g.toMatchesFenice || !g.adoptionOn || !g.autoReplyOn) return false;
   if (g.aiOwner !== null) return false;
   if (g.aiPausedAt || g.handedOffAt) return false;
   return !g.hasOutbound;

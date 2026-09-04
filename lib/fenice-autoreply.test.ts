@@ -41,6 +41,7 @@ describe('shouldAdoptInbound', () => {
   const ok = {
     toMatchesFenice: true,
     adoptionOn: true,
+    autoReplyOn: true,
     aiOwner: null,
     aiPausedAt: null,
     handedOffAt: null,
@@ -54,6 +55,11 @@ describe('shouldAdoptInbound', () => {
   });
   it('falso a interruttore spento', () => {
     expect(shouldAdoptInbound({ ...ok, adoptionOn: false })).toBe(false);
+  });
+  // Il kill-switch del pannello lo si spegne durante un incidente: adottare senza
+  // poter rispondere lascia quella chat fuori da tutte le reti di recupero.
+  it('falso col bot generale spento dal pannello: non si adotta chi non si può servire', () => {
+    expect(shouldAdoptInbound({ ...ok, autoReplyOn: false })).toBe(false);
   });
   it('falso se la chat è già di qualcuno', () => {
     expect(shouldAdoptInbound({ ...ok, aiOwner: 'mario' })).toBe(false);

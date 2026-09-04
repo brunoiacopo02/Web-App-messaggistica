@@ -184,6 +184,13 @@ export async function POST(req: NextRequest) {
         .eq('id', conversationId)
         .single();
 
+      // L'interruttore generale si legge PRIMA dell'adozione: e' anche un veto
+      // sull'adozione, non solo sulla risposta. A bot spento — cioe' durante un
+      // incidente, l'unico momento in cui lo si spegne — adottare senza rispondere
+      // lascerebbe quella conversazione fuori da tutte e tre le reti di recupero.
+      // Non costa una query in piu': serviva comunque a `shouldAutoReply` qui sotto.
+      const autoReplyOn = await getAutoReply(supabase);
+
       // Adozione: il lead ha scritto per primo e questa chat non e' di nessuno.
       //
       // Il gate dell'interruttore va valutato PRIMA del conteggio: a bot spento (come in
@@ -193,7 +200,9 @@ export async function POST(req: NextRequest) {
       // Il conteggio degli outbound si fa SOLO quando `ai_owner` e' nullo: sulle chat
       // gia' arruolate (la stragrande maggioranza degli inbound) non si aggiunge nessuna
       // query al webhook.
-      if (adozioneAttiva && conv && conv.ai_owner === null) {
+      // `autoReplyOn` sta qui per la stessa ragione dell'interruttore: a bot spento
+      // il conteggio non serve, perche' `shouldAdoptInbound` direbbe no comunque.
+      if (adozioneAttiva && autoReplyOn && conv && conv.ai_owner === null) {
         const { count, error: erroreCount } = await supabase
           .from('messages')
           .select('id', { count: 'exact', head: true })
@@ -206,6 +215,7 @@ export async function POST(req: NextRequest) {
         if (shouldAdoptInbound({
           toMatchesFenice,
           adoptionOn: adozioneAttiva,
+          autoReplyOn,
           aiOwner: conv.ai_owner,
           aiPausedAt: conv.ai_paused_at,
           handedOffAt: conv.handed_off_at,
@@ -282,7 +292,6 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      const autoReplyOn = await getAutoReply(supabase);
       if (shouldAutoReply({
         toMatchesFenice,
         autoReplyOn,
