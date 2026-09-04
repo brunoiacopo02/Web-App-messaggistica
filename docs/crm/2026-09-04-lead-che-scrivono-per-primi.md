@@ -106,7 +106,7 @@ manderebbe a scriverle entrambi.
 - **`totale` e `totaleCompleto`** — `totale` è quanti lead ci sono in questa risposta,
   `totaleCompleto` quanti ce ne sono in tutto. Se il secondo è più grande del primo la
   lista è tagliata dal vostro `limit`: rifate la chiamata con un `limit` più alto.
-- **`statoBot`** — dove sta la conversazione da parte nostra: `active` il bot ci sta parlando adesso, `replying` sta scrivendo la risposta in questo momento (è lo stesso di `active` per voi, ma in produzione restano righe ferme su quel valore e vi arriverebbero grezze), `closed` ha chiuso con un esito, `booked` ha fissato l'appuntamento, `handed_off` è passata a una persona. Sono i nostri stati interni e ve li diamo grezzi apposta: tradurli vorrebbe dire appiattire distinzioni che vi servono. Se ci fate uno switch sopra, tenete un ramo di default.
+- **`statoBot`** — dove sta la conversazione da parte nostra: `active` il bot ci sta parlando adesso, `replying` sta scrivendo la risposta in questo momento (è lo stesso di `active` per voi, ma in produzione restano righe ferme su quel valore e vi arriverebbero grezze), `closed` ha chiuso con un esito, `booked` ha fissato l'appuntamento. Non troverete `handed_off`: le chat passate a una persona sono escluse dalla lista, come detto sopra. Sono i nostri stati interni e ve li diamo grezzi apposta: tradurli vorrebbe dire appiattire distinzioni che vi servono. Se ci fate uno switch sopra, tenete un ramo di default.
 - **`provenienza`** — `"TELEGRAM"` per chi apre con la frase del canale, `"INBOUND"` per
   chiunque altro scriva spontaneamente. Non mettiamo tutti su Telegram: sulle vostre
   statistiche di funnel deve restare vero. Può contenere anche uno dei **vostri** nomi di

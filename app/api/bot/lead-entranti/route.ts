@@ -40,10 +40,21 @@ export async function POST(req: NextRequest) {
   }
   const limit = Math.min(Math.max(Number(opts.limit) || 500, 1), 2000);
 
-  const feniceNumber = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
-  if (!feniceNumber) return NextResponse.json({ ok: false, error: 'not_configured' }, { status: 503 });
-
   const admin = getSupabaseAdmin();
+
+  // Il numero Fenice serve a restringere la lista, non a servirla: se l'env manca si
+  // registra l'anomalia e si risponde lo stesso senza quel filtro. Un 503 a un client
+  // esterno per una nostra variabile assente sarebbe una dipendenza nuova su una rotta
+  // che il CRM chiama in automatico, e li lascerebbe senza lista fino al deploy dopo.
+  const feniceNumber = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
+  if (!feniceNumber) {
+    await admin.from('event_log').insert({
+      type: 'lead_entranti_senza_numero',
+      payload: {} as never,
+      message: '[bot-fissatore] TWILIO_WHATSAPP_NUMBER_FENICE assente: lista lead entranti servita senza il filtro sul numero',
+      level: 'warn',
+    });
+  }
   let convs: any[];
   try {
     // Il criterio e' quello della spec, parola per parola: conversazioni sul numero
@@ -54,17 +65,20 @@ export async function POST(req: NextRequest) {
     //    documento mandato al CRM non descrive;
     //  - `handed_off_at` nullo perche' quelle chat le sta lavorando una persona e il CRM
     //    non deve mandarci un intake sopra;
-    //  - `wa_number` perche' la lista parla solo del numero Fenice.
-    convs = await fetchAllRows<any>((from, to) => admin
-      .from('conversations')
-      .select('id, crm_funnel, ai_status, bot_outcome, bot_scheduled_at, ai_started_at, last_message_at, leads(phone_e164, first_name, last_name)')
-      .eq('ai_owner', 'mario')
-      .is('crm_lead_id', null)
-      .is('handed_off_at', null)
-      .eq('wa_number', feniceNumber)
-      .not('last_inbound_at', 'is', null)
-      .order('ai_started_at', { ascending: true, nullsFirst: true })
-      .range(from, to));
+    //  - `wa_number` perche' la lista parla solo del numero Fenice; se l'env manca il
+    //    filtro salta e la lista si serve comunque (vedi sopra).
+    convs = await fetchAllRows<any>((from, to) => {
+      const q = admin
+        .from('conversations')
+        .select('id, crm_funnel, ai_status, bot_outcome, bot_scheduled_at, ai_started_at, last_message_at, leads(phone_e164, first_name, last_name)')
+        .eq('ai_owner', 'mario')
+        .is('crm_lead_id', null)
+        .is('handed_off_at', null)
+        .not('last_inbound_at', 'is', null);
+      return (feniceNumber ? q.eq('wa_number', feniceNumber) : q)
+        .order('ai_started_at', { ascending: true, nullsFirst: true })
+        .range(from, to);
+    });
   } catch (e) {
     return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : 'errore' }, { status: 500 });
   }

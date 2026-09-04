@@ -89,17 +89,23 @@ export async function enrollLeadIntoMario(
   // vedrebbe il bot ricominciare da capo. Si prende comunque in carico il lead per il
   // CRM, cosi' da parte loro non risulta fermo.
   {
-    // Gli errori delle due letture qui sotto non si controllano: se la query fallisce,
-    // `convRow`/`partiti` restano vuoti e `apreSopraChatViva` legge una chat nuova, quindi
-    // l'apertura PARTE. È voluto — un lead che resta muto per sempre è peggio di
-    // un'apertura di troppo — ma è implicito: non invertirlo con un `?? true` senza
-    // toccare anche questo commento.
-    const { data: convRow } = await supabase
+    // Se una delle due letture non si sa com'è andata, l'apertura PARTE: un lead che
+    // resta muto per sempre è peggio di un'apertura di troppo.
+    //
+    // Sul conteggio dei messaggi basta il valore vuoto (`partiti` a null ⇒ nessun
+    // outbound ⇒ la guardia non scatta). Sulla riga della conversazione NO, e da quando
+    // `crmLeadId` nullo fa scattare la guardia da solo è diventato pericoloso: una
+    // select fallita darebbe `convRow` undefined, quindi `crm_lead_id` letto come nullo,
+    // e con un outbound partito la guardia scatterebbe su un lead del CRM che non ha
+    // mai parlato col bot — apertura saltata e `ai_owner`/`ai_status`/`ai_started_at`
+    // mai scritti: preso in carico sulla carta, muto nei fatti. Per questo l'errore
+    // della select si controlla: "non lo so" non è "è nullo", e nel dubbio si apre.
+    const { data: convRow, error: erroreConv } = await supabase
       .from('conversations').select('ai_owner, ai_status, crm_lead_id').eq('id', conversationId).single();
     const { count: partiti } = await supabase
       .from('messages').select('id', { count: 'exact', head: true })
       .eq('conversation_id', conversationId).eq('direction', 'out').not('twilio_sid', 'is', null);
-    if (apreSopraChatViva({
+    if (!erroreConv && apreSopraChatViva({
       aiOwner: convRow?.ai_owner ?? null,
       aiStatus: convRow?.ai_status ?? null,
       crmLeadId: (convRow as { crm_lead_id?: string | null } | null)?.crm_lead_id ?? null,

@@ -23,17 +23,30 @@ import { openingBody } from './persona';
 function makeSupabase(opts: {
   convRow?: { ai_owner: string | null; ai_status: string | null; crm_lead_id?: string | null };
   outboundCount?: number;
+  /** La select su `conversations` va in errore: "non lo so", non "e' nullo". */
+  convErrore?: boolean;
 } = {}) {
   const calls = { updates: [] as any[], events: [] as any[] };
   const convRow = opts.convRow ?? { ai_owner: null, ai_status: null, crm_lead_id: null };
   const outboundCount = opts.outboundCount ?? 0;
+  const convErrore = opts.convErrore === true;
   const supabase: any = {
     from(table: string) {
       if (table === 'conversations') {
         return {
           update(payload: any) { calls.updates.push(payload); return { eq() { return Promise.resolve({}); } }; },
           select() {
-            return { eq() { return { single: () => Promise.resolve({ data: convRow }) }; } };
+            return {
+              eq() {
+                return {
+                  single: () => Promise.resolve(
+                    convErrore
+                      ? { data: null, error: { message: 'connessione persa' } }
+                      : { data: convRow },
+                  ),
+                };
+              },
+            };
           },
         };
       }
@@ -178,6 +191,23 @@ describe('enrollLeadIntoMario — guardia chat gia\' avviata (apreSopraChatViva)
     expect(sendTemplateAndLog).not.toHaveBeenCalled();
     // Nessun ai_status/ai_started_at riscritto: l'appuntamento tiene il suo lucchetto.
     expect(calls.updates[0]).toEqual({ crm_lead_id: 'crm-9', crm_funnel: 'TELEGRAM' });
+  });
+
+  // Se la riga della conversazione non si riesce a leggere, `crm_lead_id` arriverebbe
+  // come nullo e la guardia scatterebbe su un lead del CRM che col bot non ha mai
+  // parlato: preso in carico sulla carta e muto nei fatti. Nel dubbio si apre.
+  it("select su conversations fallita: l'apertura parte lo stesso", async () => {
+    vi.mocked(inSendWindow).mockReturnValue(true);
+    const { supabase, calls } = makeSupabase({ convErrore: true, outboundCount: 3 });
+
+    const res = await enrollLeadIntoMario(supabase, {
+      phone: '+393331234567', firstName: 'Anna', crmLeadId: 'crm-1', crmFunnel: 'H',
+    });
+
+    expect(res.aperturaSaltata).toBeUndefined();
+    expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+    expect(calls.updates[0]).toMatchObject({ ai_owner: 'mario', ai_status: 'active' });
+    expect(calls.events.some((e) => e.type === 'apertura_saltata_chat_in_corso')).toBe(false);
   });
 
   it("un intake senza funnel non cancella il TELEGRAM dedotto dal webhook", async () => {
