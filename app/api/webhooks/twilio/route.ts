@@ -212,10 +212,21 @@ export async function POST(req: NextRequest) {
           hasOutbound,
         })) {
           const provenienza = funnelDaPrimoMessaggio(messageBody);
+          // Cinque minuti indietro, e non `now`: il messaggio che ha innescato questa
+          // adozione e' stato inserito qui sopra col `created_at` di default, cioe'
+          // l'orologio di Postgres, mentre `now` viene da quello di Node. Con
+          // `ai_started_at` anche solo un istante piu' recente, il filtro
+          // `.gte('created_at', startedAt)` di `loadHistory` (lib/fenice-autoreply.ts)
+          // lascia fuori proprio quel messaggio: la cronologia esce vuota e il drain
+          // non risponde a nessuno. E' lo stesso scarto fra i due orologi per cui
+          // `app/api/cron/sequence-touches/route.ts` usa un buffer di 5 minuti.
+          // Effetto voluto: chi manda tre messaggi di fila in due minuti se li vede
+          // leggere tutti, invece che solo l'ultimo.
+          const startedAtAdozione = new Date(Date.now() - 5 * 60_000).toISOString();
           const { error: erroreAdozione } = await supabase.from('conversations').update({
             ai_owner: 'mario',
             ai_status: 'active',
-            ai_started_at: now,
+            ai_started_at: startedAtAdozione,
             crm_funnel: provenienza,
           }).eq('id', conversationId);
           if (erroreAdozione) {
