@@ -30,13 +30,20 @@ export type EnrollArgs = {
  * il criterio di `app/api/cron/riapri-mute/route.ts`, e cambiarlo lo romperebbe: quel
  * cron esiste per le conversazioni dove abbiamo PROVATO a mandare l'apertura e non e'
  * mai partita, e con "esiste una riga in uscita" diventerebbero irrecuperabili.
+ *
+ * `aiStatus` vale 'active' o 'replying': 'replying' e' il lock del drain, non uno stato
+ * a parte — una chat che sta rispondendo e' viva quanto una attiva (vedi
+ * `shouldAutoReply` in `lib/fenice-autoreply.ts`), e in produzione restano righe ferme
+ * su quel valore dal vecchio meccanismo.
  */
 export function apreSopraChatViva(g: {
   aiOwner: string | null;
   aiStatus: string | null;
   haOutboundPartito: boolean;
 }): boolean {
-  return g.aiOwner === 'mario' && g.aiStatus === 'active' && g.haOutboundPartito;
+  return g.aiOwner === 'mario'
+    && (g.aiStatus === 'active' || g.aiStatus === 'replying')
+    && g.haOutboundPartito;
 }
 
 /**
@@ -69,6 +76,11 @@ export async function enrollLeadIntoMario(
   // vedrebbe il bot ricominciare da capo. Si prende comunque in carico il lead per il
   // CRM, cosi' da parte loro non risulta fermo.
   {
+    // Gli errori delle due letture qui sotto non si controllano: se la query fallisce,
+    // `convRow`/`partiti` restano vuoti e `apreSopraChatViva` legge una chat nuova, quindi
+    // l'apertura PARTE. È voluto — un lead che resta muto per sempre è peggio di
+    // un'apertura di troppo — ma è implicito: non invertirlo con un `?? true` senza
+    // toccare anche questo commento.
     const { data: convRow } = await supabase
       .from('conversations').select('ai_owner, ai_status').eq('id', conversationId).single();
     const { count: partiti } = await supabase

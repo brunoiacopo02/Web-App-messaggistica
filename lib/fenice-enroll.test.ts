@@ -125,6 +125,42 @@ describe('enrollLeadIntoMario — apertura differita fuori fascia', () => {
   });
 });
 
+describe('enrollLeadIntoMario — guardia chat gia\' avviata (apreSopraChatViva)', () => {
+  it('chat viva (mario/active, outbound partito) → nessun invio, aperturaSaltata:true, patch solo campi valorizzati', async () => {
+    vi.mocked(inSendWindow).mockReturnValue(true);
+    const { supabase, calls } = makeSupabase({
+      convRow: { ai_owner: 'mario', ai_status: 'active' }, outboundCount: 1,
+    });
+
+    const res = await enrollLeadIntoMario(supabase, {
+      phone: '+393331234567', firstName: 'Anna', crmLeadId: 'crm-1', crmFunnel: 'H',
+    });
+
+    expect(res).toMatchObject({ ok: true, conversationId: 42, aperturaSaltata: true });
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+    expect(calls.updates).toHaveLength(1);
+    // Solo i campi valorizzati: niente crm_lead_id/crm_funnel a null, niente ai_owner/ai_status/ai_started_at.
+    expect(calls.updates[0]).toEqual({ crm_lead_id: 'crm-1', crm_funnel: 'H' });
+    expect(calls.events.some((e) => e.type === 'apertura_saltata_chat_in_corso')).toBe(true);
+  });
+
+  it('chat viva fuori fascia → vince la guardia, non il ramo differito: aperturaSaltata:true, niente deferred', async () => {
+    vi.mocked(inSendWindow).mockReturnValue(false);
+    const { supabase, calls } = makeSupabase({
+      convRow: { ai_owner: 'mario', ai_status: 'active' }, outboundCount: 1,
+    });
+
+    const res = await enrollLeadIntoMario(supabase, {
+      phone: '+393331234567', firstName: 'Anna', crmLeadId: 'crm-1', crmFunnel: 'H',
+    });
+
+    expect(res).toMatchObject({ ok: true, conversationId: 42, aperturaSaltata: true });
+    expect(res.deferred).toBeUndefined();
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+    expect(calls.events.some((e) => e.type === 'fenice_enroll_deferred')).toBe(false);
+  });
+});
+
 describe('enrollLeadIntoMario — selezione apertura per-funnel A/B (NEW_OPENING_ENABLED)', () => {
   function stubOpeningSids() {
     vi.stubEnv('OPENING_SID_C1', 'HX_C1');
@@ -424,6 +460,11 @@ describe('apreSopraChatViva', () => {
   const viva = { aiOwner: 'mario', aiStatus: 'active', haOutboundPartito: true };
   it("vero: Mario sta già parlando con questa persona", () => {
     expect(apreSopraChatViva(viva)).toBe(true);
+  });
+  // 'replying' è il lock del drain, non uno stato a parte: una chat che sta
+  // rispondendo è viva quanto una 'active' (vedi shouldAutoReply).
+  it("vero anche su 'replying': il drain sta rispondendo in questo momento", () => {
+    expect(apreSopraChatViva({ ...viva, aiStatus: 'replying' })).toBe(true);
   });
   it('falso su una chat nuova', () => {
     expect(apreSopraChatViva({ aiOwner: null, aiStatus: null, haOutboundPartito: false })).toBe(false);
