@@ -116,7 +116,11 @@ export async function pushLeadEntrante(
     const motivo = typeof parsed?.motivo === 'string' ? parsed.motivo : `http_${res.status}`;
     await supabase.from('event_log').insert({
       type: 'lead_entrante_push_error',
-      payload: { conversationId: args.conversationId, telefono: args.telefono, status: res.status, motivo, body: testo } as never,
+      // `body` tagliato a 300 caratteri di proposito: se l'URL finisce per sbaglio su un
+      // host con la Deployment Protection di Vercel, la risposta non e' JSON ma una
+      // pagina di login da qualche KB — e finirebbe intera dentro `event_log`, a ogni
+      // lead adottato. I primi 300 caratteri bastano a riconoscerla.
+      payload: { conversationId: args.conversationId, telefono: args.telefono, status: res.status, motivo, body: testo.slice(0, 300) } as never,
       message: `[lead-entrante] push non riuscito per conv ${args.conversationId}: ${motivo}`,
       level: 'warn',
     });
