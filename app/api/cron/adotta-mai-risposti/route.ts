@@ -6,6 +6,7 @@ import { funnelDaPrimoMessaggio } from '@/lib/persona';
 import { templateName } from '@/lib/name';
 import { inSendWindow } from '@/lib/sequence';
 import { assertTemplateSendable } from '@/lib/twilio';
+import { pushLeadEntrante } from '@/lib/lead-entrante';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -130,9 +131,10 @@ export async function POST(req: NextRequest) {
       if (!l) { falliti++; if (errori.length < 5) errori.push(`conv ${c.id}: nessun numero`); continue; }
 
       const { data: primi } = await admin.from('messages')
-        .select('body').eq('conversation_id', c.id).eq('direction', 'in')
+        .select('body, created_at').eq('conversation_id', c.id).eq('direction', 'in')
         .order('created_at', { ascending: true }).limit(1);
-      const provenienza = funnelDaPrimoMessaggio(((primi ?? [])[0] as { body: string | null } | undefined)?.body);
+      const primoRiga = (primi ?? [])[0] as { body: string | null; created_at: string } | undefined;
+      const provenienza = funnelDaPrimoMessaggio(primoRiga?.body);
 
       const now = new Date().toISOString();
       // Compare-and-set su `ai_owner`: la lista dei candidati si calcola all'inizio e
@@ -155,6 +157,18 @@ export async function POST(req: NextRequest) {
         continue;
       }
       if (!adottate || adottate.length === 0) { giaPrese++; continue; }
+
+      // Qui, prima del riaggancio: non c'e' nessun Twilio da non far aspettare, e il
+      // CRM ha bisogno del leadId per poter accettare l'esito quando arriva. Il loro
+      // lock e' per numero, non globale: fino a 35 push ravvicinati in un run vanno bene.
+      await pushLeadEntrante(admin, {
+        conversationId: c.id,
+        telefono: l.phone,
+        nome: l.first_name,
+        provenienza,
+        primoMessaggio: primoRiga?.body ?? null,
+        scrittoIl: primoRiga?.created_at ?? now,
+      });
 
       const nome = templateName(l.first_name);
       const res = await sendTemplateAndLog(

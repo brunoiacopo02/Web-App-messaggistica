@@ -11,6 +11,7 @@ import { sendCrmNota } from '@/lib/bot-outcome';
 import { buildBotRipresoNote } from '@/lib/bot-outcome-rules';
 import { segnalaRispostaDopoTerzoNr } from '@/lib/risposta-post-nr';
 import { funnelDaPrimoMessaggio } from '@/lib/persona';
+import { pushLeadEntrante } from '@/lib/lead-entrante';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -229,15 +230,16 @@ export async function POST(req: NextRequest) {
           // dell'adozione, che e' raro: il webhook normale non paga niente.
           const { data: primiInbound } = await supabase
             .from('messages')
-            .select('body')
+            .select('body, created_at')
             .eq('conversation_id', conversationId)
             .eq('direction', 'in')
             .order('created_at', { ascending: true })
             .limit(1);
-          const primoInbound = ((primiInbound ?? [])[0] as { body: string | null } | undefined)?.body;
+          const primoRigaInbound = (primiInbound ?? [])[0] as { body: string | null; created_at: string } | undefined;
           // Il messaggio corrente e' il fallback: se la lettura fallisce o la riga non si
           // vede ancora, e' comunque il primo inbound di questa conversazione.
-          const provenienza = funnelDaPrimoMessaggio(primoInbound ?? messageBody);
+          const primoMessaggioTesto = primoRigaInbound?.body ?? messageBody;
+          const provenienza = funnelDaPrimoMessaggio(primoMessaggioTesto);
           // Cinque minuti indietro, e non `now`: il messaggio che ha innescato questa
           // adozione e' stato inserito qui sopra col `created_at` di default, cioe'
           // l'orologio di Postgres, mentre `now` viene da quello di Node. Con
@@ -275,6 +277,17 @@ export async function POST(req: NextRequest) {
               message: `[bot-fissatore] adottato ${phone}: ha scritto per primo (${provenienza})`,
               level: 'info',
             });
+            // Spinge il lead al CRM cosi' l'esito ha dove tornare. Dopo la risposta a
+            // Twilio, come `drainMarioReplies` qui sotto: la rete del CRM non deve
+            // rallentare il webhook, che Twilio ritenta se e' lento.
+            after(pushLeadEntrante(supabase, {
+              conversationId,
+              telefono: phone,
+              nome: null,
+              provenienza,
+              primoMessaggio: primoMessaggioTesto,
+              scrittoIl: primoRigaInbound?.created_at ?? now,
+            }));
           }
         }
       }
