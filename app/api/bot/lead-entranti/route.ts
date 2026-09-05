@@ -84,6 +84,33 @@ export async function POST(req: NextRequest) {
   }
 
   const scelte = convs.slice(0, limit);
+
+  // Chi ha gia' ricevuto una risposta dal bot, cioe' un outbound PARTITO davvero.
+  //
+  // Serve al CRM per non arruolare nella finestra fra l'adozione e la prima risposta:
+  // li' `apreSopraChatViva` (`lib/fenice-enroll.ts`) non scatta — vuole un outbound
+  // partito — e un intake farebbe cadere l'apertura "Ciao, sono Marta..." sopra un lead
+  // che aspetta ancora la risposta alla sua domanda. Di norma quella finestra dura
+  // qualche decina di secondi (il ritardo umano di `marioDelayMs` piu' la chiamata al
+  // modello), ma se il drain fallisce — Anthropic giu', credito a zero — non si chiude
+  // da sola e resta aperta finche' qualcuno non se ne accorge.
+  //
+  // Batch da 100 e paginato: la select PostgREST taglia a 1.000 righe in silenzio
+  // (vedi `lib/supabase/paginate.ts`), e qui il troncamento direbbe "non ha ancora
+  // risposto" di una chat che ha risposto — cioe' proprio il contrario del vero.
+  const haRisposto = new Set<number>();
+  {
+    const ids = scelte.map((c: any) => c.id);
+    for (let i = 0; i < ids.length; i += 100) {
+      const chunk = ids.slice(i, i + 100);
+      const righe = await fetchAllRows<{ conversation_id: number }>((f, t) => admin
+        .from('messages').select('id, conversation_id').eq('direction', 'out')
+        .not('twilio_sid', 'is', null).in('conversation_id', chunk)
+        .order('id', { ascending: true }).range(f, t));
+      for (const m of righe) haRisposto.add(m.conversation_id);
+    }
+  }
+
   const lead = [];
   for (const c of scelte) {
     // Il primo messaggio del lead: e' con quello che si e' presentato, ed e' il testo da
@@ -105,6 +132,10 @@ export async function POST(req: NextRequest) {
       scrittoIl: primo?.created_at ?? null,
       conversationId: c.id as number,
       statoBot: (c.ai_status ?? null) as string | null,
+      // Falso = il bot lo ha preso in carico ma non gli ha ancora scritto. Su questi NON
+      // va mandato un intake: l'apertura partirebbe sopra un lead che aspetta ancora una
+      // risposta. Vedi il commento sopra `haRisposto`.
+      botHaRisposto: haRisposto.has(c.id as number),
       // Valorizzati quando il bot ha gia' concluso prima che loro creassero il lead:
       // cosi' al momento della creazione sanno che quella persona ha gia' una call in
       // agenda, invece di scoprirlo al giro dopo.

@@ -5,7 +5,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
  * `conversations` (letta da `fetchAllRows`, quindi con `.range()`) e il primo messaggio
  * in ingresso di ogni conversazione.
  */
-const righe = { conversazioni: [] as Record<string, unknown>[], primoInbound: 'ciao' as string | null };
+const righe = {
+  conversazioni: [] as Record<string, unknown>[],
+  primoInbound: 'ciao' as string | null,
+  /** Gli outbound PARTITI, per `botHaRisposto`: id delle conversazioni che li hanno. */
+  outboundPartiti: [] as number[],
+};
 
 function query(table: string) {
   const q: Record<string, unknown> = {};
@@ -13,7 +18,13 @@ function query(table: string) {
   q.limit = () => Promise.resolve({
     data: [{ body: righe.primoInbound, created_at: '2026-09-01T10:00:00Z' }],
   });
-  q.range = () => Promise.resolve({ data: table === 'conversations' ? righe.conversazioni : [], error: null });
+  q.range = () => Promise.resolve({
+    data: table === 'conversations'
+      ? righe.conversazioni
+      // `messages` letta con `.range()` = la query degli outbound partiti.
+      : righe.outboundPartiti.map((id, i) => ({ id: i + 1, conversation_id: id })),
+    error: null,
+  });
   q.insert = () => Promise.resolve({});
   return q;
 }
@@ -56,6 +67,7 @@ beforeEach(() => {
   vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
   righe.conversazioni = [];
   righe.primoInbound = 'Buongiorno, sono nel canale Telegram';
+  righe.outboundPartiti = [];
 });
 afterEach(() => { vi.unstubAllEnvs(); });
 
@@ -106,5 +118,35 @@ describe('/api/bot/lead-entranti — il campo appuntamento', () => {
 
     expect(body.totale).toBe(2);
     expect(body.totaleCompleto).toBe(3);
+  });
+});
+
+describe('botHaRisposto', () => {
+  // La finestra fra l'adozione e la prima risposta: li' la guardia di
+  // `apreSopraChatViva` non scatta, perche' vuole un outbound partito. Un intake mandato
+  // in quel momento farebbe cadere "Ciao, sono Marta..." sopra un lead che aspetta ancora
+  // la risposta alla sua domanda. Di norma dura qualche decina di secondi, ma se il drain
+  // fallisce non si chiude da sola.
+  it("falso finche' il bot non ha ancora scritto", async () => {
+    righe.conversazioni = [conversazione({ ai_status: 'active' })];
+    righe.outboundPartiti = [];
+    const r = await chiedi();
+    expect(r.lead[0].botHaRisposto).toBe(false);
+  });
+
+  it("vero appena un messaggio del bot e' partito", async () => {
+    righe.conversazioni = [conversazione({ ai_status: 'active' })];
+    righe.outboundPartiti = [7246];
+    const r = await chiedi();
+    expect(r.lead[0].botHaRisposto).toBe(true);
+  });
+
+  it('distingue conversazione per conversazione', async () => {
+    righe.conversazioni = [conversazione({ id: 7246 }), conversazione({ id: 7300 })];
+    righe.outboundPartiti = [7300];
+    const r = await chiedi();
+    const perId = Object.fromEntries(r.lead.map((l) => [l.conversationId as number, l.botHaRisposto]));
+    expect(perId[7246]).toBe(false);
+    expect(perId[7300]).toBe(true);
   });
 });

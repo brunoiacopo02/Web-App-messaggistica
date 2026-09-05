@@ -95,6 +95,7 @@ quello che serve di più.
       "scrittoIl": "2026-08-26T21:51:52+02:00",
       "conversationId": 7246,
       "statoBot": "active",
+      "botHaRisposto": true,
       "esito": null,
       "appuntamento": null
     }
@@ -125,6 +126,13 @@ I campi che meritano una nota:
   agenda**, invece di scoprirlo al giro dopo. `appuntamento` è valorizzato **solo** se
   `esito` è `APPUNTAMENTO`: la data di un RICHIAMO non passa di qui, o arriverebbe alle
   Conferme come una call che non esiste.
+- **`botHaRisposto`** — falso quando il bot ha preso in carico il lead ma **non gli ha
+  ancora scritto**. Su questi non va mandato un intake: la guardia che salta l'apertura
+  pretende un messaggio gia' partito, quindi in quella finestra l'apertura "Ciao, sono
+  Marta..." cadrebbe sopra un lead che aspetta ancora la risposta alla sua domanda. Di
+  norma la finestra dura qualche decina di secondi — il ritardo umano della risposta piu'
+  la chiamata al modello — ma se il bot va giu' (Anthropic irraggiungibile, credito a
+  zero) non si chiude da sola. Aspettare che diventi vero costa un giro di lista.
 - **Un lead esce dalla lista da solo** quando l'intake manda il suo `leadId`. Non serve
   dire niente.
 
