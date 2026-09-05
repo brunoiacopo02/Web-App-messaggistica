@@ -136,18 +136,24 @@ I campi che meritano una nota:
 - **Un lead esce dalla lista da solo** quando l'intake manda il suo `leadId`. Non serve
   dire niente.
 
-### Se conviene il verso opposto
+### Il push, deciso il 05/09
 
-Se lato CRM è più comodo ricevere che leggere, si gira: basta un endpoint là e il lead
-parte da qui nel momento in cui il bot lo adotta, con lo stesso contenuto. La lista è
-proposta solo perché il client HMAC verso questo lato esiste già.
+Bruno ha approvato il verso opposto: oltre alla lista, questo lato **spinge** il lead nel
+momento in cui il bot lo adotta, su `POST /api/bot/lead-entrante` del CRM, un lead per
+chiamata e con gli stessi nomi di campo. Il `leadId` torna nella risposta e viene scritto
+subito su `crm_lead_id`: **nessun intake**, quindi nessuna apertura può partire per sbaglio.
+
+La lista resta, con due lavori suoi: il recupero dei 29 e la rete per un push perso — la
+chiamata parte dopo la risposta a Twilio, che non può aspettare, quindi non ritenta.
 
 ## Due punti aperti, da decidere insieme
 
-**1. `booked` e la guardia sull'apertura.** Oggi, se arriva un intake su una chat che ha
-già l'appuntamento fissato, l'apertura parte lo stesso. È il comportamento precedente a
-questo branch e il rifissaggio del contratto v1.5 ci si appoggia. Estenderla anche a
-`booked` è una riga, ma cambia chi viene toccato: va deciso, non fatto di iniziativa.
+**1. `booked` e `closed` sui lead che il CRM possiede già.** Sui lead di questa lista non
+c'è nessun problema: la guardia salta l'apertura qualunque sia lo stato, perché
+`crm_lead_id` è ancora nullo. Il caso aperto è un altro e più stretto: un lead **già del
+CRM**, in stato `booked` o `closed`, che viene ri-arruolato — lì l'apertura parte, ed è il
+comportamento su cui si appoggia il rifissaggio del contratto v1.5. Estendere la guardia è
+una riga, ma cambia chi viene toccato: va deciso, non fatto di iniziativa.
 
 **2. Il testo del riaggancio per i 29.** Il template dice *"ci eravamo persi a metà
 discorso"*, ma con queste persone un discorso non c'è mai stato: hanno scritto loro e non
