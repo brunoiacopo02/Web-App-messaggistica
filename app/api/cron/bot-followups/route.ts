@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendOutcome } from '@/lib/bot-outcome';
-import { decideFollowupAction } from '@/lib/bot-followups';
+import { decideFollowupAction, serveCronologia, ultimaAttivitaMs } from '@/lib/bot-followups';
 import { classifyInterrupted } from '@/lib/interrotto-note';
 import { buildConfermaPersaNote } from '@/lib/bot-outcome-rules';
 import type { MarioTurn } from '@/lib/mario';
@@ -58,7 +58,7 @@ export async function GET(req: NextRequest) {
   for (let from = 0; ; from += 1000) {
     const { data } = await supabase
       .from('conversations')
-      .select('id, ai_status, ai_lock_at, ai_started_at, crm_lead_id, bot_outcome, bot_followups_sent, gdo_agenda_at, leads(phone_e164)')
+      .select('id, ai_status, ai_lock_at, ai_started_at, created_at, last_message_at, last_inbound_at, crm_lead_id, bot_outcome, bot_followups_sent, gdo_agenda_at, leads(phone_e164)')
       .not('crm_lead_id', 'is', null)
       .in('ai_status', ['active', 'replying', 'handed_off', 'booked'])
       // Fermo manuale dal pannello: fuori dal giro del cron per intero — niente
@@ -77,20 +77,26 @@ export async function GET(req: NextRequest) {
     try {
       const phone = c.leads?.phone_e164 as string | undefined;
 
-      // 1. Carica la cronologia messaggi dall'arruolamento in poi.
-      let q = supabase
-        .from('messages')
-        .select('direction, body, created_at, twilio_status, template_sid, is_template')
-        .eq('conversation_id', c.id)
-        .order('created_at', { ascending: true })
-        .limit(200);
-      // Buffer 5': l'enroll inserisce l'apertura PRIMA di settare ai_started_at,
-      // senza margine il filtro la escluderebbe dal conteggio outbound.
-      if (c.ai_started_at) {
-        q = q.gte('created_at', new Date(Date.parse(c.ai_started_at) - 5 * 60_000).toISOString());
+      // 1. Carica la cronologia messaggi dall'arruolamento in poi — ma solo per chi
+      // può davvero produrre un'azione. Farlo per tutte le righe del giro è ciò che
+      // dal 02/09/2026 ha ucciso il cron a 300s (vedi serveCronologia).
+      const serve = serveCronologia(c, now);
+      let rows: MsgRow[] = [];
+      if (serve) {
+        let q = supabase
+          .from('messages')
+          .select('direction, body, created_at, twilio_status, template_sid, is_template')
+          .eq('conversation_id', c.id)
+          .order('created_at', { ascending: true })
+          .limit(200);
+        // Buffer 5': l'enroll inserisce l'apertura PRIMA di settare ai_started_at,
+        // senza margine il filtro la escluderebbe dal conteggio outbound.
+        if (c.ai_started_at) {
+          q = q.gte('created_at', new Date(Date.parse(c.ai_started_at) - 5 * 60_000).toISOString());
+        }
+        const { data: msgData } = await q;
+        rows = (msgData ?? []) as MsgRow[];
       }
-      const { data: msgData } = await q;
-      const rows = (msgData ?? []) as MsgRow[];
       const msgsForDecision = rows.map((r) => ({ direction: r.direction, body: r.body ?? '' }));
 
       // 2. Rete di sicurezza: re-drive se c'è un inbound senza risposta.
@@ -176,9 +182,7 @@ export async function GET(req: NextRequest) {
       // ai_started_at in assenza di messaggi.
       const lastActivityAtMs = rows.length
         ? Date.parse(rows[rows.length - 1].created_at)
-        : c.ai_started_at
-          ? Date.parse(c.ai_started_at)
-          : now;
+        : ultimaAttivitaMs(c, now);
 
       // 2c. Watchdog handed_off: passato all'umano ma mai chiuso col CRM.
       if (c.ai_status === 'handed_off') {
@@ -212,6 +216,11 @@ export async function GET(req: NextRequest) {
       }
 
       // 3. Classificazione finale (fine sequenza / silenzio Track B).
+      // Senza cronologia non si classifica: `serveCronologia` ha già stabilito che qui
+      // nessun esito può scattare. Esplicito, per non farlo diventare un 'none' muto
+      // che nasconderebbe un buco del pre-filtro.
+      if (!serve) continue;
+
       const hasInbound = rows.some((r) => r.direction === 'in');
       const lastInboundAtMs = rows.reduceRight<number | null>((acc, r) => {
         if (acc !== null) return acc;
