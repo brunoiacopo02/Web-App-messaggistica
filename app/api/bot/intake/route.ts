@@ -24,10 +24,43 @@ export const dynamic = 'force-dynamic';
  */
 type Motivo = 'telefono_non_valido' | 'arruolamento_fallito' | 'apertura_non_partita';
 
+/**
+ * Perché il soffitto sta a 600/minuto (dal 09/09/2026).
+ *
+ * Era 60/min, dimensionato su un intake da 200 lead al giorno. Con i GDO che scaricano
+ * a raffica (picco misurato: 31 lead in un minuto il 03/09) e il CRM che passa a 30/min
+ * il margine era metà, e superarlo non è un rallentamento: è una perdita. Il CRM non
+ * ritenta, quindi ogni 429 era un lead che nessuno dei due lati lavorava e che non
+ * compariva in nessun conteggio — la stessa famiglia di problemi dei "lead fermi al bot".
+ *
+ * Il limite resta perché serve contro il loop impazzito, non contro il volume vero: a
+ * 600/min un blast da 30/min ha venti volte il margine che gli serve. E il 429 ora dice
+ * `ritenta` con i secondi da aspettare, così anche il giorno che lo tocchiamo il lead
+ * non evapora.
+ */
+const INTAKE_MAX_PER_MIN = Math.max(1, Number(process.env.BOT_INTAKE_MAX_PER_MIN) || 600);
+
 export async function POST(req: NextRequest) {
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
-  const rl = checkRateLimit(`botintake:${ip}`, 60, 60_000);
-  if (!rl.ok) return new NextResponse('rate limit', { status: 429 });
+  const rl = checkRateLimit(`botintake:${ip}`, INTAKE_MAX_PER_MIN, 60_000);
+  if (!rl.ok) {
+    const dopoSecondi = Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000));
+    // Un rifiuto per rate limit va lasciato per iscritto. Finora non lo era, e la
+    // domanda del CRM ("quando scatta, rispondete 429 o non rispondete?") non aveva
+    // modo di trovare risposta nei dati: da noi non restava traccia, da loro un rifiuto
+    // muto sarebbe indistinguibile da un timeout. Se questa riga non compare, il tetto
+    // non è scattato — e il problema è altrove.
+    await getSupabaseAdmin().from('event_log').insert({
+      type: 'bot_intake_rate_limited',
+      payload: { ip, dopoSecondi, tetto: INTAKE_MAX_PER_MIN } as never,
+      message: `[bot-fissatore] intake rifiutato per rate limit (${INTAKE_MAX_PER_MIN}/min), ritenta tra ${dopoSecondi}s`,
+      level: 'warn',
+    });
+    return NextResponse.json(
+      { ok: false, error: 'rate_limited', accettato: false, ritenta: true, dopoSecondi },
+      { status: 429, headers: { 'retry-after': String(dopoSecondi) } },
+    );
+  }
 
   const secret = process.env.BOT_WEBHOOK_SECRET;
   if (!secret) return NextResponse.json({ ok: false, error: 'not_configured' }, { status: 503 });
@@ -74,6 +107,17 @@ export async function POST(req: NextRequest) {
       message: `[bot-fissatore] intake lead ${p.leadId} → conv ${res.conversationId}`,
       level: 'info',
     });
+
+    // Ritento dello stesso leadId (429 o timeout del loro AbortSignal a 5s): l'apertura
+    // era già partita al primo giro. Il lead è preso in carico — `accettato:true` — ma
+    // `duplicato:true` dice che questo giro non ha aggiunto niente, così il ritento è
+    // sicuro da fare e non gonfia i loro conteggi.
+    if (res.duplicato) {
+      return NextResponse.json({
+        ok: true, accettato: true, duplicato: true,
+        conversationId: res.conversationId, leadIdCorrente: p.leadId,
+      });
+    }
 
     // La stessa persona sotto un `leadId` nuovo. Noi deduplichiamo per numero — una
     // persona ha una chat sola — quindi da qui in poi i nostri esiti viaggiano sotto

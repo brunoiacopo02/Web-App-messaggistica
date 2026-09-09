@@ -29,7 +29,7 @@ export type EnrollArgs = {
 export async function enrollLeadIntoMario(
   supabase: Supa,
   args: EnrollArgs,
-): Promise<{ ok: boolean; conversationId: number; sid?: string; error?: string; deferred?: boolean }> {
+): Promise<{ ok: boolean; conversationId: number; sid?: string; error?: string; deferred?: boolean; duplicato?: boolean }> {
   const templateSid = process.env.FENICE_OPENING_TEMPLATE_SID;
   const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
   if (!templateSid || !from) {
@@ -64,6 +64,31 @@ export async function enrollLeadIntoMario(
       level: 'info',
     });
     return { ok: true, conversationId, deferred: true };
+  }
+
+  // Ritento del CRM sullo stesso lead: l'apertura è già partita, non se ne manda una
+  // seconda. Serve dal 09/09/2026, quando il CRM ha iniziato a ritentare sui 429 e sui
+  // timeout (113 in 30 giorni: il loro AbortSignal scatta a 5s, ma la nostra richiesta
+  // era arrivata lo stesso). Senza questa guardia ogni ritento è un secondo "ciao" allo
+  // stesso lead — il modo più veloce per farsi bloccare da un numero già a qualità LOW.
+  //
+  // La guardia guarda la CHAT, non il leadId: un outbound nelle ultime 12 ore basta a
+  // fermare l'apertura. Il leadId non serviva e anzi lasciava passare il caso peggiore —
+  // il CRM tiene più lead per lo stesso numero (1.708 gruppi con presenze diverse), noi
+  // deduplichiamo la chat per numero, quindi in un blast due leadId della stessa persona
+  // cadono nella stessa conversazione e quella sentirebbe due "ciao" di fila. Per la
+  // stessa ragione non serve la loro `personKey`: è lo stesso numero, quindi è già la
+  // stessa chat. La persona che torna dopo giorni ha l'ultimo outbound fuori finestra e
+  // riceve la sua apertura come sempre.
+  const guardia = args.crmLeadId ? await apertutaDaFermare(supabase, conversationId) : null;
+  if (guardia) {
+    await supabase.from('event_log').insert({
+      type: 'fenice_enroll_duplicato',
+      payload: { phone: args.phone, conversationId, crmLeadId: args.crmLeadId, motivo: guardia } as never,
+      message: `Intake ripetuto per lead ${args.crmLeadId}: ${guardia}, nessun reinvio`,
+      level: 'info',
+    });
+    return { ok: true, conversationId, duplicato: true };
   }
 
   // Selezione apertura: legacy (Mario) di default; se NEW_OPENING_ENABLED === '1'
@@ -110,6 +135,42 @@ export async function enrollLeadIntoMario(
   });
 
   return { ok: res.ok, conversationId, sid: res.sid, error: res.error };
+}
+
+/**
+ * Perché fermare l'apertura, o null per mandarla.
+ *
+ * Due motivi, misurati sul ripescaggio del 09/09 sera: su 46 conversazioni ripushate dal
+ * CRM, 26 hanno ricevuto un secondo messaggio entro 24 ore dal primo (la più ravvicinata
+ * a 2 ore e mezza) e 25 erano chat in cui il lead aveva risposto negli ultimi 7 giorni.
+ * Il solo controllo sull'outbound recente ne avrebbe fermate circa metà: chi ci sta
+ * parlando da giorni non deve sentirsi dire "ciao" da capo, e la distanza dall'ultimo
+ * invio non lo dice.
+ */
+async function apertutaDaFermare(
+  supabase: Supa,
+  conversationId: number,
+): Promise<'apertura_recente' | 'conversazione_viva' | null> {
+  const soglia = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
+  const { data: out } = await supabase
+    .from('messages')
+    .select('id')
+    .eq('conversation_id', conversationId)
+    .eq('direction', 'out')
+    .gte('created_at', soglia)
+    .limit(1);
+  if ((out?.length ?? 0) > 0) return 'apertura_recente';
+
+  const { data: conv } = await supabase
+    .from('conversations')
+    .select('last_inbound_at')
+    .eq('id', conversationId)
+    .maybeSingle();
+  const ultimoInbound = (conv as { last_inbound_at: string | null } | null)?.last_inbound_at;
+  if (ultimoInbound && Date.now() - new Date(ultimoInbound).getTime() <= 7 * 24 * 60 * 60 * 1000) {
+    return 'conversazione_viva';
+  }
+  return null;
 }
 
 export type GdoEnrollArgs = {

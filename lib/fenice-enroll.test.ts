@@ -21,7 +21,13 @@ function makeSupabase() {
       if (table === 'conversations') {
         return {
           update(payload: any) { calls.updates.push(payload); return { eq() { return Promise.resolve({}); } }; },
+          // Chat senza un leadId già registrato: la guardia anti-doppione lascia passare.
+          select() { return { eq() { return { maybeSingle: async () => ({ data: null }) }; } }; },
         };
+      }
+      if (table === 'messages') {
+        const chain: any = { eq: () => chain, gte: () => chain, limit: async () => ({ data: [] }) };
+        return { select: () => chain };
       }
       return { insert(payload: any) { calls.events.push(payload); return Promise.resolve({}); } };
     },
@@ -388,5 +394,99 @@ describe('enrollGdoLeadAsPostino — arruolamento in modalità postino', () => {
 
     await expect(enrollGdoLeadAsPostino(supabase, PAYLOAD)).rejects.toThrow(/AGENDA_GDO_TEMPLATE_SID/);
     expect(sendTemplateAndLog).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Fake Supabase che sa anche leggere: serve alla guardia anti-doppione, che prima di
+ * inviare guarda il crm_lead_id della conv e se un outbound è già partito di recente.
+ */
+function makeSupabaseLeggibile(opts: { crmLeadId?: string | null; outboundRecenti?: number; lastInboundAt?: string | null }) {
+  const calls = { updates: [] as any[], events: [] as any[] };
+  const supabase: any = {
+    from(table: string) {
+      if (table === 'conversations') {
+        return {
+          update(payload: any) { calls.updates.push(payload); return { eq() { return Promise.resolve({}); } }; },
+          select() {
+            return { eq() { return { maybeSingle: async () => ({ data: { crm_lead_id: opts.crmLeadId ?? null, last_inbound_at: opts.lastInboundAt ?? null } }) }; } };
+          },
+        };
+      }
+      if (table === 'messages') {
+        const rows = Array.from({ length: opts.outboundRecenti ?? 0 }, (_, i) => ({ id: i }));
+        const chain: any = { eq: () => chain, gte: () => chain, limit: async () => ({ data: rows }) };
+        return { select: () => chain };
+      }
+      return { insert(payload: any) { calls.events.push(payload); return Promise.resolve({}); } };
+    },
+  };
+  return { supabase, calls };
+}
+
+describe('enrollLeadIntoMario — guardia anti-doppione sui ritenti del CRM', () => {
+  it('stesso crmLeadId con apertura già partita → non reinvia, dice duplicato', async () => {
+    vi.mocked(inSendWindow).mockReturnValue(true);
+    const { supabase } = makeSupabaseLeggibile({ crmLeadId: 'LEAD-1', outboundRecenti: 1 });
+    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000001', crmLeadId: 'LEAD-1' });
+    expect(res).toMatchObject({ ok: true, conversationId: 42, duplicato: true });
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+  });
+
+  it('due leadId diversi della stessa persona a poche ore → una sola apertura', async () => {
+    // Il CRM tiene più lead per lo stesso numero (1.708 gruppi con presenze diverse) e
+    // noi deduplichiamo la chat per numero: in un blast i due leadId cadono nella stessa
+    // conversazione. La guardia guarda la CHAT, non il leadId, o quella persona sente
+    // due "ciao" di fila.
+    vi.mocked(inSendWindow).mockReturnValue(true);
+    const { supabase } = makeSupabaseLeggibile({ crmLeadId: 'LEAD-VECCHIO', outboundRecenti: 1 });
+    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000002', crmLeadId: 'LEAD-NUOVO' });
+    expect(res).toMatchObject({ ok: true, duplicato: true });
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+  });
+
+  it('persona ricorrente con ultimo contatto vecchio → l apertura parte', async () => {
+    vi.mocked(inSendWindow).mockReturnValue(true);
+    const { supabase } = makeSupabaseLeggibile({ crmLeadId: 'LEAD-VECCHIO', outboundRecenti: 0 });
+    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000002', crmLeadId: 'LEAD-NUOVO' });
+    expect(res).toMatchObject({ ok: true });
+    expect(res).not.toHaveProperty('duplicato');
+    expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+  });
+
+  it('stesso crmLeadId ma nessun outbound recente → l apertura parte', async () => {
+    vi.mocked(inSendWindow).mockReturnValue(true);
+    const { supabase } = makeSupabaseLeggibile({ crmLeadId: 'LEAD-1', outboundRecenti: 0 });
+    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000003', crmLeadId: 'LEAD-1' });
+    expect(res).toMatchObject({ ok: true });
+    expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+  });
+
+  it('chat viva: il lead ha risposto 3 giorni fa → nessuna apertura da capo', async () => {
+    // 25 delle 46 conversazioni ripushate il 09/09 erano così: gente che stava parlando
+    // col bot e si è sentita ridire "ciao". L'ultimo outbound era vecchio, quindi il solo
+    // controllo sugli invii non bastava.
+    vi.mocked(inSendWindow).mockReturnValue(true);
+    const treGiorniFa = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const { supabase } = makeSupabaseLeggibile({ crmLeadId: 'LEAD-1', outboundRecenti: 0, lastInboundAt: treGiorniFa });
+    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000005', crmLeadId: 'LEAD-2' });
+    expect(res).toMatchObject({ ok: true, duplicato: true });
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+  });
+
+  it('lead muto da mesi → l apertura parte', async () => {
+    vi.mocked(inSendWindow).mockReturnValue(true);
+    const dueMesiFa = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    const { supabase } = makeSupabaseLeggibile({ crmLeadId: 'LEAD-1', outboundRecenti: 0, lastInboundAt: dueMesiFa });
+    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000006', crmLeadId: 'LEAD-2' });
+    expect(res).not.toHaveProperty('duplicato');
+    expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+  });
+
+  it('senza crmLeadId (arruolamento non CRM) la guardia non si attiva', async () => {
+    vi.mocked(inSendWindow).mockReturnValue(true);
+    const { supabase } = makeSupabaseLeggibile({ crmLeadId: null, outboundRecenti: 1 });
+    await enrollLeadIntoMario(supabase, { phone: '+393330000004' });
+    expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
   });
 });
