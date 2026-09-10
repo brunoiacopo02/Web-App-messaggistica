@@ -434,6 +434,18 @@ describe('secondo recapito del lead', () => {
     expect(p).toMatch(/senza tag non parte niente/i);
   });
 
+  // [NOTA|...] stava cannibalizzando [PASSAGGIO_UMANO]: "puoi farmi chiamare su questo
+  // numero, 392..." cadeva nell'intersezione fra le due righe, e la più specifica era
+  // quella della nota — che per contratto non assegna la telefonata a nessuno.
+  it('la NOTA da sola vale solo per una chiamata che il lead già aspetta', () => {
+    expect(p).toContain('per una chiamata CHE GIÀ LO ASPETTA');
+  });
+
+  it('se è il lead a CHIEDERE di essere chiamato partono tutti e due i tag', () => {
+    expect(p).toMatch(/È LUI A CHIEDERE DI ESSERE CHIAMATO[\s\S]{0,400}\[PASSAGGIO_UMANO\][\s\S]{0,200}\[NOTA\|Secondo recapito del lead:/);
+    expect(p).toContain('Con la sola [NOTA|...] non lo chiama nessuno');
+  });
+
   it('il tag NOTA non deve mai restare visibile al lead, come gli altri tag tecnici', () => {
     expect(p).toContain('[NOTA|...] non devono MAI essere visibili al lead');
   });
@@ -649,6 +661,15 @@ describe('CHI È NOEMI E QUANDO CHIAMA', () => {
     expect(p).toContain('call dalle 13:00 in poi');
     expect(p).toContain('call PRIMA DELLE 13:00');
     expect(p).toContain('il POMERIGGIO DEL GIORNO PRIMA');
+  });
+
+  // La soglia delle 13:00 resta (è l'ora confermata dal committente), ma "qualche ora
+  // prima" di una call alle 14 cade prima delle 13, quando Noemi non c'è ancora: al lead
+  // veniva promessa una chiamata la mattina, e teneva il telefono nel momento sbagliato.
+  it("non promette mai un anticipo prima delle 13, quando Noemi non c'è", () => {
+    expect(p).toContain("prima di quell'ora non chiama mai");
+    expect(p).toContain('Mai la mattina');
+    expect(p).toMatch(/call delle 13, delle 14 e delle 15/);
   });
 
   it('vieta le frasi che fanno tenere il telefono nel momento sbagliato', () => {
