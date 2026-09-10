@@ -175,3 +175,25 @@ Questo punto **cambia chi lavora i lead**: conversazioni che oggi tornerebbero a
 - I tag non devono **mai** essere visibili al lead: vanno rimossi dal testo in `parseMarioReply`.
 - Migration **prima** del deploy (`project_pannello_chat`).
 - `main` si aggiorna al **push** su `origin/main`, non al merge (`project_deploy_push_non_automatico`).
+
+## Lotto A — completato
+
+Completato il 2026-09-10. Verifica finale (Task 6) eseguita su `feat/comportamento-bot-settembre`:
+suite completa verde (1228 test, typecheck pulito; lint ha solo errori `no-explicit-any`
+preesistenti fuori perimetro, vedi report di Task 6), e i tre casi reali che hanno motivato il
+lotto (conv 8348, conv 9595, call proposta a 4 giorni) verificati a mano contro `lib/mario-prompt.ts`
+e `lib/bot-outcome-rules.ts`.
+
+Commit del branch (`git log --oneline main..HEAD`, dal più recente):
+
+```
+151a726 fix(prompt): correggi 'cambiarti' in 'cambiargli' nel testo della finestra
+18a20ed fix(prompt): la finestra dei due giorni non si scavalca, si lavora dentro
+f42cc62 fix(gdo): la nota su Noemi si calcola dall'ora dell'appuntamento
+037bd51 fix(prompt): quando chiama Noemi dipende dall'ora della call
+adba810 test(bot): copertura end-to-end per nota + esito nello stesso turno
+5c98fc8 feat(bot): il secondo numero del lead arriva davvero alle Conferme
+caa5436 docs: correggo il test di T4 che avrebbe bocciato l'implementazione giusta
+b7e4785 fix(bot): fuori dai due giorni non e' un appuntamento, e' una nota
+0936a27 docs: spec e piano del lotto A sul comportamento del bot
+```
