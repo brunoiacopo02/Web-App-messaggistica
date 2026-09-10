@@ -1,4 +1,5 @@
 import { GDO_CONTEXT_NOTE } from './mario';
+import { romeHour } from './rome-time';
 
 /**
  * Promemoria che il bot deve portarsi dentro la conversazione con un lead GDO.
@@ -18,7 +19,7 @@ export const NOTA_NOEMI =
   'PROMEMORIA NOEMI: il lead non ha ancora sentito da te della chiamata di preselezione. ' +
   'Diglielo adesso, con parole tue e questa sostanza: gliene avrà già parlato il collega e ' +
   'tu glielo ripeti così non gli scappa; Noemi è la collega della preselezione e lo chiama ' +
-  'da un cellulare prima della call; sono 5-10 minuti, perché serve tempo per capire bene ' +
+  'da un cellulare; sono 5-10 minuti, perché serve tempo per capire bene ' +
   "la sua situazione; è il passaggio che conferma l'appuntamento, quindi tenga il telefono " +
   'a portata; se la chiamata gli scappa non è un problema, può richiamare su quel numero. ' +
   'Non farne un esame e non metterlo in soggezione.';
@@ -46,6 +47,32 @@ export interface GdoNoteInput {
   videoAppenaConfermato: boolean;
   /** Il video sta partendo insieme a questa risposta (primo turno del lead GDO). */
   videoInUscita?: boolean;
+  /** Ora della call fissata dal bot. Serve a dire quando chiama Noemi. */
+  botScheduledAt?: string | null;
+  /** Ora della call fissata dal GDO al telefono. Vince la più recente delle due. */
+  gdoAppuntamentoAt?: string | null;
+}
+
+/** Noemi inizia alle 13:00: una call del mattino la copre chiamando il pomeriggio prima. */
+const NOEMI_ORA_INIZIO = 13;
+
+/** L'ora vera della call: per un lead GDO può stare su due colonne, vince la più recente. */
+export function oraAppuntamento(
+  botScheduledAt: string | null | undefined,
+  gdoAppuntamentoAt: string | null | undefined,
+): Date | null {
+  const ts = [botScheduledAt, gdoAppuntamentoAt]
+    .filter((v): v is string => !!v && !Number.isNaN(Date.parse(v)))
+    .map((v) => Date.parse(v));
+  return ts.length ? new Date(Math.max(...ts)) : null;
+}
+
+/** La riga su quando chiama Noemi, vuota se non sappiamo quando è la call. */
+export function quandoChiamaNoemi(quando: Date | null): string {
+  if (!quando) return '';
+  return romeHour(quando) < NOEMI_ORA_INIZIO
+    ? ' Digli QUANDO lo chiama: il pomeriggio del giorno prima della call, non la mattina stessa, quindi tenga il telefono a portata già dal pomeriggio precedente.'
+    : ' Digli QUANDO lo chiama: lo stesso giorno della call, qualche ora prima. Dagli la finestra, mai un orario al minuto.';
 }
 
 /**
@@ -62,6 +89,8 @@ export function gdoContextNote(i: GdoNoteInput): string {
   const parti = [i.videoInUscita ? GDO_CONTEXT_NOTE_VIDEO_IN_USCITA : GDO_CONTEXT_NOTE];
   // Il promemoria "ricordagli il video" non ha senso nel turno in cui il video esce.
   if (!i.videoInUscita && i.gdoVideoSentAt && !i.gdoVideoWatchedAt) parti.push(NOTA_VIDEO);
-  if (serveNoemi(i)) parti.push(NOTA_NOEMI);
+  if (serveNoemi(i)) {
+    parti.push(NOTA_NOEMI + quandoChiamaNoemi(oraAppuntamento(i.botScheduledAt, i.gdoAppuntamentoAt)));
+  }
   return parti.join('\n\n');
 }

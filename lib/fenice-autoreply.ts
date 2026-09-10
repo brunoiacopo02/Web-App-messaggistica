@@ -264,7 +264,7 @@ export async function drainMarioReplies(
     .eq('ai_status', 'active')
     .is('ai_paused_at', null) // fermo manuale: la chat è di un umano, non si claima
     .or(`ai_lock_at.is.null,ai_lock_at.lt.${staleCutoff}`)
-    .select('id, ai_started_at, crm_lead_id, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, leads(first_name)')
+    .select('id, ai_started_at, crm_lead_id, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, bot_scheduled_at, gdo_appuntamento_at, leads(first_name)')
     .single();
   if (!claimed) return;
   const startedAt = (claimed as { ai_started_at: string | null }).ai_started_at;
@@ -334,6 +334,8 @@ export async function drainMarioReplies(
     gdo_video_watched_at?: string | null;
     gdo_video_followups_sent?: number | null;
     gdo_noemi_reminded_at?: string | null;
+    bot_scheduled_at?: string | null;
+    gdo_appuntamento_at?: string | null;
     leads?: { first_name?: string | null } | null;
   };
   const gdoAgendaAt = gdo.gdo_agenda_at ?? null;
@@ -344,6 +346,9 @@ export async function drainMarioReplies(
   // Non incrementato qui: il contatore dei solleciti lo muove solo il cron dedicato.
   const gdoFollowupsSent = gdo.gdo_video_followups_sent ?? 0;
   let gdoNoemiRemindedAt = gdo.gdo_noemi_reminded_at ?? null;
+  // Ora vera della call: serve a dire a quando chiama Noemi (mattina ⇒ pomeriggio prima).
+  const botScheduledAt = gdo.bot_scheduled_at ?? null;
+  const gdoAppuntamentoAt = gdo.gdo_appuntamento_at ?? null;
   let gdoVideoMissingLogged = false;
 
   // Carica i messaggi della conversazione dall'arruolamento in poi (in ordine).
@@ -455,6 +460,8 @@ export async function drainMarioReplies(
                 followupsSent: gdoFollowupsSent,
                 videoAppenaConfermato: false,
                 videoInUscita: videoInsiemeAllaRisposta,
+                botScheduledAt: botScheduledAt,
+                gdoAppuntamentoAt: gdoAppuntamentoAt,
               }),
             }
           : {}),
@@ -497,6 +504,8 @@ export async function drainMarioReplies(
               followupsSent: gdoFollowupsSent,
               videoAppenaConfermato: true, // forza NOTA_NOEMI anche a followupsSent 0
               videoInUscita: videoInsiemeAllaRisposta,
+              botScheduledAt: botScheduledAt,
+              gdoAppuntamentoAt: gdoAppuntamentoAt,
             }),
           });
           // Fail-safe: una rigenerazione vuota non vale meno di zero, vale come un

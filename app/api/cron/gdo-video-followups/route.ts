@@ -89,8 +89,8 @@ export async function GET(req: NextRequest) {
     .from('conversations')
     .select(`
       id, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at,
-      gdo_video_followups_sent, gdo_noemi_reminded_at, gdo_appuntamento_at, ai_started_at,
-      leads(phone_e164, first_name)
+      gdo_video_followups_sent, gdo_noemi_reminded_at, gdo_appuntamento_at, bot_scheduled_at,
+      ai_started_at, leads(phone_e164, first_name)
     `)
     .not('gdo_agenda_at', 'is', null)
     .gte('gdo_agenda_at', da)
@@ -265,6 +265,8 @@ export async function GET(req: NextRequest) {
             gdoNoemiRemindedAt: c.gdo_noemi_reminded_at,
             followupsSent: c.gdo_video_followups_sent ?? 0,
             videoAppenaConfermato: false,
+            botScheduledAt: c.bot_scheduled_at ?? null,
+            gdoAppuntamentoAt: c.gdo_appuntamento_at ?? null,
           }),
         });
         // Stesse due lavorazioni del drain (lib/fenice-autoreply.ts): un a-capo è una

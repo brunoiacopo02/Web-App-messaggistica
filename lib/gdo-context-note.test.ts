@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { gdoContextNote, serveNoemi, NOTA_VIDEO, NOTA_NOEMI, type GdoNoteInput } from './gdo-context-note';
+import { gdoContextNote, serveNoemi, oraAppuntamento, NOTA_VIDEO, NOTA_NOEMI, type GdoNoteInput } from './gdo-context-note';
 import { GDO_CONTEXT_NOTE } from './mario';
 
 const base = (over: Partial<GdoNoteInput> = {}): GdoNoteInput => ({
@@ -93,5 +93,57 @@ describe('gdoContextNote — il video sta uscendo adesso', () => {
     const n = gdoContextNote({ ...base, gdoVideoSentAt: '2026-08-06T10:00:00Z' });
     expect(n).toContain(NOTA_VIDEO);
     expect(n).not.toContain('IL VIDEO ESCE ORA');
+  });
+});
+
+const baseNoemi = {
+  gdoVideoSentAt: '2026-09-09T10:00:00Z',
+  gdoVideoWatchedAt: '2026-09-09T11:00:00Z',
+  gdoNoemiRemindedAt: null,
+  followupsSent: 0,
+  videoAppenaConfermato: true,
+};
+
+describe('nota Noemi: dipende dall ora dell appuntamento', () => {
+  it('appuntamento di mattina: Noemi chiama il pomeriggio prima', () => {
+    const nota = gdoContextNote({
+      ...baseNoemi,
+      botScheduledAt: '2026-09-11T10:00:00+02:00',
+      gdoAppuntamentoAt: null,
+    });
+    expect(nota).toContain('il pomeriggio del giorno prima');
+    expect(nota).not.toContain('lo stesso giorno');
+  });
+
+  it('appuntamento di pomeriggio: Noemi chiama lo stesso giorno', () => {
+    const nota = gdoContextNote({
+      ...baseNoemi,
+      botScheduledAt: '2026-09-11T16:00:00+02:00',
+      gdoAppuntamentoAt: null,
+    });
+    expect(nota).toContain('lo stesso giorno');
+  });
+
+  it('vince la data piu recente fra le due colonne', () => {
+    const nota = gdoContextNote({
+      ...baseNoemi,
+      botScheduledAt: '2026-09-11T10:00:00+02:00',
+      gdoAppuntamentoAt: '2026-09-12T16:00:00+02:00',
+    });
+    expect(nota).toContain('lo stesso giorno');
+  });
+
+  it('senza nessuna data non inventa un orario', () => {
+    const nota = gdoContextNote({ ...baseNoemi, botScheduledAt: null, gdoAppuntamentoAt: null });
+    expect(nota).not.toContain('il pomeriggio del giorno prima');
+    expect(nota).not.toContain('lo stesso giorno');
+    expect(nota).toContain('PROMEMORIA NOEMI');
+  });
+});
+
+describe('oraAppuntamento', () => {
+  it('torna null quando non c e nessuna data valida', () => {
+    expect(oraAppuntamento(null, null)).toBeNull();
+    expect(oraAppuntamento('non-una-data', null)).toBeNull();
   });
 });
