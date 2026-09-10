@@ -252,14 +252,20 @@ export function buildAppuntamentoNonFissabileNote(input: {
 
   // Spostamento di una call che esiste: la data vecchia è la cosa più importante della
   // nota, perché è quella a cui il lead NON si presenterà.
+  //
+  // La testa (prima frase, fino al primo punto) è quello che il CRM usa per deduplicare
+  // i re-invii della stessa nota sullo stesso lead entro 15 minuti: deve restare
+  // IDENTICA fra un tentativo e l'altro, quindi qui dentro non può esserci la data
+  // RICHIESTA dal lead (arriva dal modello e può cambiare turno per turno) — solo
+  // `appuntamentoInAgenda`, che viene dal DB ed è stabile.
   if (input.appuntamentoInAgenda) {
-    const resta = inAgenda
-      ? `In agenda resta ${inAgenda}, e non è stato spostato niente.`
-      : `L'appuntamento che aveva resta in agenda, e non è stato spostato niente.`;
+    const testa = inAgenda
+      ? `SPOSTAMENTO NON REGISTRATO — in agenda resta ${inAgenda}, e non è stato spostato niente.`
+      : `SPOSTAMENTO NON REGISTRATO — l'appuntamento che aveva resta in agenda, e non è stato spostato niente.`;
     return (
-      `SPOSTAMENTO NON REGISTRATO — il bot stava per spostare la call${quando} ma ` +
-      `${DETTAGLIO_APPUNTAMENTO[input.motivo]}. ${resta} Il lead può aver ricevuto in ` +
-      `chat la conferma del nuovo giorno e credere di averlo spostato: NON cancellate ` +
+      `${testa} Il bot stava per spostare la call${quando} ma ` +
+      `${DETTAGLIO_APPUNTAMENTO[input.motivo]}. Il lead può aver ricevuto in chat la ` +
+      `conferma del nuovo giorno e credere di averlo spostato: NON cancellate ` +
       `l'appuntamento, ricontattatelo per rimettervi d'accordo su giorno e ora.${citazione}`
     );
   }
@@ -267,11 +273,16 @@ export function buildAppuntamentoNonFissabileNote(input: {
   // Il modello, quando emette il tag, ha già detto al lead che la call è presa: la
   // guardia ferma la scrittura, non la frase già mandata in chat. La nota deve dirlo,
   // altrimenti chi legge crede che il lead sia solo da richiamare.
+  //
+  // Stessa ragione di sopra: la testa non porta la data richiesta (instabile), solo il
+  // motivo dello scarto (stabile, è sempre lo stesso per lo stesso fatto). La data
+  // richiesta, quando c'è, segue dopo il primo punto.
+  const dataRichiesta = quandoChiesto ? ` Data richiesta dal lead: ${quandoChiesto}.` : '';
   return (
-    `APPUNTAMENTO NON FISSATO — il bot stava per fissare una call${quando} ma ` +
-    `${DETTAGLIO_APPUNTAMENTO[input.motivo]}: in agenda non c'è niente. Il lead ` +
-    `potrebbe aver ricevuto una conferma in chat: va ricontattato per concordare ` +
-    `giorno e ora.${citazione}`
+    `APPUNTAMENTO NON FISSATO — il bot stava per fissare una call ma ` +
+    `${DETTAGLIO_APPUNTAMENTO[input.motivo]}: in agenda non c'è niente.` +
+    `${dataRichiesta} Il lead potrebbe aver ricevuto una conferma in chat: va ` +
+    `ricontattato per concordare giorno e ora.${citazione}`
   );
 }
 

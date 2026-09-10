@@ -618,3 +618,115 @@ describe('buildAppuntamentoNonFissabileNote — con un appuntamento già in agen
     expect(n).toContain("in agenda non c'è niente");
   });
 });
+
+// Il CRM deduplica derivando una chiave dalla TESTA della nota: il testo fino a
+// "Motivo:" se c'è, altrimenti la prima frase (fino al primo punto), altrimenti i
+// primi 120 caratteri; poi lowercase e spazi collassati. Due note con la stessa testa
+// sullo stesso lead entro 15 minuti sono lo stesso fatto: la seconda entra in
+// timeline ma NON fa scattare la notifica alle Conferme. Qui si verifica la
+// PROPRIETÀ che il dedup del CRM sfrutta, non solo il testo della stringa.
+describe('buildAppuntamentoNonFissabileNote — la testa regge il dedup del CRM', () => {
+  // Riproduce la logica di dedup del CRM sulla nota già costruita.
+  const testaCRM = (nota: string): string => {
+    const iMotivo = nota.indexOf('Motivo:');
+    if (iMotivo !== -1) return nota.slice(0, iMotivo);
+    const iPunto = nota.indexOf('.');
+    return iPunto !== -1 ? nota.slice(0, iPunto) : nota.slice(0, 120);
+  };
+
+  const inAgenda = '2026-09-16T13:00:00Z';
+  const richiesta1 = '2026-09-18T15:00:00+02:00';
+  const richiesta2 = '2026-09-20T10:00:00+02:00';
+
+  it('(a) la testa dello spostamento contiene la data che RESTA in agenda', () => {
+    const n = buildAppuntamentoNonFissabileNote({
+      motivo: 'fuori_finestra',
+      dataScartata: richiesta1,
+      appuntamentoInAgenda: inAgenda,
+    });
+    expect(testaCRM(n)).toContain(formatRomeDateTime(inAgenda));
+  });
+
+  it('(b) la testa dello spostamento NON contiene la data richiesta dal lead', () => {
+    const n = buildAppuntamentoNonFissabileNote({
+      motivo: 'fuori_finestra',
+      dataScartata: richiesta1,
+      appuntamentoInAgenda: inAgenda,
+    });
+    expect(testaCRM(n)).not.toContain(formatRomeDateTime(richiesta1));
+  });
+
+  it('(c) la testa dello spostamento è diversa da quella del primo fissaggio, a parità di motivo e data richiesta', () => {
+    const spostamento = buildAppuntamentoNonFissabileNote({
+      motivo: 'fuori_finestra',
+      dataScartata: richiesta1,
+      appuntamentoInAgenda: inAgenda,
+    });
+    const primoFissaggio = buildAppuntamentoNonFissabileNote({
+      motivo: 'fuori_finestra',
+      dataScartata: richiesta1,
+    });
+    expect(testaCRM(spostamento)).not.toBe(testaCRM(primoFissaggio));
+  });
+
+  it('(d) la testa dello spostamento non cambia al variare della sola data richiesta: stesso fatto, stesso re-invio', () => {
+    const n1 = buildAppuntamentoNonFissabileNote({
+      motivo: 'fuori_finestra',
+      dataScartata: richiesta1,
+      appuntamentoInAgenda: inAgenda,
+    });
+    const n2 = buildAppuntamentoNonFissabileNote({
+      motivo: 'fuori_finestra',
+      dataScartata: richiesta2,
+      appuntamentoInAgenda: inAgenda,
+    });
+    expect(testaCRM(n1)).toBe(testaCRM(n2));
+  });
+
+  it('la testa del primo fissaggio (senza appuntamento in agenda) non cambia al variare della sola data richiesta', () => {
+    const n1 = buildAppuntamentoNonFissabileNote({ motivo: 'fuori_fascia', dataScartata: richiesta1 });
+    const n2 = buildAppuntamentoNonFissabileNote({ motivo: 'fuori_fascia', dataScartata: richiesta2 });
+    expect(testaCRM(n1)).toBe(testaCRM(n2));
+    expect(testaCRM(n1)).not.toContain(formatRomeDateTime(richiesta1));
+    expect(testaCRM(n1)).not.toContain(formatRomeDateTime(richiesta2));
+  });
+
+  it('nessuna delle due note introduce la stringa "Motivo:", che sposterebbe il taglio della chiave', () => {
+    const spostamento = buildAppuntamentoNonFissabileNote({
+      motivo: 'fuori_finestra',
+      dataScartata: richiesta1,
+      appuntamentoInAgenda: inAgenda,
+    });
+    const primoFissaggio = buildAppuntamentoNonFissabileNote({ motivo: 'fuori_fascia', dataScartata: richiesta1 });
+    expect(spostamento).not.toContain('Motivo:');
+    expect(primoFissaggio).not.toContain('Motivo:');
+  });
+
+  it('la testa non è troncata a metà frase da un punto prematuro (es. in una data o un dettaglio)', () => {
+    const spostamento = buildAppuntamentoNonFissabileNote({
+      motivo: 'fuori_finestra',
+      dataScartata: richiesta1,
+      appuntamentoInAgenda: inAgenda,
+    });
+    const primoFissaggio = buildAppuntamentoNonFissabileNote({ motivo: 'fuori_fascia', dataScartata: richiesta1 });
+    // Se un punto prematuro tagliasse la frase a metà, la testa sarebbe molto più
+    // corta della frase intera che il codice scrive prima del primo "vero" punto.
+    expect(testaCRM(spostamento).length).toBeGreaterThan(40);
+    expect(testaCRM(primoFissaggio).length).toBeGreaterThan(40);
+  });
+
+  it('lo spostamento con appuntamento in agenda non parsabile resta comunque una testa stabile e senza data', () => {
+    const n1 = buildAppuntamentoNonFissabileNote({
+      motivo: 'fuori_finestra',
+      dataScartata: richiesta1,
+      appuntamentoInAgenda: 'non-una-data',
+    });
+    const n2 = buildAppuntamentoNonFissabileNote({
+      motivo: 'fuori_finestra',
+      dataScartata: richiesta2,
+      appuntamentoInAgenda: 'non-una-data',
+    });
+    expect(testaCRM(n1)).toBe(testaCRM(n2));
+    expect(testaCRM(n1)).toContain('SPOSTAMENTO NON REGISTRATO');
+  });
+});
