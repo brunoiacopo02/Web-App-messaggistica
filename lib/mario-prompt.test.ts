@@ -671,3 +671,19 @@ describe('CHI È NOEMI E QUANDO CHIAMA', () => {
     expect(p).toContain('non tirare a indovinare');
   });
 });
+
+describe('fuori finestra non si fissa', () => {
+  const p = buildMarioSystem('Marta');
+
+  it('dice che fuori dai due giorni non si fissa, mai', () => {
+    expect(p).toContain('Fuori da quei due giorni NON si fissa, mai');
+  });
+
+  it('chiede di insistere dentro la finestra prima di mollare', () => {
+    expect(p).toContain('cerca il buco dentro quei due giorni');
+  });
+
+  it('vieta di confermare un giorno fuori finestra anche se lo propone il lead', () => {
+    expect(p).toContain('anche se è il lead a proportelo');
+  });
+});
