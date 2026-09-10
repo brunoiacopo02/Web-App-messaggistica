@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { sendOutcome, sendCrmNota } from './bot-outcome';
+import { sendOutcome, sendCrmNota, neutralizzaMarcatoreMotivo } from './bot-outcome';
 import { romeOffset, formatRomeDateTime } from './rome-time';
 import { computeBookingDays } from './booking-slots';
 
@@ -887,5 +887,155 @@ describe('sendOutcome — rifissaggio di un appuntamento (v1.5)', () => {
     const { supabase } = makeSupabase(fissato);
     await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: domani });
     expect(bodyInviato().outcome).toBe('NOTA');
+  });
+});
+
+// Il CRM deduplica una NOTA (stesso lead, entro 15 minuti) derivando una "chiave" dal
+// testo: `text.toLowerCase().indexOf('motivo:')` (substring nudo, nessun confine di
+// parola: anche "ilmotivo:" scatta) e se la trova la chiave è tutto il testo fino a lì;
+// solo se non la trova, la chiave è la prima frase (fino al primo ". "). Questo
+// accoppiamento fra il nostro testo e il loro parser non si vede guardando né il nostro
+// codice né il loro: qui sotto si riproduce ESATTAMENTE la loro regola per verificare la
+// PROPRIETÀ che `neutralizzaMarcatoreMotivo` protegge, non solo la forma della stringa.
+describe('neutralizzaMarcatoreMotivo — la guardia sulla chiave di dedup del CRM', () => {
+  /** Riproduce la regola di dedup del CRM su una nota già costruita: stesso calcolo che
+   *  useremmo per verificare se due note collidono o no dal loro lato. */
+  const chiaveCRM = (nota: string): string => {
+    const iMotivo = nota.toLowerCase().indexOf('motivo:');
+    if (iMotivo !== -1) return nota.slice(0, iMotivo);
+    const iPunto = nota.indexOf('. ');
+    return iPunto !== -1 ? nota.slice(0, iPunto) : nota;
+  };
+
+  describe('marcatore "motivo:" — in qualunque forma, in qualunque punto', () => {
+    it.each([
+      ['Motivo:', 'maiuscola normale'],
+      ['MOTIVO:', 'tutto maiuscolo'],
+      ['Motivo :', 'spazio prima dei due punti (che di per sé non farebbe scattare il CRM, ma neutralizzarlo comunque non costa niente)'],
+      ['motivo  :', 'più spazi prima dei due punti'],
+      ['ilmotivo:', 'attaccato dentro un\'altra parola (un refuso, o il lead che scrive tutto insieme) — il parser del CRM non ha confini di parola, quindi scatta comunque: la nostra guardia non può averne uno'],
+    ])('"%s" (%s) esce senza la sequenza che il CRM riconosce', (marcatore) => {
+      const nota = `Nota di prova con dentro ${marcatore} un dettaglio qualunque dopo.`;
+      const risultato = neutralizzaMarcatoreMotivo(nota);
+      expect(risultato.toLowerCase()).not.toContain('motivo:');
+    });
+  });
+
+  it('le parole del lead che contengono il marcatore vengono neutralizzate: è il caso da input esterno, non sotto il nostro controllo', () => {
+    const nota =
+      'SPOSTAMENTO CHIESTO — il lead ha chiesto di spostare l\'appuntamento (nessuna nuova data indicata dal lead). ' +
+      'Parole del lead: "il motivo: non posso quel giorno, richiamatemi".';
+    const risultato = neutralizzaMarcatoreMotivo(nota);
+    expect(risultato.toLowerCase()).not.toContain('motivo:');
+    // Il senso resta leggibile: la parola "motivo" c'è ancora, solo senza i due punti.
+    expect(risultato).toContain('motivo -');
+  });
+
+  it('una nota che non contiene il marcatore e con la prima frase già lunga esce identica, byte per byte', () => {
+    const nota =
+      "APPUNTAMENTO NON FISSATO — il bot stava per fissare una call ma il tag non portava nessuna data: " +
+      "in agenda non c'è niente. Il lead potrebbe aver ricevuto una conferma in chat: va ricontattato per " +
+      "concordare giorno e ora.";
+    expect(neutralizzaMarcatoreMotivo(nota)).toBe(nota);
+  });
+
+  it('una nota fatta di una sola frase corta, senza altri punti, non va in loop né si rompe: resta sotto soglia perché non c\'è niente da allungare', () => {
+    const nota = 'DA RICHIAMARE — giorno e ora da concordare';
+    expect(neutralizzaMarcatoreMotivo(nota)).toBe(nota);
+    expect(chiaveCRM(neutralizzaMarcatoreMotivo(nota)).length).toBeLessThan(80);
+  });
+
+  it('la proprietà che conta davvero: due note dello stesso fatto con "motivo:" e data richiesta diversa devono avere la STESSA chiave — è il test che protegge la campanella dal duplicarsi', () => {
+    // Prima del fix `buildAppuntamentoNonFissabileNote` (vedi il commit precedente)
+    // aveva già imparato a non mettere la data instabile PRIMA del punto di taglio: qui
+    // si riproduce lo stesso rischio per il caso generale, testo che arriva da fuori
+    // (modello o lead) con "motivo:" in coda a una data che cambia turno per turno.
+    const nota = (data: string) =>
+      `AGGIORNAMENTO SUL FATTO — il contenuto raccontato non cambia da un turno di ` +
+      `conversazione all'altro, qualunque data ripeta il lead. Data indicata dal lead: ` +
+      `${data}. motivo: cambio di programma riferito dal lead.`;
+    const n1 = nota('18 settembre alle 15:00');
+    const n2 = nota('3 ottobre alle 10:00');
+
+    // Prima della guardia: "motivo:" è ancora lì, e la chiave del CRM include la data
+    // che lo precede — due chiavi diverse per lo stesso fatto, dedup rotto.
+    expect(chiaveCRM(n1)).not.toBe(chiaveCRM(n2));
+
+    // Dopo la guardia: "motivo:" è sparito, la chiave del CRM ricade sulla prima frase,
+    // che non contiene la data — stessa chiave, dedup che torna a funzionare.
+    const g1 = neutralizzaMarcatoreMotivo(n1);
+    const g2 = neutralizzaMarcatoreMotivo(n2);
+    expect(chiaveCRM(g1)).toBe(chiaveCRM(g2));
+    expect(chiaveCRM(g1)).not.toContain('settembre');
+    expect(chiaveCRM(g1)).not.toContain('ottobre');
+  });
+
+  describe('il secondo vettore: un punto prematuro nel testo libero del modello accorcia la chiave, e lì il rischio è opposto (una notifica che sparisce, non una di troppo)', () => {
+    // Caso misurato dal team CRM cambiando solo il formato della data nella testa di
+    // una nota di spostamento: "mercoledì 16 settembre" non tronca niente, ma "mer. 16
+    // settembre" introduce un punto a metà frase e la chiave collassa su "...resta mer"
+    // (48 caratteri) — identica per QUALUNQUE spostamento, qualunque sia la data vera.
+    const notaConDataAbbreviata = (giorno: string, ora: string, motivoScarto: string) =>
+      `SPOSTAMENTO NON REGISTRATO — in agenda resta mer. ${giorno} alle ${ora}, e non è ` +
+      `stato spostato niente. Il bot stava per spostare la call ma ${motivoScarto}. Il ` +
+      `lead può aver ricevuto in chat la conferma del nuovo giorno.`;
+
+    it('una nota con un punto prematuro (data abbreviata "mer.") esce con la chiave sopra la soglia', () => {
+      const nota = notaConDataAbbreviata('16 settembre', '15:00', 'cadeva di domenica');
+      const chiavePrima = chiaveCRM(nota);
+      // Il bug reale: la chiave si ferma su un frammento generico, condiviso da
+      // qualunque spostamento con la stessa data abbreviata.
+      expect(chiavePrima).toBe("SPOSTAMENTO NON REGISTRATO — in agenda resta mer");
+
+      const chiaveDopo = chiaveCRM(neutralizzaMarcatoreMotivo(nota));
+      expect(chiaveDopo.length).toBeGreaterThanOrEqual(80);
+    });
+
+    it('due note dello STESSO lead con fatti DIVERSI, entrambe con teste inizialmente corte, escono con chiavi diverse dopo la guardia — prima della guardia collidevano', () => {
+      const notaA = notaConDataAbbreviata('16 settembre', '15:00', 'cadeva di domenica');
+      const notaB = notaConDataAbbreviata('18 settembre', '09:00', 'era fuori fascia');
+
+      // Prima della guardia: stessa testa troncata, stesso fatto agli occhi del CRM —
+      // il secondo spostamento non farebbe MAI scattare la campanella.
+      expect(chiaveCRM(notaA)).toBe(chiaveCRM(notaB));
+
+      const chiaveA = chiaveCRM(neutralizzaMarcatoreMotivo(notaA));
+      const chiaveB = chiaveCRM(neutralizzaMarcatoreMotivo(notaB));
+      expect(chiaveA).not.toBe(chiaveB);
+    });
+
+    it('una nota con la testa già sopra soglia (niente di prematuro) esce identica, senza che nessun punto venga toccato', () => {
+      const nota =
+        "SPOSTAMENTO NON REGISTRATO — in agenda resta mercoledì 16 settembre 2026 alle " +
+        "15:00, e non è stato spostato niente. Il bot stava per spostare la call ma " +
+        "cadeva di domenica.";
+      expect(chiaveCRM(nota).length).toBeGreaterThanOrEqual(80);
+      expect(neutralizzaMarcatoreMotivo(nota)).toBe(nota);
+    });
+  });
+
+  describe('sendCrmNota → inviaNotaAlCrm: la guardia gira davvero sul corpo spedito al CRM, non solo sulla funzione isolata', () => {
+    it('una nota con "Motivo:" in coda parte al CRM senza quella sequenza', async () => {
+      const { supabase } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null });
+      await sendCrmNota(supabase, 1, 'FATTO — dettaglio. Motivo: il lead ha cambiato idea.');
+      const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+      expect(body.note.toLowerCase()).not.toContain('motivo:');
+    });
+  });
+
+  it("buildLockedNote (DA_SCARTARE) non contiene più \"Motivo:\", e la sua chiave — la prima frase, con la data in agenda dal DB — resta stabile al variare del motivo dello scarto", async () => {
+    // Import dinamico per non introdurre una dipendenza in testa al file solo per
+    // questo blocco: la funzione vive in bot-outcome-rules.ts.
+    const { buildLockedNote } = await import('./bot-outcome-rules');
+    const inAgenda = '2026-09-16T13:00:00Z';
+    const n1 = buildLockedNote({ outcome: 'DA_SCARTARE', discardReason: 'la madre non paga' }, inAgenda);
+    const n2 = buildLockedNote({ outcome: 'DA_SCARTARE', discardReason: 'ha trovato un altro corso' }, inAgenda);
+
+    expect(n1).not.toContain('Motivo:');
+    expect(n1).toContain('Causa:');
+    // La chiave (prima frase, fino al primo ". ") è la stessa: contiene solo la data in
+    // agenda, stabile, non il motivo dello scarto, che può cambiare da un tentativo
+    // all'altro di rimandare la stessa disdetta.
+    expect(chiaveCRM(n1)).toBe(chiaveCRM(n2));
   });
 });

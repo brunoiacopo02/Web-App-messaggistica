@@ -38,7 +38,13 @@ export function buildLockedNote(args: OutcomeArgs, existingDate: string | null):
       // Se disdice, QUANDO: senza la data le Conferme non sanno quale appuntamento
       // stanno per perdere. Quando non ce l'abbiamo lo si dice, invece di tacere.
       const quando = inAgenda ? `appuntamento di ${inAgenda} da annullare` : `appuntamento da annullare (data non nota da noi)`;
-      base = `DISDETTA — ${quando}. Motivo: ${args.discardReason?.trim() || 'non specificato'}.`;
+      // "Causa:", non "Motivo:": il CRM deduplica una NOTA derivando una chiave dal
+      // testo fino a "motivo:" se compare (in qualunque punto, anche a metà, anche
+      // senza spazio prima — vedi `neutralizzaMarcatoreMotivo` in `lib/bot-outcome.ts`).
+      // Con "Motivo:" qui la chiave si allungherebbe fino a inglobare il motivo dello
+      // scarto, che può cambiare fra un turno e l'altro; con "Causa:" la chiave torna a
+      // essere la prima frase, che contiene la data in agenda dal DB (stabile).
+      base = `DISDETTA — ${quando}. Causa: ${args.discardReason?.trim() || 'non specificato'}.`;
       break;
     }
     case 'INTERROTTO':

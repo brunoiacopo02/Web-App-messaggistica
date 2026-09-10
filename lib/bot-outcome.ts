@@ -20,6 +20,54 @@ type Supa = ReturnType<typeof getSupabaseAdmin>;
 
 const DEFAULT_CRM_URL = 'https://crm-sales-fenice.vercel.app/api/bot/outcome';
 
+/**
+ * Il CRM deduplica una NOTA (stesso lead, entro 15 minuti) derivando una "chiave" dal
+ * testo: `text.toLowerCase().indexOf('motivo:')` — substring nudo, nessun confine di
+ * parola, quindi anche "ilmotivo:" scatta — e se lo trova la chiave è tutto il testo
+ * fino a lì; solo se NON lo trova, la chiave è la prima frase, cioè il testo fino al
+ * primo punto seguito da uno spazio.
+ *
+ * Questa sequenza non è sotto il nostro controllo: nella nota ci finiscono le parole
+ * testuali del lead (`paroleDelLead`, che taglia solo la lunghezza) e il testo libero
+ * scritto dal modello nel tag `[NOTA|...]`. Un lead che scrive «il motivo: non posso
+ * quel giorno» o il modello che apre con una frase breve rompono il dedup dall'esterno,
+ * in un modo che non si vede né nel nostro codice né in quello del CRM: la stessa nota
+ * ri-mandata genera due chiavi diverse (niente più dedup, doppia campanella) oppure due
+ * note di fatti diversi generano la stessa chiave (la seconda campanella non parte mai,
+ * senza errori e senza niente nei log).
+ *
+ * Due interventi, nell'ordine:
+ * 1. Ogni occorrenza di "motivo" seguita (spazi opzionali in mezzo) da ":" diventa
+ *    "motivo -": stesso senso per chi legge, niente più due punti dopo la parola.
+ *    Nessun `\b` nella regex — il parser del CRM non ne ha nessuno: sanificare troppo
+ *    non fa danno, sanificare troppo poco sì.
+ * 2. Quando non c'è (più) "motivo:", la chiave del CRM è la prima frase. Un punto
+ *    prematuro nel testo libero del modello — una data abbreviata ("mer." invece di
+ *    "mercoledì"), una frase di apertura di tre parole — la accorcerebbe fino a farla
+ *    uguale per fatti diversi sullo stesso lead: qui la seconda campanella sparisce, non
+ *    ne arriva una di troppo — il lato su cui non si può sbagliare. Se la chiave che ne
+ *    risulterebbe è troppo corta, il primo punto prematuro diventa una lineetta (" —",
+ *    che non è un punto) e si ricalcola, finché la chiave supera la soglia o non ci sono
+ *    più punti da spostare. La soglia (80) sta sopra, con margine, al caso reale
+ *    verificato dal CRM ("...in agenda resta mer" si ferma a 48 caratteri e già lì la
+ *    dedup collide: un taglio a 40 non lo avrebbe coperto).
+ */
+export function neutralizzaMarcatoreMotivo(note: string): string {
+  let out = note.replace(/(motivo)\s*:/gi, '$1 -');
+
+  const SOGLIA_CHIAVE = 80;
+  const MAX_ITERAZIONI = 20;
+  for (let i = 0; i < MAX_ITERAZIONI; i++) {
+    // Non dovrebbe più poterci essere, dopo il passo sopra — ma se per qualunque
+    // ragione c'è ancora, è quel ramo a decidere la chiave: qui non c'è niente da fare.
+    if (/motivo\s*:/i.test(out)) break;
+    const idxPunto = out.indexOf('. ');
+    if (idxPunto === -1 || idxPunto >= SOGLIA_CHIAVE) break;
+    out = `${out.slice(0, idxPunto)} —${out.slice(idxPunto + 1)}`;
+  }
+  return out;
+}
+
 /** Una nota con la stessa impronta è già partita per questa conversazione? */
 async function notaGiaInviata(
   supabase: Supa,
@@ -48,7 +96,8 @@ export async function inviaNotaAlCrm(
   report: BotReport | undefined,
   secret: string,
 ): Promise<{ sent: boolean; status?: number; error?: string }> {
-  const body: BotOutcomeBody = { leadId: crmLeadId, outcome: 'NOTA', note, ...(report ? { report } : {}) };
+  const noteSicura = neutralizzaMarcatoreMotivo(note);
+  const body: BotOutcomeBody = { leadId: crmLeadId, outcome: 'NOTA', note: noteSicura, ...(report ? { report } : {}) };
   const valid = validateOutcomeBody(body);
   if (!valid.ok) {
     await supabase.from('event_log').insert({
