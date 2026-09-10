@@ -1531,6 +1531,37 @@ describe('il secondo recapito del lead arriva al CRM come NOTA, senza chiudere l
 
     expect(inviaNotaAlCrm).not.toHaveBeenCalled();
   });
+
+  // Il finding di review (round 1): il vincolo "una NOTA non impedisce un esito
+  // successivo nello stesso turno" era verificato solo a livello di parsing
+  // (mario.test.ts, coesistenza dei due tag nel testo) e per ispezione del codice
+  // (nessun break/return prima di `if (result.outcome)`). Qui la prova end-to-end:
+  // il modello emette [NOTA|...] insieme a un [ESITO:...] nello stesso turno, ed
+  // entrambi i canali devono partire nello stesso drain.
+  it('nota ed esito nello stesso turno: partono entrambi (la nota non blocca l\'esito)', async () => {
+    const claimedRow: ClaimedRow = { id: 101, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Va bene, allora non se ne parla più.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+      notaCrm: 'Secondo recapito del lead: 3924538096',
+      outcome: 'DA_SCARTARE', discardReason: 'non interessato',
+    });
+
+    await drainMarioReplies(supabase, 101, '+391234567890', () => 0);
+
+    expect(inviaNotaAlCrm).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(inviaNotaAlCrm).mock.calls[0]).toEqual([
+      supabase, 101, 'crm1', 'Secondo recapito del lead: 3924538096', undefined, 'shh',
+    ]);
+    expect(sendOutcome).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({
+      outcome: 'DA_SCARTARE', discardReason: 'non interessato',
+    });
+    // L'esito chiude la conversazione come farebbe senza la nota: la nota non ha
+    // deviato o interrotto il percorso normale dell'esito.
+    expect(calls.finalStatusWrites).toEqual(['closed']);
+  });
 });
 
 describe('fermo manuale del bot su una singola chat', () => {
