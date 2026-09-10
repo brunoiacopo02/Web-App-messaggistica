@@ -188,7 +188,7 @@ describe('fix conferme: Noemi chiama da un cellulare (non un numero fisso)', () 
   const p = buildMarioSystem('Marta');
 
   it('il passaggio 2 precisa che Noemi chiama da un cellulare e invita a richiamare su quel numero', () => {
-    expect(p).toContain('ti chiama prima della call da un cellulare:');
+    expect(p).toContain('ti chiama da un cellulare:');
     expect(p).toContain('richiamala pure su quel numero');
     expect(p).not.toContain('richiamala pure allo stesso numero');
   });
@@ -633,5 +633,41 @@ describe('buildMarioSystem — spostamento di una call gia\' fissata', () => {
 
   it('senza un quando resta un RICHIAMO', () => {
     expect(p()).toContain('se vuole spostare ma non ti dice quando');
+  });
+});
+
+describe('CHI È NOEMI E QUANDO CHIAMA', () => {
+  const p = buildMarioSystem('Marta');
+
+  it('separa la preselezione dalla call col venditore', () => {
+    expect(p).toContain('CHI È NOEMI E QUANDO CHIAMA');
+    expect(p).toContain('Noemi fa la PRESELEZIONE, non la trattativa');
+    expect(p).toContain('non chiamarla mai "la consulente" o "la tutor"');
+  });
+
+  it('lega l orario della chiamata all ora della call, con la soglia delle 13', () => {
+    expect(p).toContain('call dalle 13:00 in poi');
+    expect(p).toContain('call PRIMA DELLE 13:00');
+    expect(p).toContain('il POMERIGGIO DEL GIORNO PRIMA');
+  });
+
+  it('vieta le frasi che fanno tenere il telefono nel momento sbagliato', () => {
+    for (const frase of [
+      'ti chiama poco prima',
+      'ti chiama qualche minuto prima',
+      'ti chiama la mattina stessa',
+      'ti sta per chiamare',
+    ]) {
+      expect(p).toContain(frase);
+    }
+    expect(p).toContain('Queste frasi sono SBAGLIATE');
+  });
+
+  it('vieta di vendere la call come se fosse breve quanto Noemi', () => {
+    expect(p).toContain('I 5-10 minuti sono di Noemi, non della call');
+  });
+
+  it('se giorno e ora non sono noti non si tira a indovinare', () => {
+    expect(p).toContain('non tirare a indovinare');
   });
 });
