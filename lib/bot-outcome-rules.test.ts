@@ -488,3 +488,44 @@ describe('resolveOutcomeAction — rifissaggio (v1.5)', () => {
     expect(resolveOutcomeAction(null, { outcome: 'APPUNTAMENTO', date: fra3giorni() }, null).kind).toBe('normal');
   });
 });
+
+describe('checkDataAppuntamento — finestra dei due giorni', () => {
+  // Giovedì 10 settembre 2026, 09:00 Roma. Finestra attesa: venerdì 11 e sabato 12.
+  const now = Date.parse('2026-09-10T09:00:00+02:00');
+
+  it('accetta il primo giorno della finestra', () => {
+    expect(checkDataAppuntamento('2026-09-11T15:00:00+02:00', now, [])).toEqual({ ok: true });
+  });
+
+  it('accetta il secondo giorno della finestra', () => {
+    expect(checkDataAppuntamento('2026-09-12T15:00:00+02:00', now, [])).toEqual({ ok: true });
+  });
+
+  it('rifiuta un giorno oltre la finestra', () => {
+    expect(checkDataAppuntamento('2026-09-14T15:00:00+02:00', now, [])).toEqual({
+      ok: false,
+      motivo: 'fuori_finestra',
+    });
+  });
+
+  it('rifiuta oggi, che non è mai prenotabile', () => {
+    expect(checkDataAppuntamento('2026-09-10T18:00:00+02:00', now, [])).toEqual({
+      ok: false,
+      motivo: 'fuori_finestra',
+    });
+  });
+
+  it('la domenica resta domenica, non diventa fuori_finestra', () => {
+    // Venerdì 11: la finestra è sabato 12 e lunedì 14, domenica 13 è saltata.
+    const ven = Date.parse('2026-09-11T09:00:00+02:00');
+    expect(checkDataAppuntamento('2026-09-13T15:00:00+02:00', ven, [])).toEqual({
+      ok: false,
+      motivo: 'domenica',
+    });
+  });
+
+  it('la finestra scivola: da venerdì lunedì è dentro', () => {
+    const ven = Date.parse('2026-09-11T09:00:00+02:00');
+    expect(checkDataAppuntamento('2026-09-14T15:00:00+02:00', ven, [])).toEqual({ ok: true });
+  });
+});

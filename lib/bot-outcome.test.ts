@@ -1,21 +1,26 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { sendOutcome, sendCrmNota } from './bot-outcome';
 import { romeOffset } from './rome-time';
+import { computeBookingDays } from './booking-slots';
 
 const DATE = '2026-06-29T17:00:00Z';
 
+/** Combina un giorno ISO 'YYYY-MM-DD' con un'ora e il fuso di Roma per quel giorno. */
+function conOra(giornoIso: string, ora: number): string {
+  const ancora = new Date(`${giornoIso}T12:00:00Z`);
+  return `${giornoIso}T${String(ora).padStart(2, '0')}:00:00${romeOffset(ancora)}`;
+}
+
 /**
- * Un giorno lavorativo futuro all'ora indicata, in ora di Roma. Le fixture a data fissa
- * scadono: `checkDataAppuntamento` scarta i giorni passati, le domeniche e le ore fuori
- * dalla fascia 09-21, quindi un appuntamento "buono" va costruito relativo a adesso.
+ * Un giorno DENTRO la finestra dei due giorni prenotabili (day1 di default), all'ora
+ * indicata, in ora di Roma. Le fixture a data fissa scadono: `checkDataAppuntamento`
+ * scarta i giorni passati, le domeniche, le ore fuori dalla fascia 09-21 e i giorni
+ * fuori dalla finestra "domani + dopodomani", quindi un appuntamento "buono" va
+ * costruito relativo a adesso con lo stesso calcolo che vede la guardia.
  */
-function giornoUtile(ora = 15, piuGiorni = 3): string {
-  const d = new Date(Date.now() + piuGiorni * 86_400_000);
-  if (d.getUTCDay() === 0) d.setUTCDate(d.getUTCDate() + 1);
-  const key = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Europe/Rome', year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(d);
-  return `${key}T${String(ora).padStart(2, '0')}:00:00${romeOffset(d)}`;
+function giornoUtile(ora = 15, giorno: 1 | 2 = 1): string {
+  const { day1, day2 } = computeBookingDays(new Date());
+  return conOra(giorno === 1 ? day1.date : day2.date, ora);
 }
 
 /**
@@ -791,12 +796,11 @@ describe('sendOutcome — rifissaggio di un appuntamento (v1.5)', () => {
   const domani = new Date(Date.now() + 30 * 3600_000).toISOString();
   const fissato = { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: domani };
   const bodyInviato = () => JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string);
-  // Un mercoledi' alle 15 dentro la fascia 09-21, lontano da domeniche e chiusure.
+  // Il secondo giorno della finestra, alle 13: dentro la fascia 09-21 e diverso da
+  // `domani` (il giorno già in agenda), così la nuova data è davvero uno spostamento.
   const nuovaData = () => {
-    const d = new Date(Date.now() + 5 * 24 * 3600_000);
-    while (d.getUTCDay() === 0) d.setUTCDate(d.getUTCDate() + 1);
-    d.setUTCHours(13, 0, 0, 0);
-    return d.toISOString();
+    const { day2 } = computeBookingDays(new Date());
+    return conOra(day2.date, 13);
   };
 
   it('la data nuova parte come APPUNTAMENTO, non come nota', async () => {

@@ -1,6 +1,7 @@
 import type { BotOutcome } from './bot-contract';
 import { formatRomeDateTime, romeDayKey, romeHour, sameInstant } from './rome-time';
 import { isBookableDate, type BlackoutRange } from './booking-blackout';
+import { computeBookingDays } from './booking-slots';
 
 export type OutcomeArgs = {
   outcome: BotOutcome;
@@ -152,7 +153,8 @@ export type MotivoAppuntamentoNonFissabile =
   | 'passato'
   | 'domenica'
   | 'giorno_chiuso'
-  | 'fuori_fascia';
+  | 'fuori_fascia'
+  | 'fuori_finestra';
 export type AppuntamentoCheck = { ok: true } | { ok: false; motivo: MotivoAppuntamentoNonFissabile };
 
 /**
@@ -186,6 +188,14 @@ export function checkDataAppuntamento(
 
   const ora = romeHour(quando);
   if (ora < APPUNTAMENTO_ORA_MIN || ora > APPUNTAMENTO_ORA_MAX) return { ok: false, motivo: 'fuori_fascia' };
+
+  // La finestra è "domani + dopodomani": un appuntamento fuori di lì l'agenda vera non
+  // lo regge. La regola stava solo nel prompt e il modello la violava: 32 call su 251
+  // fissate fuori finestra a settembre. Il calcolo è lo stesso che vede il modello nel
+  // blocco SLOT APPUNTAMENTO DISPONIBILI, così guardia e prompt non possono divergere.
+  const { day1, day2 } = computeBookingDays(new Date(nowMs), ranges);
+  if (giorno !== day1.date && giorno !== day2.date) return { ok: false, motivo: 'fuori_finestra' };
+
   return { ok: true };
 }
 
@@ -196,6 +206,7 @@ const DETTAGLIO_APPUNTAMENTO: Record<MotivoAppuntamentoNonFissabile, string> = {
   domenica: 'cadeva di domenica, quando non fissiamo',
   giorno_chiuso: 'cadeva in un giorno di chiusura',
   fuori_fascia: `era fuori dalla fascia ${APPUNTAMENTO_ORA_MIN}:00-${APPUNTAMENTO_ORA_MAX}:00`,
+  fuori_finestra: 'era fuori dai due giorni che possiamo proporre',
 };
 
 /**

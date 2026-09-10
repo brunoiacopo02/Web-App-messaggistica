@@ -433,11 +433,12 @@ export async function sendOutcome(
     return { sent: false, error: 'interim_skipped_locked' };
   }
 
-  // Un appuntamento in un giorno chiuso, di domenica o fuori dalla fascia 09-21 non è
-  // un appuntamento: è una riga in agenda a cui non risponde nessuno, e le Conferme e
-  // il venditore la leggono come vera. Le regole stavano solo nel prompt, quindi
-  // valevano finché era il bot a proporre il giorno e cadevano appena lo proponeva il
-  // lead (27 call dentro la chiusura di ferragosto, 3 a mezzanotte).
+  // Un appuntamento in un giorno chiuso, di domenica, fuori dalla fascia 09-21 o fuori
+  // dai due giorni prenotabili non è un appuntamento: è una riga in agenda a cui non
+  // risponde nessuno, e le Conferme e il venditore la leggono come vera. Le regole
+  // stavano solo nel prompt, quindi valevano finché era il bot a proporre il giorno e
+  // cadevano appena lo proponeva il lead (27 call dentro la chiusura di ferragosto, 3 a
+  // mezzanotte, 32 fuori dai due giorni prenotabili a settembre).
   //
   // Dopo `resolveOutcomeAction` di proposito: su un lead che ha GIÀ un appuntamento
   // questo esito è una richiesta di spostamento, non un nuovo fissaggio, e ha già il
