@@ -13,6 +13,7 @@ import {
   buildAppuntamentoNonFissabileNote,
 } from './bot-outcome-rules';
 import { formatRomeDateTime } from './rome-time';
+import { crmDedupKey } from './note-dedup';
 
 const DATE = '2026-06-29T17:00:00Z';
 const DATE_HUMAN = formatRomeDateTime(DATE); // "lunedì 29 giugno alle 19:00"
@@ -97,6 +98,35 @@ describe('buildLockedNote — RICHIAMO (richiesta di spostamento)', () => {
   });
 });
 
+// Misurato dal CRM: la stessa identica richiesta di spostamento usciva con due
+// formulazioni diverse — "alla data indicata (...)" dal ramo RICHIAMO, "a ..." dal
+// ramo APPUNTAMENTO — a 84 secondi di distanza, perché il modello può emettere l'uno o
+// l'altro esito per lo STESSO fatto a un turno di distanza. Due stringhe diverse per lo
+// stesso fatto sono due chiavi diverse: due campanelle alle Conferme per la stessa
+// richiesta. Questo blocco protegge il criterio "stesso fatto, stesso testo, da
+// qualunque ramo arrivi", non le stringhe letterali.
+describe('buildLockedNote — SPOSTAMENTO CHIESTO è un solo fatto, non due, indipendentemente da quale esito lo racconta', () => {
+  it('RICHIAMO e APPUNTAMENTO, stessa data chiesta dal lead e stesso appuntamento in agenda → stessa nota, stessa chiave di dedup CRM (prima del fix: due formulazioni diverse, due chiavi diverse, doppia campanella)', () => {
+    const daRichiamo = buildLockedNote({ outcome: 'RICHIAMO', date: DIFF }, DATE);
+    const daAppuntamento = buildLockedNote({ outcome: 'APPUNTAMENTO', date: DIFF }, DATE);
+    expect(daRichiamo).toBe(daAppuntamento);
+    expect(crmDedupKey(daRichiamo)).toBe(crmDedupKey(daAppuntamento));
+  });
+
+  it('la richiesta di spostamento SENZA una nuova data è un fatto diverso da quella CON data: la chiave deve restare diversa, altrimenti due richieste diverse collasserebbero in una', () => {
+    const conData = buildLockedNote({ outcome: 'RICHIAMO', date: DIFF }, DATE);
+    const senzaData = buildLockedNote({ outcome: 'RICHIAMO' }, DATE);
+    expect(crmDedupKey(conData)).not.toBe(crmDedupKey(senzaData));
+  });
+
+  it('due date diverse chieste dal lead sono due fatti diversi: la chiave deve restare diversa (il caso "data che identifica il fatto", da non collassare mai)', () => {
+    const chiedeMartedi = buildLockedNote({ outcome: 'RICHIAMO', date: DIFF }, DATE);
+    const altraData = '2026-07-08T10:00:00Z'; // istante genuinamente diverso da DIFF e da DATE
+    const chiedeMercoledi = buildLockedNote({ outcome: 'RICHIAMO', date: altraData }, DATE);
+    expect(crmDedupKey(chiedeMartedi)).not.toBe(crmDedupKey(chiedeMercoledi));
+  });
+});
+
 // Bug di revisione: existingDate arriva da bot_scheduled_at, una colonna timestamptz
 // che Postgres normalizza in UTC nel round-trip (es. "...T13:00:00+00:00"), mentre
 // args.date arriva dal tag del modello nel fuso locale imposto dal prompt (es.
@@ -120,9 +150,9 @@ describe('buildLockedNote — confronto date per istante, non per stringa (round
     expect(n.split(existingHuman).length - 1).toBe(1);
   });
 
-  it('RICHIAMO: istante realmente diverso (offset diversi) → continua a comparire come data indicata dal lead', () => {
+  it('RICHIAMO: istante realmente diverso (offset diversi) → continua a comparire come data indicata dal lead (stessa formulazione breve del ramo APPUNTAMENTO, non più "alla data indicata (...)")', () => {
     const n = buildLockedNote({ outcome: 'RICHIAMO', date: leadGenuinelyDifferent }, existingUtc);
-    expect(n).toContain(`alla data indicata (${diffHuman})`);
+    expect(n).toContain(`spostare a ${diffHuman}`);
     expect(n).toContain(existingHuman);
   });
 
@@ -288,6 +318,28 @@ describe('buildBotRipresoNote', () => {
     for (const o of ['NON_RISPOSTO', 'DA_SCARTARE', 'RICHIAMO']) {
       expect(buildBotRipresoNote({ esitoPrecedente: o, quandoIso: DATE })).toContain(o);
     }
+  });
+
+  // Misurato: due invii dello STESSO fatto (il lead che ha ripreso a scrivere dopo lo
+  // stesso scarto) partono a pochi secondi l'uno dall'altro (30, 23, 44, 101s nei
+  // campioni reali) e ciascuno calcola il proprio `new Date().toISOString()`. Prima del
+  // fix l'orario stava in testa (prima del primo punto, dove il CRM taglia per la
+  // chiave di dedup): un minuto di differenza bastava a produrre due chiavi diverse e
+  // due campanelle alle Conferme per lo stesso fatto — 122 note su 152 di questo tipo.
+  // Con l'orario in coda le due chiavi restano identiche. Questo test fallirebbe sul
+  // codice pre-fix: è la prova che il difetto c'era.
+  it('stesso esito precedente, istanti diversi a un minuto di distanza → stessa chiave di dedup CRM (l\'orario di invio non deve stare in testa)', () => {
+    const t0 = '2026-09-05T09:26:03.000Z';
+    const t1 = '2026-09-05T09:27:03.000Z'; // un minuto dopo: stesso fatto, secondo invio
+    const prima = buildBotRipresoNote({ esitoPrecedente: 'DA_SCARTARE', quandoIso: t0 });
+    const dopo = buildBotRipresoNote({ esitoPrecedente: 'DA_SCARTARE', quandoIso: t1 });
+    expect(crmDedupKey(prima)).toBe(crmDedupKey(dopo));
+  });
+
+  it('esiti precedenti diversi restano fatti diversi: la chiave non collassa a prescindere dall\'orario', () => {
+    const a = buildBotRipresoNote({ esitoPrecedente: 'DA_SCARTARE', quandoIso: DATE });
+    const b = buildBotRipresoNote({ esitoPrecedente: 'INTERROTTO', quandoIso: DATE });
+    expect(crmDedupKey(a)).not.toBe(crmDedupKey(b));
   });
 });
 

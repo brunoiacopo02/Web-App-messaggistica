@@ -21,6 +21,36 @@ export type OutcomeAction =
   | { kind: 'reschedule'; outcome: 'APPUNTAMENTO'; date: string };
 
 /**
+ * "SPOSTAMENTO CHIESTO": il lead, con l'appuntamento già fissato, ha chiesto di
+ * spostarlo. Condivisa apposta fra il ramo `RICHIAMO` e il ramo `APPUNTAMENTO` di
+ * `buildLockedNote` qui sotto: il modello può emettere l'uno o l'altro esito per la
+ * STESSA richiesta di spostamento a un turno di distanza. Misurato: la stessa
+ * richiesta usciva con due formulazioni diverse a 84 secondi — "alla data indicata
+ * (...)" da RICHIAMO, "a ..." da APPUNTAMENTO — due chiavi di dedup diverse, due
+ * campanelle alle Conferme per lo stesso fatto (5 lead APPUNTAMENTO colpiti). Un solo
+ * costruttore per i due rami chiude il difetto alla radice: da qualunque ramo arrivi,
+ * lo stesso fatto produce sempre lo stesso testo.
+ *
+ * `leadDateIso` è la data che il lead ha chiesto, o `null` se non l'ha detta:
+ * IDENTIFICA il fatto — chiedere martedì o chiedere mercoledì sono due richieste
+ * diverse — e resta in testa, di proposito: qui non va tolta, a differenza
+ * dell'orario "quando è successa la cosa" di `buildBotRipresoNote` più sotto.
+ * `inAgenda` è la data già fissata, letta dal DB (`formatRomeDateTime` già applicato
+ * dal chiamante): stabile, va in coda.
+ */
+function buildSpostamentoChiestoNote(leadDateIso: string | null, inAgenda: string | null): string {
+  const testa = leadDateIso
+    ? `SPOSTAMENTO CHIESTO — il lead ha chiesto di spostare a ${formatRomeDateTime(leadDateIso)}.`
+    : `SPOSTAMENTO CHIESTO — il lead ha chiesto di spostare l'appuntamento (nessuna nuova data indicata dal lead).`;
+  // "Mantenuto" da solo si legge come "tutto a posto". Chi legge deve sapere che
+  // l'appuntamento è ancora lì perché noi non lo spostiamo, e che tocca a loro.
+  const coda = inAgenda
+    ? `In agenda resta ${inAgenda}: mantenuto finché non lo spostate voi.`
+    : 'Appuntamento mantenuto: da spostare voi.';
+  return `${testa} ${coda}`;
+}
+
+/**
  * Costruisce la nota da inviare al CRM quando un lead GIÀ fissato genera un esito
  * successivo. L'esito non declassa: viene tradotto in una nota informativa.
  */
@@ -62,13 +92,7 @@ export function buildLockedNote(args: OutcomeArgs, existingDate: string | null):
       // UTC mentre args.date arriva dal tag del modello nel fuso locale imposto dal
       // prompt, quindi lo stesso istante avrebbe quasi sempre due stringhe diverse.
       const leadDate = args.date && !sameInstant(args.date, existingDate) ? args.date : null;
-      const datePart = leadDate ? ` alla data indicata (${formatRomeDateTime(leadDate)})` : ' (nessuna nuova data indicata dal lead)';
-      // "Mantenuto" da solo si legge come "tutto a posto". Chi legge deve sapere che
-      // l'appuntamento è ancora lì perché noi non lo spostiamo, e che tocca a loro.
-      const kept = inAgenda
-        ? `In agenda resta ${inAgenda}: mantenuto finché non lo spostate voi.`
-        : 'Appuntamento mantenuto: da spostare voi.';
-      base = `SPOSTAMENTO CHIESTO — il lead ha chiesto di spostare l'appuntamento${datePart}. ${kept}`;
+      base = buildSpostamentoChiestoNote(leadDate, inAgenda);
       break;
     }
     case 'NON_RISPOSTO':
@@ -77,8 +101,7 @@ export function buildLockedNote(args: OutcomeArgs, existingDate: string | null):
       break;
     case 'APPUNTAMENTO':
       if (args.date && existingDate && !sameInstant(args.date, existingDate)) {
-        base = `SPOSTAMENTO CHIESTO — il lead ha chiesto di spostare a ${formatRomeDateTime(args.date)}.` +
-          ` In agenda resta ${formatRomeDateTime(existingDate)}: mantenuto finché non lo spostate voi.`;
+        base = buildSpostamentoChiestoNote(args.date, inAgenda);
       } else {
         base = `RICONFERMA — il lead ha riconfermato l'appuntamento${inAgenda ? ` di ${inAgenda}` : ''}.`;
       }
@@ -395,11 +418,22 @@ export function buildRispostaPostNrNote(input: { leadWords?: string; quandoNrIso
  * Destefanis: restituita il 26/07, riassegnata a un GDO che l'ha chiamata tre volte e
  * poi scartata, mentre il giorno dopo il bot le fissava l'appuntamento. La nota serve a
  * fermare quella telefonata, quindi lo dice in chiaro.
+ *
+ * `quandoIso` è `new Date().toISOString()` preso al momento dell'invio, non un dato dal
+ * DB: due invii dello STESSO fatto (il lead che ha ripreso a scrivere dopo lo stesso
+ * scarto) arrivano a `sendOutcome` a pochi secondi di distanza — l'abbiamo misurato a
+ * 30, 23, 44 e 101 secondi — e ciascuno calcola il proprio "adesso". Se l'orario stesse
+ * in testa (prima del primo punto, dove il CRM taglia per derivare la chiave di dedup)
+ * i minuti diversi renderebbero diversa la chiave, il CRM non riconoscerebbe il
+ * re-invio, e la nota entrerebbe due volte: è il difetto misurato, 122 note su 152.
+ * L'esito precedente invece è lo stesso per i due invii (è quello che c'era prima che il
+ * lead riscrivesse) ed è quello che identifica IL FATTO: resta in testa. L'orario va in
+ * coda, dove un valore che cambia non spacca la chiave.
  */
 export function buildBotRipresoNote(input: { esitoPrecedente: string; quandoIso: string }): string {
   return (
-    `IL BOT HA RIPRESO LA CHAT — il lead ha riscritto ${formatRomeDateTime(input.quandoIso)}, ` +
-    `dopo che ve lo avevamo restituito come ${input.esitoPrecedente}. ` +
+    `IL BOT HA RIPRESO LA CHAT — il lead ha riscritto dopo che ve lo avevamo restituito ` +
+    `come ${input.esitoPrecedente}. Ha riscritto ${formatRomeDateTime(input.quandoIso)}. ` +
     `Non chiamatelo a mano finché non vi arriva un nuovo esito dal bot.`
   );
 }
