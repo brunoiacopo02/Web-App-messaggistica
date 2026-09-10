@@ -181,6 +181,23 @@ describe('tag [NOTA|...]', () => {
     expect(r.passToHuman).toBe(false);
   });
 
+  // Due recapiti nello stesso messaggio: con la regex non globale la seconda [NOTA|...]
+  // restava nel testo, e al lead arrivava una bolla col tag tecnico e dentro il suo numero.
+  it('due tag nello stesso messaggio: li unisce in una nota sola e li toglie tutti dal visibile', () => {
+    const r = parseMarioReply(
+      'Perfetto, li passo entrambi. [NOTA|Secondo recapito: 333111] [NOTA|Terzo recapito: 333222]',
+    );
+    expect(r.notaCrm).toBe('Secondo recapito: 333111; Terzo recapito: 333222');
+    expect(r.visibleReply).toBe('Perfetto, li passo entrambi.');
+    expect(r.visibleReply).not.toContain('[NOTA');
+    expect(r.visibleReply).not.toContain('333222');
+  });
+
+  it('un tag vuoto non sporca la nota degli altri', () => {
+    const r = parseMarioReply('Ok. [NOTA|] [NOTA|Secondo recapito: 333111]');
+    expect(r.notaCrm).toBe('Secondo recapito: 333111');
+  });
+
   it('convive con un tag [ESITO:...] nello stesso messaggio senza confondersi', () => {
     const r = parseMarioReply(
       'Va bene, allora non se ne parla più. [NOTA|Secondo recapito: 333111] [ESITO:SCARTO|non interessato]',
@@ -217,5 +234,31 @@ describe('contesto Mario per i lead dei GDO', () => {
 
   it('la sezione richiamata esiste davvero nel prompt', () => {
     expect(MARIO_SYSTEM_PROMPT).toContain("SE L'APPUNTAMENTO È GIÀ FISSATO");
+  });
+});
+
+// I due giorni prenotabili devono uscire da qui insieme alla risposta: sono quelli che
+// il modello ha DAVVERO letto nel prompt di questo turno, e devono arrivare fino alla
+// guardia sull'esito. Ricalcolarli più tardi, dopo le 20:00, sposta la finestra e fa
+// scartare la call che il bot ha appena promesso al lead.
+describe('generateMarioReply — i giorni prenotabili escono col risultato', () => {
+  it('restituisce gli stessi due giorni che ha scritto nel prompt', async () => {
+    messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'Ok!' }] });
+    // Giovedì 10 settembre 2026 alle 19:45: la finestra è venerdì 11 e sabato 12.
+    const now = new Date('2026-09-10T17:45:00Z');
+    const r = await generateMarioReply([{ role: 'user', content: 'ok' }], { now });
+
+    expect(r.bookingDays).toEqual(['2026-09-11', '2026-09-12']);
+    const system = messagesCreate.mock.calls[0][0].system as string;
+    for (const g of r.bookingDays!) expect(system).toContain(g);
+  });
+
+  it('alle 20:10 la finestra è già ruotata: sono quelli nuovi a viaggiare, non i vecchi', async () => {
+    messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'Ok!' }] });
+    const r = await generateMarioReply([{ role: 'user', content: 'ok' }], {
+      now: new Date('2026-09-10T18:10:00Z'),
+    });
+    // Sabato 12 e lunedì 14: domenica 13 non è mai prenotabile.
+    expect(r.bookingDays).toEqual(['2026-09-12', '2026-09-14']);
   });
 });

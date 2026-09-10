@@ -529,3 +529,92 @@ describe('checkDataAppuntamento — finestra dei due giorni', () => {
     expect(checkDataAppuntamento('2026-09-14T15:00:00+02:00', ven, [])).toEqual({ ok: true });
   });
 });
+
+// Il difetto di montaggio del 10/09: la finestra che il modello vede nel prompt e
+// quella che la guardia ricalcola sono due calcoli in due istanti, e `computeBookingDays`
+// ruota l'ancora di un giorno alle 20:00. Il bot alle 19:45 propone "domani alle 20", il
+// lead risponde alle 20:10, e la call promessa in chat veniva scartata: al lead "ci
+// vediamo domani", al CRM "appuntamento non fissato", e non lo chiamava nessuno.
+describe('checkDataAppuntamento — la finestra viaggia col turno, non si ricalcola', () => {
+  // Giovedì 10 settembre 2026. Alle 19:45 il prompt mostra venerdì 11 e sabato 12;
+  // alle 20:10 l'ancora è già ruotata e il calcolo dà sabato 12 e lunedì 14.
+  const prima = ['2026-09-11', '2026-09-12'];
+  const dopoLeVenti = Date.parse('2026-09-10T20:10:00+02:00');
+  const promessa = '2026-09-11T20:00:00+02:00';
+
+  it('accetta il giorno che il modello aveva davanti, anche dopo la rotazione delle 20:00', () => {
+    expect(checkDataAppuntamento(promessa, dopoLeVenti, [], prima)).toEqual({ ok: true });
+  });
+
+  it('senza i giorni del turno lo scarterebbe: è esattamente il caso che il fix chiude', () => {
+    expect(checkDataAppuntamento(promessa, dopoLeVenti, [])).toEqual({
+      ok: false,
+      motivo: 'fuori_finestra',
+    });
+  });
+
+  it('i giorni passati non sono un lasciapassare: fuori da quei due resta fuori finestra', () => {
+    expect(checkDataAppuntamento('2026-09-15T15:00:00+02:00', dopoLeVenti, [], prima)).toEqual({
+      ok: false,
+      motivo: 'fuori_finestra',
+    });
+  });
+
+  it('le altre regole valgono lo stesso: dentro la finestra vista, ma alle 02:00, non si fissa', () => {
+    expect(checkDataAppuntamento('2026-09-11T02:00:00+02:00', dopoLeVenti, [], prima)).toEqual({
+      ok: false,
+      motivo: 'fuori_fascia',
+    });
+  });
+
+  it('una lista vuota o assente ricade sul calcolo: la guardia non si spegne mai', () => {
+    const giovedi = Date.parse('2026-09-10T09:00:00+02:00');
+    expect(checkDataAppuntamento('2026-09-11T15:00:00+02:00', giovedi, [], [])).toEqual({ ok: true });
+    expect(checkDataAppuntamento('2026-09-14T15:00:00+02:00', giovedi, [], null)).toEqual({
+      ok: false,
+      motivo: 'fuori_finestra',
+    });
+  });
+});
+
+// La guardia si applica anche allo SPOSTAMENTO di una call già in agenda. La nota
+// scritta per il primo fissaggio lì diceva il falso ("in agenda non c'è niente"): chi
+// legge cancella un appuntamento vivo, e il lead al vecchio giorno non si presenta
+// perché crede di averlo spostato.
+describe('buildAppuntamentoNonFissabileNote — con un appuntamento già in agenda', () => {
+  const nota = () =>
+    buildAppuntamentoNonFissabileNote({
+      motivo: 'fuori_finestra',
+      dataScartata: '2026-09-18T15:00:00+02:00',
+      appuntamentoInAgenda: '2026-09-16T13:00:00Z',
+      leadWords: 'possiamo spostare a venerdì?',
+    });
+
+  it('non dice mai che in agenda non c\'è niente', () => {
+    expect(nota()).not.toContain("in agenda non c'è niente");
+    expect(nota()).not.toContain('APPUNTAMENTO NON FISSATO');
+  });
+
+  it('dice che lo spostamento non è stato registrato', () => {
+    expect(nota()).toContain('SPOSTAMENTO NON REGISTRATO');
+  });
+
+  it('dice QUALE data resta in agenda, letta in ora di Roma', () => {
+    expect(nota()).toContain(formatRomeDateTime('2026-09-16T13:00:00Z'));
+  });
+
+  it('avverte che il lead crede di averla spostata e che non va cancellata', () => {
+    expect(nota()).toMatch(/credere di averlo spostato/i);
+    expect(nota()).toContain('NON cancellate');
+  });
+
+  it('riporta comunque le parole del lead', () => {
+    expect(nota()).toContain('possiamo spostare a venerdì?');
+  });
+
+  it('senza appuntamento in agenda resta la nota del primo fissaggio', () => {
+    const n = buildAppuntamentoNonFissabileNote({ motivo: 'fuori_finestra', appuntamentoInAgenda: null });
+    expect(n).toContain('APPUNTAMENTO NON FISSATO');
+    expect(n).toContain("in agenda non c'è niente");
+  });
+});

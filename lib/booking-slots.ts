@@ -144,10 +144,14 @@ const UNO_ALLA_VOLTA = (primo: string) =>
  */
 export function bookingSlotsContext(
   now: Date,
-  opts?: { ranges?: BlackoutRange[]; pieni?: GiorniPieni },
+  opts?: { ranges?: BlackoutRange[]; pieni?: GiorniPieni; days?: BookingDays },
 ): string {
+  // `days` già calcolati: serve a chi deve tenersi i due giorni che il modello ha
+  // visto e farli viaggiare fino alla guardia (`checkDataAppuntamento`). Ricalcolarli
+  // là è la cosa che rompeva le sere: `computeBookingDays` ruota l'ancora alle 20:00,
+  // quindi il prompt delle 19:45 e la guardia delle 20:10 vedevano finestre diverse.
   const { day1, day2, day1Imminente, chiusuraPrimaDiDay1, chiusuraDopoDay1 } =
-    computeBookingDays(now, opts?.ranges, opts?.pieni);
+    opts?.days ?? computeBookingDays(now, opts?.ranges, opts?.pieni);
   const off = romeOffset(now);
   const tag = `Nel tag [ESITO:APPUNTAMENTO|...] usa la data ISO 8601 del giorno scelto (${day1.date} oppure ${day2.date}) con l'ora concordata e fuso ${off}.`;
 

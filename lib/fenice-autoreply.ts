@@ -650,6 +650,11 @@ export async function drainMarioReplies(
             // cronologia, l'unica cosa che non e' una parafrasi.
             leadWords: [...history].reverse().find((t) => t.role === 'user')?.content,
             report,
+            // I due giorni prenotabili che il modello ha visto in QUESTO turno: la
+            // guardia sulla data li usa al posto di ricalcolarli. Alle 20:00 l'ancora
+            // dei giorni ruota, e una call promessa alle 19:45 veniva scartata dopo
+            // essere già stata confermata al lead in chat.
+            bookingDays: result.bookingDays,
           }, postino ? { noteOnly: true } : {});
           // Esito CRM: chiudiamo se il callback è andato a buon fine; altrimenti
           // restiamo 'active' (ritentabile). In ogni caso usciamo: i rami legacy

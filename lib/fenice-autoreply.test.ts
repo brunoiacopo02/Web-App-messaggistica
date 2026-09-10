@@ -1416,9 +1416,12 @@ function makeStatefulDrainSupabase(row: FakeConvRow, initialRows: FakeMsgRow[]) 
 // arrivare davvero la nota alle Conferme, senza mai chiudere la conversazione:
 // non è un esito.
 describe('il secondo recapito del lead arriva al CRM come NOTA, senza chiudere la conversazione', () => {
+  // Recapito alternativo per una chiamata che il lead GIÀ aspetta: qui la nota basta,
+  // la telefonata è già assegnata a qualcuno. Non è il caso del lead che CHIEDE di
+  // essere chiamato — quello vuole anche [PASSAGGIO_UMANO], e ha il suo test sotto.
   const rows: FakeMsgRow[] = [
     { direction: 'out', body: 'apertura', template_sid: null, created_at: '2026-07-29T10:00:00Z' },
-    { direction: 'in', body: 'puoi farmi chiamare su questo numero, 3924538096', template_sid: null, created_at: '2026-07-29T10:10:00Z' },
+    { direction: 'in', body: 'per la chiamata di Noemi meglio il 3924538096, l\'altro numero ce l\'ho spento', template_sid: null, created_at: '2026-07-29T10:10:00Z' },
   ];
 
   beforeEach(() => {
@@ -1561,6 +1564,102 @@ describe('il secondo recapito del lead arriva al CRM come NOTA, senza chiudere l
     // L'esito chiude la conversazione come farebbe senza la nota: la nota non ha
     // deviato o interrotto il percorso normale dell'esito.
     expect(calls.finalStatusWrites).toEqual(['closed']);
+  });
+});
+
+// Il lead che CHIEDE di essere chiamato e lascia un numero non è il caso sopra: la
+// [NOTA|...] da sola non cambia lo stato del lead e non assegna la telefonata a
+// nessuno, quindi al lead si risponde "lo passo a chi ti chiama" e poi non lo chiama
+// nessuno. Il prompt ora ordina i due tag insieme; qui si verifica che il drain li
+// porti davvero fino in fondo tutti e due.
+describe('il lead chiede di essere chiamato e lascia un numero: nota E passaggio a una persona', () => {
+  const rows: FakeMsgRow[] = [
+    { direction: 'out', body: 'apertura', template_sid: null, created_at: '2026-07-29T10:00:00Z' },
+    { direction: 'in', body: 'puoi farmi chiamare su questo numero, 3924538096', template_sid: null, created_at: '2026-07-29T10:10:00Z' },
+  ];
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.stubEnv('BOT_WEBHOOK_SECRET', 'shh');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(sendOutcome).mockClear();
+    vi.mocked(inviaNotaAlCrm).mockReset();
+    vi.mocked(inviaNotaAlCrm).mockResolvedValue({ sent: true });
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('partono entrambi: il numero a chi telefona, la richiesta a una persona', async () => {
+    const claimedRow: ClaimedRow = { id: 102, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Ti faccio richiamare da una collega su quel numero.',
+      appointmentFixed: false, passToHuman: true, videoWatched: false,
+      notaCrm: 'Secondo recapito del lead: 3924538096, sue parole: "puoi farmi chiamare su questo numero, 3924538096"',
+    });
+
+    await drainMarioReplies(supabase, 102, '+391234567890', () => 0);
+
+    // Il numero arriva a chi telefona...
+    expect(inviaNotaAlCrm).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(inviaNotaAlCrm).mock.calls[0][3]).toContain('3924538096');
+    // ...e la telefonata viene assegnata davvero a una persona.
+    expect(sendOutcome).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'CONTATTO_UMANO' });
+    expect(calls.finalStatusWrites).toEqual(['handed_off']);
+    // Nessun tag tecnico nella bolla che riceve il lead.
+    expect(calls.messageInserts.map((m: any) => m.body).join(' ')).not.toContain('[NOTA');
+  });
+});
+
+// I due giorni prenotabili che il modello ha visto in questo turno devono arrivare fino
+// alla guardia sulla data, altrimenti dopo le 20:00 la finestra ruota e la call appena
+// promessa in chat viene scartata: al lead "ci vediamo domani", al CRM "appuntamento
+// non fissato", e non lo chiama nessuno.
+describe('la finestra vista dal modello viaggia fino all\'esito', () => {
+  const rows: FakeMsgRow[] = [
+    { direction: 'out', body: 'apertura', template_sid: null, created_at: '2026-07-29T10:00:00Z' },
+    { direction: 'in', body: 'va bene domani alle 20', template_sid: null, created_at: '2026-07-29T10:10:00Z' },
+  ];
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(sendOutcome).mockClear();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('passa a sendOutcome i giorni che il prompt di quel turno mostrava', async () => {
+    const claimedRow: ClaimedRow = { id: 103, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const { supabase } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto, ci sentiamo domani alle 20.',
+      appointmentFixed: true, passToHuman: false, videoWatched: false,
+      outcome: 'APPUNTAMENTO', scheduledAt: '2026-09-11T20:00:00+02:00',
+      bookingDays: ['2026-09-11', '2026-09-12'],
+    });
+
+    await drainMarioReplies(supabase, 103, '+391234567890', () => 0);
+
+    expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({
+      outcome: 'APPUNTAMENTO',
+      date: '2026-09-11T20:00:00+02:00',
+      bookingDays: ['2026-09-11', '2026-09-12'],
+    });
+  });
+
+  it('senza i giorni (chiamante che non li conosce) l\'esito parte lo stesso: la guardia ricalcola', async () => {
+    const claimedRow: ClaimedRow = { id: 104, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const { supabase } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto.',
+      appointmentFixed: true, passToHuman: false, videoWatched: false,
+      outcome: 'APPUNTAMENTO', scheduledAt: '2026-09-11T20:00:00+02:00',
+    });
+
+    await drainMarioReplies(supabase, 104, '+391234567890', () => 0);
+
+    expect(sendOutcome).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendOutcome).mock.calls[0][2].bookingDays).toBeUndefined();
   });
 });
 

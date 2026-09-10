@@ -168,11 +168,17 @@ export type AppuntamentoCheck = { ok: true } | { ok: false; motivo: MotivoAppunt
  *
  * Il giorno e l'ora si leggono SEMPRE in ora di Roma: un tag "T22:00" senza offset è
  * mezzanotte italiana, non le 22.
+ *
+ * `bookingDays` sono i due giorni ('YYYY-MM-DD') che il modello ha visto nel prompt di
+ * QUEL turno. Vanno passati sempre che si possa: senza, la finestra si ricalcola qui e
+ * dopo le 20:00 non è più la stessa (vedi sotto). Chi non li ha — la route di recupero
+ * manuale, i cron — non perde la guardia: si ricade sul calcolo.
  */
 export function checkDataAppuntamento(
   date: string | undefined,
   nowMs: number,
   ranges: BlackoutRange[],
+  bookingDays?: readonly string[] | null,
 ): AppuntamentoCheck {
   if (!date || !date.trim()) return { ok: false, motivo: 'assente' };
   const t = Date.parse(date);
@@ -191,10 +197,20 @@ export function checkDataAppuntamento(
 
   // La finestra è "domani + dopodomani": un appuntamento fuori di lì l'agenda vera non
   // lo regge. La regola stava solo nel prompt e il modello la violava: 32 call su 251
-  // fissate fuori finestra a settembre. Il calcolo è lo stesso che vede il modello nel
-  // blocco SLOT APPUNTAMENTO DISPONIBILI, così guardia e prompt non possono divergere.
-  const { day1, day2 } = computeBookingDays(new Date(nowMs), ranges);
-  if (giorno !== day1.date && giorno !== day2.date) return { ok: false, motivo: 'fuori_finestra' };
+  // fissate fuori finestra a settembre.
+  //
+  // I giorni sono quelli che il modello ha visto nel blocco SLOT APPUNTAMENTO
+  // DISPONIBILI quando ha scritto al lead, non un secondo calcolo fatto adesso:
+  // `computeBookingDays` ruota l'ancora di un giorno alle 20:00, quindi il bot che alle
+  // 19:45 promette "domani alle 20" e il lead che risponde alle 20:10 cadevano su due
+  // finestre diverse, e la call promessa in chat veniva scartata. Quando i giorni non
+  // arrivano (chiamanti fuori dal drain: recupero manuale, cron) si ricalcola qui:
+  // meglio la finestra di adesso che nessun controllo.
+  const finestra =
+    bookingDays && bookingDays.length > 0
+      ? bookingDays
+      : (({ day1, day2 }) => [day1.date, day2.date])(computeBookingDays(new Date(nowMs), ranges));
+  if (!finestra.includes(giorno)) return { ok: false, motivo: 'fuori_finestra' };
 
   return { ok: true };
 }
@@ -213,18 +229,41 @@ const DETTAGLIO_APPUNTAMENTO: Record<MotivoAppuntamentoNonFissabile, string> = {
  * La nota che parte al posto dell'appuntamento scartato. Deve dire in testa che
  * l'appuntamento NON c'è: se le Conferme leggessero "appuntamento" chiamerebbero un
  * lead che non aspetta nessuna call.
+ *
+ * `appuntamentoInAgenda` cambia la nota da cima a fondo, e non è un dettaglio: la
+ * guardia scatta anche sullo SPOSTAMENTO di una call già presa. Lì "in agenda non c'è
+ * niente" è falso e pericoloso — chi legge cancella un appuntamento vivo, e il lead ci
+ * si presenta credendo di averlo spostato.
  */
 export function buildAppuntamentoNonFissabileNote(input: {
   motivo: MotivoAppuntamentoNonFissabile;
   dataScartata?: string;
   leadWords?: string;
+  /** L'appuntamento che il lead HA GIÀ e che resta dov'è (ISO dal DB). */
+  appuntamentoInAgenda?: string | null;
 }): string {
   const parole = paroleDelLead(input.leadWords);
   const citazione = parole ? ` Parole del lead: "${parole}".` : '';
-  const quando =
-    input.dataScartata && !Number.isNaN(Date.parse(input.dataScartata))
-      ? ` (${formatRomeDateTime(input.dataScartata)})`
-      : '';
+  const leggibile = (d: string | null | undefined) =>
+    d && !Number.isNaN(Date.parse(d)) ? formatRomeDateTime(d) : null;
+  const quandoChiesto = leggibile(input.dataScartata);
+  const quando = quandoChiesto ? ` (${quandoChiesto})` : '';
+  const inAgenda = leggibile(input.appuntamentoInAgenda);
+
+  // Spostamento di una call che esiste: la data vecchia è la cosa più importante della
+  // nota, perché è quella a cui il lead NON si presenterà.
+  if (input.appuntamentoInAgenda) {
+    const resta = inAgenda
+      ? `In agenda resta ${inAgenda}, e non è stato spostato niente.`
+      : `L'appuntamento che aveva resta in agenda, e non è stato spostato niente.`;
+    return (
+      `SPOSTAMENTO NON REGISTRATO — il bot stava per spostare la call${quando} ma ` +
+      `${DETTAGLIO_APPUNTAMENTO[input.motivo]}. ${resta} Il lead può aver ricevuto in ` +
+      `chat la conferma del nuovo giorno e credere di averlo spostato: NON cancellate ` +
+      `l'appuntamento, ricontattatelo per rimettervi d'accordo su giorno e ora.${citazione}`
+    );
+  }
+
   // Il modello, quando emette il tag, ha già detto al lead che la call è presa: la
   // guardia ferma la scrittura, non la frase già mandata in chat. La nota deve dirlo,
   // altrimenti chi legge crede che il lead sia solo da richiamare.

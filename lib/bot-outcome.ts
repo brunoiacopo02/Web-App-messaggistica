@@ -287,6 +287,12 @@ export type SendOutcomeArgs = {
   /** Solo per `CONTATTO_UMANO`: la nota già scritta, al posto di quella standard che
    *  dice "il bot si è fatto da parte" — cosa che in quei casi non è vera. */
   notaContattoUmano?: string;
+  /** I due giorni prenotabili ('YYYY-MM-DD') che il modello aveva davanti quando ha
+   *  fissato: li porta il drain, presi dal prompt di quel turno. Servono alla guardia
+   *  `fuori_finestra`, che senza li ricalcolerebbe — e alle 20:00 l'ancora ruota, così
+   *  la call appena promessa al lead risulterebbe fuori finestra. Chi non li ha (la
+   *  route di recupero manuale, i cron) li lascia vuoti: la guardia ricalcola. */
+  bookingDays?: readonly string[];
 };
 
 /**
@@ -447,13 +453,26 @@ export async function sendOutcome(
   // suo percorso (`locked` → NOTA). Qui si guarda solo il fissaggio vero.
   const appuntamentoCheck =
     args.outcome === 'APPUNTAMENTO' && !interim && (action.kind === 'normal' || action.kind === 'reschedule')
-      ? checkDataAppuntamento(args.date, Date.now(), bookingBlackout(process.env.BOOKING_BLACKOUT))
+      ? checkDataAppuntamento(
+          args.date,
+          Date.now(),
+          bookingBlackout(process.env.BOOKING_BLACKOUT),
+          args.bookingDays,
+        )
       : { ok: true as const };
   if (!appuntamentoCheck.ok) {
+    // Se una call c'è già, questa non è un fissaggio mancato ma uno SPOSTAMENTO non
+    // registrato, e la nota deve dirlo: la versione "in agenda non c'è niente" ha
+    // fatto cancellare appuntamenti vivi a chi la leggeva.
+    const inAgenda =
+      action.kind === 'reschedule' || (row?.bot_outcome ?? null) === 'APPUNTAMENTO'
+        ? row?.bot_scheduled_at ?? null
+        : null;
     const note = buildAppuntamentoNonFissabileNote({
       motivo: appuntamentoCheck.motivo,
       dataScartata: args.date,
       leadWords: args.leadWords ?? args.note,
+      appuntamentoInAgenda: inAgenda,
     });
     await supabase.from('event_log').insert({
       type: 'appuntamento_non_fissabile',

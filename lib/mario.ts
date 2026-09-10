@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { buildMarioSystem } from './mario-prompt';
 import { romeNowContext } from './rome-time';
-import { bookingSlotsContext } from './booking-slots';
+import { bookingSlotsContext, computeBookingDays } from './booking-slots';
 import { sanitizeOutbound } from './outbound-sanitize';
 import { isoWithOffset } from './bot-contract';
 
@@ -21,10 +21,19 @@ export type MarioResult = {
   /** Un secondo recapito o un'informazione che il lead vuole far arrivare a chi lo
    *  chiama. Non è un esito: non tocca lo stato del lead, la conversazione prosegue. */
   notaCrm?: string;
+  /** I due giorni prenotabili ('YYYY-MM-DD') che il modello ha DAVVERO visto nel
+   *  prompt di questo turno. Viaggiano fino a `checkDataAppuntamento` perché guardia e
+   *  prompt giudichino la stessa finestra: ricalcolarla dopo significa, alle 20:00,
+   *  scartare la call che il bot ha appena promesso al lead. Lo riempie solo
+   *  `generateMarioReply`: `parseMarioReply`, che vede solo il testo, non lo conosce. */
+  bookingDays?: readonly string[];
 };
 
 const ESITO_RE = /\[ESITO:(APPUNTAMENTO|RICHIAMO|SCARTO|INTERROTTO)\|([^\]]*)\]/i;
-const NOTA_RE = /\[NOTA\|([^\]]*)\]/i;
+/** Globale di proposito: il modello può emetterne due (due recapiti nello stesso
+ *  messaggio). Con la regex non globale la seconda restava nel testo visibile, e il
+ *  lead si vedeva arrivare una bolla col tag tecnico e dentro il proprio numero. */
+const NOTA_RE = /\[NOTA\|([^\]]*)\]/gi;
 
 /** Rileva tag speciali, li rimuove dal testo visibile e ritorna flag + esito strutturato. */
 export function parseMarioReply(raw: string): MarioResult {
@@ -56,8 +65,10 @@ export function parseMarioReply(raw: string): MarioResult {
     else if (kind === 'INTERROTTO') { outcome = 'INTERROTTO'; note = arg || undefined; }
   }
 
-  const notaMatch = raw.match(NOTA_RE);
-  const notaCrm = notaMatch ? (notaMatch[1] ?? '').trim() || undefined : undefined;
+  // Tutte le note del turno, non solo la prima: al CRM ne parte una sola, quindi si
+  // uniscono. Perderne una significherebbe perdere un recapito che il lead ha dato.
+  const noteRaccolte = [...raw.matchAll(NOTA_RE)].map((m) => (m[1] ?? '').trim()).filter(Boolean);
+  const notaCrm = noteRaccolte.length > 0 ? noteRaccolte.join('; ') : undefined;
 
   const visibleReply = sanitizeOutbound(
     raw
@@ -152,7 +163,12 @@ export async function generateMarioReply(
 
   const now = opts?.now ?? new Date();
   const contextNote = opts?.contextNote ? `\n\n${opts.contextNote}` : '';
-  const system = `${buildMarioSystem(opts?.personaName ?? 'Mario')}\n\n${romeNowContext(now)}\n\n${bookingSlotsContext(now)}${contextNote}`;
+  // I due giorni si calcolano UNA volta e si passano al blocco del prompt, così quelli
+  // che il modello legge sono esattamente quelli che restituiamo al chiamante: sono
+  // loro a dover arrivare fino alla guardia sull'esito, non un secondo calcolo fatto
+  // qualche minuto dopo (alle 20:00 l'ancora ruota e la finestra cambia sotto i piedi).
+  const giorni = computeBookingDays(now);
+  const system = `${buildMarioSystem(opts?.personaName ?? 'Mario')}\n\n${romeNowContext(now)}\n\n${bookingSlotsContext(now, { days: giorni })}${contextNote}`;
 
   const requestOptions = {
     ...(opts?.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : {}),
@@ -172,5 +188,5 @@ export async function generateMarioReply(
 
   const textBlock = response.content.find((b) => b.type === 'text');
   const raw = textBlock && 'text' in textBlock ? textBlock.text : '';
-  return parseMarioReply(raw);
+  return { ...parseMarioReply(raw), bookingDays: [giorni.day1.date, giorni.day2.date] };
 }

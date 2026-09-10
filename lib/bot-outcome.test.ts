@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { sendOutcome, sendCrmNota } from './bot-outcome';
-import { romeOffset } from './rome-time';
+import { romeOffset, formatRomeDateTime } from './rome-time';
 import { computeBookingDays } from './booking-slots';
 
 const DATE = '2026-06-29T17:00:00Z';
@@ -777,16 +777,61 @@ describe('sendOutcome — APPUNTAMENTO in un giorno o a un\'ora impossibili', ()
 
   // Da v1.5 un lead gia' fissato puo' essere SPOSTATO, e quindi la guardia deve
   // valere anche li': spostare una call alle 02:00 e' sbagliato quanto fissarcela.
+  // Aggiornato col fix del 10/09: la nota diceva "APPUNTAMENTO NON FISSATO — in agenda
+  // non c'è niente" anche quando una call c'era, e chi la leggeva poteva cancellarla.
+  // Su uno spostamento scartato la verità è un'altra: in agenda resta la data vecchia.
   it('anche uno spostamento passa dalla guardia: le 02:00 non diventano un appuntamento', async () => {
     const giaFissato = { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE };
     const { supabase, calls } = makeSupabase(giaFissato);
     await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: giornoUtile(2) });
 
     expect(bodyInviato().outcome).toBe('NOTA');
-    expect(bodyInviato().note).toContain('APPUNTAMENTO NON FISSATO');
+    expect(bodyInviato().note).toContain('SPOSTAMENTO NON REGISTRATO');
     expect(calls.events.some((e: { type: string }) => e.type === 'appuntamento_non_fissabile')).toBe(true);
     // E l'appuntamento in agenda non si muove.
     for (const u of calls.updates) expect(u).not.toHaveProperty('bot_scheduled_at');
+  });
+
+  // Caso reale: lead con la call di mercoledì, lunedì chiede venerdì, il modello
+  // conferma, la guardia scarta. Alle Conferme deve arrivare la data che resta viva,
+  // non "in agenda non c'è niente".
+  it('lo spostamento scartato dice QUALE call resta in agenda e di non cancellarla', async () => {
+    const giaFissato = { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE };
+    const { supabase } = makeSupabase(giaFissato);
+    await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: giornoUtile(2) });
+
+    const note = bodyInviato().note as string;
+    expect(note).toContain(formatRomeDateTime(DATE));
+    expect(note).not.toContain("in agenda non c'è niente");
+    expect(note).toContain('NON cancellate');
+  });
+
+  it('sul primo fissaggio la nota resta quella di prima: lì in agenda non c\'è davvero niente', async () => {
+    const { supabase } = makeSupabase(attivo);
+    await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: giornoUtile(2) });
+    expect(bodyInviato().note).toContain('APPUNTAMENTO NON FISSATO');
+  });
+
+  // I due giorni che il modello ha visto nel prompt viaggiano fino alla guardia: senza,
+  // dopo le 20:00 la finestra ruota e la call appena promessa al lead viene scartata.
+  it('accetta il giorno che il modello aveva davanti, anche se adesso la finestra è un\'altra', async () => {
+    const { supabase } = makeSupabase(attivo);
+    const fraCinqueGiorni = new Date(Date.now() + 5 * 86_400_000);
+    if (fraCinqueGiorni.getUTCDay() === 0) fraCinqueGiorni.setUTCDate(fraCinqueGiorni.getUTCDate() + 1);
+    const giorno = new Intl.DateTimeFormat('sv-SE', {
+      timeZone: 'Europe/Rome', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(fraCinqueGiorni);
+    const quando = conOra(giorno, 15);
+
+    await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: quando, bookingDays: [giorno, giorno] });
+    expect(bodyInviato().outcome).toBe('APPUNTAMENTO');
+
+    // Lo stesso identico esito senza i giorni del turno: la guardia ricalcola e scarta.
+    const solo = makeSupabase(attivo);
+    await sendOutcome(solo.supabase, 1, { outcome: 'APPUNTAMENTO', date: quando });
+    const secondo = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[1][1]!.body as string);
+    expect(secondo.outcome).toBe('NOTA');
+    expect(secondo.note).toContain('fuori dai due giorni');
   });
 });
 
