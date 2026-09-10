@@ -53,8 +53,13 @@ export interface GdoNoteInput {
   gdoAppuntamentoAt?: string | null;
 }
 
-/** Noemi inizia alle 13:00: una call del mattino la copre chiamando il pomeriggio prima. */
-const NOEMI_ORA_INIZIO = 13;
+/**
+ * Noemi attacca a lavorare alle 13:00, quella resta la sua ora d'inizio vera. Ma per una call
+ * delle 13 o delle 14 "qualche ora prima lo stesso giorno" cadrebbe quando Noemi non c'è ancora:
+ * quelle si coprono chiamando il pomeriggio del giorno prima. Sotto questa soglia, giorno prima;
+ * da qui in su, stesso giorno.
+ */
+const NOEMI_SOGLIA_STESSO_GIORNO = 15;
 
 /** L'ora vera della call: per un lead GDO può stare su due colonne, vince la più recente. */
 export function oraAppuntamento(
@@ -70,7 +75,7 @@ export function oraAppuntamento(
 /** La riga su quando chiama Noemi, vuota se non sappiamo quando è la call. */
 export function quandoChiamaNoemi(quando: Date | null): string {
   if (!quando) return '';
-  return romeHour(quando) < NOEMI_ORA_INIZIO
+  return romeHour(quando) < NOEMI_SOGLIA_STESSO_GIORNO
     ? ' Digli QUANDO lo chiama: il pomeriggio del giorno prima della call, non la mattina stessa, quindi tenga il telefono a portata già dal pomeriggio precedente.'
     : ' Digli QUANDO lo chiama: lo stesso giorno della call, qualche ora prima. Dagli la finestra, mai un orario al minuto.';
 }

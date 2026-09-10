@@ -124,6 +124,46 @@ describe('nota Noemi: dipende dall ora dell appuntamento', () => {
     expect(nota).toContain('lo stesso giorno');
   });
 
+  it('appuntamento alle 13:00: sotto soglia, Noemi chiama il giorno prima', () => {
+    const nota = gdoContextNote({
+      ...baseNoemi,
+      botScheduledAt: '2026-09-11T13:00:00+02:00',
+      gdoAppuntamentoAt: null,
+    });
+    expect(nota).toContain('il pomeriggio del giorno prima');
+    expect(nota).not.toContain('lo stesso giorno');
+  });
+
+  it('appuntamento alle 14:00: sotto soglia, Noemi chiama il giorno prima', () => {
+    const nota = gdoContextNote({
+      ...baseNoemi,
+      botScheduledAt: '2026-09-11T14:00:00+02:00',
+      gdoAppuntamentoAt: null,
+    });
+    expect(nota).toContain('il pomeriggio del giorno prima');
+    expect(nota).not.toContain('lo stesso giorno');
+  });
+
+  it('appuntamento alle 15:00: soglia raggiunta, Noemi chiama lo stesso giorno', () => {
+    const nota = gdoContextNote({
+      ...baseNoemi,
+      botScheduledAt: '2026-09-11T15:00:00+02:00',
+      gdoAppuntamentoAt: null,
+    });
+    expect(nota).toContain('lo stesso giorno');
+    expect(nota).not.toContain('il pomeriggio del giorno prima');
+  });
+
+  it('appuntamento alle 18:00: stesso giorno', () => {
+    const nota = gdoContextNote({
+      ...baseNoemi,
+      botScheduledAt: '2026-09-11T18:00:00+02:00',
+      gdoAppuntamentoAt: null,
+    });
+    expect(nota).toContain('lo stesso giorno');
+    expect(nota).not.toContain('il pomeriggio del giorno prima');
+  });
+
   it('vince la data piu recente fra le due colonne', () => {
     const nota = gdoContextNote({
       ...baseNoemi,

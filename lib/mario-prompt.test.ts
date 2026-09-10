@@ -449,6 +449,15 @@ describe('secondo recapito del lead', () => {
   it('il tag NOTA non deve mai restare visibile al lead, come gli altri tag tecnici', () => {
     expect(p).toContain('[NOTA|...] non devono MAI essere visibili al lead');
   });
+
+  // "un solo tag per messaggio" (senza qualifica) contraddiceva la regola qui sopra, che
+  // impone [PASSAGGIO_UMANO] e [NOTA|...] insieme quando è il lead a chiedere di essere
+  // chiamato: il modello poteva leggerla come un divieto e ometterne uno dei due.
+  it('la regola sul tag unico riguarda solo [ESITO:...], e lascia liberi gli altri tag di accompagnarlo', () => {
+    expect(p).toContain('un solo tag [ESITO:...] per messaggio');
+    expect(p).not.toContain('un solo tag per messaggio');
+    expect(p).toMatch(/restano liberi di accompagnarlo/);
+  });
 });
 
 describe('M1: FASE 5, i tagli del pitch cadono su confine di frase, non a metà', () => {
@@ -657,19 +666,22 @@ describe('CHI È NOEMI E QUANDO CHIAMA', () => {
     expect(p).toContain('non chiamarla mai "la consulente" o "la tutor"');
   });
 
-  it('lega l orario della chiamata all ora della call, con la soglia delle 13', () => {
-    expect(p).toContain('call dalle 13:00 in poi');
-    expect(p).toContain('call PRIMA DELLE 13:00');
+  it('lega l orario della chiamata all ora della call, con la soglia delle 15', () => {
+    expect(p).toContain('call dalle 15:00 in poi');
+    expect(p).toContain('call PRIMA DELLE 15:00');
     expect(p).toContain('il POMERIGGIO DEL GIORNO PRIMA');
   });
 
-  // La soglia delle 13:00 resta (è l'ora confermata dal committente), ma "qualche ora
-  // prima" di una call alle 14 cade prima delle 13, quando Noemi non c'è ancora: al lead
-  // veniva promessa una chiamata la mattina, e teneva il telefono nel momento sbagliato.
+  // Noemi attacca alle 13:00 (quella resta la sua ora vera), ma "qualche ora prima" di
+  // una call alle 13 o alle 14 cadrebbe prima delle 13, quando Noemi non c'è ancora: al
+  // committente questo spostava la soglia fra i due rami da 13:00 a 15:00 (02/09).
   it("non promette mai un anticipo prima delle 13, quando Noemi non c'è", () => {
     expect(p).toContain("prima di quell'ora non chiama mai");
     expect(p).toContain('Mai la mattina');
-    expect(p).toMatch(/call delle 13, delle 14 e delle 15/);
+  });
+
+  it('copre esplicitamente le call delle 13 e delle 14 chiamando il giorno prima', () => {
+    expect(p).toMatch(/call.*delle 13 e delle 14/);
   });
 
   it('vieta le frasi che fanno tenere il telefono nel momento sbagliato', () => {
