@@ -161,6 +161,36 @@ describe('tag [VIDEO_VISTO]', () => {
   });
 });
 
+describe('tag [NOTA|...]', () => {
+  it('estrae il testo della nota e lo toglie dal messaggio visibile', () => {
+    const r = parseMarioReply(
+      'Perfetto, lo passo a chi ti chiama. [NOTA|Secondo recapito del lead: 3924538096]',
+    );
+    expect(r.notaCrm).toBe('Secondo recapito del lead: 3924538096');
+    expect(r.visibleReply).toBe('Perfetto, lo passo a chi ti chiama.');
+    expect(r.visibleReply).not.toContain('[NOTA');
+  });
+
+  it('senza il tag notaCrm resta undefined', () => {
+    expect(parseMarioReply('Ciao!').notaCrm).toBeUndefined();
+  });
+
+  it('una nota non è un esito: non chiude la conversazione', () => {
+    const r = parseMarioReply('Ok. [NOTA|Secondo recapito: 333111]');
+    expect(r.outcome).toBeUndefined();
+    expect(r.passToHuman).toBe(false);
+  });
+
+  it('convive con un tag [ESITO:...] nello stesso messaggio senza confondersi', () => {
+    const r = parseMarioReply(
+      'Va bene, allora non se ne parla più. [NOTA|Secondo recapito: 333111] [ESITO:SCARTO|non interessato]',
+    );
+    expect(r.notaCrm).toBe('Secondo recapito: 333111');
+    expect(r.outcome).toBe('DA_SCARTARE');
+    expect(r.visibleReply).toBe('Va bene, allora non se ne parla più.');
+  });
+});
+
 describe('generateMarioReply — contesto extra (lead con appuntamento già fissato dal GDO)', () => {
   it('appende il contesto al system prompt senza toccare la cronologia', async () => {
     messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'Ok!' }] });

@@ -4,10 +4,13 @@ import { shouldAutoReply, shouldReopen, nextUnansweredInboundIndex, lastIsUnansw
 vi.mock('./mario', () => ({ generateMarioReply: vi.fn(), GDO_CONTEXT_NOTE: 'CONTESTO-GDO' }));
 vi.mock('./twilio', () => ({ sendFreeText: vi.fn(async () => ({ sid: 'SM_fake', status: 'queued' })) }));
 vi.mock('./bot-report', () => ({ generateBotReport: vi.fn(async () => ({})) }));
-vi.mock('./bot-outcome', () => ({ sendOutcome: vi.fn(async () => ({ sent: true })) }));
+vi.mock('./bot-outcome', () => ({
+  sendOutcome: vi.fn(async () => ({ sent: true })),
+  inviaNotaAlCrm: vi.fn(async () => ({ sent: true })),
+}));
 
 import { generateMarioReply, GDO_CONTEXT_NOTE } from './mario';
-import { sendOutcome } from './bot-outcome';
+import { sendOutcome, inviaNotaAlCrm } from './bot-outcome';
 import { NOTA_VIDEO, NOTA_NOEMI } from './gdo-context-note';
 import { OPENING_ENV_KEYS, personaForConversation } from './persona';
 
@@ -1407,6 +1410,128 @@ function makeStatefulDrainSupabase(row: FakeConvRow, initialRows: FakeMsgRow[]) 
 
   return { supabase, calls, conv };
 }
+
+// Prima di questo, un secondo numero dato dal lead in chat moriva lì: il bot
+// rispondeva "lo segno, avviso Noemi" e non lo segnava nessuno. [NOTA|...] fa
+// arrivare davvero la nota alle Conferme, senza mai chiudere la conversazione:
+// non è un esito.
+describe('il secondo recapito del lead arriva al CRM come NOTA, senza chiudere la conversazione', () => {
+  const rows: FakeMsgRow[] = [
+    { direction: 'out', body: 'apertura', template_sid: null, created_at: '2026-07-29T10:00:00Z' },
+    { direction: 'in', body: 'puoi farmi chiamare su questo numero, 3924538096', template_sid: null, created_at: '2026-07-29T10:10:00Z' },
+  ];
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.stubEnv('BOT_WEBHOOK_SECRET', 'shh');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(sendOutcome).mockClear();
+    vi.mocked(inviaNotaAlCrm).mockReset();
+    vi.mocked(inviaNotaAlCrm).mockResolvedValue({ sent: true });
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('invia la nota al CRM e la conversazione resta viva (non è un esito)', async () => {
+    const claimedRow: ClaimedRow = { id: 95, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto, lo passo a chi ti chiama.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+      notaCrm: 'Secondo recapito del lead: 3924538096',
+    });
+
+    await drainMarioReplies(supabase, 95, '+391234567890', () => 0);
+
+    expect(inviaNotaAlCrm).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(inviaNotaAlCrm).mock.calls[0]).toEqual([
+      supabase, 95, 'crm1', 'Secondo recapito del lead: 3924538096', undefined, 'shh',
+    ]);
+    // Il messaggio al lead è partito una sola volta, il tag non ci resta dentro.
+    expect(calls.messageInserts.map((m: any) => m.body)).toEqual(['Perfetto, lo passo a chi ti chiama.']);
+    // Non è un esito: nessuna chiamata a sendOutcome, la conversazione resta active.
+    expect(sendOutcome).not.toHaveBeenCalled();
+    expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+
+  it('lead non-CRM (nessun crm_lead_id): non tenta l\'invio', async () => {
+    const claimedRow: ClaimedRow = { id: 96, ai_started_at: null, crm_lead_id: null, bot_outcome: null };
+    const { supabase } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto, lo passo a chi ti chiama.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+      notaCrm: 'Secondo recapito del lead: 3924538096',
+    });
+
+    await drainMarioReplies(supabase, 96, '+391234567890', () => 0);
+
+    expect(inviaNotaAlCrm).not.toHaveBeenCalled();
+  });
+
+  it('un invio fallito non manda in errore il turno: il messaggio al lead resta partito', async () => {
+    const claimedRow: ClaimedRow = { id: 97, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(inviaNotaAlCrm).mockRejectedValueOnce(new Error('rete giù'));
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto, lo passo a chi ti chiama.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+      notaCrm: 'Secondo recapito del lead: 3924538096',
+    });
+
+    await drainMarioReplies(supabase, 97, '+391234567890', () => 0);
+
+    expect(calls.messageInserts).toHaveLength(1);
+    expect(calls.events.some((e: any) => e.type === 'nota_secondo_recapito_non_inviata')).toBe(true);
+    // L'eccezione non è arrivata al catch del drain: al retry non rimanderebbe la
+    // stessa risposta al lead una seconda volta.
+    expect(calls.events.some((e: any) => e.type === 'fenice_ai_error')).toBe(false);
+    expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+
+  it('la risposta del CRM diversa da 2xx si logga ma non blocca il turno', async () => {
+    const claimedRow: ClaimedRow = { id: 98, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(inviaNotaAlCrm).mockResolvedValueOnce({ sent: false, status: 500, error: 'http_500' });
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto, lo passo a chi ti chiama.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+      notaCrm: 'Secondo recapito del lead: 3924538096',
+    });
+
+    await drainMarioReplies(supabase, 98, '+391234567890', () => 0);
+
+    expect(calls.events.some((e: any) => e.type === 'nota_secondo_recapito_non_inviata')).toBe(true);
+    expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+
+  it('senza BOT_WEBHOOK_SECRET non tenta l\'invio e lo logga', async () => {
+    vi.stubEnv('BOT_WEBHOOK_SECRET', '');
+    const claimedRow: ClaimedRow = { id: 99, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto, lo passo a chi ti chiama.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+      notaCrm: 'Secondo recapito del lead: 3924538096',
+    });
+
+    await drainMarioReplies(supabase, 99, '+391234567890', () => 0);
+
+    expect(inviaNotaAlCrm).not.toHaveBeenCalled();
+    expect(calls.events.some((e: any) => e.type === 'nota_secondo_recapito_non_inviata')).toBe(true);
+  });
+
+  it('senza il tag notaCrm non chiama mai il CRM per la nota', async () => {
+    const claimedRow: ClaimedRow = { id: 100, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const { supabase } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Certo, dimmi pure.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 100, '+391234567890', () => 0);
+
+    expect(inviaNotaAlCrm).not.toHaveBeenCalled();
+  });
+});
 
 describe('fermo manuale del bot su una singola chat', () => {
   const OPENING: FakeMsgRow = { direction: 'out', body: 'apertura', template_sid: null, created_at: '2026-07-01T10:00:00Z' };

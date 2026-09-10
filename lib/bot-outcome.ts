@@ -37,8 +37,10 @@ async function notaGiaInviata(
   return (data ?? []).length > 0;
 }
 
-/** POST di una NOTA al CRM. Solo rete e log: nessuna decisione, nessuno stato locale. */
-async function inviaNotaAlCrm(
+/** POST di una NOTA al CRM. Solo rete e log: nessuna decisione, nessuno stato locale.
+ *  Esportata: la usa anche il call site del tag [NOTA|...] in `fenice-autoreply.ts`
+ *  per far arrivare alle Conferme un secondo recapito che il lead dà in chat. */
+export async function inviaNotaAlCrm(
   supabase: Supa,
   conversationId: number,
   crmLeadId: string,

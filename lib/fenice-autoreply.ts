@@ -9,7 +9,7 @@ import { splitMarioMessages } from './mario-split';
 import { ensureConfirmationBlock, containsVideoLink } from './confirmation-block';
 import { unknownFeniceLinks } from './outbound-sanitize';
 import { generateBotReport } from './bot-report';
-import { sendOutcome } from './bot-outcome';
+import { sendOutcome, inviaNotaAlCrm } from './bot-outcome';
 import { stopDalCrmPerLead, vuolePassaggioAUmano } from './stop-crm';
 import { buildScriveDopoLaCallNote } from './bot-outcome-rules';
 import { personaForConversation, PERSONA_NAME, OPENING_ENV_KEYS } from './persona';
@@ -588,6 +588,39 @@ export async function drainMarioReplies(
         payload: { conversationId, phone, appointmentFixed: result.appointmentFixed, passToHuman: result.passToHuman } as never,
         message: `Mario ha risposto a ${phone}`, level: 'info',
       });
+
+      // Il secondo recapito che il lead dà in chat moriva qui: il bot rispondeva "lo
+      // segno, avviso Noemi" e non lo segnava nessuno. [NOTA|...] è il canale già vivo
+      // (lo stesso delle disdette): non è un esito, non tocca lo stato del lead, e la
+      // conversazione prosegue esattamente come prima — per questo sta PRIMA della
+      // gestione degli esiti, non al loro posto. Il messaggio al lead è già partito
+      // sopra: un errore qui non deve mai propagarsi, altrimenti il `catch` del drain
+      // rimetterebbe la conversazione 'active' e il prossimo giro rimanderebbe la
+      // stessa risposta al lead una seconda volta.
+      if (result.notaCrm && crmLeadId) {
+        try {
+          const secret = process.env.BOT_WEBHOOK_SECRET;
+          const esitoNota = secret
+            ? await inviaNotaAlCrm(supabase, conversationId, crmLeadId, result.notaCrm, undefined, secret)
+            : { sent: false, error: 'not_configured' };
+          if (!esitoNota.sent) {
+            await supabase.from('event_log').insert({
+              type: 'nota_secondo_recapito_non_inviata',
+              payload: { conversationId, crmLeadId, error: esitoNota.error ?? null, status: esitoNota.status ?? null } as never,
+              message: `[bot-fissatore] conv ${conversationId}: nota col secondo recapito del lead non inviata al CRM (${esitoNota.error ?? esitoNota.status})`,
+              level: 'error',
+            });
+          }
+        } catch (err) {
+          const m = err instanceof Error ? err.message : 'errore';
+          await supabase.from('event_log').insert({
+            type: 'nota_secondo_recapito_non_inviata',
+            payload: { conversationId, crmLeadId, error: m } as never,
+            message: `[bot-fissatore] conv ${conversationId}: eccezione inviando la nota col secondo recapito del lead — ${m}`,
+            level: 'error',
+          });
+        }
+      }
 
       if (result.outcome) {
         // Il drain claima solo da 'active' (vedi il lock CAS sopra): aiStatus qui è

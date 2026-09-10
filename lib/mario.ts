@@ -18,9 +18,13 @@ export type MarioResult = {
   scheduledAt?: string;
   discardReason?: string;
   note?: string;
+  /** Un secondo recapito o un'informazione che il lead vuole far arrivare a chi lo
+   *  chiama. Non è un esito: non tocca lo stato del lead, la conversazione prosegue. */
+  notaCrm?: string;
 };
 
 const ESITO_RE = /\[ESITO:(APPUNTAMENTO|RICHIAMO|SCARTO|INTERROTTO)\|([^\]]*)\]/i;
+const NOTA_RE = /\[NOTA\|([^\]]*)\]/i;
 
 /** Rileva tag speciali, li rimuove dal testo visibile e ritorna flag + esito strutturato. */
 export function parseMarioReply(raw: string): MarioResult {
@@ -52,12 +56,16 @@ export function parseMarioReply(raw: string): MarioResult {
     else if (kind === 'INTERROTTO') { outcome = 'INTERROTTO'; note = arg || undefined; }
   }
 
+  const notaMatch = raw.match(NOTA_RE);
+  const notaCrm = notaMatch ? (notaMatch[1] ?? '').trim() || undefined : undefined;
+
   const visibleReply = sanitizeOutbound(
     raw
       .replace(ESITO_RE, '')
       .replace(/\[APPUNTAMENTO_FISSATO\]/g, '')
       .replace(/\[PASSAGGIO_UMANO\]/g, '')
       .replace(/\[VIDEO_VISTO\]/g, '')
+      .replace(NOTA_RE, '')
       .trim(),
   );
 
@@ -70,6 +78,7 @@ export function parseMarioReply(raw: string): MarioResult {
     scheduledAt,
     discardReason,
     note,
+    notaCrm,
   };
 }
 

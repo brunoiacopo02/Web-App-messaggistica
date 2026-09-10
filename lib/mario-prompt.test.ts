@@ -422,6 +422,23 @@ describe('niente promesse di telefonate: Mario non puo chiamare nessuno', () => 
   });
 });
 
+describe('secondo recapito del lead', () => {
+  const p = buildMarioSystem('Marta');
+
+  it('insegna il tag NOTA invece di rimbalzare il lead a Noemi', () => {
+    expect(p).toContain('[NOTA|Secondo recapito del lead:');
+    expect(p).not.toContain('diglielo a Noemi appena ti chiama');
+  });
+
+  it('dice che senza il tag non parte niente', () => {
+    expect(p).toMatch(/senza tag non parte niente/i);
+  });
+
+  it('il tag NOTA non deve mai restare visibile al lead, come gli altri tag tecnici', () => {
+    expect(p).toContain('[NOTA|...] non devono MAI essere visibili al lead');
+  });
+});
+
 describe('M1: FASE 5, i tagli del pitch cadono su confine di frase, non a metà', () => {
   const p = buildMarioSystem('Marta');
 
