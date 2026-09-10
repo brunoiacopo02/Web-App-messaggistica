@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { sendOutcome, sendCrmNota, neutralizzaMarcatoreMotivo } from './bot-outcome';
 import { romeOffset, formatRomeDateTime } from './rome-time';
 import { computeBookingDays } from './booking-slots';
+import { crmDedupKey } from './note-dedup';
 
 const DATE = '2026-06-29T17:00:00Z';
 
@@ -62,12 +63,18 @@ function makeSupabase(convRow: any, opts: { eventLogRows?: any[] } = {}) {
         insert(payload: any) { calls.events.push(payload); return Promise.resolve({}); },
         select() {
           const filtri: [string, string][] = [];
+          let gte: [string, string] | null = null;
           const stub: any = {
             eq(colonna: string, valore: string) { filtri.push([colonna, valore]); return stub; },
+            // `.gte()` e `.order()` li usa `noteCrmRecentiPerLead`: l'ordine non serve
+            // al fake (i dataset di test restano piccoli), il confronto per `gte` sì.
+            gte(colonna: string, valore: string) { gte = [colonna, valore]; return stub; },
+            order() { return stub; },
             limit() {
               calls.eventLogQueries.push([...filtri]);
               const data = eventLogRows.filter((r) =>
-                filtri.every(([colonna, valore]) => valoreColonna(r, colonna) === valore));
+                filtri.every(([colonna, valore]) => valoreColonna(r, colonna) === valore)
+                && (!gte || (valoreColonna(r, gte[0]) ?? '') >= gte[1]));
               return Promise.resolve({ data });
             },
           };
@@ -437,6 +444,108 @@ describe('sendCrmNota — una nota diretta, fuori dalla logica degli esiti', () 
     const r = await sendCrmNota(supabase, 1, 'qualcosa');
     expect(r).toEqual({ sent: false, error: 'not_crm_lead' });
     expect((globalThis.fetch as any).mock.calls).toHaveLength(0);
+  });
+});
+
+// Difesa "controllo esatto" sulla chiave di dedup del CRM (vedi il commento sopra
+// `neutralizzaMarcatoreMotivo`): la soglia di lunghezza è un proxy della specificità,
+// non la specificità. `inviaNotaAlCrm` (qui esercitata via `sendCrmNota`, il call site
+// del testo libero del modello) legge le `bot_note_sent` già mandate allo stesso lead
+// negli ultimi 15 minuti e allunga la chiave quando collide con un fatto diverso.
+describe('inviaNotaAlCrm — controllo esatto sulla chiave di dedup', () => {
+  const CONV = { crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null };
+  // Il caso misurato dal team del CRM sul loro parser vero: 100 caratteri di preambolo
+  // identico, poi due fatti diversi. La soglia di 80 non se ne accorge (100 > 80): solo
+  // il controllo esatto, che guarda le note vere e non una loro lunghezza, ci riesce.
+  const preambolo = 'Aggiornamento automatico dal bot fissatore relativo alla conversazione WhatsApp in corso con il lead.';
+  const notaA = `${preambolo} Ha chiesto di spostare la call a giovedì.`;
+  const notaB = `${preambolo} Ha dato un secondo recapito, 333 1234567.`;
+
+  it('al successo registra bot_note_sent con la chiave derivata e l\'impronta del testo', async () => {
+    const { supabase, calls } = makeSupabase(CONV);
+    await sendCrmNota(supabase, 1, notaA);
+
+    const evento = calls.events.find((e: { type: string }) => e.type === 'bot_note_sent');
+    expect(evento).toBeDefined();
+    expect(evento.payload.conversationId).toBe(1);
+    expect(evento.payload.crmLeadId).toBe('crm1');
+    expect(typeof evento.payload.noteKey).toBe('string');
+    expect(evento.payload.noteKey.length).toBeGreaterThan(0);
+    expect(evento.payload.noteFingerprint).toMatch(/^[0-9a-f]{16}$/);
+    expect(evento.level).toBe('info');
+  });
+
+  it('il caso misurato dal CRM: A e B condividono la chiave "a soglia" (100 caratteri), ma il controllo esatto le fa divergere', async () => {
+    // Senza il controllo esatto, questo è esattamente il buco: la soglia di 80 non
+    // interviene perché 100 è già sopra, e le due chiavi "naturali" sono identiche.
+    expect(crmDedupKey(notaA)).toBe(crmDedupKey(notaB));
+
+    const { supabase: s1, calls: c1 } = makeSupabase(CONV);
+    await sendCrmNota(s1, 1, notaA);
+    const bodyA = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+
+    const precedente = {
+      id: 1,
+      created_at: new Date().toISOString(),
+      ...c1.events.find((e: { type: string }) => e.type === 'bot_note_sent'),
+    };
+    (globalThis.fetch as any).mockClear();
+    const { supabase: s2 } = makeSupabase(CONV, { eventLogRows: [precedente] });
+    await sendCrmNota(s2, 2, notaB);
+    const bodyB = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+
+    expect(bodyA.note).toBe(notaA); // A parte per prima: nessuna collisione, intatta
+    expect(bodyB.note).not.toBe(notaB); // B è stata allungata per divergere
+    expect(crmDedupKey(bodyA.note)).not.toBe(crmDedupKey(bodyB.note));
+  });
+
+  it('una nota già inviata allo stesso lead, fuori dalla finestra di 15 minuti, non blocca nulla', async () => {
+    const { supabase: s1, calls: c1 } = makeSupabase(CONV);
+    await sendCrmNota(s1, 1, notaA);
+    const vecchia = {
+      id: 1,
+      created_at: new Date(Date.now() - 20 * 60_000).toISOString(),
+      ...c1.events.find((e: { type: string }) => e.type === 'bot_note_sent'),
+    };
+    (globalThis.fetch as any).mockClear();
+    const { supabase: s2 } = makeSupabase(CONV, { eventLogRows: [vecchia] });
+    await sendCrmNota(s2, 2, notaB);
+
+    const bodyB = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(bodyB.note).toBe(notaB); // fuori finestra: nessuna collisione rilevata
+  });
+
+  it('la stessa nota re-inviata sullo stesso lead non viene toccata: le chiavi devono restare uguali', async () => {
+    const { supabase: s1, calls: c1 } = makeSupabase(CONV);
+    await sendCrmNota(s1, 1, notaA);
+    const precedente = {
+      id: 1,
+      created_at: new Date().toISOString(),
+      ...c1.events.find((e: { type: string }) => e.type === 'bot_note_sent'),
+    };
+    (globalThis.fetch as any).mockClear();
+    const { supabase: s2 } = makeSupabase(CONV, { eventLogRows: [precedente] });
+    await sendCrmNota(s2, 2, notaA); // stesso identico fatto, stesso lead
+
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(body.note).toBe(notaA); // impronta uguale → nessuna collisione, non si tocca
+  });
+
+  it('lead diversi non collidono fra loro', async () => {
+    const { supabase: s1, calls: c1 } = makeSupabase(CONV);
+    await sendCrmNota(s1, 1, notaA);
+    const precedente = {
+      id: 1,
+      created_at: new Date().toISOString(),
+      ...c1.events.find((e: { type: string }) => e.type === 'bot_note_sent'),
+    };
+    (globalThis.fetch as any).mockClear();
+    const ALTRO_LEAD = { crm_lead_id: 'crm2', bot_outcome: null, bot_scheduled_at: null };
+    const { supabase: s2 } = makeSupabase(ALTRO_LEAD, { eventLogRows: [precedente] });
+    await sendCrmNota(s2, 2, notaB);
+
+    const bodyB = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(bodyB.note).toBe(notaB);
   });
 });
 

@@ -14,7 +14,7 @@ import {
 import { bookingBlackout } from './booking-blackout';
 import { estraiPeriodo } from './periodo-richiamo';
 import { categoriaPerCrm, disponibilitaDalTesto, motivoRichiesta } from './contatti-umani';
-import { noteFingerprint } from './note-dedup';
+import { noteFingerprint, divergiChiaveDaNotePrecedenti, type NotaCrmPrecedente } from './note-dedup';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -51,6 +51,16 @@ const DEFAULT_CRM_URL = 'https://crm-sales-fenice.vercel.app/api/bot/outcome';
  *    più punti da spostare. La soglia (80) sta sopra, con margine, al caso reale
  *    verificato dal CRM ("...in agenda resta mer" si ferma a 48 caratteri e già lì la
  *    dedup collide: un taglio a 40 non lo avrebbe coperto).
+ *
+ * La soglia di 80 è un proxy della specificità, non la specificità: un preambolo lungo
+ * ma generico la supera restando identico per fatti diversi (misurato dal CRM: due note
+ * che iniziano uguali per 100 caratteri, una "ha chiesto di spostare la call", l'altra
+ * "ha dato un secondo recapito" — stessa chiave, fatti diversi, seconda campanella mai
+ * partita). `inviaNotaAlCrm`, sotto, aggiunge un terzo intervento — il controllo esatto,
+ * non un proxy: legge le note già mandate a questo lead nella finestra di dedup e, se la
+ * chiave nuova collide con quella di una nota diversa (`divergiChiaveDaNotePrecedenti` in
+ * `lib/note-dedup.ts`), allunga finché non diverge. Le due difese non si pestano i piedi:
+ * la soglia resta un minimo generico, il controllo esatto è quello puntuale.
  */
 export function neutralizzaMarcatoreMotivo(note: string): string {
   let out = note.replace(/(motivo)\s*:/gi, '$1 -');
@@ -85,9 +95,38 @@ async function notaGiaInviata(
   return (data ?? []).length > 0;
 }
 
-/** POST di una NOTA al CRM. Solo rete e log: nessuna decisione, nessuno stato locale.
+/** Finestra di dedup del CRM: due note con la stessa chiave, sullo stesso lead, entro
+ *  questo tempo, sono per loro lo stesso fatto (vedi il commento sopra
+ *  `neutralizzaMarcatoreMotivo`). */
+const FINESTRA_DEDUP_CRM_MS = 15 * 60_000;
+
+/** Le `bot_note_sent` già scritte per questo lead nella finestra di dedup del CRM,
+ *  ridotte a {chiave, fingerprint}: è il materiale su cui `divergiChiaveDaNotePrecedenti`
+ *  decide se la nota nuova va allungata. Righe più vecchie di una `inviaNotaAlCrm` che
+ *  non passava ancora da questo campo (niente `noteKey`) vengono scartate, non rotte. */
+async function noteCrmRecentiPerLead(supabase: Supa, crmLeadId: string): Promise<NotaCrmPrecedente[]> {
+  const dal = new Date(Date.now() - FINESTRA_DEDUP_CRM_MS).toISOString();
+  const { data } = await supabase
+    .from('event_log')
+    .select('payload')
+    .eq('type', 'bot_note_sent')
+    .eq('payload->>crmLeadId', crmLeadId)
+    .gte('created_at', dal)
+    .order('created_at', { ascending: false })
+    .limit(10);
+  return (data ?? [])
+    .map((r) => (r as { payload?: { noteKey?: unknown; noteFingerprint?: unknown } } | null)?.payload)
+    .filter((p): p is { noteKey: string; noteFingerprint: string } =>
+      typeof p?.noteKey === 'string' && typeof p?.noteFingerprint === 'string')
+    .map((p) => ({ chiave: p.noteKey, fingerprint: p.noteFingerprint }));
+}
+
+/** POST di una NOTA al CRM. Solo rete e log: nessuna decisione, nessuno stato locale —
+ *  a parte la difesa "controllo esatto" sulla chiave di dedup (vedi
+ *  `divergiChiaveDaNotePrecedenti`), che qui legge le note recenti e decide.
  *  Esportata: la usa anche il call site del tag [NOTA|...] in `fenice-autoreply.ts`
- *  per far arrivare alle Conferme un secondo recapito che il lead dà in chat. */
+ *  per far arrivare alle Conferme un secondo recapito che il lead dà in chat — è
+ *  proprio lì, nel testo libero del modello, che il rischio di collisione sta. */
 export async function inviaNotaAlCrm(
   supabase: Supa,
   conversationId: number,
@@ -96,7 +135,33 @@ export async function inviaNotaAlCrm(
   report: BotReport | undefined,
   secret: string,
 ): Promise<{ sent: boolean; status?: number; error?: string }> {
-  const noteSicura = neutralizzaMarcatoreMotivo(note);
+  const noteBase = neutralizzaMarcatoreMotivo(note);
+  // L'impronta si calcola sul testo base, PRIMA di un eventuale allungamento anti-
+  // collisione: rappresenta il fatto, non il suo travestimento del momento, e deve
+  // restare stabile fra due invii della stessa nota anche se in mezzo cambia il set di
+  // note recenti con cui entra in collisione.
+  const fingerprint = noteFingerprint(noteBase);
+  const notePrecedenti = await noteCrmRecentiPerLead(supabase, crmLeadId);
+  const divergenza = divergiChiaveDaNotePrecedenti(noteBase, fingerprint, notePrecedenti);
+  const noteSicura = divergenza.note;
+  if (divergenza.irriducibile) {
+    // Non c'era più nessun punto da spostare: si spedisce comunque (mai inventare un
+    // taglio) ma si lascia una traccia esplicita, perché una campanella persa così
+    // resti tracciata invece che silenziosa come lo era prima di questa difesa.
+    await supabase.from('event_log').insert({
+      type: 'bot_nota_chiave_irriducibile',
+      payload: {
+        conversationId,
+        crmLeadId,
+        chiave: divergenza.chiave,
+        fingerprint,
+        chiaveCollisione: divergenza.collisione.chiave,
+        fingerprintCollisione: divergenza.collisione.fingerprint,
+      } as never,
+      message: `[bot-fissatore] chiave di dedup non divergibile per lead ${crmLeadId}: rischio che le Conferme perdano questa notifica`,
+      level: 'warn',
+    });
+  }
   const body: BotOutcomeBody = { leadId: crmLeadId, outcome: 'NOTA', note: noteSicura, ...(report ? { report } : {}) };
   const valid = validateOutcomeBody(body);
   if (!valid.ok) {
@@ -116,7 +181,20 @@ export async function inviaNotaAlCrm(
       headers: { 'content-type': 'application/json', 'x-bot-signature': signPayload(rawBody, secret) },
       body: rawBody,
     });
-    if (res.ok) return { sent: true, status: res.status };
+    if (res.ok) {
+      // Traccia del successo: prima di questa difesa `inviaNotaAlCrm` non scriveva
+      // niente su event_log se non in caso di errore, e senza questa riga il controllo
+      // esatto non avrebbe materiale su cui confrontare la nota successiva. Stessa
+      // forma della `bot_note_sent` scritta più sotto da `sendCrmNoteOnly`, così le due
+      // restano interrogabili insieme.
+      await supabase.from('event_log').insert({
+        type: 'bot_note_sent',
+        payload: { conversationId, crmLeadId, note: noteSicura, noteKey: divergenza.chiave, noteFingerprint: fingerprint } as never,
+        message: `[bot-fissatore] nota inviata al CRM per lead ${crmLeadId}`,
+        level: 'info',
+      });
+      return { sent: true, status: res.status };
+    }
     const text = await res.text().catch(() => '');
     return { sent: false, status: res.status, error: text || `http_${res.status}` };
   } catch (e) {
