@@ -367,6 +367,8 @@ git commit -m "fix(prompt): quando chiama Noemi dipende dall'ora della call"
 
 In `lib/gdo-context-note.test.ts`, con la forma di `GdoNoteInput` già usata negli altri test del file (`gdoVideoSentAt`, `gdoVideoWatchedAt`, `gdoNoemiRemindedAt`, `followupsSent`, `videoAppenaConfermato`):
 
+Importa nel test anche `oraAppuntamento` oltre a `gdoContextNote`.
+
 ```ts
 const baseNoemi = {
   gdoVideoSentAt: '2026-09-09T10:00:00Z',
@@ -384,7 +386,7 @@ describe('nota Noemi: dipende dall ora dell appuntamento', () => {
       gdoAppuntamentoAt: null,
     });
     expect(nota).toContain('il pomeriggio del giorno prima');
-    expect(nota).not.toContain('la mattina stessa,');
+    expect(nota).not.toContain('lo stesso giorno');
   });
 
   it('appuntamento di pomeriggio: Noemi chiama lo stesso giorno', () => {
