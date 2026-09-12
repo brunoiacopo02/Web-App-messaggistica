@@ -39,7 +39,7 @@
     },
     {
       "path": "/api/cron/sequence-touches",
-      "schedule": "*/30 6-18 * * *"
+      "schedule": "*/30 5-21 * * *"
     },
     {
       "path": "/api/cron/lead-analysis",

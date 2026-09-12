@@ -1,7 +1,7 @@
 import type { getSupabaseAdmin } from './supabase/admin';
 import { findOrCreateLeadConversation, sendTemplateAndLog } from './messaging';
 import { feniceOpening } from './fenice-opening';
-import { inSendWindow } from './sequence';
+import { inOpeningWindow } from './sequence';
 import { normalizeFunnel, variantIndexFor, openingEnvKey, openingBody, openingWaysFor } from './persona';
 import { firstNameOf, templateName } from './name';
 import type { GdoVariant } from './bot-contract';
@@ -52,10 +52,14 @@ export async function enrollLeadIntoMario(
     crm_funnel: args.crmFunnel ?? null,
   };
 
-  // Apertura differita: di notte i template aprono peggio (-10pt risposta) e
-  // disturbano. La conv viene comunque presa in carico da Mario, senza outbound:
-  // sarà il cron sequence-touches a inviare l'apertura al primo run in fascia.
-  if (!inSendWindow(Date.now())) {
+  // Apertura differita: nel cuore della notte i template aprono peggio (-10pt
+  // risposta) e disturbano. La conv viene comunque presa in carico da Mario, senza
+  // outbound: sarà il cron sequence-touches a inviare l'apertura al primo run in
+  // fascia, cioè alle 07:00.
+  // La fascia qui è quella LARGA (07:00-23:00, `inOpeningWindow`) e non quella dei
+  // touch: è il primo messaggio a chi ha appena lasciato il numero, e una risposta
+  // se l'aspetta. Vedi il commento su `inOpeningWindow` per i numeri.
+  if (!inOpeningWindow(Date.now())) {
     await supabase.from('conversations').update(convUpdate).eq('id', conversationId);
     await supabase.from('event_log').insert({
       type: 'fenice_enroll_deferred',
