@@ -46,12 +46,35 @@ export type MsgLite = { direction: string; twilio_status: string | null; templat
 
 const romeFmt = new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', hour: 'numeric', minute: 'numeric', hour12: false });
 
-/** Fascia invii 08:30 (inclusa) – 20:30 (esclusa), ora locale Europe/Rome. */
-export function inSendWindow(nowMs: number): boolean {
+function romeMinutes(nowMs: number): number {
   const parts = romeFmt.formatToParts(new Date(nowMs));
   const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
-  const mins = get('hour') * 60 + get('minute');
+  return get('hour') * 60 + get('minute');
+}
+
+/** Fascia invii 08:30 (inclusa) – 20:30 (esclusa), ora locale Europe/Rome.
+ * Vale per i TOUCH e i NUDGE: messaggi che il lead non sta aspettando. */
+export function inSendWindow(nowMs: number): boolean {
+  const mins = romeMinutes(nowMs);
   return mins >= 8 * 60 + 30 && mins < 20 * 60 + 30;
+}
+
+/** Fascia della PRIMA apertura: 07:00 (inclusa) – 23:00 (esclusa), Europe/Rome.
+ *
+ * Più larga di `inSendWindow` perché è il caso opposto: qui il lead ha appena
+ * lasciato il numero e una risposta la aspetta. Misurato l'11/09/2026 su 3.814
+ * conversazioni in 14 giorni: di giorno il primo messaggio parte a 0 minuti, ma
+ * chi arriva alle 21 aspetta 13 ORE, chi arriva alle 07 ne aspetta 2,6. In quelle
+ * due code sta il 16% di tutti i lead (21-23: 10%, 07-08: 6%).
+ *
+ * Sopra le 23 e sotto le 7 non si scrive comunque: il numero Fenice è a qualità
+ * LOW, e un messaggio che sveglia qualcuno è quello che si prende il "blocca e
+ * segnala" — che è esattamente il segnale che affossa il rating. Chi arriva nel
+ * cuore della notte dorme: lo legge al mattino in ogni caso, e lo prende il primo
+ * run delle 07:00. */
+export function inOpeningWindow(nowMs: number): boolean {
+  const mins = romeMinutes(nowMs);
+  return mins >= 7 * 60 && mins < 23 * 60;
 }
 
 /** ISO 8601 con offset esplicito Europe/Rome (es. 2026-08-07T09:00:00+02:00): il CRM
@@ -113,7 +136,7 @@ export function decideTrackA(input: {
   const t0 = firstOutboundAtMs(msgs);
   if (t0 === null) {
     // Apertura differita: la conv CRM esiste ma non è ancora partito nulla.
-    return inSendWindow(nowMs) && sequenceEnabled ? { kind: 'send_opening' } : { kind: 'wait' };
+    return inOpeningWindow(nowMs) && sequenceEnabled ? { kind: 'send_opening' } : { kind: 'wait' };
   }
   const touches = countSequenceTouches(msgs, seqSids);
   // Fast-fail: già ritentato almeno una volta e mai consegnato nulla → numero morto.

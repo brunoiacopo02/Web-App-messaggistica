@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   TOUCH_OFFSETS_DAYS, SEQUENCE_END_DAYS, NUDGE1_MIN_H, NUDGE1_MAX_H, TRACKB_GIVEUP_H,
-  inSendWindow, anyDelivered, allOutboundDeadNoDelivery, countSequenceTouches,
+  inSendWindow, inOpeningWindow, anyDelivered, allOutboundDeadNoDelivery, countSequenceTouches,
   firstOutboundAtMs, lastOutboundAtMs, decideTrackA, decideTrackB, pickNudgeText,
   type MsgLite,
   toRomeIso,
@@ -102,6 +102,24 @@ describe('inSendWindow (Europe/Rome, 08:30–20:30)', () => {
   it('08:00 Rome (inverno, 07:00Z) → false', () => expect(inSendWindow(Date.parse('2026-01-15T07:00:00Z'))).toBe(false));
 });
 
+// 11/09/2026. Misurato su 3.814 conversazioni in 14 giorni: di giorno il primo
+// messaggio parte a 0 minuti, ma chi arriva alle 21 aspetta 13 ORE e chi arriva
+// alle 07 ne aspetta 2,6. Il 16% di tutti i lead sta in quelle due code (21-23 e
+// 07-08). La PRIMA apertura si allarga a 07:00-23:00; i touch e i nudge restano
+// nella fascia stretta, perche' quelli nessuno li sta aspettando.
+describe('inOpeningWindow (Europe/Rome, 07:00-23:00)', () => {
+  it('07:00 Rome (estate) → true', () => expect(inOpeningWindow(Date.parse('2026-07-15T05:00:00Z'))).toBe(true));
+  it('06:59 Rome (estate) → false', () => expect(inOpeningWindow(Date.parse('2026-07-15T04:59:00Z'))).toBe(false));
+  it('22:59 Rome (estate) → true', () => expect(inOpeningWindow(Date.parse('2026-07-15T20:59:00Z'))).toBe(true));
+  it('23:00 Rome (estate) → false', () => expect(inOpeningWindow(Date.parse('2026-07-15T21:00:00Z'))).toBe(false));
+  it('03:00 Rome, cuore della notte → false', () => expect(inOpeningWindow(Date.parse('2026-07-15T01:00:00Z'))).toBe(false));
+  // Inverno: Rome = UTC+1. Il cron di vercel.json e' in UTC e scivola di un'ora al
+  // cambio d'ora: la fascia vera la decide questa funzione, non il cron.
+  it('07:00 Rome (inverno, 06:00Z) → true', () => expect(inOpeningWindow(Date.parse('2026-01-15T06:00:00Z'))).toBe(true));
+  it('06:00 Rome (inverno, 05:00Z) → false', () => expect(inOpeningWindow(Date.parse('2026-01-15T05:00:00Z'))).toBe(false));
+  it('22:30 Rome (inverno, 21:30Z) → true', () => expect(inOpeningWindow(Date.parse('2026-01-15T21:30:00Z'))).toBe(true));
+});
+
 describe('helpers su MsgLite', () => {
   it('anyDelivered: out delivered → true', () => expect(anyDelivered([out(5, 'delivered')])).toBe(true));
   it('anyDelivered: out read → true', () => expect(anyDelivered([out(5, 'read')])).toBe(true));
@@ -136,11 +154,28 @@ describe('decideTrackA — apertura differita', () => {
   it('nessun outbound, in fascia, enabled → send_opening', () => {
     expect(decideTrackA({ nowMs: NOW, msgs: [], seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'send_opening' });
   });
-  it('nessun outbound, fuori fascia → wait', () => {
-    expect(decideTrackA({ nowMs: NOW_NIGHT, msgs: [], seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'wait' });
+  it('nessun outbound alle 22 di sera → si apre lo stesso: chi ha appena lasciato il numero e sveglio e aspetta', () => {
+    expect(decideTrackA({ nowMs: NOW_NIGHT, msgs: [], seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'send_opening' });
+  });
+  it('nessun outbound alle 03 di notte → wait: nel cuore della notte non si scrive', () => {
+    const notteFonda = Date.parse('2026-07-15T01:00:00Z');
+    expect(decideTrackA({ nowMs: notteFonda, msgs: [], seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'wait' });
   });
   it('nessun outbound, kill-switch off → wait', () => {
     expect(decideTrackA({ nowMs: NOW, msgs: [], seqSids: SEQ, sequenceEnabled: false })).toEqual({ kind: 'wait' });
+  });
+});
+
+// La fascia larga vale SOLO per la prima apertura. Un template di follow-up alle 22
+// arriva a qualcuno che non aspetta niente da noi: quello resta in fascia stretta.
+describe('decideTrackA — il touch non segue la fascia larga delle aperture', () => {
+  it('touch dovuto ma sono le 22 → wait', () => {
+    const msgs = [out(30, 'delivered', 'HXopening', NOW_NIGHT)];
+    expect(decideTrackA({ nowMs: NOW_NIGHT, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'wait' });
+  });
+  it('lo stesso touch a mezzogiorno parte', () => {
+    const msgs = [out(30, 'delivered', 'HXopening')];
+    expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'send_touch', touchIndex: 1 });
   });
 });
 
