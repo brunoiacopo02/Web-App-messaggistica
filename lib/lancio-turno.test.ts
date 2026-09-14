@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('./twilio', () => ({ sendFreeText: vi.fn(async () => ({ sid: 'SM_L', status: 'queued' })) }));
 vi.mock('./bot-outcome', () => ({ sendOutcome: vi.fn(async () => ({ sent: true })) }));
@@ -16,7 +16,7 @@ const WELCOME: Row = { direction: 'out', body: "Ciao Anna, sono l'assistente vir
 const inb = (body: string): Row => ({ direction: 'in', body, template_sid: null });
 const outLibero = (body: string): Row => ({ direction: 'out', body, template_sid: null });
 
-function makeSupabase() {
+function makeSupabase(ingressoAt: string | null = null) {
   const calls = { convUpdates: [] as any[], events: [] as any[], messages: [] as any[] };
   const supabase: any = {
     from(table: string) {
@@ -24,7 +24,15 @@ function makeSupabase() {
         return { update(p: any) { calls.convUpdates.push(p); const c: any = { eq: () => c, then: (r: any) => r({ data: null, error: null }) }; return c; } };
       }
       if (table === 'messages') return { insert(p: any) { calls.messages.push(p); return Promise.resolve({ data: null }); } };
-      return { insert(p: any) { calls.events.push(p); return Promise.resolve({ data: null }); } };
+      // event_log: insert per le tracce, select per l'istante di ingresso nel lancio.
+      const q: any = {
+        eq: () => q, order: () => q, limit: () => q,
+        maybeSingle: () => Promise.resolve({ data: ingressoAt ? { created_at: ingressoAt } : null }),
+      };
+      return {
+        insert(p: any) { calls.events.push(p); return Promise.resolve({ data: null }); },
+        select: () => q,
+      };
     },
   };
   return { supabase, calls };
@@ -36,7 +44,12 @@ const base = (over: Partial<Parameters<typeof eseguiTurnoLancio>[1]> = {}) => ({
   fase: 'attesa', nome: 'Anna', rows: [WELCOME, inb('si')], inboundBody: 'si', genera, ...over,
 });
 
-beforeEach(() => { vi.clearAllMocks(); genera.mockReset(); });
+beforeEach(() => {
+  vi.clearAllMocks();
+  genera.mockReset();
+  vi.stubEnv('LANCIO_WELCOME_TEMPLATE_SID', 'HX_W');
+});
+afterEach(() => { vi.unstubAllEnvs(); });
 
 describe('eseguiTurnoLancio — sì', () => {
   it('manda il testo fisso, passa a posto_bloccato, scrive gli eventi; il modello non si chiama', async () => {
@@ -74,12 +87,29 @@ describe('eseguiTurnoLancio — no', () => {
     expect(calls.events.some((e) => e.type === 'lancio_congedo')).toBe(true);
   });
 
-  it("se il CRM non risponde la conversazione resta active (ritentabile), il congedo è comunque partito", async () => {
+  it('se il CRM non risponde la fase NON diventa terminale: il turno dopo ritenta lo scarto senza un secondo congedo', async () => {
     vi.mocked(sendOutcome).mockResolvedValueOnce({ sent: false, error: 'http_500' });
-    const { supabase } = makeSupabase();
+    const { supabase, calls } = makeSupabase();
     const stato = await eseguiTurnoLancio(supabase, base({ rows: [WELCOME, inb('no')], inboundBody: 'no' }));
     expect(stato).toBe('active');
     expect(sendFreeText).toHaveBeenCalledTimes(1);
+    // La fase resta 'attesa': chiuderla qui manderebbe il messaggio dopo a Mario, sul
+    // lead che ha appena detto no, e nessuno ritenterebbe piu' il DA_SCARTARE.
+    expect(calls.convUpdates.some((u) => 'lancio_fase' in u)).toBe(false);
+
+    // Giro successivo: il congedo e' in cronologia e il lead ha riscritto (per giunta
+    // qualcosa che da solo sembrerebbe un sì).
+    const { supabase: s2, calls: c2 } = makeSupabase();
+    const stato2 = await eseguiTurnoLancio(s2, base({
+      rows: [WELCOME, inb('no'), outLibero(TESTO_CONGEDO), inb('ok va bene')],
+      inboundBody: 'ok va bene',
+    }));
+    expect(stato2).toBe('closed');
+    expect(sendFreeText).toHaveBeenCalledTimes(1); // nessuna seconda bolla di congedo
+    expect(genera).not.toHaveBeenCalled();
+    expect(vi.mocked(sendOutcome).mock.calls[1][2]).toMatchObject({ outcome: 'DA_SCARTARE' });
+    expect(c2.convUpdates.some((u) => u.lancio_fase === 'chiuso')).toBe(true);
+    expect(c2.convUpdates.some((u) => u.lancio_fase === 'posto_bloccato')).toBe(false);
   });
 
   it('senza crmLeadId (arruolamento a mano) niente esito: chiude e basta', async () => {
@@ -136,6 +166,62 @@ describe('eseguiTurnoLancio — domanda', () => {
     await eseguiTurnoLancio(supabase, base({ rows: [WELCOME, inb('come?')], inboundBody: 'come?' }));
     expect(sendFreeText).not.toHaveBeenCalled();
     expect(calls.events.some((e) => e.type === 'lancio_silenzio' && e.payload.motivo === 'risposta_vuota')).toBe(true);
+  });
+});
+
+describe('eseguiTurnoLancio — cronologia di questo lancio', () => {
+  const vecchieDiMario = [
+    { direction: 'out', body: 'Ciao, sono Mario', template_sid: 'HX_MARIO', created_at: '2026-08-01T09:00:00Z' },
+    { direction: 'in', body: 'chi sei?', template_sid: null, created_at: '2026-08-01T09:05:00Z' },
+    { direction: 'out', body: 'Ti va una call?', template_sid: null, created_at: '2026-08-01T09:06:00Z' },
+    { direction: 'in', body: 'quando?', template_sid: null, created_at: '2026-08-01T09:07:00Z' },
+    { direction: 'out', body: 'Domani alle 18', template_sid: null, created_at: '2026-08-01T09:08:00Z' },
+    { direction: 'in', body: 'ok', template_sid: null, created_at: '2026-08-01T09:09:00Z' },
+    { direction: 'out', body: 'Perfetto, a domani', template_sid: null, created_at: '2026-08-01T09:10:00Z' },
+  ];
+
+  it("chat riusata senza benvenuto: il giro precedente di Mario non conta come domande gia' fatte", async () => {
+    genera.mockResolvedValueOnce({ classe: 'domanda', passToHuman: false, visibleReply: 'E gratuita.' });
+    // Nessun benvenuto in cronologia (guardia anti-doppione dell'intake): il taglio
+    // arriva dall'evento lancio_intake. Senza, i 3 outbound liberi di Mario varrebbero
+    // come tre domande gia' spese e la prima del lancio finirebbe nel silenzio.
+    const { supabase } = makeSupabase('2026-09-20T10:00:00Z');
+    const rows = [...vecchieDiMario, { direction: 'in', body: 'e gratis?', template_sid: null, created_at: '2026-09-20T10:05:00Z' }];
+    await eseguiTurnoLancio(supabase, base({ rows, inboundBody: 'e gratis?' }));
+    expect(genera).toHaveBeenCalledTimes(1);
+    expect(genera.mock.calls[0][0]).toEqual([{ role: 'user', content: 'e gratis?' }]);
+    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe('E gratuita.');
+  });
+
+  it("col benvenuto in cronologia il taglio parte da li, senza leggere l'evento", async () => {
+    genera.mockResolvedValueOnce({ classe: 'domanda', passToHuman: false, visibleReply: 'Alle 21.' });
+    const { supabase } = makeSupabase(); // nessun evento lancio_intake da leggere
+    const rows = [...vecchieDiMario, { ...WELCOME, created_at: '2026-09-20T10:00:00Z' }, inb('a che ora?')];
+    await eseguiTurnoLancio(supabase, base({ rows, inboundBody: 'a che ora?' }));
+    expect(genera.mock.calls[0][0]).toEqual([
+      { role: 'assistant', content: WELCOME.body },
+      { role: 'user', content: 'a che ora?' },
+    ]);
+  });
+});
+
+describe('eseguiTurnoLancio — niente modello quando non serve', () => {
+  it('una foto senza didascalia non si manda al modello: silenzio tracciato', async () => {
+    const { supabase, calls } = makeSupabase();
+    await eseguiTurnoLancio(supabase, base({ rows: [WELCOME, inb('')], inboundBody: '' }));
+    expect(genera).not.toHaveBeenCalled();
+    expect(sendFreeText).not.toHaveBeenCalled();
+    expect(calls.events.some((e) => e.type === 'lancio_silenzio' && e.payload.motivo === 'classe_incerta')).toBe(true);
+    expect(calls.events.some((e) => e.type === 'fenice_ai_reply')).toBe(true);
+  });
+
+  it('un incerto dopo il terzo scambio non paga una chiamata al modello', async () => {
+    const { supabase, calls } = makeSupabase();
+    const rows = [WELCOME, inb('a?'), outLibero('1'), inb('b?'), outLibero('2'), inb('c?'), outLibero('3'), inb('mah')];
+    await eseguiTurnoLancio(supabase, base({ rows, inboundBody: 'mah' }));
+    expect(genera).not.toHaveBeenCalled();
+    expect(sendFreeText).not.toHaveBeenCalled();
+    expect(calls.events.some((e) => e.type === 'lancio_silenzio')).toBe(true);
   });
 });
 

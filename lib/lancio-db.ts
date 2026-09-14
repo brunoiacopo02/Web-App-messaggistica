@@ -29,3 +29,24 @@ export async function impostaFaseLancio(
     level: error ? 'error' : 'info',
   });
 }
+
+/**
+ * Quando questa chat e' entrata nel lancio, letto dall'evento `lancio_intake`. E' il
+ * taglio della cronologia sulle chat riusate, dove `ai_started_at` resta quello del giro
+ * di Mario (scelta dell'intake: la storia non si azzera). Si interroga solo quando il
+ * benvenuto del lancio non e' in cronologia — cioe' proprio nel caso del riuso.
+ */
+export async function leggiIngressoLancioAt(
+  supabase: Supa,
+  conversationId: number,
+): Promise<string | null> {
+  const { data } = await supabase
+    .from('event_log')
+    .select('created_at')
+    .eq('type', 'lancio_intake')
+    .eq('payload->>conversationId', String(conversationId))
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return (data as { created_at: string } | null)?.created_at ?? null;
+}

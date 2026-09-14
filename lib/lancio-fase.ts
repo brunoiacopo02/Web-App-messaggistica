@@ -23,6 +23,13 @@ export const LANCIO_FASI_TERMINALI: readonly LancioFase[] = ['chiuso', 'restitui
 
 /** Le fasi che questo blocco (B1) sa gestire nel turno. Le altre arrivano con B4/B5. */
 export const LANCIO_FASI_B1: readonly LancioFase[] = ['attesa', 'posto_bloccato'];
+export const FASI_GESTITE_B1: ReadonlySet<string> = new Set<string>(LANCIO_FASI_B1);
+
+/** Unica sorgente di verita' su "questa fase la sa gestire B1": la usano sia la
+ *  decisione del turno sia chi deve capire se vale la pena interpellare il modello. */
+export function faseGestitaB1(fase: string | null): boolean {
+  return FASI_GESTITE_B1.has(fase ?? '');
+}
 
 /** La chat è del lancio e il lancio non è finito: Mario e i suoi cron stanno fuori. */
 export function lancioInCorso(c: { lancio_slug?: string | null; lancio_fase?: string | null }): boolean {
@@ -51,6 +58,14 @@ export const MAX_SCAMBI_DOMANDE = 3;
 
 export type ClasseLancio = 'si' | 'no' | 'domanda' | 'incerto';
 
+/** Una riga `messages` come la leggono i moduli del lancio. */
+export type RigaLancio = {
+  direction: string;
+  body: string | null;
+  template_sid: string | null;
+  created_at?: string | null;
+};
+
 export type LancioAzione =
   | { kind: 'posto_bloccato'; testo: string }
   | { kind: 'congedo'; testo: string }
@@ -70,9 +85,7 @@ export function decideLancioTurno(i: {
   passToHuman: boolean;
 }): LancioAzione {
   if (i.passToHuman) return { kind: 'passaggio_umano' };
-  if (!(LANCIO_FASI_B1 as readonly string[]).includes(i.fase ?? '')) {
-    return { kind: 'silenzio', motivo: 'fase_non_gestita' };
-  }
+  if (!faseGestitaB1(i.fase)) return { kind: 'silenzio', motivo: 'fase_non_gestita' };
   if (i.classe === 'no') return { kind: 'congedo', testo: TESTO_CONGEDO };
   if (i.classe === 'si') {
     return i.fase === 'posto_bloccato'
@@ -94,12 +107,44 @@ const TESTI_FISSI = new Set([TESTO_POSTO_BLOCCATO, TESTO_CONGEDO, TESTO_PASSAGGI
  * nessuna colonna in più, e il conto resta giusto anche se un turno muore a metà.
  * Per questo le risposte lancio partono come UNA bolla (mai `splitMarioMessages`).
  */
-export function contaScambiDomande(
-  rows: { direction: string; body: string | null; template_sid: string | null }[],
-): number {
+export function contaScambiDomande(rows: RigaLancio[]): number {
   return rows.filter((m) =>
     m.direction === 'out' && m.template_sid == null && !!m.body && !TESTI_FISSI.has(m.body.trim()),
   ).length;
+}
+
+/**
+ * Il congedo e' gia' uscito su questa chat. Serve quando la fase NON e' stata portata a
+ * `chiuso` perche' il CRM ha rifiutato il `DA_SCARTARE`: il turno dopo deve ritentare
+ * l'esito senza mandare una seconda volta la stessa frase — e senza riclassificare, o un
+ * "ok, va bene" scritto dopo il congedo gli bloccherebbe il posto a cui ha detto no.
+ */
+export function congedoGiaInviato(rows: RigaLancio[]): boolean {
+  return rows.some(
+    (m) => m.direction === 'out' && m.template_sid == null && (m.body ?? '').trim() === TESTO_CONGEDO,
+  );
+}
+
+/**
+ * Le righe che appartengono a QUESTO lancio. Su una chat riusata (guardia anti-doppione
+ * dell'intake) `ai_started_at` non viene azzerato di proposito, quindi il drain carica
+ * anche il giro precedente di Mario: senza questo taglio la prima domanda del lead
+ * risulterebbe la quarta (silenzio) e il modello del lancio si leggerebbe un fissaggio
+ * del GDO come contesto. Si taglia dal benvenuto del lancio se c'e' (nessuna query), se
+ * no dall'istante dell'evento `lancio_intake`.
+ */
+export function tagliaRigheDalLancio(
+  rows: RigaLancio[],
+  welcomeSid: string | null | undefined,
+  ingressoAt: string | null,
+): RigaLancio[] {
+  if (welcomeSid) {
+    for (let i = rows.length - 1; i >= 0; i--) {
+      if (rows[i].template_sid === welcomeSid) return rows.slice(i);
+    }
+  }
+  if (ingressoAt) return rows.filter((m) => !m.created_at || m.created_at >= ingressoAt);
+  return rows;
 }
 
 const FASE_LABEL: Record<LancioFase, string> = {

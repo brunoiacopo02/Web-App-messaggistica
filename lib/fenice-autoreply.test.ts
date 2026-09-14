@@ -260,6 +260,7 @@ type ClaimedRow = {
   gdo_noemi_reminded_at?: string | null;
   lancio_slug?: string | null;
   lancio_fase?: string | null;
+  leads?: { first_name?: string | null } | null;
 };
 type FakeMsgRow = { direction: string; body: string; template_sid: string | null; created_at: string };
 
@@ -1756,8 +1757,8 @@ describe('drainMarioReplies — aggancio del turno lancio', () => {
 
   it('con un lancio in corso il round lo fa eseguiTurnoLancio: Mario non viene interpellato', async () => {
     const { supabase, calls } = makeDrainSupabase(
-      { id: 42, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L1', gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
-        lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa', leads: { first_name: 'Anna' } } as any,
+      { id: 42, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L1', bot_outcome: null, gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
+        lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa', leads: { first_name: 'Anna' } },
       [WELCOME, SI],
     );
     await drainMarioReplies(supabase, 42, '+393331234567', () => 0);
@@ -1772,8 +1773,8 @@ describe('drainMarioReplies — aggancio del turno lancio', () => {
   it('lo stato finale è quello che il turno lancio restituisce', async () => {
     vi.mocked(eseguiTurnoLancio).mockResolvedValueOnce('closed');
     const { supabase, calls } = makeDrainSupabase(
-      { id: 43, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L2', gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
-        lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa' } as any,
+      { id: 43, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L2', bot_outcome: null, gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
+        lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa' },
       [WELCOME, { ...SI, body: 'no' }],
     );
     await drainMarioReplies(supabase, 43, '+393331234567', () => 0);
@@ -1783,8 +1784,8 @@ describe('drainMarioReplies — aggancio del turno lancio', () => {
   it('lancio chiuso: torna Mario di sempre', async () => {
     vi.mocked(generateMarioReply).mockResolvedValueOnce({ visibleReply: 'ciao', appointmentFixed: false, passToHuman: false, videoWatched: false } as any);
     const { supabase } = makeDrainSupabase(
-      { id: 44, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L3', gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
-        lancio_slug: 'webdev-2026-10', lancio_fase: 'chiuso' } as any,
+      { id: 44, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L3', bot_outcome: null, gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
+        lancio_slug: 'webdev-2026-10', lancio_fase: 'chiuso' },
       [WELCOME, SI],
     );
     await drainMarioReplies(supabase, 44, '+393331234567', () => 0);
