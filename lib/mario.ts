@@ -102,6 +102,11 @@ function getClient(): Anthropic {
   return _client;
 }
 
+/** Il client condiviso, per gli altri generatori (lancio) che usano lo stesso modello. */
+export function getAnthropicClient(): Anthropic {
+  return getClient();
+}
+
 /**
  * Contesto per i lead arruolati per conto di un GDO: l'appuntamento l'ha già preso il
  * commerciale al telefono e il video è già partito, quindi il bot non deve ripartire
@@ -116,7 +121,7 @@ export const GDO_CONTEXT_NOTE =
 
 /** Cosa vede Mario al posto di un messaggio del lead senza testo. Le note vocali arrivano
  *  già trascritte, quindi qui resta il materiale visivo e i documenti. */
-const MEDIA_SENZA_TESTO =
+export const MEDIA_SENZA_TESTO =
   '[il lead ha inviato un contenuto senza testo: una foto, uno sticker, un video o un documento]';
 
 /** Genera la prossima risposta del bot data la cronologia. Inietta l'ora di Roma.
