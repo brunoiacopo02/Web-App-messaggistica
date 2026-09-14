@@ -89,7 +89,7 @@ export function canSendOutcome(g: { crmLeadId: string | null; aiStatus: string |
 
 type MsgRow = { direction: string; body: string };
 // Riga del drain: come MsgRow ma con il template per derivare la persona (Mario/Marta).
-type DrainMsgRow = MsgRow & { template_sid: string | null };
+type DrainMsgRow = MsgRow & { template_sid: string | null; created_at: string };
 
 /** SID dei template "Marta" (aperture A/B + sequenza + riaggancio) dalle env.
  *  Env assenti ⇒ set vuoto ⇒ persona sempre Mario (comportamento identico a oggi). */

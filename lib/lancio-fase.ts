@@ -71,7 +71,7 @@ export type LancioAzione =
   | { kind: 'congedo'; testo: string }
   | { kind: 'domanda'; chiudi: boolean }
   | { kind: 'passaggio_umano' }
-  | { kind: 'silenzio'; motivo: 'gia_bloccato' | 'domande_esaurite' | 'fase_non_gestita' | 'classe_incerta' };
+  | { kind: 'silenzio'; motivo: 'gia_bloccato' | 'domande_esaurite' | 'fase_non_gestita' | 'classe_incerta' | 'inbound_fuori_lancio' };
 
 /**
  * Cosa fare in questo turno, data la fase e la classe del messaggio del lead.
@@ -113,6 +113,9 @@ export function contaScambiDomande(rows: RigaLancio[]): number {
   ).length;
 }
 
+const eIlCongedo = (m: RigaLancio): boolean =>
+  m.direction === 'out' && m.template_sid == null && (m.body ?? '').trim() === TESTO_CONGEDO;
+
 /**
  * Il congedo e' gia' uscito su questa chat. Serve quando la fase NON e' stata portata a
  * `chiuso` perche' il CRM ha rifiutato il `DA_SCARTARE`: il turno dopo deve ritentare
@@ -120,9 +123,22 @@ export function contaScambiDomande(rows: RigaLancio[]): number {
  * "ok, va bene" scritto dopo il congedo gli bloccherebbe il posto a cui ha detto no.
  */
 export function congedoGiaInviato(rows: RigaLancio[]): boolean {
-  return rows.some(
-    (m) => m.direction === 'out' && m.template_sid == null && (m.body ?? '').trim() === TESTO_CONGEDO,
-  );
+  return rows.some(eIlCongedo);
+}
+
+/**
+ * Le parole con cui il lead si e' tirato indietro: l'ultimo messaggio suo PRIMA del
+ * congedo. Su un esito ritentato sono quelle che devono arrivare al CRM — l'inbound del
+ * turno corrente e' arrivato dopo il no e racconterebbe un'altra storia.
+ */
+export function paroleDelCongedo(rows: RigaLancio[]): string | null {
+  const iCongedo = rows.findIndex(eIlCongedo);
+  if (iCongedo < 0) return null;
+  for (let i = iCongedo - 1; i >= 0; i--) {
+    const testo = (rows[i].body ?? '').trim();
+    if (rows[i].direction === 'in' && testo !== '') return testo;
+  }
+  return null;
 }
 
 /**

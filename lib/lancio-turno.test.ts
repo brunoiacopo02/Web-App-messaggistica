@@ -120,6 +120,44 @@ describe('eseguiTurnoLancio — no', () => {
   });
 });
 
+describe('eseguiTurnoLancio — congedo rifiutato dal CRM', () => {
+  it('403: il CRM rifiuta lo scarto ma e definitivo — fase chiuso, stato closed, nessun ritentativo dopo', async () => {
+    // sendOutcome sul 403 registra gia' l'esito in locale e chiude la conversazione:
+    // trattarlo come ritentabile terrebbe il lead nel pubblico del lancio per sempre.
+    vi.mocked(sendOutcome).mockResolvedValueOnce({ sent: false, status: 403, error: 'http_403' });
+    const { supabase, calls } = makeSupabase();
+    const stato = await eseguiTurnoLancio(supabase, base({ rows: [WELCOME, inb('no')], inboundBody: 'no' }));
+    expect(stato).toBe('closed');
+    expect(calls.convUpdates.some((u) => u.lancio_fase === 'chiuso')).toBe(true);
+    expect(calls.events.some((e) => e.type === 'lancio_congedo' && e.payload.motivo === 'crm_403')).toBe(true);
+
+    // La fase e' terminale: al messaggio dopo il lancio non riprende nemmeno il turno
+    // (lo ferma `lancioInCorso` nel drain) e comunque nessuno ri-POSTa lo scarto.
+    const { supabase: s2 } = makeSupabase();
+    await eseguiTurnoLancio(s2, base({
+      fase: 'chiuso',
+      rows: [WELCOME, inb('no'), outLibero(TESTO_CONGEDO), inb('ok va bene')],
+      inboundBody: 'ok va bene',
+    }));
+    expect(sendOutcome).toHaveBeenCalledTimes(1);
+    expect(sendFreeText).toHaveBeenCalledTimes(1);
+  });
+
+  it('sul ritentativo al CRM vanno le parole del no, non quelle scritte dopo il congedo', async () => {
+    vi.mocked(sendOutcome).mockResolvedValueOnce({ sent: false, error: 'http_500' });
+    const { supabase } = makeSupabase();
+    await eseguiTurnoLancio(supabase, base({ rows: [WELCOME, inb('non mi interessa')], inboundBody: 'non mi interessa' }));
+    expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ leadWords: 'non mi interessa' });
+
+    const { supabase: s2 } = makeSupabase();
+    await eseguiTurnoLancio(s2, base({
+      rows: [WELCOME, inb('non mi interessa'), outLibero(TESTO_CONGEDO), inb('ok va bene')],
+      inboundBody: 'ok va bene',
+    }));
+    expect(vi.mocked(sendOutcome).mock.calls[1][2]).toMatchObject({ leadWords: 'non mi interessa' });
+  });
+});
+
 describe('eseguiTurnoLancio — domanda', () => {
   it('chiama il modello con la fase e la data della live e manda UNA bolla col testo pulito', async () => {
     genera.mockResolvedValueOnce({ classe: 'domanda', passToHuman: false, visibleReply: 'È gratuita.\nIl link ti arriva qui il 5.' });
@@ -212,6 +250,23 @@ describe('eseguiTurnoLancio — niente modello quando non serve', () => {
     expect(genera).not.toHaveBeenCalled();
     expect(sendFreeText).not.toHaveBeenCalled();
     expect(calls.events.some((e) => e.type === 'lancio_silenzio' && e.payload.motivo === 'classe_incerta')).toBe(true);
+    expect(calls.events.some((e) => e.type === 'fenice_ai_reply')).toBe(true);
+  });
+
+  it('un inbound di prima del lancio non e la risposta al benvenuto: silenzio tracciato', async () => {
+    // Chat riusata: il drain pesca l'inbound dalle righe NON tagliate e potrebbe
+    // passarci un "si" rimasto senza risposta nel giro di Mario. Non deve bloccare
+    // nessun posto.
+    const { supabase, calls } = makeSupabase('2026-09-20T10:00:00Z');
+    const rows = [
+      { direction: 'in', body: 'si', template_sid: null, created_at: '2026-08-01T09:00:00Z' },
+      { ...WELCOME, created_at: '2026-09-20T10:00:00Z' },
+    ];
+    await eseguiTurnoLancio(supabase, base({ rows, inboundBody: 'si' }));
+    expect(genera).not.toHaveBeenCalled();
+    expect(sendFreeText).not.toHaveBeenCalled();
+    expect(calls.convUpdates.some((u) => 'lancio_fase' in u)).toBe(false);
+    expect(calls.events.some((e) => e.type === 'lancio_silenzio' && e.payload.motivo === 'inbound_fuori_lancio')).toBe(true);
     expect(calls.events.some((e) => e.type === 'fenice_ai_reply')).toBe(true);
   });
 

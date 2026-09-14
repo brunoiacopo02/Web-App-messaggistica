@@ -7,7 +7,7 @@ import { generateLancioReply } from './lancio-reply';
 import { classificaLancio, type LancioReplyParsed } from './lancio-classifica';
 import {
   congedoGiaInviato, contaScambiDomande, decideLancioTurno, faseGestitaB1, MAX_SCAMBI_DOMANDE,
-  tagliaRigheDalLancio, TESTO_CHIUSURA_DOMANDE, TESTO_CONGEDO, TESTO_PASSAGGIO_UMANO,
+  paroleDelCongedo, tagliaRigheDalLancio, TESTO_CHIUSURA_DOMANDE, TESTO_CONGEDO, TESTO_PASSAGGIO_UMANO,
   type ClasseLancio, type LancioAzione, type RigaLancio,
 } from './lancio-fase';
 import { impostaFaseLancio, leggiIngressoLancioAt } from './lancio-db';
@@ -59,6 +59,13 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
   // nessuna riclassificazione — chi ha detto no resta un no anche se poi scrive "ok".
   const daRitentare = faseGestita && congedoGiaInviato(righe);
 
+  // Il drain sceglie l'inbound dalle righe NON tagliate: su una chat riusata puo' essere
+  // un messaggio di prima del lancio, rimasto senza risposta nel giro di Mario. Non e'
+  // la risposta al benvenuto e non va letta come tale — il turno tace e lascia la
+  // traccia, cosi' il re-drive non ci ritorna sopra ogni ora.
+  const inboundFuoriLancio = i.inboundBody.trim() !== ''
+    && !righe.some((m) => m.direction === 'in' && (m.body ?? '').trim() === i.inboundBody.trim());
+
   let classe: ClasseLancio = classificaLancio(i.inboundBody);
   let modello: LancioReplyParsed | null = null;
   // Il modello si interpella solo se puo' ancora rispondere: nelle fasi di B4/B5 il
@@ -67,7 +74,8 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
   // buttarla costa e basta — e su una fase non gestita un [PASSAGGIO_UMANO] pensato per
   // l'attesa uscirebbe su una chat che sta gia' oltre il link.
   const serveModello =
-    faseGestita && !daRitentare && i.inboundBody.trim() !== '' && scambi < MAX_SCAMBI_DOMANDE
+    faseGestita && !daRitentare && !inboundFuoriLancio
+    && i.inboundBody.trim() !== '' && scambi < MAX_SCAMBI_DOMANDE
     && (classe === 'incerto' || classe === 'domanda');
   if (serveModello) {
     const settings = i.settings ?? (await getLancioSettings(supabase));
@@ -78,7 +86,9 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
 
   const azione: LancioAzione = daRitentare
     ? { kind: 'congedo', testo: TESTO_CONGEDO }
-    : decideLancioTurno({ fase: i.fase, classe, scambiDomande: scambi, passToHuman: modello?.passToHuman ?? false });
+    : inboundFuoriLancio
+      ? { kind: 'silenzio', motivo: 'inbound_fuori_lancio' }
+      : decideLancioTurno({ fase: i.fase, classe, scambiDomande: scambi, passToHuman: modello?.passToHuman ?? false });
 
   const invia = async (body: string): Promise<void> => {
     const sent = await sendFreeText({ to: i.phone, body, from: i.from });
@@ -110,22 +120,34 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
       // Prima si chiudeva comunque: se il callback falliva, il lead che aveva appena
       // detto "non mi interessa" tornava a Mario al messaggio dopo e il DA_SCARTARE non
       // veniva piu' ritentato da nessuno.
-      const accettato = i.crmLeadId
-        ? await (async () => {
-            const esito = await sendOutcome(supabase, i.conversationId, {
-              outcome: 'DA_SCARTARE',
-              discardReason: 'non interessato',
-              note: "Lancio Web Dev AI: ha risposto no al benvenuto della lista d'attesa.",
-              leadWords: i.inboundBody,
-            });
-            return esito.sent || esito.error === 'note_duplicate';
-          })()
-        : true;
+      // Su un esito ritentato le parole da mandare al CRM sono quelle di allora: quello
+      // che il lead ha scritto DOPO il congedo non e' il motivo dello scarto.
+      const parole = daRitentare ? paroleDelCongedo(righe) ?? undefined : i.inboundBody;
+      let motivo: string | null = null;
+      let accettato = true;
+      if (i.crmLeadId) {
+        const esito = await sendOutcome(supabase, i.conversationId, {
+          outcome: 'DA_SCARTARE',
+          discardReason: 'non interessato',
+          note: "Lancio Web Dev AI: ha risposto no al benvenuto della lista d'attesa.",
+          ...(parole ? { leadWords: parole } : {}),
+        });
+        // Il 403 e' definitivo quanto un 200: il CRM rifiuta l'esito (lead non piu' del
+        // bot) e `sendOutcome` lo registra localmente chiudendo la conversazione.
+        // Trattarlo come ritentabile lascerebbe la fase su 'attesa' per sempre — il lead
+        // resterebbe nel pubblico che B4 va a chiamare e ogni suo messaggio ri-POSTerebbe
+        // lo stesso scarto.
+        accettato = esito.sent || esito.error === 'note_duplicate' || esito.status === 403;
+        motivo = esito.sent ? null
+          : esito.status === 403 ? 'crm_403'
+            : esito.error === 'note_duplicate' ? 'nota_duplicata'
+              : (esito.error ?? `http_${esito.status ?? '?'}`);
+      }
       if (accettato) {
         await impostaFaseLancio(supabase, i.conversationId, 'chiuso');
         finalStatus = 'closed';
       }
-      await evento('lancio_congedo', { finalStatus, ritentato: daRitentare, accettato },
+      await evento('lancio_congedo', { finalStatus, ritentato: daRitentare, accettato, motivo },
         `[lancio] conv ${i.conversationId}: non interessato, congedato${accettato ? '' : ' (esito al CRM da ritentare)'}`,
         accettato ? 'info' : 'warn');
       break;
@@ -156,7 +178,7 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
         .eq('id', i.conversationId);
       if (errHandoff) {
         await evento('handed_off_non_registrato', { error: errHandoff.message },
-          `[lancio] conv ${i.conversationId}: motivo del passaggio non registrato (${errHandoff.message})`, 'error');
+          `[lancio] conv ${i.conversationId}: motivo del passaggio non registrato (${errHandoff.message})`, 'warn');
       }
       finalStatus = 'handed_off';
       break;
