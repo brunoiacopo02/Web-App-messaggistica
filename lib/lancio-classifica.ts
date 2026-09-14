@@ -10,6 +10,7 @@ import { sanitizeOutbound } from './outbound-sanitize';
 function normalizza(body: string): string {
   return body
     .toLowerCase()
+    .replace(/[’]/g, "'") // apostrofo tipografico (’) come apostrofo dritto
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
     .replace(/[^\p{L}\p{N}?']+/gu, ' ')
@@ -20,7 +21,7 @@ const NO_SECCO = /^(no|nope|nah|no grazie|no grazie!?)$/;
 const NO_FRASI = new RegExp(
   '\\b(' +
     [
-      'non (mi|ci) interessa', 'non sono interessat[oa]', "non e per me", 'non fa per me',
+      'no grazie', 'non (mi|ci) interessa', 'non sono interessat[oa]', "non e per me", 'non fa per me',
       'togli(mi|etemi|temi)', 'cancell(ami|atemi)', 'rimuov(imi|etemi)', 'elimin(ami|atemi)',
       'non (mi )?scriv(ere|ete|etemi|ermi)( piu)?', 'non voglio( piu)?( ricevere)?', 'basta( messaggi)?', 'stop',
       'lasciat?e?mi (in pace|stare)', 'lasciami (in pace|stare)', 'numero sbagliato', 'sbagliato numero',
@@ -28,6 +29,9 @@ const NO_FRASI = new RegExp(
     ].join('|') +
     ')\\b',
 );
+/** Un "no" da solo (non "non"): mai un sì, anche in mezzo a parole da sì ("certo
+ *  che no"). Controllato dopo NO_SECCO/NO_FRASI, che restano più specifici. */
+const NO_BARE = /\bno\b/;
 
 const SI_PAROLE = new RegExp(
   '\\b(' +
@@ -61,7 +65,13 @@ export function classificaLancio(body: string | null | undefined): ClasseLancio 
   if (t.includes('?') || DOMANDA_INIZIO.test(t)) return 'domanda';
 
   const parole = t.split(/\s+/).filter(Boolean);
-  if (parole.length <= MAX_PAROLE_SI && SI_PAROLE.test(t) && !NEGAZIONE.test(t)) return 'si';
+  const formaDaSi = parole.length <= MAX_PAROLE_SI && SI_PAROLE.test(t) && !NEGAZIONE.test(t);
+
+  // Un "no" isolato (non intercettato sopra) non diventa mai un sì: se il resto ha
+  // comunque una forma da sì ("certo che no") vince il no, altrimenti è incerto.
+  if (NO_BARE.test(t)) return formaDaSi ? 'no' : 'incerto';
+
+  if (formaDaSi) return 'si';
 
   return 'incerto';
 }
@@ -76,7 +86,9 @@ const LANCIO_TAG_RE = /\[LANCIO:(SI|DOMANDA|NO)\]/i;
 const LANCIO_TAG_ALL_RE = /\[LANCIO:(SI|DOMANDA|NO)\]/gi;
 /** Qualsiasi altro tag tecnico fra parentesi quadre (anche uno di Mario uscito per
  *  sbaglio, es. `[ESITO:SCARTO|x]`: i due punti fanno parte del nome). */
-const ALTRI_TAG_RE = /\[[A-Z_:]+(?:\|[^\]]*)?\]/g;
+const ALTRI_TAG_RE = /\[[A-Z_:]+(?:\|[^\]]*)?\]/gi;
+const PASSAGGIO_UMANO_RE = /\[PASSAGGIO_UMANO\]/i;
+const PASSAGGIO_UMANO_RE_G = /\[PASSAGGIO_UMANO\]/gi;
 
 /**
  * Legge i tag del modello lancio e li toglie dal testo. Senza tag la classe è
@@ -86,12 +98,15 @@ export function parseLancioReply(raw: string): LancioReplyParsed {
   const m = raw.match(LANCIO_TAG_RE);
   const kind = m ? m[1].toUpperCase() : 'DOMANDA';
   const classe: LancioReplyParsed['classe'] = kind === 'SI' ? 'si' : kind === 'NO' ? 'no' : 'domanda';
-  const passToHuman = raw.includes('[PASSAGGIO_UMANO]');
+  const passToHuman = PASSAGGIO_UMANO_RE.test(raw);
   const visibleReply = sanitizeOutbound(
     raw
       .replace(LANCIO_TAG_ALL_RE, '')
-      .replace(/\[PASSAGGIO_UMANO\]/g, '')
+      .replace(PASSAGGIO_UMANO_RE_G, '')
       .replace(ALTRI_TAG_RE, '')
+      // righe rimaste vuote perché un tag stava da solo sulla sua riga (o fra righe
+      // vuote): 2+ a-capo consecutivi (con eventuali spazi in mezzo) diventano uno solo.
+      .replace(/[ \t]*\n[ \t]*(?:\n[ \t]*)+/g, '\n')
       .replace(/[ \t]{2,}/g, ' ')
       .trim(),
   );

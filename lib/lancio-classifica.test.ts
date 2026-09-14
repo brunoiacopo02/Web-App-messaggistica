@@ -17,6 +17,13 @@ describe('classificaLancio — il no che congeda', () => {
   it('"non vedo l\'ora" NON è un no', () => {
     expect(classificaLancio("non vedo l'ora!")).not.toBe('no');
   });
+  it.each(['certo che no', 'assolutamente no', 'no, assolutamente', 'ok no', "no grazie, magari un'altra volta"])(
+    'un "no" isolato in mezzo a una parola da sì non diventa mai si: "%s" → no', (b) => expect(classificaLancio(b)).toBe('no'),
+  );
+  it('"non lo so" resta incerto (non è un "no" isolato, "non" non è "no")', () => {
+    expect(['incerto', 'domanda']).toContain(classificaLancio('non lo so'));
+    expect(classificaLancio('non lo so')).not.toBe('si');
+  });
 });
 
 describe('classificaLancio — la domanda', () => {
@@ -66,5 +73,18 @@ describe('parseLancioReply — i tag del modello', () => {
   });
   it('un tag di Mario finito per sbaglio nel testo non arriva al lead', () => {
     expect(parseLancioReply('Ok [ESITO:SCARTO|x] [LANCIO:NO]').visibleReply).toBe('Ok');
+  });
+  it('[passaggio_umano] minuscolo: rilevato e non arriva al lead', () => {
+    const r = parseLancioReply('Ok. [passaggio_umano] [LANCIO:DOMANDA]');
+    expect(r.passToHuman).toBe(true);
+    expect(r.visibleReply).toBe('Ok.');
+  });
+  it('tag da solo sulla sua riga: niente riga vuota nel testo visibile', () => {
+    const r = parseLancioReply('Riga1\n[LANCIO:SI]\nRiga2');
+    expect(r.visibleReply).toBe('Riga1\nRiga2');
+  });
+  it('tag fra righe vuote: comunque niente righe vuote', () => {
+    const r = parseLancioReply('Riga1\n\n[LANCIO:SI]\n\nRiga2');
+    expect(r.visibleReply).toBe('Riga1\nRiga2');
   });
 });
