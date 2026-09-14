@@ -291,7 +291,8 @@ export async function enrollGdoLeadAsPostino(
  *   (`lancio_*` valorizzati) e la cronologia non si azzera;
  * - fuori dalla fascia 07-23, o con `lancio_attivo` spento, il lead e' preso in carico
  *   senza outbound: lo riprende il cron `lancio-aperture`, NON `sequence-touches`
- *   (che queste chat le esclude).
+ *   (che queste chat le esclude dal Task 10, quando `FILTRO_FUORI_LANCIO` entra nelle
+ *   sue query: fino ad allora l'esclusione non c'e' ancora).
  */
 async function enrollLancio(
   supabase: Supa,
