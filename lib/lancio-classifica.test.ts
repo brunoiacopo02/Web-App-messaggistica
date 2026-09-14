@@ -26,6 +26,15 @@ describe('classificaLancio — il no che congeda', () => {
   });
 });
 
+describe('classificaLancio — "no" in apertura: solo un rifiuto vero forza il no', () => {
+  it.each(['no, assolutamente', 'no grazie', 'no non mi interessa', 'no'])(
+    '"%s" → no (il resto resta un rifiuto)', (b) => expect(classificaLancio(b)).toBe('no'),
+  );
+  it.each(['no ma sono interessato', 'no dai, in realtà mi interessa'])(
+    '"%s" → incerto (il resto non è un rifiuto: avversativo o segnale da sì)', (b) => expect(classificaLancio(b)).toBe('incerto'),
+  );
+});
+
 describe('classificaLancio — la domanda', () => {
   it.each(['è a pagamento?', 'Quanto costa', 'a che ora inizia', 'come mi collego?', 'sì, ma è gratis?', 'serve installare zoom?', 'posso partecipare dal telefono'])(
     '"%s" → domanda', (b) => expect(classificaLancio(b)).toBe('domanda'),

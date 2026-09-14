@@ -54,6 +54,13 @@ const SI_PAROLE = new RegExp(
 const NEGAZIONE = /\b(non|nessun[oa]?|mai)\b/;
 const MAX_PAROLE_SI = 6;
 
+/** Come continua un "no" in apertura perché resti un rifiuto: vuoto, o una di
+ *  queste parole. "assolutamente" e "per niente" qui sono un rinforzo del no
+ *  ("no, assolutamente" = no di certo), non il "sì" che sono da soli. */
+const RIFIUTO_APERTURA_RE = new RegExp(
+  '^(' + ['grazie', 'non', 'nessun[oa]?', 'mai', 'assolutamente', 'per niente'].join('|') + ')\\b',
+);
+
 const DOMANDA_INIZIO = new RegExp(
   '^(' +
     [
@@ -79,12 +86,23 @@ export function classificaLancio(body: string | null | undefined): ClasseLancio 
   const formaDaSi = parole.length <= MAX_PAROLE_SI && SI_PAROLE.test(t) && !NEGAZIONE.test(t);
 
   if (parole.includes('no')) {
-    // Un "no" isolato (non intercettato sopra) è la testa semantica del
-    // messaggio solo in apertura o in chiusura ("no, assolutamente", "certo
-    // che no"): in quei casi vince il no. In mezzo alla frase, anche accanto
-    // a una parola da sì ("sì sì, no aspetta, va bene"), è ambiguo: mai un
-    // sì, ma nemmeno un no automatico — decide il modello.
-    return parole[0] === 'no' || parole[parole.length - 1] === 'no' ? 'no' : 'incerto';
+    // In chiusura ("certo che no", "assolutamente no") il "no" è sempre la
+    // testa semantica del messaggio: vince il no.
+    if (parole[parole.length - 1] === 'no') return 'no';
+
+    if (parole[0] === 'no') {
+      // In apertura vince il no solo se il resto resta un rifiuto (vuoto o
+      // RIFIUTO_APERTURA_RE: "no grazie", "no non mi interessa", "no,
+      // assolutamente"...). Se il resto ha un segnale da sì o si apre con un
+      // avversativo ("no ma sono interessato", "no dai, in realtà mi
+      // interessa") — o comunque non è un rifiuto riconoscibile — è ambiguo:
+      // mai un sì, ma nemmeno un no automatico, decide il modello.
+      const resto = parole.slice(1).join(' ');
+      return resto === '' || RIFIUTO_APERTURA_RE.test(resto) ? 'no' : 'incerto';
+    }
+
+    // "no" in mezzo alla frase: ambiguo, mai un sì, mai un no automatico.
+    return 'incerto';
   }
 
   if (formaDaSi) return 'si';
