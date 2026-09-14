@@ -8,11 +8,13 @@ vi.mock('./bot-outcome', () => ({
   sendOutcome: vi.fn(async () => ({ sent: true })),
   inviaNotaAlCrm: vi.fn(async () => ({ sent: true })),
 }));
+vi.mock('./lancio-turno', () => ({ eseguiTurnoLancio: vi.fn(async () => 'active') }));
 
 import { generateMarioReply, GDO_CONTEXT_NOTE } from './mario';
 import { sendOutcome, inviaNotaAlCrm } from './bot-outcome';
 import { NOTA_VIDEO, NOTA_NOEMI } from './gdo-context-note';
 import { OPENING_ENV_KEYS, personaForConversation } from './persona';
+import { eseguiTurnoLancio } from './lancio-turno';
 
 describe('shouldAutoReply', () => {
   const ok = { toMatchesFenice: true, autoReplyOn: true, aiOwner: 'mario', aiStatus: 'active' };
@@ -256,6 +258,8 @@ type ClaimedRow = {
   gdo_video_watched_at?: string | null;
   gdo_video_followups_sent?: number | null;
   gdo_noemi_reminded_at?: string | null;
+  lancio_slug?: string | null;
+  lancio_fase?: string | null;
 };
 type FakeMsgRow = { direction: string; body: string; template_sid: string | null; created_at: string };
 
@@ -1736,5 +1740,55 @@ describe('fermo manuale del bot su una singola chat', () => {
 
     expect(conv.ai_status).toBe('booked');
     expect(conv.ai_lock_at).toBe('2026-08-01T12:31:00Z'); // il lucchetto altrui resta
+  });
+});
+
+describe('drainMarioReplies — aggancio del turno lancio', () => {
+  const WELCOME: FakeMsgRow = { direction: 'out', body: 'benvenuto lancio', template_sid: 'HX_W', created_at: '2026-09-20T10:00:00Z' };
+  const SI: FakeMsgRow = { direction: 'in', body: 'si', template_sid: null, created_at: '2026-09-20T10:05:00Z' };
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(eseguiTurnoLancio).mockClear();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('con un lancio in corso il round lo fa eseguiTurnoLancio: Mario non viene interpellato', async () => {
+    const { supabase, calls } = makeDrainSupabase(
+      { id: 42, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L1', gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
+        lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa', leads: { first_name: 'Anna' } } as any,
+      [WELCOME, SI],
+    );
+    await drainMarioReplies(supabase, 42, '+393331234567', () => 0);
+    expect(eseguiTurnoLancio).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(eseguiTurnoLancio).mock.calls[0][1]).toMatchObject({
+      conversationId: 42, phone: '+393331234567', crmLeadId: 'crm-L1', fase: 'attesa', nome: 'Anna', inboundBody: 'si',
+    });
+    expect(generateMarioReply).not.toHaveBeenCalled();
+    expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+
+  it('lo stato finale è quello che il turno lancio restituisce', async () => {
+    vi.mocked(eseguiTurnoLancio).mockResolvedValueOnce('closed');
+    const { supabase, calls } = makeDrainSupabase(
+      { id: 43, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L2', gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
+        lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa' } as any,
+      [WELCOME, { ...SI, body: 'no' }],
+    );
+    await drainMarioReplies(supabase, 43, '+393331234567', () => 0);
+    expect(calls.finalStatusWrites).toEqual(['closed']);
+  });
+
+  it('lancio chiuso: torna Mario di sempre', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({ visibleReply: 'ciao', appointmentFixed: false, passToHuman: false, videoWatched: false } as any);
+    const { supabase } = makeDrainSupabase(
+      { id: 44, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L3', gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
+        lancio_slug: 'webdev-2026-10', lancio_fase: 'chiuso' } as any,
+      [WELCOME, SI],
+    );
+    await drainMarioReplies(supabase, 44, '+393331234567', () => 0);
+    expect(eseguiTurnoLancio).not.toHaveBeenCalled();
+    expect(generateMarioReply).toHaveBeenCalledTimes(1);
   });
 });

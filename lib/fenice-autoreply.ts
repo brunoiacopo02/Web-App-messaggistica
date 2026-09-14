@@ -14,6 +14,8 @@ import { stopDalCrmPerLead, vuolePassaggioAUmano } from './stop-crm';
 import { buildScriveDopoLaCallNote } from './bot-outcome-rules';
 import { personaForConversation, PERSONA_NAME, OPENING_ENV_KEYS } from './persona';
 import { confermaVideoVisto } from './video-visto';
+import { lancioInCorso } from './lancio-fase';
+import { eseguiTurnoLancio } from './lancio-turno';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -264,7 +266,7 @@ export async function drainMarioReplies(
     .eq('ai_status', 'active')
     .is('ai_paused_at', null) // fermo manuale: la chat è di un umano, non si claima
     .or(`ai_lock_at.is.null,ai_lock_at.lt.${staleCutoff}`)
-    .select('id, ai_started_at, crm_lead_id, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, bot_scheduled_at, gdo_appuntamento_at, leads(first_name)')
+    .select('id, ai_started_at, crm_lead_id, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, bot_scheduled_at, gdo_appuntamento_at, lancio_slug, lancio_fase, leads(first_name)')
     .single();
   if (!claimed) return;
   const startedAt = (claimed as { ai_started_at: string | null }).ai_started_at;
@@ -338,6 +340,8 @@ export async function drainMarioReplies(
     gdo_appuntamento_at?: string | null;
     leads?: { first_name?: string | null } | null;
   };
+  // Chat del lancio Web Dev AI: il turno lo fa lib/lancio-turno, non Mario.
+  const lancio = claimed as { lancio_slug?: string | null; lancio_fase?: string | null };
   const gdoAgendaAt = gdo.gdo_agenda_at ?? null;
   const gdoVideoUrl = gdo.gdo_video_url ?? null;
   const postino = gdoAgendaAt !== null;
@@ -384,6 +388,16 @@ export async function drainMarioReplies(
       // Un link del video già uscito in questa chat: serve sia alla patch del blocco
       // conferma, sia alla rete di sicurezza sul FATTO qui sotto.
       const videoGiaInviato = rows.some((m) => m.direction === 'out' && containsVideoLink(m.body));
+
+      if (lancioInCorso(lancio)) {
+        finalStatus = await eseguiTurnoLancio(supabase, {
+          conversationId, phone, from, crmLeadId,
+          fase: lancio.lancio_fase ?? null,
+          nome: gdo.leads?.first_name ?? null,
+          rows, inboundBody,
+        });
+        break;
+      }
 
       /** Manda il video del GDO come bolla a sé e ne registra l'invio. */
       const inviaVideoGdo = async (): Promise<void> => {
