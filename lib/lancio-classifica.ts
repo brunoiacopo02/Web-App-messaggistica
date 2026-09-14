@@ -29,9 +29,18 @@ const NO_FRASI = new RegExp(
     ].join('|') +
     ')\\b',
 );
-/** Un "no" da solo (non "non"): mai un sì, anche in mezzo a parole da sì ("certo
- *  che no"). Controllato dopo NO_SECCO/NO_FRASI, che restano più specifici. */
-const NO_BARE = /\bno\b/;
+/**
+ * Idiomi con "no"/"nessun" che NON sono una negazione ("no problem", "nessun
+ * problema"): tolti dal testo prima di ogni controllo no/sì, così non fanno
+ * scattare né il "no" isolato né NEGAZIONE su una frase che è un sì.
+ */
+function rimuoviIdiomiNeutri(t: string): string {
+  return t
+    .replace(/\bno problemo?\b/g, ' ')
+    .replace(/\bnessun problema\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 const SI_PAROLE = new RegExp(
   '\\b(' +
@@ -58,7 +67,9 @@ const DOMANDA_INIZIO = new RegExp(
 export function classificaLancio(body: string | null | undefined): ClasseLancio {
   const raw = (body ?? '').trim();
   if (!raw) return 'incerto';
-  const t = normalizza(raw);
+  let t = normalizza(raw);
+  if (!t) return 'incerto';
+  t = rimuoviIdiomiNeutri(t);
   if (!t) return 'incerto';
 
   if (NO_SECCO.test(t) || NO_FRASI.test(t)) return 'no';
@@ -67,9 +78,14 @@ export function classificaLancio(body: string | null | undefined): ClasseLancio 
   const parole = t.split(/\s+/).filter(Boolean);
   const formaDaSi = parole.length <= MAX_PAROLE_SI && SI_PAROLE.test(t) && !NEGAZIONE.test(t);
 
-  // Un "no" isolato (non intercettato sopra) non diventa mai un sì: se il resto ha
-  // comunque una forma da sì ("certo che no") vince il no, altrimenti è incerto.
-  if (NO_BARE.test(t)) return formaDaSi ? 'no' : 'incerto';
+  if (parole.includes('no')) {
+    // Un "no" isolato (non intercettato sopra) è la testa semantica del
+    // messaggio solo in apertura o in chiusura ("no, assolutamente", "certo
+    // che no"): in quei casi vince il no. In mezzo alla frase, anche accanto
+    // a una parola da sì ("sì sì, no aspetta, va bene"), è ambiguo: mai un
+    // sì, ma nemmeno un no automatico — decide il modello.
+    return parole[0] === 'no' || parole[parole.length - 1] === 'no' ? 'no' : 'incerto';
+  }
 
   if (formaDaSi) return 'si';
 

@@ -33,6 +33,21 @@ describe('classificaLancio — la domanda', () => {
   it('un punto di domanda vince sul sì: "si ma quanto dura?" è una domanda', () => {
     expect(classificaLancio('si ma quanto dura?')).toBe('domanda');
   });
+  it('un punto di domanda vince anche su un "no": "no? e quando sarebbe?" è una domanda', () => {
+    expect(classificaLancio('no? e quando sarebbe?')).toBe('domanda');
+  });
+});
+
+describe('classificaLancio — il "no" isolato non è un martello: solo in testa o in coda', () => {
+  it('"no problem, ci sono!" è un sì: "no problem" è un idioma, non una negazione', () => {
+    expect(classificaLancio('no problem, ci sono!')).toBe('si');
+  });
+  it('"nessun problema, ci sono" è un sì: "nessun problema" è un idioma, non una negazione', () => {
+    expect(classificaLancio('nessun problema, ci sono')).toBe('si');
+  });
+  it('"sì sì, no aspetta, va bene": il "no" in mezzo alla frase è ambiguo, mai un sì (né un no automatico)', () => {
+    expect(classificaLancio('sì sì, no aspetta, va bene')).toBe('incerto');
+  });
 });
 
 describe('classificaLancio — incerto va al modello', () => {
