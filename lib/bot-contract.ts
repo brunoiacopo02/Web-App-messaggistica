@@ -13,6 +13,36 @@ export interface BotIntakePayload {
   /** I lead precedenti della stessa persona, dal piu' recente, con il loro esito.
    *  Vuoto quando il CRM non lo manda: e' un di piu', mai una condizione. */
   previousLeadIds?: PreviousLead[];
+  /** Lead del lancio (contratto v1.6). Null/assente = flusso normale. */
+  lancio?: LancioIntake | null;
+}
+
+/** Come e' arrivato il lead del lancio: dalla lista AC 132 o dal pulsante della live. */
+export type LancioIngresso = 'lista' | 'pulsante_webinar';
+
+/**
+ * Contratto v1.6 (spec §6.1): il CRM marca i lead del lancio "Web Developer AI" con
+ * questo campo. Assente ⇒ flusso di Mario di sempre, byte per byte. Presente ⇒ il bot
+ * manda il benvenuto del lancio invece dell'apertura e la chat entra nel flusso a fasi
+ * (`conversations.lancio_*`).
+ */
+export interface LancioIntake {
+  slug: string;
+  ingresso: LancioIngresso;
+}
+
+/**
+ * Letto senza pretese, come `parsePreviousLeads`: un `lancio` malformato non deve mai
+ * impedire l'arruolamento — al massimo il lead entra nel flusso normale (slug assente)
+ * o con ingresso `lista` (ingresso sconosciuto).
+ */
+export function parseLancioField(raw: unknown): LancioIntake | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const slug = typeof o.slug === 'string' ? o.slug.trim() : '';
+  if (!slug) return null;
+  const ingresso: LancioIngresso = o.ingresso === 'pulsante_webinar' ? 'pulsante_webinar' : 'lista';
+  return { slug, ingresso };
 }
 
 /** Un giro precedente della stessa persona, come lo racconta il CRM. */
@@ -130,6 +160,7 @@ export function parseIntakePayload(
       funnel: typeof o.funnel === 'string' ? o.funnel : null,
       personKey: typeof o.personKey === 'string' && o.personKey.trim() ? o.personKey.trim() : null,
       previousLeadIds: parsePreviousLeads(o.previousLeadIds),
+      lancio: parseLancioField(o.lancio),
     },
   };
 }
