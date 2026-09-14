@@ -26,6 +26,11 @@ describe('buildLancioSystem — fase attesa', () => {
     expect(s).not.toMatch(/non serve installare niente/i);
     expect(s).toMatch(/da telefono conviene avere l'app Zoom/);
   });
+  it('la data della live sta in un posto solo: se cambia, nel prompt non resta un 5 ottobre', () => {
+    const altra = buildLancioSystem({ ...base, eventoAt: '2026-11-12T20:30:00+01:00' });
+    expect(altra).toContain('giovedì 12 novembre alle 20:30');
+    expect(altra).not.toContain('5 ottobre');
+  });
   it('non promette registrazioni né replay', () => {
     expect(s).toMatch(/non prometti NESSUNA registrazione né replay/);
     expect(s).toMatch(/in diretta/i);
