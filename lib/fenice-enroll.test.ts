@@ -561,6 +561,26 @@ describe('enrollLeadIntoMario — ramo lancio (B1)', () => {
     expect(evt.payload).toMatchObject({ crmLeadId: 'crm-L1', conversationId: 42, slug: 'webdev-2026-10', ingresso: 'lista', ok: true });
   });
 
+  it('benvenuto partito: timbra lancio_benvenuto_at, il lucchetto letto dal cron', async () => {
+    const { supabase, calls } = makeSupabase();
+    await enrollLeadIntoMario(supabase, ARGS);
+    expect(calls.updates[0].lancio_benvenuto_at).toEqual(expect.any(String));
+  });
+
+  it('benvenuto NON partito: nessun timbro, o il cron non ci riproverebbe mai', async () => {
+    vi.mocked(sendTemplateAndLog).mockResolvedValueOnce({ ok: false, error: 'twilio boom' });
+    const { supabase, calls } = makeSupabase();
+    await enrollLeadIntoMario(supabase, ARGS);
+    expect(calls.updates[0].lancio_benvenuto_at).toBeUndefined();
+  });
+
+  it('differito (lancio spento): nessun timbro, il cron lo prende in carico', async () => {
+    vi.mocked(getLancioSettings).mockResolvedValueOnce({ attivo: false } as never);
+    const { supabase, calls } = makeSupabase();
+    await enrollLeadIntoMario(supabase, ARGS);
+    expect(calls.updates[0].lancio_benvenuto_at).toBeUndefined();
+  });
+
   it('con lancio_attivo spento prende in carico ma NON manda: differita, la riprende il cron lancio', async () => {
     vi.mocked(getLancioSettings).mockResolvedValueOnce({ attivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null, eventoAt: null });
     const { supabase, calls } = makeSupabase();

@@ -4,8 +4,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // Registra ogni chiamata (tabella, operazione, payload, filtri) così i test possono
 // interrogare anche quello che NON è stato scritto: "nessuna riga messages sul
 // frequency cap" e "un solo invio per numero" sono asserzioni sul secondo.
+//
+// `conversations.lancio_benvenuto_at` è finto per davvero — l'update con
+// `.is('lancio_benvenuto_at', null)` restituisce righe solo la prima volta — perché il
+// lucchetto contro il doppio invio è tutto lì: se il compare-and-set non fosse
+// simulato, il test lo vedrebbe funzionare anche se il route non lo usasse.
 
-type Filtro = [string, string];
+type Filtro = [string, unknown];
 type Chiamata = { table: string; op: 'select' | 'insert' | 'update'; arg: unknown; filtri: Filtro[] };
 const chiamate: Chiamata[] = [];
 
@@ -13,23 +18,56 @@ type ConvFinta = {
   id: number;
   crm_lead_id: string | null;
   lancio_fase: string | null;
+  lancio_benvenuto_at: string | null;
+  last_inbound_at: string | null;
   leads: { phone_e164: string | null; first_name: string | null } | null;
 };
-type OutFinto = { template_sid: string | null; twilio_status: string | null; created_at: string | null };
+type OutFinto = {
+  conversation_id?: number;
+  template_sid: string | null;
+  twilio_status: string | null;
+  twilio_error_code: number | null;
+  created_at: string | null;
+};
 
 const stato = {
   convs: [] as ConvFinta[],
   outbound: new Map<number, OutFinto[]>(),
   attivo: '1' as string,
+  /** Chat già timbrate: l'update del claim non le restituisce. */
+  timbrate: new Set<number>(),
 };
 
+const valore = (rec: Chiamata, colonna: string) => rec.filtri.find(([c]) => c === colonna)?.[1];
+
 function esegui(rec: Chiamata): { data: unknown; error: unknown } {
+  if (rec.table === 'conversations' && rec.op === 'update') {
+    const campi = rec.arg as Record<string, unknown>;
+    const id = Number(valore(rec, 'id'));
+    if (!('lancio_benvenuto_at' in campi)) return { data: [], error: null };
+    if (campi.lancio_benvenuto_at === null) {
+      stato.timbrate.delete(id);
+      return { data: [], error: null };
+    }
+    // Claim: `is('lancio_benvenuto_at', null)` è un compare-and-set.
+    if (stato.timbrate.has(id)) return { data: [], error: null };
+    stato.timbrate.add(id);
+    return { data: [{ id }], error: null };
+  }
   if (rec.op !== 'select') return { data: null, error: null };
   if (rec.table === 'app_settings') return { data: [{ key: 'lancio_attivo', value: stato.attivo }], error: null };
-  if (rec.table === 'conversations') return { data: stato.convs, error: null };
+  if (rec.table === 'conversations') {
+    // La paginazione del route: la seconda pagina è sempre vuota (fixture piccole).
+    const pagina = (valore(rec, '__range') as number[] | undefined) ?? [0, 999];
+    const liberi = stato.convs.filter((c) => !stato.timbrate.has(c.id));
+    return { data: liberi.slice(pagina[0], pagina[1] + 1), error: null };
+  }
   if (rec.table === 'messages') {
-    const id = Number(rec.filtri.find(([c]) => c === 'conversation_id')?.[1]);
-    return { data: stato.outbound.get(id) ?? [], error: null };
+    const ids = (valore(rec, '__in') as number[] | undefined) ?? [];
+    const righe = ids.flatMap((id) =>
+      (stato.outbound.get(id) ?? []).map((r) => ({ ...r, conversation_id: id })),
+    );
+    return { data: righe, error: null };
   }
   return { data: [], error: null };
 }
@@ -38,13 +76,12 @@ function query(table: string, op: Chiamata['op'], arg: unknown) {
   const rec: Chiamata = { table, op, arg, filtri: [] };
   chiamate.push(rec);
   const q: Record<string, unknown> = {};
-  for (const m of ['is', 'or', 'gte', 'lte', 'in', 'not', 'order', 'limit', 'single', 'maybeSingle']) {
+  for (const m of ['is', 'or', 'gte', 'lte', 'not', 'order', 'limit', 'single', 'maybeSingle', 'select']) {
     q[m] = () => q;
   }
-  q.eq = (colonna: string, valore: unknown) => {
-    rec.filtri.push([colonna, String(valore)]);
-    return q;
-  };
+  q.eq = (colonna: string, v: unknown) => { rec.filtri.push([colonna, v]); return q; };
+  q.in = (_c: string, v: unknown) => { rec.filtri.push(['__in', v]); return q; };
+  q.range = (a: number, b: number) => { rec.filtri.push(['__range', [a, b]]); return q; };
   q.then = (ok: (v: unknown) => unknown, ko?: (e: unknown) => unknown) =>
     Promise.resolve(esegui(rec)).then(ok, ko);
   return q;
@@ -62,10 +99,11 @@ vi.mock('@/lib/supabase/admin', () => ({
 
 // ─────────────────────────── finto Twilio ───────────────────────────
 const sendTemplate = vi.fn();
+const assertTemplateSendable = vi.fn();
 vi.mock('@/lib/twilio', () => ({
   sendTemplate: (...a: unknown[]) => sendTemplate(...a),
+  assertTemplateSendable: (...a: unknown[]) => assertTemplateSendable(...a),
   getTemplateBody: async () => null,
-  assertTemplateSendable: async () => {},
 }));
 
 import { GET } from './route';
@@ -73,7 +111,9 @@ import { GET } from './route';
 const SEGRETO = 'segreto-di-test';
 const WELCOME = 'HXbenvenuto';
 const ADESSO = new Date('2026-09-20T10:00:00Z'); // 12:00 Roma, in fascia
+const NOTTE = new Date('2026-09-20T01:00:00Z'); // 03:00 Roma
 const H = 3600_000;
+const G = 24 * H;
 
 const richiesta = (secret: string | null = SEGRETO) =>
   GET({
@@ -88,6 +128,8 @@ const conv = (id: number, extra: Partial<ConvFinta> = {}): ConvFinta => ({
   id,
   crm_lead_id: `crm-${id}`,
   lancio_fase: 'attesa',
+  lancio_benvenuto_at: null,
+  last_inbound_at: null,
   leads: { phone_e164: tel(id), first_name: 'mario rossi' },
   ...extra,
 });
@@ -98,6 +140,15 @@ const insertIn = (table: string) =>
     .map((c) => c.arg as Record<string, unknown>);
 const eventi = () => insertIn('event_log');
 const tipiEvento = () => eventi().map((e) => e.type);
+const eventoRun = () => eventi().find((e) => e.type === 'lancio_aperture_run');
+const selectSu = (table: string) => chiamate.filter((c) => c.table === table && c.op === 'select');
+const timbriTolti = () =>
+  chiamate.filter(
+    (c) =>
+      c.table === 'conversations' &&
+      c.op === 'update' &&
+      (c.arg as Record<string, unknown>).lancio_benvenuto_at === null,
+  );
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -106,8 +157,11 @@ beforeEach(() => {
   stato.convs = [];
   stato.outbound = new Map();
   stato.attivo = '1';
+  stato.timbrate = new Set();
   sendTemplate.mockReset();
   sendTemplate.mockResolvedValue({ sid: 'SMtest', status: 'queued' });
+  assertTemplateSendable.mockReset();
+  assertTemplateSendable.mockResolvedValue(undefined);
   process.env.CRON_SECRET = SEGRETO;
   process.env.LANCIO_WELCOME_TEMPLATE_SID = WELCOME;
   process.env.TWILIO_WHATSAPP_NUMBER_FENICE = 'whatsapp:+390000000';
@@ -147,8 +201,40 @@ describe('GET /api/cron/lancio-aperture', () => {
     });
     expect(String(righe[0].body)).toContain('5 ottobre');
     expect(tipiEvento().filter((t) => t === 'lancio_apertura_inviata')).toHaveLength(2);
-    expect(tipiEvento()).toContain('lancio_aperture_run');
-    expect(body).toMatchObject({ ok: true, inviati: 2 });
+    expect(body).toMatchObject({ ok: true, inviati: 2, candidati: 2 });
+  });
+
+  it('il timbro si mette PRIMA dell’invio e non si toglie se parte', async () => {
+    stato.convs = [conv(1)];
+    await richiesta();
+    const claim = chiamate.findIndex(
+      (c) => c.table === 'conversations' && c.op === 'update' && (c.arg as Record<string, unknown>).lancio_benvenuto_at,
+    );
+    const inserimento = chiamate.findIndex((c) => c.table === 'messages' && c.op === 'insert');
+    expect(claim).toBeGreaterThanOrEqual(0);
+    expect(claim).toBeLessThan(inserimento);
+    expect(timbriTolti()).toHaveLength(0);
+    expect(stato.timbrate.has(1)).toBe(true);
+  });
+
+  it('una chat gia’ timbrata non e’ nemmeno candidata (la coda non si intasa)', async () => {
+    stato.convs = [conv(1), conv(2)];
+    stato.timbrate.add(1);
+    const body = await (await richiesta()).json();
+    expect(body.candidati).toBe(1);
+    expect(sendTemplate).toHaveBeenCalledTimes(1);
+    expect(sendTemplate.mock.calls[0][0]).toMatchObject({ to: tel(2) });
+  });
+
+  it('se un altro run se l’e’ presa mentre leggevamo, si passa oltre', async () => {
+    stato.convs = [conv(1), conv(2)];
+    // La select aveva già restituito la conv 1, poi l'altro run l'ha timbrata: il
+    // compare-and-set non torna righe e il benvenuto non parte due volte.
+    stato.timbrate.add(1);
+    stato.convs = [conv(1), conv(2)];
+    const body = await (await richiesta()).json();
+    expect(sendTemplate).toHaveBeenCalledTimes(1);
+    expect(body.inviati).toBe(1);
   });
 
   it('il tetto per run ferma gli invii, non li perde', async () => {
@@ -166,40 +252,77 @@ describe('GET /api/cron/lancio-aperture', () => {
     expect(body.inviati).toBe(1);
   });
 
-  it('frequency cap Meta: nessuna riga, si ritenta al run dopo', async () => {
+  it('frequency cap Meta: nessuna riga, timbro tolto, si ritenta al run dopo', async () => {
     stato.convs = [conv(1)];
     sendTemplate.mockRejectedValueOnce(Object.assign(new Error('frequency cap'), { code: 63049 }));
     const body = await (await richiesta()).json();
     expect(insertIn('messages')).toHaveLength(0);
     expect(tipiEvento()).toContain('lancio_apertura_freq_capped');
+    expect(timbriTolti()).toHaveLength(1);
+    expect(stato.timbrate.has(1)).toBe(false);
     expect(body).toMatchObject({ capped: 1, inviati: 0 });
   });
 
-  it('un invio fallito lascia la riga fallita (e il prossimo run ritenta)', async () => {
+  it('un invio fallito lascia la riga fallita e libera il timbro (il prossimo run ritenta)', async () => {
     stato.convs = [conv(1)];
     sendTemplate.mockRejectedValueOnce(Object.assign(new Error('numero morto'), { code: 63024 }));
     const body = await (await richiesta()).json();
     expect(insertIn('messages')[0]).toMatchObject({ twilio_status: 'failed', twilio_error_code: 63024 });
     expect(tipiEvento()).toContain('send_error');
+    expect(stato.timbrate.has(1)).toBe(false);
     expect(body).toMatchObject({ falliti: 1, inviati: 0 });
   });
 
-  it('lancio spento: nessun invio, i lead restano in coda', async () => {
+  it('il presidio template ferma tutto il run, senza righe e senza consumare budget', async () => {
+    stato.convs = [conv(1), conv(2), conv(3)];
+    sendTemplate.mockRejectedValue(
+      new Error(`template ${WELCOME} bloccato: categoria MARKETING con UTILITY_ONLY attivo.`),
+    );
+    const body = await (await richiesta()).json();
+    expect(sendTemplate).toHaveBeenCalledTimes(1);
+    expect(insertIn('messages')).toHaveLength(0);
+    expect(tipiEvento().filter((t) => t === 'lancio_aperture_config_error')).toHaveLength(1);
+    expect(stato.timbrate.size).toBe(0);
+    expect(body).toMatchObject({ inviati: 0, falliti: 0, fermo: 'template_bloccato' });
+  });
+
+  it('lancio spento: si esce prima di leggere le conversazioni', async () => {
     stato.attivo = '0';
     stato.convs = [conv(1)];
     const body = await (await richiesta()).json();
     expect(sendTemplate).not.toHaveBeenCalled();
-    expect(body).toMatchObject({ inviati: 0, attesi: 1, attivo: false });
+    expect(selectSu('conversations')).toHaveLength(0);
+    expect(eventoRun()).toMatchObject({ type: 'lancio_aperture_run' });
+    expect(body).toMatchObject({ inviati: 0, motivo: 'lancio_spento', attivo: false });
+  });
+
+  it('di notte si esce subito, senza leggere niente', async () => {
+    vi.setSystemTime(NOTTE);
+    stato.convs = [conv(1)];
+    const body = await (await richiesta()).json();
+    expect(selectSu('conversations')).toHaveLength(0);
+    expect(body).toMatchObject({ inviati: 0, motivo: 'fuori_fascia' });
   });
 
   it("l'apertura di Mario di un'ora fa blocca il benvenuto, quella di ieri no", async () => {
     stato.convs = [conv(1), conv(2)];
     stato.outbound.set(1, [
-      { template_sid: 'HXapertura', twilio_status: 'delivered', created_at: new Date(ADESSO.getTime() - 1 * H).toISOString() },
+      { template_sid: 'HXapertura', twilio_status: 'delivered', twilio_error_code: null, created_at: new Date(ADESSO.getTime() - 1 * H).toISOString() },
     ]);
     stato.outbound.set(2, [
-      { template_sid: 'HXapertura', twilio_status: 'delivered', created_at: new Date(ADESSO.getTime() - 13 * H).toISOString() },
+      { template_sid: 'HXapertura', twilio_status: 'delivered', twilio_error_code: null, created_at: new Date(ADESSO.getTime() - 13 * H).toISOString() },
     ]);
+    const body = await (await richiesta()).json();
+    expect(sendTemplate).toHaveBeenCalledTimes(1);
+    expect(sendTemplate.mock.calls[0][0]).toMatchObject({ to: tel(2) });
+    expect(body).toMatchObject({ inviati: 1, attesi: 1 });
+  });
+
+  it('una chat viva (inbound di 2 giorni fa) aspetta; a 8 giorni il benvenuto parte', async () => {
+    stato.convs = [
+      conv(1, { last_inbound_at: new Date(ADESSO.getTime() - 2 * G).toISOString() }),
+      conv(2, { last_inbound_at: new Date(ADESSO.getTime() - 8 * G).toISOString() }),
+    ];
     const body = await (await richiesta()).json();
     expect(sendTemplate).toHaveBeenCalledTimes(1);
     expect(sendTemplate.mock.calls[0][0]).toMatchObject({ to: tel(2) });
@@ -209,27 +332,40 @@ describe('GET /api/cron/lancio-aperture', () => {
   it('un benvenuto riuscito non si ripete; tre falliti si lasciano stare', async () => {
     const vecchio = new Date(ADESSO.getTime() - 20 * H).toISOString();
     stato.convs = [conv(1), conv(2)];
-    stato.outbound.set(1, [{ template_sid: WELCOME, twilio_status: 'delivered', created_at: vecchio }]);
+    stato.outbound.set(1, [
+      { template_sid: WELCOME, twilio_status: 'delivered', twilio_error_code: null, created_at: vecchio },
+    ]);
     stato.outbound.set(2, [
-      { template_sid: WELCOME, twilio_status: 'failed', created_at: vecchio },
-      { template_sid: WELCOME, twilio_status: 'failed', created_at: vecchio },
-      { template_sid: WELCOME, twilio_status: 'undelivered', created_at: vecchio },
+      { template_sid: WELCOME, twilio_status: 'failed', twilio_error_code: 63024, created_at: vecchio },
+      { template_sid: WELCOME, twilio_status: 'failed', twilio_error_code: 63024, created_at: vecchio },
+      { template_sid: WELCOME, twilio_status: 'undelivered', twilio_error_code: 63024, created_at: vecchio },
     ]);
     const body = await (await richiesta()).json();
     expect(sendTemplate).not.toHaveBeenCalled();
     expect(body).toMatchObject({ inviati: 0, saltati: 2 });
   });
 
-  it('due falliti si ritentano ancora', async () => {
+  it('due falliti si ritentano ancora, e un frequency cap non conta come fallimento', async () => {
     const vecchio = new Date(ADESSO.getTime() - 20 * H).toISOString();
-    stato.convs = [conv(1)];
+    stato.convs = [conv(1), conv(2)];
     stato.outbound.set(1, [
-      { template_sid: WELCOME, twilio_status: 'failed', created_at: vecchio },
-      { template_sid: WELCOME, twilio_status: 'failed', created_at: vecchio },
+      { template_sid: WELCOME, twilio_status: 'failed', twilio_error_code: 63024, created_at: vecchio },
+      { template_sid: WELCOME, twilio_status: 'failed', twilio_error_code: 63024, created_at: vecchio },
+    ]);
+    stato.outbound.set(2, [
+      { template_sid: WELCOME, twilio_status: 'failed', twilio_error_code: 63049, created_at: vecchio },
+      { template_sid: WELCOME, twilio_status: 'failed', twilio_error_code: 63049, created_at: vecchio },
+      { template_sid: WELCOME, twilio_status: 'failed', twilio_error_code: 63049, created_at: vecchio },
     ]);
     const body = await (await richiesta()).json();
-    expect(sendTemplate).toHaveBeenCalledTimes(1);
-    expect(body.inviati).toBe(1);
+    expect(sendTemplate).toHaveBeenCalledTimes(2);
+    expect(body.inviati).toBe(2);
+  });
+
+  it('una sola query messages per lotto, non una per conversazione', async () => {
+    stato.convs = [conv(1), conv(2), conv(3)];
+    await richiesta();
+    expect(selectSu('messages')).toHaveLength(1);
   });
 
   it('senza telefono non si manda niente', async () => {
@@ -248,9 +384,12 @@ describe('GET /api/cron/lancio-aperture', () => {
     expect(body).toMatchObject({ ok: true, skipped: 'config' });
   });
 
-  it('a run muto non si scrive un evento di run', async () => {
+  it('anche a mani vuote il run si scrive: un cron inceppato deve vedersi', async () => {
     stato.convs = [];
     await richiesta();
-    expect(tipiEvento()).not.toContain('lancio_aperture_run');
+    expect(eventoRun()).toMatchObject({
+      type: 'lancio_aperture_run',
+      payload: { candidati: 0, inviati: 0 },
+    });
   });
 });

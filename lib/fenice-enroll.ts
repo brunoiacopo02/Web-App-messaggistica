@@ -369,7 +369,13 @@ async function enrollLancio(
     supabase, conversationId, args.phone, templateSid, 'Lancio benvenuto', from,
     { '1': templateName(firstName) }, lancioBenvenutoText(firstName),
   );
-  await supabase.from('conversations').update(convUpdate).eq('id', conversationId);
+  // Il benvenuto e' partito: si timbra `lancio_benvenuto_at`, che e' il lucchetto letto
+  // dal cron `lancio-aperture` (una riga timbrata non e' nemmeno candidata). Se l'invio
+  // e' fallito NON si timbra: il cron deve poterci riprovare.
+  await supabase
+    .from('conversations')
+    .update(res.ok ? { ...convUpdate, lancio_benvenuto_at: new Date().toISOString() } : convUpdate)
+    .eq('id', conversationId);
 
   if (!res.ok) {
     await supabase.from('event_log').insert({

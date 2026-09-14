@@ -114,6 +114,7 @@ export type Database = {
           lancio_link_inviato_at: string | null
           lancio_followup_inviato_at: string | null
           lancio_info: Json | null
+          lancio_benvenuto_at: string | null
           lead_id: number
           unread_count: number
           wa_number: string | null
@@ -160,6 +161,7 @@ export type Database = {
           lancio_link_inviato_at?: string | null
           lancio_followup_inviato_at?: string | null
           lancio_info?: Json | null
+          lancio_benvenuto_at?: string | null
           lead_id: number
           unread_count?: number
           wa_number?: string | null
@@ -206,6 +208,7 @@ export type Database = {
           lancio_link_inviato_at?: string | null
           lancio_followup_inviato_at?: string | null
           lancio_info?: Json | null
+          lancio_benvenuto_at?: string | null
           lead_id?: number
           unread_count?: number
           wa_number?: string | null

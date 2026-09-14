@@ -12,7 +12,8 @@ alter table public.conversations
   add column if not exists lancio_ingresso text,
   add column if not exists lancio_link_inviato_at timestamptz,
   add column if not exists lancio_followup_inviato_at timestamptz,
-  add column if not exists lancio_info jsonb;
+  add column if not exists lancio_info jsonb,
+  add column if not exists lancio_benvenuto_at timestamptz;
 
 comment on column public.conversations.lancio_slug is
   'Identificativo del lancio (es. webdev-2026-10). Valorizzato = la chat e'' del lancio, non del fissaggio di Mario.';
@@ -24,6 +25,8 @@ comment on column public.conversations.lancio_link_inviato_at is
   'Quando e'' partito il template col link Zoom (B4). Idempotenza del blast.';
 comment on column public.conversations.lancio_followup_inviato_at is
   'Quando e'' partito il follow-up del 6/10 (B5). Base delle 48h di restituzione.';
+comment on column public.conversations.lancio_benvenuto_at is
+  'Quando e'' partito il benvenuto del lancio. E'' il lucchetto dell''invio: l''intake e il cron lancio-aperture lo scrivono PRIMA/DOPO l''invio e nessuno dei due tocca una riga gia'' timbrata. Rimesso a null se l''invio fallisce.';
 comment on column public.conversations.lancio_info is
   'Risposte di riscaldamento raccolte la sera del 5 (B4), passate al venditore.';
 
