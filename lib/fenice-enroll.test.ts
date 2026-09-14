@@ -5,8 +5,14 @@ vi.mock('./messaging', () => ({
   sendTemplateAndLog: vi.fn(async () => ({ ok: true, sid: 'SM_TEST' })),
 }));
 
+vi.mock('./lancio-settings', () => ({
+  getLancioSettings: vi.fn(async () => ({ attivo: true, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null, eventoAt: null })),
+}));
+
 import { enrollGdoLeadAsPostino, enrollLeadIntoMario } from './fenice-enroll';
 import { findOrCreateLeadConversation, sendTemplateAndLog } from './messaging';
+import { getLancioSettings } from './lancio-settings';
+import { lancioBenvenutoText } from './lancio-fase';
 import { openingBody } from './persona';
 
 /** Fake del client Supabase: traccia update su conversations ed insert su event_log. */
@@ -16,7 +22,12 @@ function makeSupabase() {
     from(table: string) {
       if (table === 'conversations') {
         return {
-          update(payload: any) { calls.updates.push(payload); return { eq() { return Promise.resolve({}); } }; },
+          update(payload: any) {
+            calls.updates.push(payload);
+            // Catena thenable: il ramo lancio fa anche `.update(...).eq(...).or(...)`.
+            const chain: any = { eq: () => chain, or: () => chain, then: (r: any) => r({}) };
+            return chain;
+          },
           // Chat senza un leadId già registrato: la guardia anti-doppione lascia passare.
           select() { return { eq() { return { maybeSingle: async () => ({ data: null }) }; } }; },
         };
@@ -428,7 +439,11 @@ function makeSupabaseLeggibile(opts: { crmLeadId?: string | null; outboundRecent
     from(table: string) {
       if (table === 'conversations') {
         return {
-          update(payload: any) { calls.updates.push(payload); return { eq() { return Promise.resolve({}); } }; },
+          update(payload: any) {
+            calls.updates.push(payload);
+            const chain: any = { eq: () => chain, or: () => chain, then: (r: any) => r({}) };
+            return chain;
+          },
           select() {
             return { eq() { return { maybeSingle: async () => ({ data: { crm_lead_id: opts.crmLeadId ?? null, last_inbound_at: opts.lastInboundAt ?? null } }) }; } };
           },
@@ -509,5 +524,110 @@ describe('enrollLeadIntoMario — guardia anti-doppione sui ritenti del CRM', ()
     const { supabase } = makeSupabaseLeggibile({ crmLeadId: null, outboundRecenti: 1 });
     await enrollLeadIntoMario(supabase, { phone: '+393330000004' });
     expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('enrollLeadIntoMario — ramo lancio (B1)', () => {
+  const LANCIO = { slug: 'webdev-2026-10', ingresso: 'lista' as const };
+  const ARGS = { phone: '+393331234567', firstName: 'ANNA BIANCHI', crmLeadId: 'crm-L1', crmFunnel: 'Lancio Web Dev AI', lancio: LANCIO };
+
+  beforeEach(() => {
+    vi.setSystemTime(MEZZOGIORNO);
+    vi.stubEnv('LANCIO_WELCOME_TEMPLATE_SID', 'HX_LANCIO_WELCOME');
+    vi.stubEnv('NEW_OPENING_ENABLED', '1'); // anche col flag A/B acceso il lancio non passa dalle aperture C/T/J
+    vi.mocked(getLancioSettings).mockResolvedValue({ attivo: true, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null, eventoAt: null });
+  });
+
+  it("manda il template di benvenuto del lancio, non un'apertura di Mario/Marta", async () => {
+    const { supabase, calls } = makeSupabase();
+    const res = await enrollLeadIntoMario(supabase, ARGS);
+    expect(res).toMatchObject({ ok: true, conversationId: 42, sid: 'SM_TEST' });
+    const call = vi.mocked(sendTemplateAndLog).mock.calls[0];
+    expect(call.slice(1, 6)).toEqual([42, '+393331234567', 'HX_LANCIO_WELCOME', 'Lancio benvenuto', 'whatsapp:+390000000000']);
+    expect(call[6]).toEqual({ '1': 'Anna' });
+    expect(call[7]).toBe(lancioBenvenutoText('ANNA BIANCHI'));
+    expect(calls.events.some((e) => e.type === 'opening_config_error')).toBe(false);
+  });
+
+  it("scrive lancio_slug, lancio_fase=attesa, lancio_ingresso e l'evento lancio_intake", async () => {
+    const { supabase, calls } = makeSupabase();
+    await enrollLeadIntoMario(supabase, ARGS);
+    expect(calls.updates[0]).toMatchObject({
+      ai_owner: 'mario', ai_status: 'active', crm_lead_id: 'crm-L1', crm_funnel: 'Lancio Web Dev AI',
+      lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa', lancio_ingresso: 'lista',
+    });
+    const evt = calls.events.find((e) => e.type === 'lancio_intake');
+    expect(evt).toBeTruthy();
+    expect(evt.payload).toMatchObject({ crmLeadId: 'crm-L1', conversationId: 42, slug: 'webdev-2026-10', ingresso: 'lista', ok: true });
+  });
+
+  it('con lancio_attivo spento prende in carico ma NON manda: differita, la riprende il cron lancio', async () => {
+    vi.mocked(getLancioSettings).mockResolvedValueOnce({ attivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null, eventoAt: null });
+    const { supabase, calls } = makeSupabase();
+    const res = await enrollLeadIntoMario(supabase, ARGS);
+    expect(res).toMatchObject({ ok: true, conversationId: 42, deferred: true });
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+    expect(calls.updates[0]).toMatchObject({ lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa' });
+    expect(calls.events.find((e) => e.type === 'lancio_intake').payload.differita).toBe('lancio_spento');
+    expect(calls.events.some((e) => e.type === 'fenice_enroll_deferred')).toBe(false);
+  });
+
+  it("nel cuore della notte e' differita per fascia, come le aperture", async () => {
+    vi.setSystemTime(NOTTE_FONDA);
+    const { supabase, calls } = makeSupabase();
+    const res = await enrollLeadIntoMario(supabase, ARGS);
+    expect(res.deferred).toBe(true);
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+    expect(calls.events.find((e) => e.type === 'lancio_intake').payload.differita).toBe('fuori_fascia');
+  });
+
+  it('conversazione viva (ha scritto 3 giorni fa): niente secondo benvenuto, ma lancio_* valorizzati e duplicato:true', async () => {
+    const treGiorniFa = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const { supabase, calls } = makeSupabaseLeggibile({ crmLeadId: 'crm-VECCHIO', outboundRecenti: 0, lastInboundAt: treGiorniFa });
+    const res = await enrollLeadIntoMario(supabase, ARGS);
+    expect(res).toMatchObject({ ok: true, conversationId: 42, duplicato: true });
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+    expect(calls.updates[0]).toMatchObject({
+      lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa', lancio_ingresso: 'lista', crm_lead_id: 'crm-L1', ai_owner: 'mario',
+    });
+    expect('ai_started_at' in calls.updates[0]).toBe(false); // la cronologia della chat viva non si azzera
+    expect(calls.events.find((e) => e.type === 'lancio_intake').payload).toMatchObject({ duplicato: true, motivo: 'conversazione_viva' });
+  });
+
+  // Ruling del controller (ritrovamento B5 #2): su una chat riusata l'esito del giro
+  // precedente resta scritto sulla riga. Senza azzerarlo, la restituzione di fine lancio
+  // (NON_RISPOSTO) verrebbe declassata a NOTA sul lead sbagliato da resolveOutcomeAction.
+  it("azzera l'esito del giro precedente sulla chat riusata (ramo normale e ramo duplicato)", async () => {
+    const { supabase, calls } = makeSupabase();
+    await enrollLeadIntoMario(supabase, ARGS);
+    expect(calls.updates[0]).toMatchObject({ bot_outcome: null, bot_outcome_at: null, bot_scheduled_at: null });
+
+    const treGiorniFa = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const viva = makeSupabaseLeggibile({ crmLeadId: 'crm-VECCHIO', outboundRecenti: 0, lastInboundAt: treGiorniFa });
+    await enrollLeadIntoMario(viva.supabase, ARGS);
+    expect(viva.calls.updates[0]).toMatchObject({ bot_outcome: null, bot_outcome_at: null, bot_scheduled_at: null });
+  });
+
+  it('template non configurato → errore esplicito, nessun invio', async () => {
+    vi.stubEnv('LANCIO_WELCOME_TEMPLATE_SID', '');
+    const { supabase } = makeSupabase();
+    await expect(enrollLeadIntoMario(supabase, ARGS)).rejects.toThrow(/LANCIO_WELCOME_TEMPLATE_SID/);
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+  });
+
+  it("invio fallito → ok:false, event send_error e lancio_intake con l'errore", async () => {
+    vi.mocked(sendTemplateAndLog).mockResolvedValueOnce({ ok: false, error: 'template bloccato: categoria MARKETING con UTILITY_ONLY attivo' });
+    const { supabase, calls } = makeSupabase();
+    const res = await enrollLeadIntoMario(supabase, ARGS);
+    expect(res.ok).toBe(false);
+    expect(calls.events.some((e) => e.type === 'send_error' && e.level === 'error')).toBe(true);
+    expect(calls.events.find((e) => e.type === 'lancio_intake').payload.ok).toBe(false);
+  });
+
+  it('senza campo lancio il flusso di sempre non cambia (nessuna lettura delle impostazioni)', async () => {
+    const { supabase } = makeSupabase();
+    await enrollLeadIntoMario(supabase, { phone: '+393331234567', firstName: 'Anna', crmFunnel: 'CORSO 10 ORE' });
+    expect(getLancioSettings).not.toHaveBeenCalled();
+    expect(vi.mocked(sendTemplateAndLog).mock.calls[0][3]).not.toBe('HX_LANCIO_WELCOME');
   });
 });

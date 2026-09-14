@@ -100,6 +100,7 @@ export async function POST(req: NextRequest) {
       email: p.email,
       crmLeadId: p.leadId,
       crmFunnel: p.funnel,
+      lancio: p.lancio ?? null,
     });
     await supabase.from('event_log').insert({
       type: 'bot_intake',

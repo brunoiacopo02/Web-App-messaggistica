@@ -4,8 +4,10 @@ import { feniceOpening } from './fenice-opening';
 import { inOpeningWindow } from './sequence';
 import { normalizeFunnel, variantIndexFor, openingEnvKey, openingBody, openingWaysFor } from './persona';
 import { firstNameOf, templateName } from './name';
-import type { GdoVariant } from './bot-contract';
+import type { GdoVariant, LancioIntake } from './bot-contract';
 import { gdoAgendaText, videoLinkForVariant } from './gdo-agenda';
+import { getLancioSettings } from './lancio-settings';
+import { lancioBenvenutoText } from './lancio-fase';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -16,6 +18,12 @@ export type EnrollArgs = {
   email?: string | null;
   crmLeadId?: string | null;
   crmFunnel?: string | null;
+  /** Lead del lancio (contratto v1.6): benvenuto del lancio al posto dell'apertura. */
+  lancio?: LancioIntake | null;
+};
+
+export type EnrollResult = {
+  ok: boolean; conversationId: number; sid?: string; error?: string; deferred?: boolean; duplicato?: boolean;
 };
 
 /**
@@ -29,7 +37,12 @@ export type EnrollArgs = {
 export async function enrollLeadIntoMario(
   supabase: Supa,
   args: EnrollArgs,
-): Promise<{ ok: boolean; conversationId: number; sid?: string; error?: string; deferred?: boolean; duplicato?: boolean }> {
+): Promise<EnrollResult> {
+  // Lead del lancio: un flusso a parte, con il suo template e le sue fasi. Sta prima di
+  // tutto il resto perche' nessuna delle regole di Mario (A/B delle aperture, funnel
+  // C/T/J, sequenza) deve poter toccare questi lead.
+  if (args.lancio) return enrollLancio(supabase, { ...args, lancio: args.lancio });
+
   const templateSid = process.env.FENICE_OPENING_TEMPLATE_SID;
   const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
   if (!templateSid || !from) {
@@ -264,5 +277,110 @@ export async function enrollGdoLeadAsPostino(
     level: res.ok ? 'info' : 'error',
   });
 
+  return { ok: res.ok, conversationId, sid: res.sid, error: res.error };
+}
+
+/**
+ * Arruolamento di un lead del lancio "Web Developer AI" (spec §5.1).
+ *
+ * Differenze dal flusso di Mario, tutte volute:
+ * - il primo messaggio e' il template di benvenuto del lancio, l'UNICO messaggio
+ *   preimpostato che questo blocco manda (il numero e' a qualita' LOW);
+ * - la guardia anti-doppione viene PRIMA della finestra: una chat gia' viva non riceve
+ *   un secondo benvenuto nemmeno differito, ma entra comunque nel flusso lancio
+ *   (`lancio_*` valorizzati) e la cronologia non si azzera;
+ * - fuori dalla fascia 07-23, o con `lancio_attivo` spento, il lead e' preso in carico
+ *   senza outbound: lo riprende il cron `lancio-aperture`, NON `sequence-touches`
+ *   (che queste chat le esclude).
+ */
+async function enrollLancio(
+  supabase: Supa,
+  args: EnrollArgs & { lancio: LancioIntake },
+): Promise<EnrollResult> {
+  const templateSid = process.env.LANCIO_WELCOME_TEMPLATE_SID;
+  const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
+  if (!templateSid || !from) {
+    throw new Error('LANCIO_WELCOME_TEMPLATE_SID o TWILIO_WHATSAPP_NUMBER_FENICE non configurati');
+  }
+
+  const firstName = args.firstName ?? undefined;
+  const { conversationId } = await findOrCreateLeadConversation(supabase, {
+    phone: args.phone,
+    firstName,
+    lastName: args.lastName ?? undefined,
+    email: args.email ?? undefined,
+  });
+
+  const lancioFields = {
+    lancio_slug: args.lancio.slug,
+    lancio_fase: 'attesa',
+    lancio_ingresso: args.lancio.ingresso,
+    // Chat riusata: l'esito del giro precedente resta scritto sulla riga. Va azzerato
+    // qui, all'ingresso nel lancio, o la restituzione di fine lancio (NON_RISPOSTO) si
+    // troverebbe davanti un APPUNTAMENTO vecchio e `resolveOutcomeAction` la
+    // declasserebbe a NOTA — su un lead che con questo lancio non c'entra niente.
+    // Su una conversazione appena creata sono gia' null: scriverli non cambia nulla.
+    bot_outcome: null,
+    bot_outcome_at: null,
+    bot_scheduled_at: null,
+  };
+  const base = { phone: args.phone, conversationId, crmLeadId: args.crmLeadId ?? null, slug: args.lancio.slug, ingresso: args.lancio.ingresso };
+  const evento = (extra: Record<string, unknown>, message: string) =>
+    supabase.from('event_log').insert({
+      type: 'lancio_intake',
+      payload: { ...base, ...extra } as never,
+      message,
+      level: 'info',
+    });
+
+  const guardia = args.crmLeadId ? await apertutaDaFermare(supabase, conversationId) : null;
+  if (guardia) {
+    await supabase.from('conversations')
+      .update({ ...lancioFields, ai_owner: 'mario', crm_lead_id: args.crmLeadId ?? null, crm_funnel: args.crmFunnel ?? null })
+      .eq('id', conversationId);
+    // Una chat chiusa (o mai governata) torna attiva; una booked/handed_off resta a chi ce l'ha in mano.
+    await supabase.from('conversations')
+      .update({ ai_status: 'active' })
+      .eq('id', conversationId)
+      .or('ai_status.is.null,ai_status.eq.closed');
+    await evento({ duplicato: true, motivo: guardia }, `[lancio] lead ${args.crmLeadId}: chat gia' viva (${guardia}), nessun benvenuto, entra nel flusso lancio`);
+    return { ok: true, conversationId, duplicato: true };
+  }
+
+  const convUpdate = {
+    ai_owner: 'mario',
+    ai_status: 'active',
+    ai_started_at: new Date().toISOString(),
+    crm_lead_id: args.crmLeadId ?? null,
+    crm_funnel: args.crmFunnel ?? null,
+    ...lancioFields,
+  };
+
+  const settings = await getLancioSettings(supabase);
+  const differita = !settings.attivo ? 'lancio_spento' : !inOpeningWindow(Date.now()) ? 'fuori_fascia' : null;
+  if (differita) {
+    await supabase.from('conversations').update(convUpdate).eq('id', conversationId);
+    await evento({ differita }, `[lancio] lead ${args.crmLeadId ?? args.phone} preso in carico, benvenuto differito (${differita})`);
+    return { ok: true, conversationId, deferred: true };
+  }
+
+  const res = await sendTemplateAndLog(
+    supabase, conversationId, args.phone, templateSid, 'Lancio benvenuto', from,
+    { '1': templateName(firstName) }, lancioBenvenutoText(firstName),
+  );
+  await supabase.from('conversations').update(convUpdate).eq('id', conversationId);
+
+  if (!res.ok) {
+    await supabase.from('event_log').insert({
+      type: 'send_error',
+      payload: { ...base, error: res.error } as never,
+      message: `[lancio] benvenuto fallito per ${args.phone}: ${res.error}`,
+      level: 'error',
+    });
+  }
+  await evento(
+    { sid: res.sid ?? null, ok: res.ok, error: res.error ?? null },
+    res.ok ? `[lancio] benvenuto inviato a ${args.phone}` : `[lancio] benvenuto NON partito per ${args.phone}`,
+  );
   return { ok: res.ok, conversationId, sid: res.sid, error: res.error };
 }
