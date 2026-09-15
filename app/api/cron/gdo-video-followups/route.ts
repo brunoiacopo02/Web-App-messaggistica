@@ -16,6 +16,7 @@ import {
 } from '@/lib/gdo-video-followup';
 import { romeHour, romeMinute, romeDaysBetween } from '@/lib/rome-time';
 import { templateName } from '@/lib/name';
+import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -105,6 +106,9 @@ export async function GET(req: NextRequest) {
     // Disdetta chiesta: sollecitare il video di una call che il lead vuole spostare è
     // solo danno.
     .is('cancel_requested_at', null)
+    // Lancio in corso: nessun sollecito. Con lancio chiuso/restituito il lead GDO
+    // torna normale.
+    .or(FILTRO_FUORI_LANCIO)
     .limit(500);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

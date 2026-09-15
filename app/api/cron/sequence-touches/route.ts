@@ -27,6 +27,7 @@ import {
   OPENING_ENV_KEYS,
 } from '@/lib/persona';
 import { firstNameOf, templateName } from '@/lib/name';
+import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -188,6 +189,9 @@ export async function GET(req: NextRequest) {
       // Fermo manuale dal pannello: la chat è in mano a una persona, nessun touch
       // automatico le arriva addosso.
       .is('ai_paused_at', null)
+      // Lancio Web Dev AI: niente aperture, touch o nudge. Il benvenuto differito lo
+      // manda /api/cron/lancio-aperture, il resto è silenzio fino al 5/10 (spec §5.1).
+      .or(FILTRO_FUORI_LANCIO)
       .range(fromRow, fromRow + 999);
     const batch = data ?? [];
     convs.push(...batch);

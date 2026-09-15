@@ -7,6 +7,7 @@ import { buildConfermaPersaNote } from '@/lib/bot-outcome-rules';
 import type { MarioTurn } from '@/lib/mario';
 import { drainMarioReplies, lastIsUnansweredInbound, isOrphanedReplyingLock, isLockStale, LOCK_TTL_MS, serveRedrive } from '@/lib/fenice-autoreply';
 import { runAgendaFollowups } from '@/lib/agenda-followup';
+import { lancioInCorso } from '@/lib/lancio-fase';
 import { alertUnaVolta } from '@/lib/alert-una-volta';
 
 export const runtime = 'nodejs';
@@ -58,7 +59,7 @@ export async function GET(req: NextRequest) {
   for (let from = 0; ; from += 1000) {
     const { data } = await supabase
       .from('conversations')
-      .select('id, ai_status, ai_lock_at, ai_started_at, created_at, last_message_at, last_inbound_at, crm_lead_id, bot_outcome, bot_followups_sent, gdo_agenda_at, leads(phone_e164)')
+      .select('id, ai_status, ai_lock_at, ai_started_at, created_at, last_message_at, last_inbound_at, crm_lead_id, bot_outcome, bot_followups_sent, gdo_agenda_at, lancio_slug, lancio_fase, leads(phone_e164)')
       .not('crm_lead_id', 'is', null)
       .in('ai_status', ['active', 'replying', 'handed_off', 'booked'])
       // Fermo manuale dal pannello: fuori dal giro del cron per intero — niente
@@ -162,6 +163,14 @@ export async function GET(req: NextRequest) {
         continue;
       }
 
+      // 2a-bis. Lancio Web Dev AI in corso: come per il postino, niente watchdog né
+      // classificazioni. Il re-drive sopra resta — il turno lo fa lib/lancio-turno —
+      // e la chat torna a Mario solo con una fase terminale (chiuso/restituito).
+      if (lancioInCorso(c)) {
+        report.push({ id: c.id, action: 'lancio_skip', fase: c.lancio_fase });
+        continue;
+      }
+
       // 2b. Lead già esitato (qualunque esito): mai riclassificare. La riga è stata
       // riaperta dal webhook: richiudila per farla uscire dal giro del cron. Il
       // re-drive sopra resta comunque valido — un lead esitato che riscrive merita
@@ -238,6 +247,7 @@ export async function GET(req: NextRequest) {
         sequenceEnabled,
         nudgesSent: (c.bot_followups_sent as number | null) ?? 0,
         gdoPostino: c.gdo_agenda_at != null,
+        lancio: lancioInCorso(c),
       });
 
       if (action === 'discard_dead') {

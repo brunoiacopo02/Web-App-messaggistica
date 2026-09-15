@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { enrollLeadIntoMario } from '@/lib/fenice-enroll';
 import { fetchAllRows } from '@/lib/supabase/paginate';
+import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -48,6 +49,9 @@ export async function POST(req: NextRequest) {
     .select('id, crm_lead_id, crm_funnel, lead_id, ai_status, bot_outcome')
     .eq('ai_owner', 'mario')
     .gte('ai_started_at', dal)
+    // Le chat del lancio hanno il loro recupero (lancio-aperture): qui
+    // enrollLeadIntoMario manderebbe l'apertura di Mario sopra il benvenuto del lancio.
+    .or(FILTRO_FUORI_LANCIO)
     .order('id', { ascending: true })
     .range(from, to));
 
