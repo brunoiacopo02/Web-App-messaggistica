@@ -28,6 +28,7 @@ import {
 } from '@/lib/persona';
 import { firstNameOf, templateName } from '@/lib/name';
 import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
+import { logCronQueryError } from '@/lib/cron-query-error';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -177,7 +178,7 @@ export async function GET(req: NextRequest) {
   // Tutte le conv CRM attive, con paginazione (>1000 possibili a regime 50/g).
   const convs: any[] = [];
   for (let fromRow = 0; ; fromRow += 1000) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('conversations')
       .select('id, ai_status, ai_started_at, crm_lead_id, crm_funnel, bot_outcome, bot_followups_sent, leads(phone_e164, first_name)')
       .not('crm_lead_id', 'is', null)
@@ -193,6 +194,9 @@ export async function GET(req: NextRequest) {
       // manda /api/cron/lancio-aperture, il resto è silenzio fino al 5/10 (spec §5.1).
       .or(FILTRO_FUORI_LANCIO)
       .range(fromRow, fromRow + 999);
+    // Una query fallita torna `data: null`: senza questa riga il run finisce con
+    // "0 invii" e nessuno se ne accorge.
+    if (error) { await logCronQueryError(supabase, 'sequence_touches_query_error', error); break; }
     const batch = data ?? [];
     convs.push(...batch);
     if (batch.length < 1000) break;

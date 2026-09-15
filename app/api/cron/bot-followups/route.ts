@@ -8,6 +8,7 @@ import type { MarioTurn } from '@/lib/mario';
 import { drainMarioReplies, lastIsUnansweredInbound, isOrphanedReplyingLock, isLockStale, LOCK_TTL_MS, serveRedrive } from '@/lib/fenice-autoreply';
 import { runAgendaFollowups } from '@/lib/agenda-followup';
 import { lancioInCorso } from '@/lib/lancio-fase';
+import { logCronQueryError } from '@/lib/cron-query-error';
 import { alertUnaVolta } from '@/lib/alert-una-volta';
 
 export const runtime = 'nodejs';
@@ -57,7 +58,7 @@ export async function GET(req: NextRequest) {
   // il vecchio .limit(500) non basta più).
   const convs: any[] = [];
   for (let from = 0; ; from += 1000) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('conversations')
       .select('id, ai_status, ai_lock_at, ai_started_at, created_at, last_message_at, last_inbound_at, crm_lead_id, bot_outcome, bot_followups_sent, gdo_agenda_at, lancio_slug, lancio_fase, leads(phone_e164)')
       .not('crm_lead_id', 'is', null)
@@ -67,6 +68,9 @@ export async function GET(req: NextRequest) {
       .is('ai_paused_at', null)
       .order('id', { ascending: true })
       .range(from, from + 999);
+    // `data: null` da una query fallita e zero candidati si somigliano troppo: qui
+    // il cron smetterebbe di esitare e di rispondere senza dirlo a nessuno.
+    if (error) { await logCronQueryError(supabase, 'bot_followups_query_error', error); break; }
     const page = (data ?? []) as any[];
     convs.push(...page);
     if (page.length < 1000) break;
@@ -247,6 +251,8 @@ export async function GET(req: NextRequest) {
         sequenceEnabled,
         nudgesSent: (c.bot_followups_sent as number | null) ?? 0,
         gdoPostino: c.gdo_agenda_at != null,
+        // Oggi ridondante (il blocco 2a-bis ha gia' fatto `continue`), e resta: la
+        // guardia del modulo puro non deve dipendere dall'ordine dei blocchi qui.
         lancio: lancioInCorso(c),
       });
 

@@ -4,6 +4,7 @@ import { sendTemplateAndLog } from '@/lib/messaging';
 import { dueReminder, slotLabel, pickReminder24Template, type ReminderKind } from '@/lib/precall-reminders';
 import { templateName } from '@/lib/name';
 import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
+import { logCronQueryError } from '@/lib/cron-query-error';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -66,7 +67,7 @@ export async function GET(req: NextRequest) {
   const windowEnd = new Date(now + 30 * H).toISOString();
 
   // Appuntamenti fissati (terminali) la cui data cade nella finestra utile ai promemoria.
-  const { data: convData } = await supabase
+  const { data: convData, error: convErr } = await supabase
     .from('conversations')
     .select('id, bot_scheduled_at, leads(phone_e164, first_name)')
     .eq('bot_outcome', 'APPUNTAMENTO')
@@ -82,6 +83,7 @@ export async function GET(req: NextRequest) {
     .or(FILTRO_FUORI_LANCIO)
     .gte('bot_scheduled_at', windowStart)
     .lte('bot_scheduled_at', windowEnd);
+  if (convErr) await logCronQueryError(supabase, 'precall_reminders_query_error', convErr);
 
   const convs = (convData ?? []) as any[];
 

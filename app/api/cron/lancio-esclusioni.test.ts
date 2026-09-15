@@ -24,6 +24,10 @@ const stato = {
   righe: {} as Record<string, Riga[]>,
   /** Ogni select andata a buon fine, con gli id delle righe restituite. */
   letture: [] as { table: string; ids: unknown[] }[],
+  /** Le righe scritte in insert: servono a leggere gli event_log. */
+  inseriti: [] as { table: string; riga: Riga }[],
+  /** Tabelle che devono rispondere con un errore invece che con delle righe. */
+  erroreSu: {} as Record<string, { message: string; code?: string } | undefined>,
 };
 
 const testo = (v: unknown): string => (v == null ? '' : String(v));
@@ -63,14 +67,22 @@ function predicatoDaTermine(t: string): Predicato {
 type Query = {
   table: string;
   op: 'select' | 'insert' | 'update';
+  arg: unknown;
   preds: Predicato[];
   range: [number, number] | null;
   limite: number | null;
   singola: boolean;
 };
 
-function esegui(q: Query): { data: unknown; error: null } {
-  if (q.op !== 'select') return { data: [], error: null };
+function esegui(q: Query): { data: unknown; error: unknown } {
+  if (q.op !== 'select') {
+    if (q.op === 'insert') stato.inseriti.push({ table: q.table, riga: q.arg as Riga });
+    return { data: [], error: null };
+  }
+  // Errore simulato: PostgREST torna `data: null`, ed e' proprio il caso che i cron
+  // non distinguevano da "nessun candidato".
+  const guasto = stato.erroreSu[q.table];
+  if (guasto) return { data: null, error: guasto };
   let righe = (stato.righe[q.table] ?? []).filter((r) => q.preds.every((p) => p(r)));
   if (q.range) righe = righe.slice(q.range[0], q.range[1] + 1);
   if (q.limite !== null) righe = righe.slice(0, q.limite);
@@ -78,8 +90,8 @@ function esegui(q: Query): { data: unknown; error: null } {
   return { data: q.singola ? (righe[0] ?? null) : righe, error: null };
 }
 
-function query(table: string, op: Query['op']): Record<string, unknown> {
-  const q: Query = { table, op, preds: [], range: null, limite: null, singola: false };
+function query(table: string, op: Query['op'], arg?: unknown): Record<string, unknown> {
+  const q: Query = { table, op, arg, preds: [], range: null, limite: null, singola: false };
   const b: Record<string, unknown> = {};
   const self = () => b;
   b.select = self;
@@ -126,8 +138,8 @@ function query(table: string, op: Query['op']): Record<string, unknown> {
 const finto = {
   from: (table: string) => ({
     select: () => query(table, 'select'),
-    insert: () => query(table, 'insert'),
-    update: () => query(table, 'update'),
+    insert: (r: unknown) => query(table, 'insert', r),
+    update: (r: unknown) => query(table, 'update', r),
   }),
 };
 
@@ -168,6 +180,7 @@ import { GET as sequenceTouches } from './sequence-touches/route';
 import { GET as precallReminders } from './precall-reminders/route';
 import { GET as gdoVideoFollowups } from './gdo-video-followups/route';
 import { POST as riapriMute } from './riapri-mute/route';
+import { runAgendaFollowups, BOOKING_LINK_MATCH } from '@/lib/agenda-followup';
 
 // ─────────────────────────── fixture ───────────────────────────
 
@@ -188,6 +201,10 @@ const leads = (id: number) => ({ phone_e164: tel(id), first_name: 'mario' });
 const convLette = (): unknown[] =>
   stato.letture.filter((l) => l.table === 'conversations').flatMap((l) => l.ids);
 
+/** I tipi degli event_log scritti nel run. */
+const tipiEvento = (): string[] =>
+  stato.inseriti.filter((i) => i.table === 'event_log').map((i) => String(i.riga.type));
+
 const richiestaGet = (route: (req: never) => Promise<Response>, path: string) =>
   route({
     headers: new Headers({ authorization: `Bearer ${SEGRETO}` }),
@@ -199,6 +216,8 @@ beforeEach(() => {
   vi.setSystemTime(ADESSO);
   stato.righe = {};
   stato.letture = [];
+  stato.inseriti = [];
+  stato.erroreSu = {};
   sendTemplate.mockReset();
   sendTemplate.mockResolvedValue({ sid: 'SMtest', status: 'queued' });
   sendFreeText.mockReset();
@@ -372,5 +391,109 @@ describe('riapri-mute: le chat mute del lancio non si riaprono con Mario', () =>
     expect(body.esaminate).toBe(2);
     const numeri = enrollLeadIntoMario.mock.calls.map((c) => (c[1] as { phone: string }).phone);
     expect(numeri).toEqual([tel(2), tel(3)]);
+  });
+});
+
+// ─────────────────────────── agenda-followup (dentro bot-followups) ───────────────────────────
+
+describe('agenda-followup: nessun sollecito free-text sulle chat del lancio', () => {
+  // L'intake del lancio rimette `bot_outcome` a null e `ai_status` ad 'active': la
+  // guardia `terminal` di decideAgendaFollowup non protegge nulla, e su una chat
+  // riusata il link di prenotazione di Mario può essere ancora dentro le 24 ore.
+  const conv = (id: number, lancio: Riga): Riga => ({
+    id,
+    lead_id: id,
+    ai_status: 'active',
+    bot_outcome: null,
+    bot_followups_sent: 0,
+    gdo_agenda_at: null,
+    ...lancio,
+  });
+
+  beforeEach(() => {
+    stato.righe.conversations = [conv(1, IN_CORSO), conv(2, CHIUSO)];
+    // Per ogni chat: il link di prenotazione uscito 3 ore fa (oltre le 2 di attesa) e
+    // un inbound di un'ora fa, che tiene aperta la finestra 24h. L'out sta per primo:
+    // l'ultimo messaggio non è un inbound, altrimenti risponderebbe il backstop.
+    stato.righe.messages = [1, 2].flatMap((id) => [
+      {
+        id: id * 10, conversation_id: id, direction: 'out',
+        body: `Ecco gli orari: https://${BOOKING_LINK_MATCH}`,
+        twilio_status: 'delivered', created_at: new Date(ADESSO.getTime() - 3 * H).toISOString(),
+      },
+      {
+        id: id * 10 + 1, conversation_id: id, direction: 'in', body: 'ok',
+        twilio_status: null, created_at: new Date(ADESSO.getTime() - 1 * H).toISOString(),
+      },
+    ]);
+    stato.righe.leads = [1, 2].map((id) => ({ id, phone_e164: tel(id), first_name: 'mario' }));
+  });
+
+  it('il lancio in corso non riceve il sollecito, il lancio chiuso sì', async () => {
+    const res = await runAgendaFollowups(finto as never, ADESSO);
+    expect(sendFreeText).toHaveBeenCalledTimes(1);
+    expect((sendFreeText.mock.calls[0][0] as { to: string }).to).toBe(tel(2));
+    expect(res.sent).toBe(1);
+  });
+});
+
+// ─────────────────────────── una query che fallisce si deve vedere ───────────────────────────
+
+describe('una select dei candidati che fallisce lascia una traccia', () => {
+  // Il caso vero: migrazione 20260914000001 non applicata, `lancio_slug` sconosciuta,
+  // Postgres 42703. `data` torna null, cioè zero candidati: senza il log il cron dice
+  // "ok, 0 invii" e Mario si ferma per tutti in silenzio.
+  const guasto = { message: 'column conversations.lancio_slug does not exist', code: '42703' };
+
+  beforeEach(() => {
+    stato.erroreSu.conversations = guasto;
+    stato.righe.conversations = [];
+    stato.righe.messages = [];
+  });
+
+  it('sequence-touches lo scrive in event_log', async () => {
+    process.env.SEQUENCE_ENABLED = '1';
+    process.env.FENICE_OPENING_TEMPLATE_SID = 'HXapertura';
+    for (const i of [1, 2, 3, 4]) process.env[`SEQ_TEMPLATE_SID_${i}`] = `HXseq${i}`;
+    const body = await (await richiestaGet(sequenceTouches, '/api/cron/sequence-touches')).json();
+    expect(tipiEvento()).toContain('sequence_touches_query_error');
+    expect(body.sent).toBe(0);
+  });
+
+  it('precall-reminders lo scrive in event_log', async () => {
+    process.env.PRECALL_REMINDERS_ENABLED = '1';
+    process.env.REMINDER_24H_TEMPLATE_SID = 'HX24';
+    process.env.REMINDER_3H_TEMPLATE_SID = 'HX3';
+    await richiestaGet(precallReminders, '/api/cron/precall-reminders');
+    expect(tipiEvento()).toContain('precall_reminders_query_error');
+  });
+
+  it('gdo-video-followups lo scrive in event_log', async () => {
+    process.env.GDO_VIDEO_FOLLOWUPS_ENABLED = '1';
+    await richiestaGet(gdoVideoFollowups, '/api/cron/gdo-video-followups');
+    expect(tipiEvento()).toContain('gdo_video_followups_query_error');
+  });
+
+  it('riapri-mute lo scrive in event_log e risponde 500 invece di "nessun candidato"', async () => {
+    const res = await riapriMute({
+      headers: new Headers({ authorization: `Bearer ${SEGRETO}` }),
+      json: async () => ({ esegui: true }),
+    } as never);
+    expect(res.status).toBe(500);
+    expect(tipiEvento()).toContain('riapri_mute_query_error');
+    expect(enrollLeadIntoMario).not.toHaveBeenCalled();
+  });
+
+  it('agenda-followup lo scrive in event_log e non manda niente', async () => {
+    stato.righe.messages = [{
+      id: 10, conversation_id: 1, direction: 'out',
+      body: `Ecco gli orari: https://${BOOKING_LINK_MATCH}`,
+      twilio_status: 'delivered', created_at: new Date(ADESSO.getTime() - 3 * H).toISOString(),
+    }];
+    // Le messages passano, le conversations no: è la query dei candidati a cadere.
+    const res = await runAgendaFollowups(finto as never, ADESSO);
+    expect(tipiEvento()).toContain('agenda_followup_query_error');
+    expect(sendFreeText).not.toHaveBeenCalled();
+    expect(res.sent).toBe(0);
   });
 });
