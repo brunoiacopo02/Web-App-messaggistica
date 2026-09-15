@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { getSupabaseBrowser } from '@/lib/supabase/client';
 import { mondoLabel, type Mondo } from '@/lib/chat-perimetro';
+import { lancioFaseLabel } from '@/lib/lancio-fase';
 
 type Conv = {
   id: number;
@@ -17,17 +18,25 @@ type Conv = {
   lead: { id: number; phone_e164: string; first_name: string | null; last_name: string | null } | null;
   preview?: string;
   mondo?: string;
+  lancio?: { slug: string; fase: string | null } | null;
 };
 
-export function ConversationList({ initial, apiPath = '/api/conversations', basePath = '/inbox', channelName = 'inbox-list' }: {
+export function ConversationList({
+  initial,
+  apiPath = '/api/conversations',
+  basePath = '/inbox',
+  channelName = 'inbox-list',
+  conFiltroLancio = false,
+}: {
   initial: Conv[];
   apiPath?: string;
   basePath?: string;
   channelName?: string;
+  conFiltroLancio?: boolean;
 }) {
   const params = useParams<{ conversationId?: string }>();
   const [items, setItems] = useState<Conv[]>(initial);
-  const [filter, setFilter] = useState<'all' | 'unread' | 'recent'>('all');
+  const [filter, setFilter] = useState<'all' | 'unread' | 'recent' | 'lancio'>('all');
   const [q, setQ] = useState('');
   const [, startTransition] = useTransition();
 
@@ -87,9 +96,9 @@ export function ConversationList({ initial, apiPath = '/api/conversations', base
       <div className="p-3 space-y-2 border-b">
         <Input placeholder="Cerca per nome o numero…" value={q} onChange={(e) => setQ(e.target.value)} />
         <div className="flex gap-1">
-          {(['all', 'unread', 'recent'] as const).map((f) => (
+          {(['all', 'unread', 'recent', ...(conFiltroLancio ? (['lancio'] as const) : [])] as const).map((f) => (
             <Button key={f} size="sm" variant={filter === f ? 'default' : 'outline'} onClick={() => setFilter(f)}>
-              {f === 'all' ? 'Tutte' : f === 'unread' ? 'Non lette' : 'Ultimi 7gg'}
+              {f === 'all' ? 'Tutte' : f === 'unread' ? 'Non lette' : f === 'recent' ? 'Ultimi 7gg' : 'Lancio'}
             </Button>
           ))}
         </div>
@@ -109,6 +118,14 @@ export function ConversationList({ initial, apiPath = '/api/conversations', base
                 <div className="flex justify-between items-baseline gap-2">
                   <span className="font-medium truncate">{name}</span>
                   <span className="flex items-center gap-2 shrink-0">
+                    {c.lancio && (
+                      <span
+                        title={lancioFaseLabel(c.lancio.fase)}
+                        className="text-[10px] uppercase tracking-wide rounded px-1.5 py-0.5 bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-100"
+                      >
+                        Lancio
+                      </span>
+                    )}
                     {/* Il badge compare solo dove l'API lo manda (pannello /chat): gli altri
                         pannelli non hanno `mondo` e restano identici a prima. */}
                     {c.mondo && (

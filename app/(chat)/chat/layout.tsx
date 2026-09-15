@@ -15,7 +15,7 @@ export default async function ChatListLayout({ children }: { children: React.Rea
     .from('conversations')
     .select(`
       id, last_message_at, last_inbound_at, unread_count, last_message_preview,
-      ai_owner, gdo_agenda_at, gdo_video_sent_at,
+      ai_owner, gdo_agenda_at, gdo_video_sent_at, lancio_slug, lancio_fase,
       lead:leads ( id, phone_e164, first_name, last_name )
     `)
     .order('last_message_at', { ascending: false })
@@ -28,6 +28,7 @@ export default async function ChatListLayout({ children }: { children: React.Rea
     ...c,
     preview: c.last_message_preview ?? undefined,
     mondo: mondoDi(c),
+    lancio: c.lancio_slug ? { slug: c.lancio_slug, fase: c.lancio_fase } : null,
   }));
 
   return (
@@ -38,6 +39,7 @@ export default async function ChatListLayout({ children }: { children: React.Rea
         apiPath="/api/chat/conversations"
         basePath="/chat"
         channelName="chat-list"
+        conFiltroLancio
       />
       {children}
     </div>

@@ -6,10 +6,11 @@ import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Send, UserPlus, Power, CheckCircle2, Inbox, MessagesSquare, Radio, CalendarCheck, UserCog } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { ChatStatusPill } from '@/components/fenice/status';
+import { ChatStatusPill, StatusPill } from '@/components/fenice/status';
+import { lancioFaseLabel } from '@/lib/lancio-fase';
 import { StatCard } from '@/components/fenice/StatCard';
 
-type Row = { id: number; status: string | null; phone: string; name: string; lastMessageAt: string };
+type Row = { id: number; status: string | null; phone: string; name: string; lastMessageAt: string; lancioFase: string | null };
 
 export function LivePanel({ initialAutoReply, initialRows }: { initialAutoReply: boolean; initialRows: Row[] }) {
   const router = useRouter();
@@ -149,7 +150,10 @@ export function LivePanel({ initialAutoReply, initialRows }: { initialAutoReply:
                   <td className="px-5 py-3 font-medium tabular-nums">{r.phone}</td>
                   <td className="px-5 py-3 text-muted-foreground">{r.name || '—'}</td>
                   <td className="px-5 py-3 text-right">
-                    <ChatStatusPill status={r.status} />
+                    <span className="inline-flex items-center justify-end gap-1.5">
+                      {r.lancioFase && <StatusPill label={lancioFaseLabel(r.lancioFase)} tone="amber" dot={false} />}
+                      <ChatStatusPill status={r.status} />
+                    </span>
                   </td>
                 </tr>
               ))}

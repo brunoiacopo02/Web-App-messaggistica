@@ -15,7 +15,7 @@ export default async function FeniceLivePage() {
   const autoReply = await getAutoReply(admin);
   const { data: convs } = await admin
     .from('conversations')
-    .select('id, ai_status, last_message_at, leads(phone_e164, first_name)')
+    .select('id, ai_status, last_message_at, lancio_slug, lancio_fase, leads(phone_e164, first_name)')
     .eq('ai_owner', 'mario')
     .order('last_message_at', { ascending: false })
     .limit(100);
@@ -26,6 +26,7 @@ export default async function FeniceLivePage() {
     phone: c.leads?.phone_e164 ?? '',
     name: c.leads?.first_name ?? '',
     lastMessageAt: c.last_message_at as string,
+    lancioFase: c.lancio_slug ? ((c.lancio_fase as string | null) ?? 'attesa') : null,
   }));
 
   return (

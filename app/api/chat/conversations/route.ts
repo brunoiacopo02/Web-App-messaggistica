@@ -16,6 +16,8 @@ type ConversationRow = {
   ai_owner: string | null;
   gdo_agenda_at: string | null;
   gdo_video_sent_at: string | null;
+  lancio_slug: string | null;
+  lancio_fase: string | null;
   lead: { id: number; phone_e164: string | null; first_name: string | null; last_name: string | null } | null;
 };
 
@@ -62,7 +64,7 @@ export async function GET(req: Request) {
     .from('conversations')
     .select(`
       id, last_message_at, last_inbound_at, unread_count, campaign_id, last_message_preview,
-      ai_owner, gdo_agenda_at, gdo_video_sent_at,
+      ai_owner, gdo_agenda_at, gdo_video_sent_at, lancio_slug, lancio_fase,
       lead:leads ( id, phone_e164, first_name, last_name )
     `)
     .order('last_message_at', { ascending: false });
@@ -71,6 +73,9 @@ export async function GET(req: Request) {
 
   if (filter === 'unread') query = query.gt('unread_count', 0);
   if (filter === 'recent') query = query.gte('last_message_at', new Date(Date.now() - 7 * 86400_000).toISOString());
+  // Lancio Web Dev AI: le Conferme cercano per numero, ma il filtro serve a vedere il
+  // lotto intero (chi ha risposto, chi ha bloccato il posto) senza inventare un pannello.
+  if (filter === 'lancio') query = query.not('lancio_slug', 'is', null);
 
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -79,6 +84,7 @@ export async function GET(req: Request) {
     ...c,
     preview: c.last_message_preview ?? undefined,
     mondo: mondoDi(c),
+    lancio: c.lancio_slug ? { slug: c.lancio_slug, fase: c.lancio_fase } : null,
   }));
   return NextResponse.json({ data: out });
 }
