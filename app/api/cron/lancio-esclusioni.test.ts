@@ -28,6 +28,8 @@ const stato = {
   inseriti: [] as { table: string; riga: Riga }[],
   /** Tabelle che devono rispondere con un errore invece che con delle righe. */
   erroreSu: {} as Record<string, { message: string; code?: string } | undefined>,
+  /** Tabelle il cui insert RIFIUTA la promise (DB irraggiungibile, non errore PostgREST). */
+  rifiutaInsertSu: {} as Record<string, boolean | undefined>,
 };
 
 const testo = (v: unknown): string => (v == null ? '' : String(v));
@@ -130,8 +132,12 @@ function query(table: string, op: Query['op'], arg?: unknown): Record<string, un
   b.range = (a: number, z: number) => { q.range = [a, z]; return b; };
   b.single = () => { q.singola = true; return b; };
   b.maybeSingle = () => { q.singola = true; return b; };
-  b.then = (ok: (v: unknown) => unknown, ko?: (e: unknown) => unknown) =>
-    Promise.resolve(esegui(q)).then(ok, ko);
+  b.then = (ok: (v: unknown) => unknown, ko?: (e: unknown) => unknown) => {
+    if (q.op === 'insert' && stato.rifiutaInsertSu[q.table]) {
+      return Promise.reject(new Error(`insert su ${q.table} non riuscita`)).then(ok, ko);
+    }
+    return Promise.resolve(esegui(q)).then(ok, ko);
+  };
   return b;
 }
 
@@ -218,6 +224,7 @@ beforeEach(() => {
   stato.letture = [];
   stato.inseriti = [];
   stato.erroreSu = {};
+  stato.rifiutaInsertSu = {};
   sendTemplate.mockReset();
   sendTemplate.mockResolvedValue({ sid: 'SMtest', status: 'queued' });
   sendFreeText.mockReset();
@@ -495,5 +502,42 @@ describe('una select dei candidati che fallisce lascia una traccia', () => {
     expect(tipiEvento()).toContain('agenda_followup_query_error');
     expect(sendFreeText).not.toHaveBeenCalled();
     expect(res.sent).toBe(0);
+  });
+});
+
+describe("il log della query fallita non puo' peggiorare le cose", () => {
+  // Il caso doppio: il DB non risponde, quindi non risponde nemmeno alla scrittura del
+  // log. Il cron era gia' a zero candidati — un'eccezione qui lo trasformerebbe in un
+  // 500, cioe' l'unico modo per rendere l'incidente peggiore di com'era.
+  beforeEach(() => {
+    stato.erroreSu.conversations = { message: 'server closed the connection unexpectedly' };
+    stato.rifiutaInsertSu.event_log = true;
+    stato.righe.conversations = [];
+    stato.righe.messages = [];
+  });
+
+  it('precall-reminders e gdo-video-followups finiscono il giro lo stesso', async () => {
+    process.env.PRECALL_REMINDERS_ENABLED = '1';
+    process.env.REMINDER_24H_TEMPLATE_SID = 'HX24';
+    process.env.REMINDER_3H_TEMPLATE_SID = 'HX3';
+    process.env.GDO_VIDEO_FOLLOWUPS_ENABLED = '1';
+
+    const precall = await richiestaGet(precallReminders, '/api/cron/precall-reminders');
+    expect(precall.status).toBe(200);
+    expect(await precall.json()).toMatchObject({ ok: true, sent: 0 });
+
+    const gdo = await richiestaGet(gdoVideoFollowups, '/api/cron/gdo-video-followups');
+    expect(gdo.status).toBe(200);
+    expect(await gdo.json()).toMatchObject({ ok: true, candidati: 0 });
+  });
+
+  it('agenda-followup torna a mani vuote invece di esplodere', async () => {
+    stato.righe.messages = [{
+      id: 10, conversation_id: 1, direction: 'out',
+      body: `Ecco gli orari: https://${BOOKING_LINK_MATCH}`,
+      twilio_status: 'delivered', created_at: new Date(ADESSO.getTime() - 3 * H).toISOString(),
+    }];
+    await expect(runAgendaFollowups(finto as never, ADESSO)).resolves.toMatchObject({ sent: 0 });
+    expect(sendFreeText).not.toHaveBeenCalled();
   });
 });

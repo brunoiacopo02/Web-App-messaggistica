@@ -20,11 +20,20 @@ export async function logCronQueryError(
 ): Promise<void> {
   const messaggio = error?.message ?? 'errore sconosciuto';
   const codice = error?.code ?? null;
-  console.error(`[cron] ${type}: ${messaggio}${codice ? ` (${codice})` : ''}`);
-  await supabase.from('event_log').insert({
-    type,
-    payload: { message: messaggio, code: codice } as never,
-    message: `[cron] query candidati fallita (${type}): ${messaggio}`,
-    level: 'error',
-  });
+  // Questa funzione non puo' fallire: la chiamano cron che, senza candidati, finivano
+  // il giro senza danno. Se anche la scrittura del log andasse giu' — il caso tipico e'
+  // proprio quello in cui il DB non risponde — un'eccezione qui trasformerebbe una
+  // giornata a zero invii in un 500, cioe' peggiorerebbe l'unica cosa che stavamo
+  // provando a rendere visibile. Il console.error resta comunque nei log di Vercel.
+  try {
+    console.error(`[cron] ${type}: ${messaggio}${codice ? ` (${codice})` : ''}`);
+    await supabase.from('event_log').insert({
+      type,
+      payload: { message: messaggio, code: codice } as never,
+      message: `[cron] query candidati fallita (${type}): ${messaggio}`,
+      level: 'error',
+    });
+  } catch (e) {
+    console.error(`[cron] ${type}: anche la scrittura del log e' fallita`, e);
+  }
 }
