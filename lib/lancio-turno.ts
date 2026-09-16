@@ -12,6 +12,9 @@ import {
   type ClasseLancio, type LancioAzione, type RigaLancio,
 } from './lancio-fase';
 import { impostaFaseLancio, leggiIngressoLancioAt, marcaCongedo } from './lancio-db';
+import { turnoAssistenza } from './lancio-assistenza';
+import { turnoPostPitch, turnoDopoScelta } from './lancio-post-pitch';
+import { adessoLancio } from './lancio-orologio';
 import type { LancioInfo } from './lancio-crm';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
@@ -38,9 +41,11 @@ export type TurnoLancioInput = {
 };
 
 /**
- * Un turno della chat del lancio nella fase di attesa (spec §5.2). Chiamato dal drain
- * al posto di Mario quando `lancioInCorso` e' vero. Restituisce lo stato finale che il
- * drain scrive in `ai_status`.
+ * Un turno della chat del lancio. Chiamato dal drain al posto di Mario quando
+ * `lancioInCorso` e' vero; restituisce lo stato finale che il drain scrive in
+ * `ai_status`. Le fasi attesa/posto_bloccato (spec §5.2) sono qui sotto; link_inviato,
+ * post_pitch e scelta_fatta (spec §5.3-5.4) stanno nei moduli del B4, a cui lo `switch`
+ * in testa delega con le righe gia' tagliate al lancio.
  *
  * Ordine: taglio della cronologia al lancio; classificazione deterministica; il modello
  * solo se serve (domanda o incerto, e solo se puo' ancora rispondere); decisione pura
@@ -60,6 +65,23 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
     welcomeSid,
     conBenvenuto ? null : await leggiIngressoLancioAt(supabase, i.conversationId),
   );
+
+  // Dal blast in poi ogni fase ha il suo turno (B4). Le righe che passano di qui sono
+  // gia' tagliate al lancio: il taglio si fa una volta sola, prima dello switch, o su una
+  // chat riusata il giro precedente di Mario finirebbe nella cronologia che assistenza e
+  // post-pitch mandano al modello. L'orologio e' uno solo per il turno: da li' passano le
+  // regole di finestra e le ore proponibili.
+  const ctxB4 = async () => ({
+    settings: i.settings ?? (await getLancioSettings(supabase)),
+    now: i.now ?? adessoLancio(),
+  });
+  const iB4 = { ...i, rows: righe };
+  switch (i.fase) {
+    case 'link_inviato': return turnoAssistenza(supabase, iB4, await ctxB4());
+    case 'post_pitch': return turnoPostPitch(supabase, iB4, await ctxB4());
+    case 'scelta_fatta': return turnoDopoScelta(supabase, iB4, await ctxB4());
+    default: break; // attesa / posto_bloccato: il turno qui sotto; followup_inviato: B5
+  }
 
   const scambi = contaScambiDomande(righe);
   const faseGestita = faseGestitaB1(i.fase);

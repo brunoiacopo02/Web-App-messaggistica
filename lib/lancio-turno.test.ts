@@ -5,10 +5,17 @@ vi.mock('./bot-outcome', () => ({ sendOutcome: vi.fn(async () => ({ sent: true }
 vi.mock('./lancio-settings', () => ({
   getLancioSettings: vi.fn(async () => ({ attivo: true, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null, eventoAt: '2026-10-05T21:00:00+02:00' })),
 }));
+// I turni del B4: qui si verifica solo che lo `switch` per fase li chiami con le righe
+// gia' tagliate al lancio e con l'orologio del turno. Quello che fanno dentro e' provato
+// in lancio-assistenza.test.ts e lancio-post-pitch.test.ts.
+vi.mock('./lancio-assistenza', () => ({ turnoAssistenza: vi.fn(async () => 'active') }));
+vi.mock('./lancio-post-pitch', () => ({ turnoPostPitch: vi.fn(async () => 'closed'), turnoDopoScelta: vi.fn(async () => 'closed') }));
 
 import { eseguiTurnoLancio } from './lancio-turno';
 import { sendFreeText } from './twilio';
 import { sendOutcome } from './bot-outcome';
+import { turnoAssistenza } from './lancio-assistenza';
+import { turnoPostPitch, turnoDopoScelta } from './lancio-post-pitch';
 import { TESTO_POSTO_BLOCCATO, TESTO_CONGEDO, TESTO_CHIUSURA_DOMANDE, TESTO_PASSAGGIO_UMANO } from './lancio-fase';
 
 type Row = { direction: string; body: string | null; template_sid: string | null };
@@ -303,12 +310,61 @@ describe('eseguiTurnoLancio — passaggio umano', () => {
   });
 });
 
-describe('eseguiTurnoLancio — fasi di B4/B5', () => {
-  it('link_inviato: silenzio con motivo fase_non_gestita, mai il pitch', async () => {
+describe('eseguiTurnoLancio — le fasi del B4 delegano ai loro turni', () => {
+  const NOW = new Date('2026-10-05T22:40:00+02:00');
+
+  it('link_inviato → turnoAssistenza con settings e now; il turno del B1 non parte', async () => {
     const { supabase, calls } = makeSupabase();
-    await eseguiTurnoLancio(supabase, base({ fase: 'link_inviato', rows: [WELCOME, inb('codice?')], inboundBody: 'codice?' }));
-    expect(sendFreeText).not.toHaveBeenCalled();
+    const stato = await eseguiTurnoLancio(supabase, base({ fase: 'link_inviato', rows: [WELCOME, inb('codice?')], inboundBody: 'codice?', now: NOW }));
+    expect(stato).toBe('active');
+    expect(turnoAssistenza).toHaveBeenCalledTimes(1);
+    const [, input, ctx] = vi.mocked(turnoAssistenza).mock.calls[0];
+    expect(input).toMatchObject({ conversationId: 42, fase: 'link_inviato', inboundBody: 'codice?' });
+    expect(ctx).toMatchObject({ now: NOW, settings: expect.objectContaining({ eventoAt: '2026-10-05T21:00:00+02:00' }) });
     expect(genera).not.toHaveBeenCalled();
+    expect(sendFreeText).not.toHaveBeenCalled();
+    expect(calls.events.some((e) => e.type === 'lancio_silenzio')).toBe(false);
+  });
+
+  it("post_pitch → turnoPostPitch, con lancioInfo passato com'è; lo stato è quello del turno", async () => {
+    const { supabase } = makeSupabase();
+    const info = { risposte: ['faccio il barista'] };
+    const stato = await eseguiTurnoLancio(supabase, base({ fase: 'post_pitch', lancioInfo: info, rows: [WELCOME, inb('adesso')], inboundBody: 'adesso', now: NOW }));
+    expect(stato).toBe('closed');
+    expect(vi.mocked(turnoPostPitch).mock.calls[0][1]).toMatchObject({ fase: 'post_pitch', lancioInfo: info });
+    expect(vi.mocked(turnoPostPitch).mock.calls[0][2]).toMatchObject({ now: NOW });
+  });
+
+  it('scelta_fatta → turnoDopoScelta, con la stessa finestra (settings e now)', async () => {
+    const { supabase } = makeSupabase();
+    await eseguiTurnoLancio(supabase, base({ fase: 'scelta_fatta', rows: [WELCOME, inb('grazie')], inboundBody: 'grazie', now: NOW }));
+    expect(turnoDopoScelta).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(turnoDopoScelta).mock.calls[0][2]).toMatchObject({ now: NOW, settings: expect.objectContaining({ eventoAt: '2026-10-05T21:00:00+02:00' }) });
+  });
+
+  it("senza now in input l'orologio è quello del turno (una Date), non undefined", async () => {
+    const { supabase } = makeSupabase();
+    await eseguiTurnoLancio(supabase, base({ fase: 'link_inviato', rows: [WELCOME, inb('?')], inboundBody: '?' }));
+    expect(vi.mocked(turnoAssistenza).mock.calls[0][2].now).toBeInstanceOf(Date);
+  });
+
+  // Il taglio si fa UNA volta qui, prima dello switch: senza, su una chat riusata il giro
+  // precedente di Mario finirebbe nella cronologia che l'assistenza manda al modello.
+  it('le righe arrivano al turno del B4 gia tagliate al lancio', async () => {
+    const { supabase } = makeSupabase();
+    const vecchia = { direction: 'in', body: 'ok', template_sid: null, created_at: '2026-08-01T09:09:00Z' };
+    const rows = [vecchia, { ...WELCOME, created_at: '2026-09-20T10:00:00Z' }, inb('codice?')];
+    await eseguiTurnoLancio(supabase, base({ fase: 'link_inviato', rows, inboundBody: 'codice?' }));
+    const righe = vi.mocked(turnoAssistenza).mock.calls[0][1].rows;
+    expect(righe.map((m) => m.body)).toEqual([WELCOME.body, 'codice?']);
+  });
+
+  it('followup_inviato resta del B5: silenzio fase_non_gestita, mai il pitch', async () => {
+    const { supabase, calls } = makeSupabase();
+    await eseguiTurnoLancio(supabase, base({ fase: 'followup_inviato', rows: [WELCOME, inb('ok')], inboundBody: 'ok' }));
+    expect(turnoAssistenza).not.toHaveBeenCalled();
+    expect(turnoPostPitch).not.toHaveBeenCalled();
+    expect(sendFreeText).not.toHaveBeenCalled();
     expect(calls.events.some((e) => e.type === 'lancio_silenzio' && e.payload.motivo === 'fase_non_gestita')).toBe(true);
   });
 });

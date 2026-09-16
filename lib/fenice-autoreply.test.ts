@@ -278,6 +278,7 @@ type ClaimedRow = {
   gdo_noemi_reminded_at?: string | null;
   lancio_slug?: string | null;
   lancio_fase?: string | null;
+  lancio_info?: unknown;
   leads?: { first_name?: string | null } | null;
 };
 type FakeMsgRow = { direction: string; body: string; template_sid: string | null; created_at: string };
@@ -1809,6 +1810,35 @@ describe('drainMarioReplies — aggancio del turno lancio', () => {
     await drainMarioReplies(supabase, 44, '+393331234567', () => 0);
     expect(eseguiTurnoLancio).not.toHaveBeenCalled();
     expect(generateMarioReply).toHaveBeenCalledTimes(1);
+  });
+
+  // Le fasi del B4 passano dallo stesso ramo: `lancio_info` (le risposte del
+  // riscaldamento) e `created_at` delle righe devono arrivare al turno, o il post-pitch
+  // ricomincia da capo a ogni messaggio e il taglio al lancio non sa dove tagliare.
+  it.each(['link_inviato', 'post_pitch', 'scelta_fatta'])('fase %s: il ramo lancio scavalca Mario e passa lancio_info e created_at', async (fase) => {
+    const info = { risposte: ['studio informatica'], slotsMostratiAt: null };
+    const { supabase, calls } = makeDrainSupabase(
+      { id: 45, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L5', bot_outcome: null, gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
+        lancio_slug: 'webdev-2026-10', lancio_fase: fase, lancio_info: info, leads: { first_name: 'Anna' } },
+      [WELCOME, { ...SI, body: 'qual è il codice?' }],
+    );
+    await drainMarioReplies(supabase, 45, '+393331234567', () => 0);
+    expect(generateMarioReply).not.toHaveBeenCalled();
+    expect(eseguiTurnoLancio).toHaveBeenCalledTimes(1);
+    const input = vi.mocked(eseguiTurnoLancio).mock.calls[0][1];
+    expect(input).toMatchObject({ conversationId: 45, fase, lancioInfo: info, inboundBody: 'qual è il codice?' });
+    expect(input.rows[1]).toMatchObject({ direction: 'in', created_at: SI.created_at });
+    expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+
+  it('senza lancio_info sulla conversazione il turno riceve null, non undefined', async () => {
+    const { supabase } = makeDrainSupabase(
+      { id: 46, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L6', bot_outcome: null, gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
+        lancio_slug: 'webdev-2026-10', lancio_fase: 'post_pitch' },
+      [WELCOME, SI],
+    );
+    await drainMarioReplies(supabase, 46, '+393331234567', () => 0);
+    expect(vi.mocked(eseguiTurnoLancio).mock.calls[0][1].lancioInfo).toBeNull();
   });
 });
 

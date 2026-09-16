@@ -18,6 +18,7 @@ import { confermaVideoVisto } from './video-visto';
 import { notaPrimoContatto } from './primo-contatto-note';
 import { haCongedo, lancioInCorso } from './lancio-fase';
 import { eseguiTurnoLancio } from './lancio-turno';
+import type { LancioInfo } from './lancio-crm';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -323,7 +324,7 @@ export async function drainMarioReplies(
     // `bot_outcome` e `bot_scheduled_at` servono al ramo degli esiti senza leadId
     // (`registraEsitoSenzaLeadId`): senza di loro non saprebbe che su questa
     // conversazione c'e' gia' un appuntamento in piedi, e lo declasserebbe.
-    .select('id, ai_started_at, crm_lead_id, bot_outcome, bot_scheduled_at, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, gdo_appuntamento_at, lancio_slug, lancio_fase, leads(first_name)')
+    .select('id, ai_started_at, crm_lead_id, bot_outcome, bot_scheduled_at, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, gdo_appuntamento_at, lancio_slug, lancio_fase, lancio_info, leads(first_name)')
     .single();
   // PGRST116 = nessuna riga: e' il caso NORMALE (conversazione non claimabile, o
   // lucchetto di un altro drain) e non va segnalato. Qualunque altro errore invece qui
@@ -416,7 +417,7 @@ export async function drainMarioReplies(
     leads?: { first_name?: string | null } | null;
   };
   // Chat del lancio Web Dev AI: il turno lo fa lib/lancio-turno, non Mario.
-  const lancio = claimed as { lancio_slug?: string | null; lancio_fase?: string | null };
+  const lancio = claimed as { lancio_slug?: string | null; lancio_fase?: string | null; lancio_info?: LancioInfo | null };
   const gdoAgendaAt = gdo.gdo_agenda_at ?? null;
   const gdoVideoUrl = gdo.gdo_video_url ?? null;
   const postino = gdoAgendaAt !== null;
@@ -470,6 +471,9 @@ export async function drainMarioReplies(
           fase: lancio.lancio_fase ?? null,
           nome: gdo.leads?.first_name ?? null,
           rows, inboundBody,
+          // Le risposte del riscaldamento (e il marcatore del congedo): senza, il turno
+          // post-pitch ricomincerebbe da capo a ogni messaggio del lead.
+          lancioInfo: lancio.lancio_info ?? null,
         });
         break;
       }
