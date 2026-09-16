@@ -71,6 +71,23 @@ const DOMANDA_INIZIO = new RegExp(
     ')\\b',
 );
 
+/**
+ * Il solo livello ESPLICITO del no: le frasi di rifiuto (`NO_FRASI` — "non mi interessa",
+ * "toglimi dalla lista", "non scrivermi più", "no grazie"), senza il "no" secco.
+ *
+ * Serve dove il "no" del lead è quasi sempre la risposta a una DOMANDA del bot e non un
+ * congedo: nell'assistenza al collegamento ("hai l'app Zoom?" → "no") un `classificaLancio`
+ * secco scartava il lead e chiudeva la chat proprio mentre chiedeva aiuto per entrare.
+ * Nell'attesa del B1 la domanda la fa il lead, e lì il "no" secco resta un no: quella
+ * classificazione non cambia.
+ */
+export function congedoEsplicito(body: string | null | undefined): boolean {
+  const raw = (body ?? '').trim();
+  if (!raw) return false;
+  const t = rimuoviIdiomiNeutri(normalizza(raw));
+  return t !== '' && NO_FRASI.test(t);
+}
+
 export function classificaLancio(body: string | null | undefined): ClasseLancio {
   const raw = (body ?? '').trim();
   if (!raw) return 'incerto';

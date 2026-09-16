@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classificaLancio, parseLancioReply } from './lancio-classifica';
+import { classificaLancio, congedoEsplicito, parseLancioReply } from './lancio-classifica';
 
 describe('classificaLancio — il sì che blocca il posto', () => {
   it.each(['sì', 'si', 'Si!', 'ok', 'Ok grazie', 'certo', 'confermo', 'sono interessato', 'interessata', 'ci sono', 'ci sarò', 'va bene', 'perfetto', 'bloccami il posto', 'ci sto'])(
@@ -110,5 +110,21 @@ describe('parseLancioReply — i tag del modello', () => {
   it('tag fra righe vuote: comunque niente righe vuote', () => {
     const r = parseLancioReply('Riga1\n\n[LANCIO:SI]\n\nRiga2');
     expect(r.visibleReply).toBe('Riga1\nRiga2');
+  });
+});
+
+describe('congedoEsplicito — solo le frasi di rifiuto, mai il "no" secco', () => {
+  it.each(['non mi interessa', 'non mi interessa più', 'toglimi dalla lista', 'non scrivermi più', 'no grazie', 'numero sbagliato'])(
+    '"%s" → congedo', (b) => expect(congedoEsplicito(b)).toBe(true),
+  );
+  // Sono tutti "no" che `classificaLancio` legge come no: in assistenza sono la risposta
+  // a una domanda del bot, e lì il congedo non lo devono far scattare.
+  it.each(['no', 'No', 'nope', 'nah', 'certo che no', 'assolutamente no'])(
+    '"%s" → non è un congedo', (b) => expect(congedoEsplicito(b)).toBe(false),
+  );
+  it('vuoto e media: falso, mai un congedo', () => {
+    expect(congedoEsplicito('')).toBe(false);
+    expect(congedoEsplicito(null)).toBe(false);
+    expect(congedoEsplicito('👍')).toBe(false);
   });
 });

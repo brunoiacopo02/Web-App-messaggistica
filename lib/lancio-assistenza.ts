@@ -2,7 +2,7 @@ import type { getSupabaseAdmin } from './supabase/admin';
 import type { LancioSettings } from './lancio-settings';
 import type { TurnoLancioInput } from './lancio-turno';
 import { generateLancioReply } from './lancio-reply';
-import { classificaLancio } from './lancio-classifica';
+import { congedoEsplicito } from './lancio-classifica';
 import { congedoGiaInviato, inboundDelLotto, paroleDelCongedo, ultimoTestoDelLotto } from './lancio-fase';
 import { puoRispondere } from './lancio-scelta';
 import { zoomMeetingId } from './lancio-zoom-blast';
@@ -23,7 +23,7 @@ const NOTA_CONGEDO = 'Lancio Web Dev AI: ha ricevuto il link Zoom e ha detto di 
  *
  * Dopo mezzanotte la fase resta `link_inviato` (il cron del follow-up del B5 la cerca
  * così) ma qui non si risponde più: silenzio definitivo, tracciato, perché il 6 arriva il
- * follow-up e da lì risponde Mario. Un "no" netto è un congedo anche qui, così il
+ * follow-up e da lì risponde Mario. Un rifiuto ESPLICITO è un congedo anche qui, così il
  * follow-up non raggiunge chi si è appena tirato fuori.
  *
  * Si classifica sul LOTTO (`inboundDelLotto`), non sull'inbound che il drain ha scelto:
@@ -57,7 +57,12 @@ export async function turnoAssistenza(
   // si pagherebbe per niente. La traccia c'è lo stesso, o il re-drive ci torna ogni ora.
   if (testoLead === '') return silenzioLancio(supabase, c, 'inbound_senza_testo', true);
 
-  if (classificaLancio(testoLead) === 'no') {
+  // Qui le regex si fermano al rifiuto ESPLICITO: in assistenza il bot fa domande ("hai
+  // l'app Zoom?", "il link ti si apre?") e il "no" secco è la risposta a quelle, non un
+  // congedo. Chiudere lì scartava al CRM un lead che stava chiedendo aiuto per entrare
+  // nella live. Tutto il resto — "no" compreso — va al modello, che il congedo può
+  // dichiararlo lo stesso con la classe o col tag (sotto).
+  if (congedoEsplicito(testoLead)) {
     return congedoLancio(supabase, c, testoLead, NOTA_CONGEDO);
   }
 

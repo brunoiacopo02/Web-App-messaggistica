@@ -99,6 +99,37 @@ describe('turnoAssistenza — nella finestra', () => {
     expect(calls.events.find((e) => e.type === 'fenice_ai_reply').payload).toMatchObject({ azione: 'congedo' });
   });
 
+  // In assistenza le domande le fa il BOT ("hai l'app Zoom?", "ti si apre il link?"): il
+  // "no" secco è la risposta a quelle. Prima le regex lo leggevano come un congedo e
+  // scartavano al CRM un lead che stava chiedendo aiuto per entrare nella live.
+  it('un "no" alle 21:05 non è un congedo: risponde il modello, nessuno scarto', async () => {
+    genera.mockResolvedValueOnce({ classe: 'domanda', passToHuman: false, visibleReply: 'Nessun problema: apri il link dal browser, funziona uguale.', lancioTag: null });
+    const { supabase, calls } = makeSupabase();
+    const stato = await turnoAssistenza(supabase, base({
+      rows: [LINK, { direction: 'out', body: "Hai l'app Zoom installata?", template_sid: null, created_at: '2026-10-05T21:04:00+02:00' }, inb('no', '2026-10-05T21:05:00+02:00')],
+      inboundBody: 'no',
+    }), { settings: SETTINGS, now: new Date('2026-10-05T21:05:00+02:00') });
+    expect(stato).toBe('active');
+    expect(genera).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe('Nessun problema: apri il link dal browser, funziona uguale.');
+    expect(sendOutcome).not.toHaveBeenCalled();
+    expect(marcaCongedo).not.toHaveBeenCalled();
+    expect(impostaFaseLancio).not.toHaveBeenCalled();
+    expect(tipiEventi(calls)).not.toContain('lancio_congedo');
+  });
+
+  it('il rifiuto ESPLICITO resta un congedo senza passare dal modello: "non mi interessa più"', async () => {
+    const { supabase } = makeSupabase();
+    const stato = await turnoAssistenza(supabase, base({
+      rows: [LINK, inb('non mi interessa più', '2026-10-05T21:05:00+02:00')],
+      inboundBody: 'non mi interessa più',
+    }), { settings: SETTINGS, now: new Date('2026-10-05T21:05:00+02:00') });
+    expect(stato).toBe('closed');
+    expect(genera).not.toHaveBeenCalled();
+    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe(TESTO_CONGEDO);
+    expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'DA_SCARTARE', leadWords: 'non mi interessa più' });
+  });
+
   it('il no lo può dire anche il modello con [LANCIO:NO]: stesso congedo', async () => {
     genera.mockResolvedValueOnce({ classe: 'domanda', passToHuman: false, visibleReply: 'Capisco.', lancioTag: { tag: 'NO' } });
     const { supabase } = makeSupabase();
@@ -121,7 +152,7 @@ describe('turnoAssistenza — nella finestra', () => {
   it('CRM giù sul congedo: il testo è partito e il congedo è marcato, ma la fase NON si chiude e lo stato resta active (ritentabile)', async () => {
     vi.mocked(sendOutcome).mockResolvedValueOnce({ sent: false, error: 'http_500' });
     const { supabase, calls } = makeSupabase();
-    const stato = await turnoAssistenza(supabase, base({ rows: [LINK, inb('no')], inboundBody: 'no' }), { settings: SETTINGS, now: NOTTE5 });
+    const stato = await turnoAssistenza(supabase, base({ rows: [LINK, inb('non mi interessa')], inboundBody: 'non mi interessa' }), { settings: SETTINGS, now: NOTTE5 });
     expect(stato).toBe('active');
     expect(sendFreeText).toHaveBeenCalledTimes(1);
     expect(marcaCongedo).toHaveBeenCalledTimes(1);
@@ -132,7 +163,7 @@ describe('turnoAssistenza — nella finestra', () => {
   it('il 403 del CRM è definitivo quanto un 200: fase chiusa, closed', async () => {
     vi.mocked(sendOutcome).mockResolvedValueOnce({ sent: false, status: 403, error: 'forbidden' });
     const { supabase } = makeSupabase();
-    const stato = await turnoAssistenza(supabase, base({ rows: [LINK, inb('no')], inboundBody: 'no' }), { settings: SETTINGS, now: NOTTE5 });
+    const stato = await turnoAssistenza(supabase, base({ rows: [LINK, inb('non mi interessa')], inboundBody: 'non mi interessa' }), { settings: SETTINGS, now: NOTTE5 });
     expect(stato).toBe('closed');
     expect(impostaFaseLancio).toHaveBeenCalledWith(expect.anything(), 42, 'chiuso');
   });
@@ -153,7 +184,7 @@ describe('turnoAssistenza — nella finestra', () => {
 
   it('senza crmLeadId il congedo chiude lo stesso: niente esito al CRM', async () => {
     const { supabase } = makeSupabase();
-    const stato = await turnoAssistenza(supabase, base({ crmLeadId: null, rows: [LINK, inb('no')], inboundBody: 'no' }), { settings: SETTINGS, now: NOTTE5 });
+    const stato = await turnoAssistenza(supabase, base({ crmLeadId: null, rows: [LINK, inb('non mi interessa')], inboundBody: 'non mi interessa' }), { settings: SETTINGS, now: NOTTE5 });
     expect(stato).toBe('closed');
     expect(sendOutcome).not.toHaveBeenCalled();
     expect(impostaFaseLancio).toHaveBeenCalledWith(expect.anything(), 42, 'chiuso');
