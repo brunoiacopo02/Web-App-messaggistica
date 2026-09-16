@@ -13,6 +13,7 @@ import { segnalaRispostaDopoTerzoNr } from '@/lib/risposta-post-nr';
 import { classificaPrimoMessaggio, isMarkerPulsanteWebinar } from '@/lib/primo-messaggio';
 import { LANCIO_SLUG, pulsanteRiportaInPostPitch, pulsanteScriveFase } from '@/lib/lancio-fase';
 import { impostaFaseLancio } from '@/lib/lancio-db';
+import { notaInboundDopoRestituzione } from '@/lib/lancio-restituzioni';
 import { getLancioSettings } from '@/lib/lancio-settings';
 import { pushLeadEntrante } from '@/lib/lead-entrante';
 
@@ -434,13 +435,33 @@ export async function POST(req: NextRequest) {
         after(segnalaRispostaDopoTerzoNr(supabase, conversationId, conv.crm_lead_id));
       }
 
+      // Lead del lancio gia' restituito al pool (B5, ruling C8): non si riapre, il bot
+      // tace, e chi lo ha in carico sul CRM viene avvisato con una nota — e' l'unico
+      // modo perche' non chiami a vuoto una persona che intanto sta scrivendo qui.
+      const restituito = !!conv?.lancio_slug && conv.lancio_fase === 'restituito';
+      if (conv && restituito) {
+        await supabase.from('event_log').insert({
+          type: 'lancio_inbound_dopo_restituzione',
+          payload: { conversationId, phone, crmLeadId: conv.crm_lead_id, testo: messageBody.slice(0, 300) } as never,
+          message: `[lancio] ${phone} ha riscritto dopo il ritorno nel pool (conv ${conversationId}): il bot non risponde`,
+          level: 'info',
+        });
+        // Dopo la risposta a Twilio, come tutte le altre note: la rete del CRM non deve
+        // rallentare il webhook. Senza `crm_lead_id` non c'e' nessuno da avvisare —
+        // `sendCrmNota` lo rileggerebbe da se' e uscirebbe con 'not_crm_lead'.
+        if (conv.crm_lead_id) {
+          after(sendCrmNota(supabase, conversationId, notaInboundDopoRestituzione(messageBody, new Date().toISOString())));
+        }
+      }
+
       if (conv && shouldReopen({
         aiOwner: conv.ai_owner,
         aiStatus: conv.ai_status,
         aiPausedAt: conv.ai_paused_at,
-        // Chat del lancio gia' congedata: non si riapre (vedi `shouldReopen`).
+        // Chat del lancio gia' congedata o restituita: non si riapre (vedi `shouldReopen`).
         lancioSlug: conv.lancio_slug,
         lancioInfo: conv.lancio_info,
+        lancioFase: conv.lancio_fase,
       })) {
         await supabase.from('conversations').update({ ai_status: 'active' }).eq('id', conversationId);
         conv.ai_status = 'active';
@@ -460,7 +481,7 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      if (shouldAutoReply({
+      if (!restituito && shouldAutoReply({
         toMatchesFenice,
         autoReplyOn,
         aiOwner: conv?.ai_owner ?? null,

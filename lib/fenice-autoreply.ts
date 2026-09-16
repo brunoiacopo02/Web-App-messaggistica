@@ -75,6 +75,9 @@ export function shouldAutoReply(g: AutoReplyGate): boolean {
  * proprio dopo una promessa di silenzio. La restituzione di fine lancio (B5) sa gia'
  * dove trovarla. I chiamanti che non leggono le colonne del lancio non passano questi
  * campi e si comportano come prima.
+ *
+ * Falso anche per una chat del lancio in fase `restituito`: il lead e' tornato al pool
+ * del CRM (ruling C8).
  */
 export function shouldReopen(g: {
   aiOwner: string | null;
@@ -82,10 +85,14 @@ export function shouldReopen(g: {
   aiPausedAt?: string | null;
   lancioSlug?: string | null;
   lancioInfo?: unknown;
+  lancioFase?: string | null;
 }): boolean {
   if (g.aiPausedAt) return false;
   if (g.aiOwner !== 'mario') return false;
   if (g.lancioSlug && haCongedo(g.lancioInfo)) return false;
+  // Restituito al pool (B5, ruling C8): il lead e' del CRM, non del bot. Riaprire qui
+  // rimetterebbe Mario su una persona che un GDO sta chiamando. Il webhook avvisa il CRM.
+  if (g.lancioSlug && g.lancioFase === 'restituito') return false;
   return g.aiStatus === 'closed';
 }
 

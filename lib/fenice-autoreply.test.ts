@@ -2316,3 +2316,19 @@ describe('drainMarioReplies — dopo il follow-up la chat passa a Mario nello ST
     expect(calls.finalStatusWrites).toEqual(['closed']);
   });
 });
+
+describe('shouldReopen — veto sulle chat del lancio restituite al pool (C8)', () => {
+  const base = { aiOwner: 'mario', aiStatus: 'closed', aiPausedAt: null, lancioSlug: 'webdev-2026-10', lancioInfo: null };
+  it('restituito: mai, anche se closed e senza congedo', () => {
+    expect(shouldReopen({ ...base, lancioFase: 'restituito' })).toBe(false);
+  });
+  it('chiuso dal follow-up: si riapre come una chat normale', () => {
+    expect(shouldReopen({ ...base, lancioFase: 'chiuso' })).toBe(true);
+  });
+  it('senza slug la fase non conta', () => {
+    expect(shouldReopen({ ...base, lancioSlug: null, lancioFase: 'restituito' })).toBe(true);
+  });
+  it('il congedo continua a vincere', () => {
+    expect(shouldReopen({ ...base, lancioFase: 'chiuso', lancioInfo: { congedo_at: '2026-10-05T23:00:00Z' } })).toBe(false);
+  });
+});

@@ -101,6 +101,10 @@ vi.mock('@/lib/fenice-autoreply', async (originale) => ({
   ...(await originale<Record<string, unknown>>()),
   drainMarioReplies: vi.fn(async () => {}),
 }));
+vi.mock('@/lib/bot-outcome', async (originale) => ({
+  ...(await originale<Record<string, unknown>>()),
+  sendCrmNota: vi.fn(async () => ({ sent: true })),
+}));
 // `after()` fuori da una richiesta Next lancerebbe: qui la promessa e' gia' stata creata
 // (e' quello che si vuole verificare), basta consumarla.
 vi.mock('next/server', async (originale) => ({
@@ -113,6 +117,8 @@ import { POST } from './route';
 import { pushLeadEntrante } from '@/lib/lead-entrante';
 import { getLancioSettings } from '@/lib/lancio-settings';
 import { TESTO_PULSANTE_WEBINAR } from '@/lib/primo-messaggio';
+import { sendCrmNota } from '@/lib/bot-outcome';
+import { drainMarioReplies } from '@/lib/fenice-autoreply';
 
 const FENICE = 'whatsapp:+390000000000';
 
@@ -213,5 +219,34 @@ describe('pulsante del webinar — interruttore lancio_pulsante_attivo', () => {
     });
     expect(stato.updates.find((u) => 'crm_funnel' in u.valori)?.valori.crm_funnel).toBe('Lancio Web Dev AI');
     expect(pushLeadEntrante).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('lead restituito al pool che riscrive (C8)', () => {
+  beforeEach(() => {
+    stato.conv = {
+      ai_owner: 'mario', ai_status: 'closed', ai_paused_at: null, handed_off_at: null,
+      crm_lead_id: 'L9', bot_outcome: 'NON_RISPOSTO',
+      lancio_slug: 'webdev-2026-10', lancio_fase: 'restituito', lancio_ingresso: 'lista', lancio_info: null,
+    };
+    vi.mocked(sendCrmNota).mockClear();
+    vi.mocked(drainMarioReplies).mockClear();
+  });
+
+  it('non si riapre, il bot non risponde, si scrive l evento e la nota al CRM', async () => {
+    const res = await inbound('ci sono ancora?');
+    expect(res.status).toBe(200);
+    expect(stato.updates.some((u) => u.valori.ai_status === 'active')).toBe(false);
+    expect(eventi('lancio_inbound_dopo_restituzione')).toHaveLength(1);
+    expect(sendCrmNota).toHaveBeenCalledTimes(1);
+    expect(String(vi.mocked(sendCrmNota).mock.calls[0][2])).toContain('dopo il ritorno nel pool');
+    expect(drainMarioReplies).not.toHaveBeenCalled();
+  });
+
+  it('senza crm_lead_id: evento si, nota no', async () => {
+    stato.conv.crm_lead_id = null;
+    await inbound('ci sono ancora?');
+    expect(eventi('lancio_inbound_dopo_restituzione')).toHaveLength(1);
+    expect(sendCrmNota).not.toHaveBeenCalled();
   });
 });
