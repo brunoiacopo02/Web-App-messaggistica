@@ -40,6 +40,13 @@ type RigaMessaggio = RigaLancio & { conversation_id: number };
 
 const BLOCCO_VALUTAZIONE = 200;
 const MAX_RIGHE_BLOCCO = BLOCCO_VALUTAZIONE * 40;
+/**
+ * Quanto indietro si legge la cronologia: `lancio_evento_at` meno 30 giorni, come nel
+ * cron del follow-up. Le chat RIUSATE si portano dietro mesi di messaggi di Mario, ma
+ * tutto quello che serve qui — l'ancora, gli inbound del lancio, il congedo — vive dopo
+ * l'inizio del lancio. Senza il taglio, un blocco di chat riusate sfonda il tetto righe.
+ */
+const GIORNI_STORICO = 30;
 /** Nota del `DA_SCARTARE` ritentato dallo sweeper (C2): il lead aveva gia' detto no. */
 export const NOTA_SCARTO_RITENTATO = 'Lancio Web Dev AI: aveva detto di no e il congedo era gia\' uscito; esito ritentato dal cron.';
 
@@ -65,6 +72,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, skipped: 'config', missing: ['lancio_evento_at'] });
   }
   const evento = new Date(eventoMs);
+  const tagliaStorico = new Date(eventoMs - GIORNI_STORICO * 24 * 60 * 60 * 1000).toISOString();
   const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE ?? '';
   const welcomeSid = process.env.LANCIO_WELCOME_TEMPLATE_SID || null;
 
@@ -93,6 +101,7 @@ export async function GET(req: NextRequest) {
   const daRestituire: { c: Candidata; motivo: MotivoRestituzione }[] = [];
   const scartiDaRitentare: { c: Candidata; rows: RigaLancio[] }[] = [];
   let valutati = 0;
+  let blocchiTroncati = 0;
   for (let i = 0; i < coda.length && daRestituire.length < max; i += BLOCCO_VALUTAZIONE) {
     if (Date.now() - t0 > TEMPO_MASSIMO_MS) break;
     const blocco = coda.slice(i, i + BLOCCO_VALUTAZIONE);
@@ -100,14 +109,35 @@ export async function GET(req: NextRequest) {
       .from('messages')
       .select('conversation_id, direction, body, template_sid, created_at')
       .in('conversation_id', blocco.map((c) => c.id))
+      // Prima del lancio non c'e' niente che serva a decidere: il taglio tiene le chat
+      // riusate dentro il tetto righe.
+      .gte('created_at', tagliaStorico)
       .order('created_at', { ascending: true })
       .limit(MAX_RIGHE_BLOCCO);
     if (error) {
       await logCronQueryError(supabase, 'lancio_restituzioni_messages_query_error', error);
       break;
     }
+    const righeBlocco = (data ?? []) as unknown as RigaMessaggio[];
+    // Il troncamento non e' innocuo (stessa difesa del cron del follow-up, commit
+    // dec4428): l'ordine e' crescente, quindi a cadere sono le righe PIU' NUOVE di tutte
+    // le chat del blocco. Una chat letta a meta' sembra "non ha mai scritto" — e qui non
+    // significa saltare un template, significa mandare il lead nel pool con la nota
+    // sbagliata, cioe' una decisione che il CRM non annulla piu'. Su una lettura tagliata
+    // non si decide niente: il blocco conta `ancora_ignota` e si rivaluta al run dopo
+    // (lo sweeper C2 compreso: anche `paroleDelCongedo` leggerebbe una storia monca).
+    if (righeBlocco.length >= MAX_RIGHE_BLOCCO) {
+      blocchiTroncati++;
+      valutati += blocco.length;
+      niente.ancora_ignota += blocco.length;
+      await logEvento(supabase, 'lancio_restituzioni_blocco_troncato',
+        { blocco: Math.floor(i / BLOCCO_VALUTAZIONE), righe: righeBlocco.length, tetto: MAX_RIGHE_BLOCCO, conversazioni: blocco.length, primaChat: blocco[0]?.id ?? null, ultimaChat: blocco[blocco.length - 1]?.id ?? null },
+        `[lancio] restituzioni: cronologia troncata sul blocco da ${blocco.length} chat (${righeBlocco.length} righe, tetto ${MAX_RIGHE_BLOCCO}) — nessuna decisione presa su queste chat`,
+        'warn');
+      continue;
+    }
     const perConv = new Map<number, RigaLancio[]>();
-    for (const r of (data ?? []) as unknown as RigaMessaggio[]) {
+    for (const r of righeBlocco) {
       const lista = perConv.get(r.conversation_id) ?? [];
       lista.push(r);
       perConv.set(r.conversation_id, lista);
@@ -130,7 +160,7 @@ export async function GET(req: NextRequest) {
 
   if (dry) {
     const motivi = daRestituire.reduce<Record<string, number>>((acc, d) => ({ ...acc, [d.motivo]: (acc[d.motivo] ?? 0) + 1 }), {});
-    return NextResponse.json({ ok: true, dry: true, candidati: coda.length, valutati, daRestituire: daRestituire.length, motivi, scartiDaRitentare: scartiDaRitentare.length, niente, queryKo });
+    return NextResponse.json({ ok: true, dry: true, candidati: coda.length, valutati, daRestituire: daRestituire.length, motivi, scartiDaRitentare: scartiDaRitentare.length, niente, blocchiTroncati, queryKo });
   }
 
   // ─────────────── C2: gli scarti rifiutati dopo un congedo ───────────────
@@ -215,7 +245,7 @@ export async function GET(req: NextRequest) {
   const riepilogo = {
     candidati: coda.length, valutati, nonValutati, daRestituire: lotto.length,
     restituiti, giaRestituiti, rifiutati, rifiutateDalCrm, nonConfermate, errori, residui,
-    scartiRitentati, scartiChiusi, niente, max, queryKo,
+    scartiRitentati, scartiChiusi, niente, blocchiTroncati, max, queryKo,
   };
   await scriviRun(
     riepilogo,

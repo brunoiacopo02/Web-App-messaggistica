@@ -40,7 +40,7 @@ function query(table: string, op: Chiamata['op'], a: unknown, opzioni?: Chiamata
   const rec: Chiamata = { table, op, arg: a, filtri: [], opzioni };
   chiamate.push(rec);
   const q: Record<string, unknown> = {};
-  for (const m of ['eq', 'is', 'in', 'not', 'order', 'limit', 'range', 'select']) q[m] = (...args: unknown[]) => { rec.filtri.push({ m, args }); return q; };
+  for (const m of ['eq', 'is', 'in', 'not', 'gte', 'order', 'limit', 'range', 'select']) q[m] = (...args: unknown[]) => { rec.filtri.push({ m, args }); return q; };
   q.then = (ok: (v: unknown) => unknown, ko?: (e: unknown) => unknown) => Promise.resolve().then(() => esegui(rec)).then(ok, ko);
   return q;
 }
@@ -233,6 +233,20 @@ describe('GET /api/cron/lancio-restituzioni — decisioni e CRM', () => {
     await expect((await richiesta()).json()).resolves.toMatchObject({ restituiti: 0, errori: 1 });
     expect(impostaFaseLancio).not.toHaveBeenCalled();
     expect(tipi()).toContain('lancio_restituzione_error');
+  });
+  it('cronologia troncata dal tetto righe: nessuna decisione sul blocco, warn e ancora_ignota', async () => {
+    // Il troncamento porta via le righe PIU' NUOVE (ordine crescente): una chat letta a
+    // meta' sembrerebbe "mai risposto" e finirebbe nel pool con la nota sbagliata, che e'
+    // irreversibile. Su una lettura tagliata non si decide niente.
+    stato.convs = [conv(1)];
+    const tante: Riga[] = [welcome(1)];
+    for (let k = 0; k < 8000; k++) tante.push(inb(1, 'si', '2026-09-21T10:00:00Z'));
+    stato.messaggi.set(1, tante);
+    const res = await (await richiesta()).json();
+    expect(sendOutcome).not.toHaveBeenCalled();
+    expect(res.niente.ancora_ignota).toBe(1);
+    expect(res.blocchiTroncati).toBe(1);
+    expect(tipi()).toContain('lancio_restituzioni_blocco_troncato');
   });
   it('un esito gia presente non si tocca', async () => {
     stato.convs = [conv(1, { bot_outcome: 'APPUNTAMENTO' })];
