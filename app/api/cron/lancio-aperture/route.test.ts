@@ -36,6 +36,14 @@ const stato = {
   attivo: '1' as string,
   /** Chat già timbrate: l'update del claim non le restituisce. */
   timbrate: new Set<number>(),
+  /** Il VALORE del timbro, per conv: il rilascio è ancorato a quello che ha scritto
+   *  questo run (`.eq('lancio_benvenuto_at', timbro)`), non al solo id. */
+  timbri: new Map<number, string>(),
+  /** L'insert della riga `messages` fallisce: serve a provare che un invio già partito
+   *  non fa liberare il timbro. */
+  messagesInsertKo: false,
+  /** La select dei candidati fallisce (migrazione non applicata). */
+  convSelectError: null as { message: string; code?: string } | null,
 };
 
 const valore = (rec: Chiamata, colonna: string) => rec.filtri.find(([c]) => c === colonna)?.[1];
@@ -46,17 +54,27 @@ function esegui(rec: Chiamata): { data: unknown; error: unknown } {
     const id = Number(valore(rec, 'id'));
     if (!('lancio_benvenuto_at' in campi)) return { data: [], error: null };
     if (campi.lancio_benvenuto_at === null) {
-      stato.timbrate.delete(id);
+      // Rilascio ancorato: si libera solo il timbro scritto da questo run.
+      const atteso = valore(rec, 'lancio_benvenuto_at');
+      if (atteso === undefined || stato.timbri.get(id) === atteso) {
+        stato.timbrate.delete(id);
+        stato.timbri.delete(id);
+      }
       return { data: [], error: null };
     }
     // Claim: `is('lancio_benvenuto_at', null)` è un compare-and-set.
     if (stato.timbrate.has(id)) return { data: [], error: null };
     stato.timbrate.add(id);
+    stato.timbri.set(id, String(campi.lancio_benvenuto_at));
     return { data: [{ id }], error: null };
+  }
+  if (rec.table === 'messages' && rec.op === 'insert' && stato.messagesInsertKo) {
+    throw new Error('insert messages KO');
   }
   if (rec.op !== 'select') return { data: null, error: null };
   if (rec.table === 'app_settings') return { data: [{ key: 'lancio_attivo', value: stato.attivo }], error: null };
   if (rec.table === 'conversations') {
+    if (stato.convSelectError) return { data: null, error: stato.convSelectError };
     // La paginazione del route: la seconda pagina è sempre vuota (fixture piccole).
     const pagina = (valore(rec, '__range') as number[] | undefined) ?? [0, 999];
     const liberi = stato.convs.filter((c) => !stato.timbrate.has(c.id));
@@ -158,6 +176,9 @@ beforeEach(() => {
   stato.outbound = new Map();
   stato.attivo = '1';
   stato.timbrate = new Set();
+  stato.timbri = new Map();
+  stato.messagesInsertKo = false;
+  stato.convSelectError = null;
   sendTemplate.mockReset();
   sendTemplate.mockResolvedValue({ sid: 'SMtest', status: 'queued' });
   assertTemplateSendable.mockReset();
@@ -391,5 +412,49 @@ describe('GET /api/cron/lancio-aperture', () => {
       type: 'lancio_aperture_run',
       payload: { candidati: 0, inviati: 0 },
     });
+  });
+
+  // Il messaggio è già su WhatsApp: qualunque cosa fallisca dopo, liberare il timbro
+  // rimetterebbe la chat fra i candidati e il run successivo manderebbe il benvenuto una
+  // seconda volta alla stessa persona.
+  it('se salta la scrittura DOPO un invio riuscito il timbro resta: nessun secondo invio', async () => {
+    stato.convs = [conv(1)];
+    stato.messagesInsertKo = true;
+    const body = await (await richiesta()).json();
+
+    expect(sendTemplate).toHaveBeenCalledTimes(1);
+    expect(timbriTolti()).toHaveLength(0);
+    expect(stato.timbrate.has(1)).toBe(true);
+    expect(tipiEvento()).toContain('lancio_apertura_meta_incompleta');
+    expect(body).toMatchObject({ inviati: 0, falliti: 0, errori: 1 });
+
+    // Run successivo, col guasto passato: la chat non è nemmeno più candidata.
+    chiamate.length = 0;
+    stato.messagesInsertKo = false;
+    const body2 = await (await richiesta()).json();
+    expect(sendTemplate).toHaveBeenCalledTimes(1);
+    expect(body2).toMatchObject({ candidati: 0, inviati: 0 });
+  });
+
+  it('il rilascio del timbro è ancorato a quello scritto da questo run', async () => {
+    stato.convs = [conv(1)];
+    sendTemplate.mockRejectedValueOnce(Object.assign(new Error('numero morto'), { code: 63024 }));
+    await richiesta();
+    const rilascio = timbriTolti()[0];
+    expect(rilascio.filtri).toContainEqual(['lancio_benvenuto_at', expect.any(String)]);
+  });
+
+  // Con le colonne `lancio_*` non ancora applicate la select torna `data: null`: zero
+  // candidati, `ok: true`, identico a una coda vuota.
+  it('una query candidati fallita si vede: riga di errore, niente invii', async () => {
+    const spia = vi.spyOn(console, 'error').mockImplementation(() => {});
+    stato.convs = [conv(1)];
+    stato.convSelectError = { message: 'column conversations.lancio_slug does not exist', code: '42703' };
+    const body = await (await richiesta()).json();
+    expect(sendTemplate).not.toHaveBeenCalled();
+    expect(tipiEvento()).toContain('lancio_aperture_query_error');
+    expect(body).toMatchObject({ ok: true, candidati: 0, inviati: 0 });
+    expect(spia).toHaveBeenCalled();
+    spia.mockRestore();
   });
 });

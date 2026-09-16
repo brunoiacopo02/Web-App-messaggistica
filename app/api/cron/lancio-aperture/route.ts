@@ -12,6 +12,7 @@ import {
 } from '@/lib/lancio-aperture';
 import { inOpeningWindow } from '@/lib/sequence';
 import { lancioBenvenutoText } from '@/lib/lancio-fase';
+import { logCronQueryError } from '@/lib/cron-query-error';
 import { templateName } from '@/lib/name';
 
 export const runtime = 'nodejs';
@@ -19,17 +20,18 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
 // Benvenuti del lancio rimasti indietro (intake fuori dalla fascia 07-23 o lancio
-// spento). Queste chat vengono escluse da sequence-touches (FILTRO_FUORI_LANCIO) dal
-// Task 10: senza questo cron resterebbero mute per sempre — e nel frattempo il
-// benvenuto lo manda solo chi lo sa mandare, cioe' questo route, perche' la sequenza
-// non conosce il template del lancio. Schedule in vercel.json: ogni 15' dalle 05
-// alle 21 UTC; il filtro sull'ora italiana lo fa `inOpeningWindow`, perche' l'ora
-// legale sposta la fascia e il cron no.
+// spento). Queste chat sono escluse dai cron di Mario (sequenza, nudge, promemoria,
+// solleciti) da `FILTRO_FUORI_LANCIO`, esclusioni gia' in piedi (Task 10): senza questo
+// cron resterebbero mute per sempre — e comunque il benvenuto lo manda solo chi lo sa
+// mandare, cioe' questo route, perche' la sequenza non conosce il template del lancio.
+// Schedule in vercel.json: ogni 15' dalle 05 alle 21 UTC; il filtro sull'ora italiana lo
+// fa `inOpeningWindow`, perche' l'ora legale sposta la fascia e il cron no.
 //
 // L'invio e' protetto da `conversations.lancio_benvenuto_at`, timbrato PRIMA della
 // chiamata a Twilio: e' insieme il filtro dei candidati (una chat servita non si
 // ripresenta mai piu', quindi la coda non si intasa) e il lucchetto contro due run
-// sovrapposti. Se l'invio non parte, il timbro viene tolto.
+// sovrapposti. Il timbro si toglie SOLO se a Twilio non e' partito niente: dopo un invio
+// riuscito resta dov'e', qualunque cosa fallisca dopo.
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -127,7 +129,7 @@ export async function GET(req: NextRequest) {
   // arriverebbero mai in fondo alla query.
   const convs: Conv[] = [];
   for (let pagina = 0; pagina < MAX_PAGINE; pagina++) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('conversations')
       .select('id, crm_lead_id, lancio_fase, lancio_benvenuto_at, last_inbound_at, leads(phone_e164, first_name)')
       .not('lancio_slug', 'is', null)
@@ -139,6 +141,13 @@ export async function GET(req: NextRequest) {
       .is('lancio_benvenuto_at', null)
       .order('id', { ascending: true })
       .range(pagina * 1000, pagina * 1000 + 999);
+    // Una query fallita torna `data: null`, cioe' zero candidati: senza questa riga il
+    // run risponderebbe `inviati: 0` identico a una coda vuota. E' proprio il caso della
+    // migrazione `lancio_*` non ancora applicata (Postgres 42703).
+    if (error) {
+      await logCronQueryError(supabase, 'lancio_aperture_query_error', error);
+      break;
+    }
     const lotto = (data ?? []) as unknown as Conv[];
     convs.push(...lotto);
     if (lotto.length < 1000) break;
@@ -208,9 +217,10 @@ export async function GET(req: NextRequest) {
         // e un run lento non e' un'ipotesi di scuola), il secondo trova la riga gia'
         // presa e passa oltre. `is('lancio_benvenuto_at', null)` rende l'update un
         // compare-and-set: chi non si riprende righe ha perso la gara.
+        const timbro = new Date().toISOString();
         const { data: preso } = await supabase
           .from('conversations')
-          .update({ lancio_benvenuto_at: new Date().toISOString() })
+          .update({ lancio_benvenuto_at: timbro })
           .eq('id', c.id)
           .is('lancio_benvenuto_at', null)
           .select('id');
@@ -218,13 +228,26 @@ export async function GET(req: NextRequest) {
           saltati++;
           continue;
         }
+        // Si libera SOLO il timbro che ha messo questo giro: se nel frattempo un altro
+        // run (o l'intake) ne ha scritto uno suo, quel timbro protegge un invio che non
+        // e' nostro e toglierlo lo farebbe ripartire.
         const liberaTimbro = () =>
-          supabase.from('conversations').update({ lancio_benvenuto_at: null }).eq('id', c.id);
+          supabase
+            .from('conversations')
+            .update({ lancio_benvenuto_at: null })
+            .eq('id', c.id)
+            .eq('lancio_benvenuto_at', timbro);
 
         const nome = c.leads?.first_name ?? null;
         const corpo = lancioBenvenutoText(nome);
         tentati++;
         numeriServiti.add(phone);
+        // Il messaggio e' su WhatsApp: da qui in poi il timbro non si tocca piu'.
+        // Qualunque cosa fallisca dopo (l'insert della riga `messages`, il bump della
+        // conversazione, il log) non annulla un invio gia' partito, e liberare il timbro
+        // rimetterebbe la chat fra i candidati: al run dopo il lead riceverebbe il
+        // benvenuto una seconda volta.
+        let spedito = false;
         try {
           const res = await sendTemplate({
             to: phone,
@@ -232,6 +255,7 @@ export async function GET(req: NextRequest) {
             variables: { '1': templateName(nome) },
             from,
           });
+          spedito = true;
           await supabase.from('messages').insert({
             conversation_id: c.id,
             direction: 'out',
@@ -255,6 +279,19 @@ export async function GET(req: NextRequest) {
           inviati++;
         } catch (err) {
           const e = err as { message?: string; code?: number };
+          if (spedito) {
+            // L'invio era andato: il guasto e' nostro, dopo Twilio. Si conta come
+            // errore e si passa oltre SENZA liberare il timbro.
+            errori++;
+            await logEvento(
+              supabase,
+              'lancio_apertura_meta_incompleta',
+              { conversationId: c.id, crmLeadId: c.crm_lead_id, error: e?.message ?? 'errore' },
+              `[lancio] benvenuto inviato a ${phone} ma la registrazione e' fallita: ${e?.message ?? 'errore'}`,
+              'error',
+            );
+            continue;
+          }
           // Niente e' partito in nessuno dei rami sotto: il timbro va tolto, o la chat
           // resterebbe muta per sempre (non sarebbe piu' nemmeno candidata).
           await liberaTimbro();
