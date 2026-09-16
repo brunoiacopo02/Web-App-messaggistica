@@ -621,6 +621,21 @@ describe('enrollLeadIntoMario — ramo lancio (B1)', () => {
     expect(evt.payload).toMatchObject({ crmLeadId: 'crm-L1', conversationId: 42, slug: 'webdev-2026-10', ingresso: 'lista', ok: true });
   });
 
+  // Una chat gia' adottata dal webhook porta il suo `crm_funnel` (il TELEGRAM dedotto
+  // dal primo messaggio del lead). L'intake del lancio che non manda il funnel non deve
+  // cancellarlo: stessa regola del ramo normale di `enrollLeadIntoMario`.
+  it('un intake del lancio senza funnel non cancella il TELEGRAM dedotto dal webhook', async () => {
+    const { supabase, calls } = makeSupabase();
+    const { crmFunnel: _ignorato, ...senzaFunnel } = ARGS;
+
+    await enrollLeadIntoMario(supabase, senzaFunnel);
+
+    // `crm_funnel` non compare in NESSUNA delle patch: il valore sulla riga resta quello.
+    expect(calls.updates.length).toBeGreaterThan(0);
+    for (const u of calls.updates) expect('crm_funnel' in u).toBe(false);
+    expect(calls.updates[0]).toMatchObject({ lancio_slug: 'webdev-2026-10' });
+  });
+
   it('benvenuto partito: timbra lancio_benvenuto_at, il lucchetto letto dal cron', async () => {
     const { supabase, calls } = makeSupabase();
     await enrollLeadIntoMario(supabase, ARGS);

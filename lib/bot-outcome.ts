@@ -549,8 +549,17 @@ export async function registraEsitoSenzaLeadId(
   // 2. La guardia sulla data: un appuntamento di domenica, in un giorno chiuso o fuori
   //    fascia non e' un appuntamento. Gli adottati sono proprio i lead che lo slot se lo
   //    propongono da soli. Non si scrive niente e la conversazione resta aperta.
+  //    `args.bookingDays` sono i due giorni che il modello aveva davanti in QUESTO turno:
+  //    senza, la guardia li ricalcola, e alle 20:00 l'ancora ruota — la call promessa al
+  //    lead alle 19:45 e accettata alle 20:10 uscirebbe `fuori_finestra`. Stesso
+  //    argomento che il drain passa gia' a `sendOutcome`.
   if (args.outcome === 'APPUNTAMENTO' && (action.kind === 'normal' || action.kind === 'reschedule')) {
-    const check = checkDataAppuntamento(args.date, Date.now(), bookingBlackout(process.env.BOOKING_BLACKOUT));
+    const check = checkDataAppuntamento(
+      args.date,
+      Date.now(),
+      bookingBlackout(process.env.BOOKING_BLACKOUT),
+      args.bookingDays,
+    );
     if (!check.ok) {
       const decisione = await registra('data_non_fissabile', {
         motivo: check.motivo,

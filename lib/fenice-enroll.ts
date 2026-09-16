@@ -433,7 +433,10 @@ async function enrollLancio(
   const guardia = args.crmLeadId ? await apertutaDaFermare(supabase, conversationId) : null;
   if (guardia) {
     await supabase.from('conversations')
-      .update({ ...lancioFields, ai_owner: 'mario', crm_lead_id: args.crmLeadId ?? null, crm_funnel: args.crmFunnel ?? null })
+      // `crm_funnel` solo se c'e': un intake del lancio che non lo manda cancellerebbe
+      // il funnel che la chat si porta dietro (il TELEGRAM dedotto dal webhook su un
+      // adottato). Stessa regola del ramo normale di `enrollLeadIntoMario`.
+      .update({ ...lancioFields, ai_owner: 'mario', crm_lead_id: args.crmLeadId ?? null, ...(args.crmFunnel ? { crm_funnel: args.crmFunnel } : {}) })
       .eq('id', conversationId);
     // Una chat chiusa (o mai governata) torna attiva; una booked/handed_off resta a chi ce l'ha in mano.
     await supabase.from('conversations')
@@ -449,7 +452,8 @@ async function enrollLancio(
     ai_status: 'active',
     ai_started_at: new Date().toISOString(),
     crm_lead_id: args.crmLeadId ?? null,
-    crm_funnel: args.crmFunnel ?? null,
+    // Come sopra: il funnel si scrive solo se l'intake lo manda, mai a null.
+    ...(args.crmFunnel ? { crm_funnel: args.crmFunnel } : {}),
     ...lancioFields,
   };
 

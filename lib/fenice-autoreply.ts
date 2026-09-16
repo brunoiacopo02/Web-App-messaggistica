@@ -793,6 +793,10 @@ export async function drainMarioReplies(
               discardReason: result.discardReason,
               note: result.note,
               leadWords: [...history].reverse().find((t) => t.role === 'user')?.content,
+              // Gli stessi due giorni che viaggiano verso `sendOutcome` qui sopra: la
+              // guardia sulla data li vuole anche sugli adottati, o alle 20:00 l'ancora
+              // ruota e la call appena promessa in chat risulta fuori finestra.
+              bookingDays: result.bookingDays,
             },
             { botOutcome: esitoInPiedi, botScheduledAt: dataInPiedi },
           );

@@ -1329,6 +1329,47 @@ describe('registraEsitoSenzaLeadId', () => {
   // Il bug che ha reso necessario questo giro: un esito senza data non deve lasciare
   // in piedi la data di un appuntamento precedente, o /api/bot/lead-entranti
   // consegnerebbe al CRM un NON_INTERESSATO con una call in agenda accanto.
+  // Lo scenario delle 20:00, gemello di quello che `sendOutcome` ha gia': alle 19:45 il
+  // bot propone "domani alle 20", il lead accetta alle 20:10 e nel frattempo
+  // `computeBookingDays` ha ruotato l'ancora. Senza i giorni di QUEL turno la guardia
+  // ricalcola e scarta una call gia' promessa in chat — e sugli adottati e' peggio che
+  // altrove, perche' non c'e' nessun CRM dall'altra parte che se ne accorga.
+  it('accetta il giorno che il modello aveva davanti alle 19:45, anche se alle 20:10 la finestra e\' un\'altra', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      // Mercoledi' 15/07/2026, 19:45 di Roma: il turno in cui il bot propone il giorno.
+      vi.setSystemTime(Date.parse('2026-07-15T17:45:00Z'));
+      const { day1, day2 } = computeBookingDays(new Date());
+      const giorniDelTurno = [day1.date, day2.date];
+      const promessa = conOra(day1.date, 20);
+
+      // 20:10: l'ancora e' ruotata, il `day1` di prima non e' piu' in finestra.
+      vi.setSystemTime(Date.parse('2026-07-15T18:10:00Z'));
+      expect(computeBookingDays(new Date()).day1.date).not.toBe(day1.date);
+
+      const { supabase, calls } = makeSupabase(null);
+      const res = await registraEsitoSenzaLeadId(
+        supabase, 7246,
+        { outcome: 'APPUNTAMENTO', date: promessa, bookingDays: giorniDelTurno },
+        nessunEsito,
+      );
+
+      expect(res).toEqual({ decisione: 'registrato', chiudi: true });
+      expect(calls.updates[0].bot_outcome).toBe('APPUNTAMENTO');
+      expect(calls.updates[0].bot_scheduled_at).toBe(promessa);
+
+      // Lo stesso identico esito senza i giorni del turno: la guardia ricalcola e scarta.
+      const solo = makeSupabase(null);
+      const senza = await registraEsitoSenzaLeadId(
+        solo.supabase, 7246, { outcome: 'APPUNTAMENTO', date: promessa }, nessunEsito,
+      );
+      expect(senza).toEqual({ decisione: 'data_non_fissabile', chiudi: false });
+      expect(solo.calls.updates).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('un esito senza data azzera bot_scheduled_at invece di lasciarlo com\'era', async () => {
     const { supabase, calls } = makeSupabase(null);
 
