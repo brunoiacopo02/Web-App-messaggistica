@@ -4,6 +4,7 @@ import { renderTemplateVariables, renderBodyTemplate, type CampaignRow } from '@
 import { fetchListContacts } from '@/lib/ac-api';
 import { planBatch, type PlannedSend } from '@/lib/batch';
 import { sendTemplate, getTemplateBody } from '@/lib/twilio';
+import { runPool } from '@/lib/run-pool';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -42,24 +43,6 @@ async function getSentPhones(supabase: Supa, campaign: CampaignRow): Promise<Set
 
   const { data: leads } = await supabase.from('leads').select('phone_e164').in('id', leadIds);
   return new Set((leads ?? []).map((l) => l.phone_e164));
-}
-
-async function runPool<T, R>(
-  items: T[],
-  concurrency: number,
-  worker: (item: T, idx: number) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let cursor = 0;
-  async function run() {
-    while (true) {
-      const idx = cursor++;
-      if (idx >= items.length) return;
-      results[idx] = await worker(items[idx], idx);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, run));
-  return results;
 }
 
 /** Invia il template a un singolo destinatario, creando lead/conversazione/messaggio. */
