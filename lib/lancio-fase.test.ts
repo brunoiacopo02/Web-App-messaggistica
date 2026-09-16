@@ -3,6 +3,7 @@ import {
   LANCIO_SLUG, LANCIO_FASI, LANCIO_FASI_TERMINALI, FILTRO_FUORI_LANCIO, MAX_SCAMBI_DOMANDE,
   TESTO_POSTO_BLOCCATO, TESTO_CONGEDO, TESTO_CHIUSURA_DOMANDE, TESTO_PASSAGGIO_UMANO,
   isLancioFase, lancioInCorso, decideLancioTurno, contaScambiDomande, lancioFaseLabel, lancioBenvenutoText,
+  inboundDelLotto, ultimoTestoDelLotto, haCongedo,
 } from './lancio-fase';
 
 describe('costanti della spec §3.2 / §5.2', () => {
@@ -135,5 +136,46 @@ describe('etichette e benvenuto', () => {
     expect(lancioBenvenutoText('ANNA BIANCHI')).toMatch(/^Ciao Anna, sono l'assistente virtuale di Fenice Academy\./);
     expect(lancioBenvenutoText(null)).toMatch(/^Ciao a te, /);
     expect(lancioBenvenutoText('Anna')).toContain('per bloccare il posto.');
+  });
+});
+
+describe('il lotto a cui risponde il turno', () => {
+  const i = (body: string | null) => ({ direction: 'in', body, template_sid: null });
+  const o = (body: string) => ({ direction: 'out', body, template_sid: null });
+
+  it('sono i messaggi del lead dopo l ultima bolla nostra, tutti', () => {
+    expect(inboundDelLotto([o('benvenuto'), i('ok'), o('posto bloccato'), i('aspetta'), i('no grazie')]))
+      .toEqual([i('aspetta'), i('no grazie')]);
+  });
+  it('senza outbound in cronologia il lotto e tutta la chat del lead', () => {
+    expect(inboundDelLotto([i('ciao'), i('ci sono')])).toHaveLength(2);
+  });
+  it('nessun messaggio dopo l ultima bolla: lotto vuoto (inbound fuori lancio)', () => {
+    expect(inboundDelLotto([i('si'), o('benvenuto')])).toEqual([]);
+  });
+
+  it('si classifica sull ultimo che abbia del testo, non sul primo', () => {
+    expect(ultimoTestoDelLotto([i(''), i('si')])).toBe('si');
+    expect(ultimoTestoDelLotto([i('ok'), i('no grazie')])).toBe('no grazie');
+  });
+  it('un lotto di soli media non ha testo: il turno tace', () => {
+    expect(ultimoTestoDelLotto([i(''), i(null), i('   ')])).toBe('');
+    expect(ultimoTestoDelLotto([])).toBe('');
+  });
+});
+
+describe('haCongedo — il marcatore durevole', () => {
+  it('vero solo con un congedo_at valorizzato', () => {
+    expect(haCongedo({ congedo_at: '2026-09-21T10:00:00Z' })).toBe(true);
+    expect(haCongedo({ congedo_at: '2026-09-21T10:00:00Z', risposta1: 'x' })).toBe(true);
+  });
+  it('falso su tutto il resto, senza mai lanciare', () => {
+    expect(haCongedo(null)).toBe(false);
+    expect(haCongedo(undefined)).toBe(false);
+    expect(haCongedo({})).toBe(false);
+    expect(haCongedo({ congedo_at: '' })).toBe(false);
+    expect(haCongedo({ congedo_at: 123 })).toBe(false);
+    expect(haCongedo([{ congedo_at: 'x' }])).toBe(false);
+    expect(haCongedo('congedo_at')).toBe(false);
   });
 });

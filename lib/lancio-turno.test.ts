@@ -16,12 +16,16 @@ const WELCOME: Row = { direction: 'out', body: "Ciao Anna, sono l'assistente vir
 const inb = (body: string): Row => ({ direction: 'in', body, template_sid: null });
 const outLibero = (body: string): Row => ({ direction: 'out', body, template_sid: null });
 
-function makeSupabase(ingressoAt: string | null = null) {
+function makeSupabase(ingressoAt: string | null = null, lancioInfo: any = null) {
   const calls = { convUpdates: [] as any[], events: [] as any[], messages: [] as any[] };
   const supabase: any = {
     from(table: string) {
       if (table === 'conversations') {
-        return { update(p: any) { calls.convUpdates.push(p); const c: any = { eq: () => c, then: (r: any) => r({ data: null, error: null }) }; return c; } };
+        return {
+          update(p: any) { calls.convUpdates.push(p); const c: any = { eq: () => c, then: (r: any) => r({ data: null, error: null }) }; return c; },
+          // `marcaCongedo` rilegge `lancio_info` per non buttare le chiavi di B4.
+          select() { const c: any = { eq: () => c, maybeSingle: () => Promise.resolve({ data: { lancio_info: lancioInfo }, error: null }) }; return c; },
+        };
       }
       if (table === 'messages') return { insert(p: any) { calls.messages.push(p); return Promise.resolve({ data: null }); } };
       // event_log: insert per le tracce, select per l'istante di ingresso nel lancio.
@@ -306,5 +310,84 @@ describe('eseguiTurnoLancio — fasi di B4/B5', () => {
     expect(sendFreeText).not.toHaveBeenCalled();
     expect(genera).not.toHaveBeenCalled();
     expect(calls.events.some((e) => e.type === 'lancio_silenzio' && e.payload.motivo === 'fase_non_gestita')).toBe(true);
+  });
+});
+
+describe('eseguiTurnoLancio — si risponde al lotto, non al primo messaggio', () => {
+  /** Quello che il drain passa: il PRIMO inbound rimasto senza risposta. */
+  const inboundDelDrain = (rows: Row[]): string => {
+    let ultimoOut = -1;
+    for (let k = 0; k < rows.length; k++) if (rows[k].direction === 'out') ultimoOut = k;
+    for (let k = ultimoOut + 1; k < rows.length; k++) if (rows[k].direction === 'in') return rows[k].body ?? '';
+    return '';
+  };
+
+  it("uno sticker prima del si non fa piu' un turno muto: il posto si blocca", async () => {
+    // Il drain sceglie il primo inbound senza risposta — qui la foto senza didascalia —
+    // e prima si classificava quello: turno muto, traccia fenice_ai_reply (quindi
+    // niente re-drive) e il "si" del lead non bloccava il posto mai piu'.
+    const rows = [WELCOME, inb(''), inb('si')];
+    const { supabase, calls } = makeSupabase();
+    await eseguiTurnoLancio(supabase, base({ rows, inboundBody: inboundDelDrain(rows) }));
+    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe(TESTO_POSTO_BLOCCATO);
+    expect(calls.convUpdates.some((u) => u.lancio_fase === 'posto_bloccato')).toBe(true);
+  });
+
+  it('un "no grazie" dopo un "ok" arriva al CRM: vale l ultimo, non il primo', async () => {
+    const rows = [WELCOME, inb('ok'), outLibero(TESTO_POSTO_BLOCCATO), inb('ok'), inb('no grazie')];
+    const { supabase, calls } = makeSupabase();
+    const stato = await eseguiTurnoLancio(supabase, base({
+      fase: 'posto_bloccato', rows, inboundBody: inboundDelDrain(rows),
+    }));
+    expect(stato).toBe('closed');
+    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe(TESTO_CONGEDO);
+    expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'DA_SCARTARE', leadWords: 'no grazie' });
+    expect(calls.convUpdates.some((u) => u.lancio_fase === 'chiuso')).toBe(true);
+  });
+
+  it("una domanda dopo un'emoji riceve risposta, e il modello legge tutto il lotto", async () => {
+    genera.mockResolvedValueOnce({ classe: 'domanda', passToHuman: false, visibleReply: 'Alle 21.' });
+    const rows = [WELCOME, inb('👍'), inb('a che ora?')];
+    const { supabase } = makeSupabase();
+    await eseguiTurnoLancio(supabase, base({ rows, inboundBody: inboundDelDrain(rows) }));
+    expect(genera).toHaveBeenCalledTimes(1);
+    expect(genera.mock.calls[0][0]).toEqual([
+      { role: 'assistant', content: WELCOME.body },
+      { role: 'user', content: '👍' },
+      { role: 'user', content: 'a che ora?' },
+    ]);
+    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe('Alle 21.');
+  });
+
+  it('un lotto di soli media resta un silenzio, come prima', async () => {
+    const rows = [WELCOME, inb(''), inb('')];
+    const { supabase, calls } = makeSupabase();
+    await eseguiTurnoLancio(supabase, base({ rows, inboundBody: '' }));
+    expect(genera).not.toHaveBeenCalled();
+    expect(sendFreeText).not.toHaveBeenCalled();
+    expect(calls.events.some((e) => e.type === 'lancio_silenzio' && e.payload.motivo === 'classe_incerta')).toBe(true);
+  });
+});
+
+describe('eseguiTurnoLancio — marcatore del congedo', () => {
+  it('scrive congedo_at in lancio_info tenendo le chiavi gia presenti, anche se il CRM rifiuta', async () => {
+    vi.mocked(sendOutcome).mockResolvedValueOnce({ sent: false, error: 'http_500' });
+    const { supabase, calls } = makeSupabase(null, { risposta1: 'gia scritta da B4' });
+    await eseguiTurnoLancio(supabase, base({ rows: [WELCOME, inb('non mi interessa')], inboundBody: 'non mi interessa' }));
+    const marker = calls.convUpdates.find((u) => u.lancio_info);
+    expect(marker.lancio_info).toMatchObject({ risposta1: 'gia scritta da B4' });
+    expect(typeof marker.lancio_info.congedo_at).toBe('string');
+    // La fase resta 'attesa' (lo scarto va ritentato) ma il marcatore c'e' lo stesso.
+    expect(calls.convUpdates.some((u) => 'lancio_fase' in u)).toBe(false);
+  });
+
+  it('sul ritentativo dello scarto non si riscrive il marcatore (la frase non riparte)', async () => {
+    const { supabase, calls } = makeSupabase();
+    await eseguiTurnoLancio(supabase, base({
+      rows: [WELCOME, inb('non mi interessa'), outLibero(TESTO_CONGEDO), inb('ok va bene')],
+      inboundBody: 'ok va bene',
+    }));
+    expect(sendFreeText).not.toHaveBeenCalled();
+    expect(calls.convUpdates.some((u) => u.lancio_info)).toBe(false);
   });
 });

@@ -179,7 +179,7 @@ export async function POST(req: NextRequest) {
     if (toMatchesFenice) {
       const { data: conv } = await supabase
         .from('conversations')
-        .select('ai_owner, ai_status, ai_paused_at, crm_lead_id, bot_outcome')
+        .select('ai_owner, ai_status, ai_paused_at, crm_lead_id, bot_outcome, lancio_slug, lancio_info')
         .eq('id', conversationId)
         .single();
 
@@ -193,7 +193,14 @@ export async function POST(req: NextRequest) {
         after(segnalaRispostaDopoTerzoNr(supabase, conversationId, conv.crm_lead_id));
       }
 
-      if (conv && shouldReopen({ aiOwner: conv.ai_owner, aiStatus: conv.ai_status, aiPausedAt: conv.ai_paused_at })) {
+      if (conv && shouldReopen({
+        aiOwner: conv.ai_owner,
+        aiStatus: conv.ai_status,
+        aiPausedAt: conv.ai_paused_at,
+        // Chat del lancio gia' congedata: non si riapre (vedi `shouldReopen`).
+        lancioSlug: conv.lancio_slug,
+        lancioInfo: conv.lancio_info,
+      })) {
         await supabase.from('conversations').update({ ai_status: 'active' }).eq('id', conversationId);
         conv.ai_status = 'active';
         // Il lead era già stato restituito al CRM e ha riscritto: da adesso il bot e i

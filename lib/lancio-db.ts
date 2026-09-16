@@ -31,6 +31,48 @@ export async function impostaFaseLancio(
 }
 
 /**
+ * Il marcatore durevole del congedo su `conversations.lancio_info`: si scrive quando la
+ * frase di congedo e' PARTITA, a prescindere da come e' andato l'esito al CRM.
+ *
+ * La cronologia da sola non basta: chi deve sapere che questa persona si e' tirata
+ * indietro — la riapertura del webhook, il blast del link di B4, il follow-up di B5 —
+ * ha davanti una riga `conversations`, non i messaggi, e la fase puo' essere rimasta
+ * 'attesa' perche' il CRM ha rifiutato lo scarto. Il merge tiene le chiavi che B4 ci
+ * scrive (le risposte di riscaldamento), quindi si legge prima di scrivere.
+ *
+ * Non lancia: un lead congedato resta congedato anche se questa riga non si scrive, e
+ * il turno non deve morire qui.
+ */
+export async function marcaCongedo(
+  supabase: Supa,
+  conversationId: number,
+  quandoIso: string = new Date().toISOString(),
+): Promise<void> {
+  const { data } = await supabase
+    .from('conversations')
+    .select('lancio_info')
+    .eq('id', conversationId)
+    .maybeSingle();
+  const attuale = (data as { lancio_info?: Json | null } | null)?.lancio_info;
+  const base =
+    attuale && typeof attuale === 'object' && !Array.isArray(attuale)
+      ? (attuale as Record<string, unknown>)
+      : {};
+  const { error } = await supabase
+    .from('conversations')
+    .update({ lancio_info: { ...base, congedo_at: quandoIso } as Json })
+    .eq('id', conversationId);
+  if (error) {
+    await supabase.from('event_log').insert({
+      type: 'lancio_congedo_non_marcato',
+      payload: { conversationId, errore: error.message } as never,
+      message: `[lancio] conv ${conversationId}: marcatore del congedo NON scritto — ${error.message}`,
+      level: 'warn',
+    });
+  }
+}
+
+/**
  * Quando questa chat e' entrata nel lancio, letto dall'evento `lancio_intake`. E' il
  * taglio della cronologia sulle chat riusate, dove `ai_started_at` resta quello del giro
  * di Mario (scelta dell'intake: la storia non si azzera). Si interroga solo quando il

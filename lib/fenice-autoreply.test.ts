@@ -205,6 +205,22 @@ describe('shouldReopen', () => {
   it('non riapre se aiStatus è null', () => {
     expect(shouldReopen({ aiOwner: 'mario', aiStatus: null })).toBe(false);
   });
+
+  // Il lead del lancio che ha detto "non mi interessa" si e' sentito rispondere "non ti
+  // scrivo piu' per questo evento". Se riscrive, riaprire lo rimetterebbe in mano al bot
+  // subito dopo quella promessa: a questo serve il marcatore durevole in `lancio_info`.
+  it('NON riapre una chat del lancio gia congedata', () => {
+    expect(shouldReopen({
+      aiOwner: 'mario', aiStatus: 'closed',
+      lancioSlug: 'webdev-2026-10', lancioInfo: { congedo_at: '2026-09-21T10:00:00Z' },
+    })).toBe(false);
+  });
+
+  it('una chat del lancio senza congedo si riapre come sempre, e il marcatore da solo non basta', () => {
+    expect(shouldReopen({ aiOwner: 'mario', aiStatus: 'closed', lancioSlug: 'webdev-2026-10', lancioInfo: null })).toBe(true);
+    // Senza `lancio_slug` non e' una chat del lancio: il marcatore non c'entra.
+    expect(shouldReopen({ aiOwner: 'mario', aiStatus: 'closed', lancioInfo: { congedo_at: '2026-09-21T10:00:00Z' } })).toBe(true);
+  });
 });
 
 describe('canSendOutcome', () => {
@@ -1791,5 +1807,56 @@ describe('drainMarioReplies — aggancio del turno lancio', () => {
     await drainMarioReplies(supabase, 44, '+393331234567', () => 0);
     expect(eseguiTurnoLancio).not.toHaveBeenCalled();
     expect(generateMarioReply).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('drainMarioReplies — un claim fallito non e un silenzio', () => {
+  /** Finto minimo: il claim risponde con l'errore dato, tutto il resto raccoglie. */
+  function supabaseClaimKo(error: { message: string; code?: string } | null) {
+    const eventi: any[] = [];
+    const supabase: any = {
+      from(table: string) {
+        if (table === 'conversations') {
+          return {
+            update() {
+              const q: any = {
+                eq: () => q, is: () => q, or: () => q, select: () => q,
+                single: () => Promise.resolve({ data: null, error }),
+              };
+              return q;
+            },
+          };
+        }
+        return { insert: (p: any) => { eventi.push(p); return Promise.resolve({ data: null }); } };
+      },
+    };
+    return { supabase, eventi };
+  }
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.mocked(generateMarioReply).mockReset();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+
+  // Le colonne `lancio_*` sono entrate in questa select: con la migrazione non applicata
+  // il claim torna `data: null` come una conversazione non claimabile, e il bot tacerebbe
+  // per TUTTI senza una riga di log.
+  it('colonna sconosciuta (42703): riga event_log di errore e console.error, senza lanciare', async () => {
+    const spia = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { supabase, eventi } = supabaseClaimKo({
+      message: 'column conversations.lancio_slug does not exist', code: '42703',
+    });
+    await expect(drainMarioReplies(supabase, 77, '+393331234567', () => 0)).resolves.toBeUndefined();
+    const riga = eventi.find((e) => e.type === 'fenice_ai_claim_error');
+    expect(riga).toMatchObject({ level: 'error', payload: { conversationId: 77, code: '42703' } });
+    expect(spia).toHaveBeenCalled();
+    expect(generateMarioReply).not.toHaveBeenCalled();
+  });
+
+  it('PGRST116 (nessuna riga) resta muto: e il caso normale di una conv gia claimata', async () => {
+    const { supabase, eventi } = supabaseClaimKo({ message: 'no rows', code: 'PGRST116' });
+    await drainMarioReplies(supabase, 78, '+393331234567', () => 0);
+    expect(eventi.map((e) => e.type)).not.toContain('fenice_ai_claim_error');
   });
 });

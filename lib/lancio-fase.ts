@@ -127,6 +127,47 @@ export function congedoGiaInviato(rows: RigaLancio[]): boolean {
 }
 
 /**
+ * Il "lotto" di questo turno: TUTTO quello che il lead ha scritto dopo l'ultima bolla
+ * nostra. Il drain passa un inbound solo (il primo rimasto senza risposta) e per un
+ * periodo il turno classificava quello: bastava uno sticker, una foto o un "ok" prima
+ * del messaggio vero perche' tutto il resto finisse nell'ombra — turno muto, con la
+ * traccia `fenice_ai_reply` che impedisce anche il re-drive, e un "toglimi dalla lista"
+ * che non arrivava mai al CRM.
+ */
+export function inboundDelLotto(rows: RigaLancio[]): RigaLancio[] {
+  let ultimoOut = -1;
+  for (let i = 0; i < rows.length; i++) if (rows[i].direction === 'out') ultimoOut = i;
+  return rows.slice(ultimoOut + 1).filter((m) => m.direction === 'in');
+}
+
+/**
+ * Su cosa si classifica il lotto: l'ultimo messaggio del lead che abbia davvero del
+ * testo. E' la sua posizione piu' recente — chi ha scritto "ok" e poi "no grazie" ha
+ * detto no — e quelli prima restano comunque nella storia che legge il modello.
+ * Vuoto = il lead non ha scritto niente di leggibile (solo media): il turno tace.
+ */
+export function ultimoTestoDelLotto(lotto: RigaLancio[]): string {
+  for (let i = lotto.length - 1; i >= 0; i--) {
+    const testo = (lotto[i].body ?? '').trim();
+    if (testo !== '') return testo;
+  }
+  return '';
+}
+
+/**
+ * Il congedo e' uscito su questa chat, letto dal marcatore durevole
+ * `conversations.lancio_info.congedo_at` invece che dalla cronologia. Serve a chi la
+ * cronologia non ce l'ha davanti: la riapertura del webhook (un lead congedato che
+ * riscrive non torna a Mario) e i cron di B4/B5, che devono escludere queste righe dal
+ * blast del link e dal follow-up.
+ */
+export function haCongedo(lancioInfo: unknown): boolean {
+  if (!lancioInfo || typeof lancioInfo !== 'object' || Array.isArray(lancioInfo)) return false;
+  const v = (lancioInfo as Record<string, unknown>).congedo_at;
+  return typeof v === 'string' && v.trim() !== '';
+}
+
+/**
  * Le parole con cui il lead si e' tirato indietro: l'ultimo messaggio suo PRIMA del
  * congedo. Su un esito ritentato sono quelle che devono arrivare al CRM — l'inbound del
  * turno corrente e' arrivato dopo il no e racconterebbe un'altra storia.

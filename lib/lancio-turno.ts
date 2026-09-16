@@ -6,11 +6,12 @@ import { getLancioSettings, type LancioSettings } from './lancio-settings';
 import { generateLancioReply } from './lancio-reply';
 import { classificaLancio, type LancioReplyParsed } from './lancio-classifica';
 import {
-  congedoGiaInviato, contaScambiDomande, decideLancioTurno, faseGestitaB1, MAX_SCAMBI_DOMANDE,
-  paroleDelCongedo, tagliaRigheDalLancio, TESTO_CHIUSURA_DOMANDE, TESTO_CONGEDO, TESTO_PASSAGGIO_UMANO,
+  congedoGiaInviato, contaScambiDomande, decideLancioTurno, faseGestitaB1, inboundDelLotto,
+  MAX_SCAMBI_DOMANDE, paroleDelCongedo, tagliaRigheDalLancio, TESTO_CHIUSURA_DOMANDE, TESTO_CONGEDO,
+  TESTO_PASSAGGIO_UMANO, ultimoTestoDelLotto,
   type ClasseLancio, type LancioAzione, type RigaLancio,
 } from './lancio-fase';
-import { impostaFaseLancio, leggiIngressoLancioAt } from './lancio-db';
+import { impostaFaseLancio, leggiIngressoLancioAt, marcaCongedo } from './lancio-db';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -22,6 +23,9 @@ export type TurnoLancioInput = {
   fase: string | null;
   nome: string | null;
   rows: RigaLancio[];
+  /** L'inbound che il drain ha scelto (il PRIMO rimasto senza risposta). Non e' su
+   *  questo che si classifica — vedi `inboundDelLotto` — ma serve a distinguere il
+   *  silenzio "non ha scritto niente" da quello "ha scritto prima del lancio". */
   inboundBody: string;
   /** Iniettabile nei test: di default il modello col prompt lancio. */
   genera?: typeof generateLancioReply;
@@ -59,14 +63,23 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
   // nessuna riclassificazione — chi ha detto no resta un no anche se poi scrive "ok".
   const daRitentare = faseGestita && congedoGiaInviato(righe);
 
-  // Il drain sceglie l'inbound dalle righe NON tagliate: su una chat riusata puo' essere
-  // un messaggio di prima del lancio, rimasto senza risposta nel giro di Mario. Non e'
-  // la risposta al benvenuto e non va letta come tale — il turno tace e lascia la
-  // traccia, cosi' il re-drive non ci ritorna sopra ogni ora.
-  const inboundFuoriLancio = i.inboundBody.trim() !== ''
-    && !righe.some((m) => m.direction === 'in' && (m.body ?? '').trim() === i.inboundBody.trim());
+  // Si risponde al LOTTO, non al singolo inbound che il drain ha scelto: il drain passa
+  // il primo messaggio rimasto senza risposta, e classificare quello lasciava nel buio
+  // tutti i successivi. Uno sticker seguito da "sì" faceva un turno muto (e la traccia
+  // `fenice_ai_reply` toglieva pure il re-drive: quel sì non bloccava il posto mai
+  // piu'); un "ok" seguito da "toglimi dalla lista" mandava al CRM il primo e buttava
+  // il secondo.
+  const lotto = inboundDelLotto(righe);
+  const testoLead = ultimoTestoDelLotto(lotto);
 
-  let classe: ClasseLancio = classificaLancio(i.inboundBody);
+  // Il drain sceglie l'inbound dalle righe NON tagliate: su una chat riusata puo' essere
+  // un messaggio di prima del lancio, rimasto senza risposta nel giro di Mario. Dentro
+  // il lancio non c'e' nessun messaggio del lead, quindi il lotto e' vuoto: non e' la
+  // risposta al benvenuto e non va letta come tale — il turno tace e lascia la traccia,
+  // cosi' il re-drive non ci ritorna sopra ogni ora.
+  const inboundFuoriLancio = lotto.length === 0 && i.inboundBody.trim() !== '';
+
+  let classe: ClasseLancio = classificaLancio(testoLead);
   let modello: LancioReplyParsed | null = null;
   // Il modello si interpella solo se puo' ancora rispondere: nelle fasi di B4/B5 il
   // turno e' silenzio comunque, dopo il terzo scambio si tace, e su un inbound senza
@@ -75,10 +88,12 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
   // l'attesa uscirebbe su una chat che sta gia' oltre il link.
   const serveModello =
     faseGestita && !daRitentare && !inboundFuoriLancio
-    && i.inboundBody.trim() !== '' && scambi < MAX_SCAMBI_DOMANDE
+    && testoLead !== '' && scambi < MAX_SCAMBI_DOMANDE
     && (classe === 'incerto' || classe === 'domanda');
   if (serveModello) {
     const settings = i.settings ?? (await getLancioSettings(supabase));
+    // Tutta la storia del lancio, lotto compreso: il modello legge anche i messaggi del
+    // lead che vengono prima di quello su cui abbiamo classificato.
     const history: MarioTurn[] = righe.map((m) => ({ role: m.direction === 'in' ? 'user' : 'assistant', content: m.body ?? '' }));
     modello = await genera(history, { fase: i.fase, nome: i.nome, eventoAt: settings.eventoAt });
     if (classe === 'incerto') classe = modello.classe;
@@ -115,14 +130,20 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
       break;
     }
     case 'congedo': {
-      if (!daRitentare) await invia(azione.testo);
+      if (!daRitentare) {
+        await invia(azione.testo);
+        // Il marcatore va scritto qui, sull'invio, non a valle dell'esito: il CRM puo'
+        // rifiutarlo e la fase restare 'attesa', ma il lead si e' gia' tirato indietro
+        // e da questo momento nessuno deve piu' scrivergli per il lancio.
+        await marcaCongedo(supabase, i.conversationId);
+      }
       // La fase diventa terminale SOLO quando il CRM ha preso in carico lo scarto.
       // Prima si chiudeva comunque: se il callback falliva, il lead che aveva appena
       // detto "non mi interessa" tornava a Mario al messaggio dopo e il DA_SCARTARE non
       // veniva piu' ritentato da nessuno.
       // Su un esito ritentato le parole da mandare al CRM sono quelle di allora: quello
       // che il lead ha scritto DOPO il congedo non e' il motivo dello scarto.
-      const parole = daRitentare ? paroleDelCongedo(righe) ?? undefined : i.inboundBody;
+      const parole = daRitentare ? paroleDelCongedo(righe) ?? undefined : testoLead;
       let motivo: string | null = null;
       let accettato = true;
       if (i.crmLeadId) {
@@ -165,7 +186,7 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
     case 'passaggio_umano': {
       await invia((modello?.visibleReply ?? '').trim() || TESTO_PASSAGGIO_UMANO);
       if (i.crmLeadId) {
-        const esito = await sendOutcome(supabase, i.conversationId, { outcome: 'CONTATTO_UMANO', note: i.inboundBody });
+        const esito = await sendOutcome(supabase, i.conversationId, { outcome: 'CONTATTO_UMANO', note: testoLead });
         if (!esito.sent) {
           await evento('contatto_umano_non_segnalato', { error: esito.error ?? null, status: esito.status ?? null },
             `[lancio] conv ${i.conversationId}: passaggio a una persona non segnalato al CRM`, 'warn');
@@ -174,7 +195,7 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
       // Come nel percorso di Mario: se la colonna non c'e' l'errore non si propaga, ma
       // resta scritto che il motivo del passaggio non e' stato registrato.
       const { error: errHandoff } = await supabase.from('conversations')
-        .update({ handed_off_at: new Date().toISOString(), handed_off_reason: i.inboundBody })
+        .update({ handed_off_at: new Date().toISOString(), handed_off_reason: testoLead })
         .eq('id', i.conversationId);
       if (errHandoff) {
         await evento('handed_off_non_registrato', { error: errHandoff.message },

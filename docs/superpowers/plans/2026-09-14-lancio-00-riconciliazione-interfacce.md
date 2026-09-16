@@ -35,6 +35,16 @@ I sei piani sono stati scritti in parallelo da agenti diversi e alcuni nomi dive
 | Test runner | `bunx vitest run <file>`, tutti: `bun run test`; typecheck `bun run typecheck` | `bun test` da solo (runner di Bun, NON Vitest) |
 | Migrazione prima del deploy | DDL via Supabase SQL Editor (Chrome) o Management API (vedi memoria del repo `reference_supabase_ddl_senza_pat`); il push su `origin/main` è il deploy | — |
 
+## Marker congedo (B1, vincolante per B4 e B5)
+
+Quando il bot manda la frase di congedo (il lead ha detto che non gli interessa), B1 scrive `congedo_at` dentro `conversations.lancio_info` (merge: le altre chiavi restano). Il marker si scrive **sull'invio della frase**, non sull'esito al CRM: se il CRM rifiuta il `DA_SCARTARE` la fase resta `attesa`, ma la persona si è già tirata indietro e le abbiamo promesso che non le scriviamo più.
+
+Conseguenze, da rispettare senza eccezioni:
+
+- **B4 (blast del link)** e **B5 (follow-up)** devono ESCLUDERE le righe con `lancio_info->>'congedo_at'` valorizzato, in aggiunta ai filtri che hanno già. PostgREST: `.is('lancio_info->>congedo_at', null)` (o equivalente: `.filter('lancio_info->>congedo_at', 'is', null)`). Senza questo filtro una chat congedata ma con la fase rimasta `attesa` (CRM giù al momento dello scarto) riceverebbe il link del 5 ottobre.
+- **`congedoGiaInviato()`** (`lib/lancio-fase.ts`) può leggere prima il marker (`haCongedo(lancio_info)`, helper puro esportato da `lib/lancio-fase.ts`) e solo dopo la cronologia dei messaggi: il marker è una colonna, la cronologia è una query.
+- La **riapertura** del webhook Twilio (`shouldReopen`) già non riapre una chat con `lancio_slug` valorizzato e `haCongedo(lancio_info)` vero: chi è stato congedato non torna a Mario se riscrive. La restituzione di fine lancio (B5) resta l'unico canale che lo tocca.
+
 ## Ordine di esecuzione
 B1-CRM ∥ B1-bot → B2 (bot prima, poi CRM) → B3 (CRM) ∥ B4 (bot) → B5 (bot e CRM) → B6 prova generale.
 

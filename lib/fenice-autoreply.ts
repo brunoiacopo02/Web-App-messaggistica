@@ -14,7 +14,7 @@ import { stopDalCrmPerLead, vuolePassaggioAUmano } from './stop-crm';
 import { buildScriveDopoLaCallNote } from './bot-outcome-rules';
 import { personaForConversation, PERSONA_NAME, OPENING_ENV_KEYS } from './persona';
 import { confermaVideoVisto } from './video-visto';
-import { lancioInCorso } from './lancio-fase';
+import { haCongedo, lancioInCorso } from './lancio-fase';
 import { eseguiTurnoLancio } from './lancio-turno';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
@@ -62,14 +62,25 @@ export function shouldAutoReply(g: AutoReplyGate): boolean {
  * Falso anche col fermo manuale attivo: riaprire non farebbe rispondere il bot
  * (`shouldAutoReply` ha il suo veto) ma mostrerebbe 'active' su una chat che è in
  * mano a una persona.
+ *
+ * Falso, infine, per una chat del lancio dove il congedo e' gia' uscito
+ * (`lancio_info.congedo_at`, vedi `haCongedo`): quella persona ha detto che non le
+ * interessa e le abbiamo risposto che non le scriviamo piu'. Se riscrive, riaprire la
+ * rimetterebbe in mano al bot — a Mario, per giunta, visto che la fase e' terminale —
+ * proprio dopo una promessa di silenzio. La restituzione di fine lancio (B5) sa gia'
+ * dove trovarla. I chiamanti che non leggono le colonne del lancio non passano questi
+ * campi e si comportano come prima.
  */
 export function shouldReopen(g: {
   aiOwner: string | null;
   aiStatus: string | null;
   aiPausedAt?: string | null;
+  lancioSlug?: string | null;
+  lancioInfo?: unknown;
 }): boolean {
   if (g.aiPausedAt) return false;
   if (g.aiOwner !== 'mario') return false;
+  if (g.lancioSlug && haCongedo(g.lancioInfo)) return false;
   return g.aiStatus === 'closed';
 }
 
@@ -259,7 +270,7 @@ export async function drainMarioReplies(
   // è di un processo morto e si può scavalcare.
   const nowIso = new Date().toISOString();
   const staleCutoff = new Date(Date.now() - LOCK_TTL_MS).toISOString();
-  const { data: claimed } = await supabase
+  const { data: claimed, error: claimErr } = await supabase
     .from('conversations')
     .update({ ai_lock_at: nowIso })
     .eq('id', conversationId)
@@ -268,6 +279,22 @@ export async function drainMarioReplies(
     .or(`ai_lock_at.is.null,ai_lock_at.lt.${staleCutoff}`)
     .select('id, ai_started_at, crm_lead_id, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, bot_scheduled_at, gdo_appuntamento_at, lancio_slug, lancio_fase, leads(first_name)')
     .single();
+  // PGRST116 = nessuna riga: e' il caso NORMALE (conversazione non claimabile, o
+  // lucchetto di un altro drain) e non va segnalato. Qualunque altro errore invece qui
+  // non si vedeva: `data` tornava null e il drain usciva zitto, identico al caso
+  // normale. Con le colonne `lancio_*` entrate in questa select, una migrazione non
+  // applicata (Postgres 42703) farebbe tacere il bot per TUTTI senza una riga di log.
+  // Non si lancia: un drain che non parte e' un messaggio senza risposta, non un 500.
+  if (claimErr && claimErr.code !== 'PGRST116') {
+    console.error(`[fenice] claim fallito su conv ${conversationId}: ${claimErr.message}`);
+    await supabase.from('event_log').insert({
+      type: 'fenice_ai_claim_error',
+      payload: { conversationId, message: claimErr.message, code: claimErr.code ?? null } as never,
+      message: `[fenice] claim del turno fallito su conv ${conversationId}: ${claimErr.message}`,
+      level: 'error',
+    });
+    return;
+  }
   if (!claimed) return;
   const startedAt = (claimed as { ai_started_at: string | null }).ai_started_at;
   const crmLeadId = (claimed as { crm_lead_id: string | null }).crm_lead_id;
