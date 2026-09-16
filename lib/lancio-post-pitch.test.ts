@@ -448,6 +448,18 @@ describe('turnoPostPitch — [LANCIO:SLOTS], [LANCIO:NO], finestra', () => {
     expect(sendFreeText).toHaveBeenCalledTimes(2);
   });
 
+  // Il pulsante premuto alle 20:40 del 5, prima che la live cominci: la chiamata
+  // immediata non c'e' ancora (modo 'giorno', e' la regola di modoPostPitch), ma i giorni
+  // si chiamano come li chiama chi scrive il 5 — il 6 e' domani. Prima la bolla diceva
+  // "oggi pomeriggio" parlando del pomeriggio del giorno dopo.
+  it('alle 20:40 del 5 le ore sono quelle di domani, anche se la chiamata subito non c e', async () => {
+    genera.mockResolvedValueOnce(modello({ lancioTag: { tag: 'SLOTS' } }));
+    const { supabase } = makeSupabase();
+    await turnoPostPitch(supabase, scelta('una call'), ctx(new Date('2026-10-05T20:40:00+02:00')));
+    expect(genera.mock.calls[0][1].modo).toBe('giorno');
+    expect(bolle()[0]).toBe(SLOT_TEXT_NOTTE);
+  });
+
   it('modello vuoto senza tag: silenzio definitivo', async () => {
     genera.mockResolvedValueOnce(modello({ visibleReply: '' }));
     const { supabase, calls } = makeSupabase();

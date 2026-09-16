@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  giorniLancio, modoPostPitch, puoRispondere, validaAtLancio, parseLancioTag, stripLancioTags,
+  giorniLancio, modoPostPitch, modoEtichette, puoRispondere, validaAtLancio, parseLancioTag, stripLancioTags,
   oreProponibili, atIso, etichettaGiorno, testoSlots, bloccoSlotPerPrompt,
   testoConfermaChiamata, testoConfermaPrenotazione, testoOraEsaurita, raccogliRisposte, MARKER_PULSANTE_RE,
 } from './lancio-scelta';
@@ -14,6 +14,20 @@ const MATTINA6 = t('2026-10-06T09:10:00+02:00');
 describe('giorniLancio e modo', () => {
   it('i tre giorni di Roma derivano dall evento', () => {
     expect(giorniLancio(EVENTO)).toEqual({ evento: '2026-10-05', giornoDopo: '2026-10-06', dopodomani: '2026-10-07' });
+  });
+  // Le etichette dei giorni NON seguono la finestra della notte: seguono il giorno di
+  // Roma. Tenerle insieme faceva dire "oggi pomeriggio" alle 20:40 del 5 (parlando del
+  // pomeriggio del 6) e "domani mattina" il 7 (parlando di stamattina).
+  it('etichette: il 5 e notte a qualunque ora, il 6 e giorno, il 7 e dopodomani', () => {
+    expect(modoEtichette(t('2026-10-05T20:40:00+02:00'), EVENTO)).toBe('notte');
+    expect(modoEtichette(t('2026-10-05T23:30:00+02:00'), EVENTO)).toBe('notte');
+    expect(modoEtichette(t('2026-10-06T02:00:00+02:00'), EVENTO)).toBe('giorno');
+    expect(modoEtichette(t('2026-10-06T10:00:00+02:00'), EVENTO)).toBe('giorno');
+    expect(modoEtichette(t('2026-10-07T09:30:00+02:00'), EVENTO)).toBe('dopodomani');
+  });
+  it('alle 02:00 del 6 la chiamata immediata e ancora possibile ma il giorno e gia oggi', () => {
+    expect(modoPostPitch(t('2026-10-06T02:00:00+02:00'), EVENTO)).toBe('notte');
+    expect(modoEtichette(t('2026-10-06T02:00:00+02:00'), EVENTO)).toBe('giorno');
   });
   it('notte dalle 21:00 del 5 alle 02:59 del 6, giorno dopo', () => {
     expect(modoPostPitch(t('2026-10-05T21:00:00+02:00'), EVENTO)).toBe('notte');
@@ -127,6 +141,35 @@ describe('testi', () => {
     expect(s).not.toMatch(/alle 11/);
     expect(s).toContain('oggi pomeriggio dalle 15 alle 20');
     expect(s).toContain('domani mattina');
+  });
+  // Il pulsante premuto alle 20:40 del 5 (il link e' gia' partito, la live non e' ancora
+  // cominciata): il 6 e' domani, non oggi.
+  it('alle 20:40 del 5 il giorno dopo si chiama domani, non oggi', () => {
+    const ora = t('2026-10-05T20:40:00+02:00');
+    const s = testoSlots(oreProponibili(SLOTS, ora, EVENTO), GIORNI, modoEtichette(ora, EVENTO));
+    expect(s).toBe('Per la call ho libero domattina alle 9, alle 11 o alle 14, oppure domani pomeriggio dalle 15 alle 20: che ora preferisci?');
+  });
+  // Alle 02:00 il giorno di Roma e' gia' il 6: le ore della mattina restano prenotabili
+  // (il blocco del prompt le tiene) ma non si propongono da sole, come in tutto il 6.
+  it('alle 02:00 del 6 si dice oggi, non domani', () => {
+    const ora = t('2026-10-06T02:00:00+02:00');
+    const s = testoSlots(oreProponibili(SLOTS, ora, EVENTO), GIORNI, modoEtichette(ora, EVENTO));
+    expect(s).toContain('oggi pomeriggio dalle 15 alle 20');
+    expect(s).not.toContain('domattina');
+    expect(s).toContain('domani mattina dalle 9 alle 14');
+  });
+  // Il 7 il 6 non esiste piu': le sue ore sono tutte passate e non si nomina.
+  it('alle 09:30 del 7 la mattina di oggi e stamattina, e del 6 non si parla', () => {
+    const ora = t('2026-10-07T09:30:00+02:00');
+    const ore = oreProponibili(SLOTS, ora, EVENTO);
+    expect(ore.mattina).toEqual([]);
+    expect(ore.pomeriggio).toEqual([]);
+    const s = testoSlots(ore, GIORNI, modoEtichette(ora, EVENTO));
+    expect(s).toBe('Per la call ho stamattina dalle 11 alle 14: che ora preferisci?');
+    expect(s).not.toMatch(/domani|ieri|non ho piu/);
+    const b = bloccoSlotPerPrompt(ore, GIORNI, modoEtichette(ora, EVENTO));
+    expect(b).toContain('2026-10-07T11:00:00+02:00 → mercoledì 7 ottobre alle 11:00 (stamattina)');
+    expect(b).not.toContain('2026-10-06T');
   });
   it('il blocco per il prompt elenca stringhe ISO da copiare', () => {
     const b = bloccoSlotPerPrompt(oreProponibili(SLOTS, NOTTE, EVENTO), GIORNI, 'notte');

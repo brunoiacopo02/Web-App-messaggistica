@@ -12,11 +12,11 @@ import { haCongedo, paroleDelCongedo, inboundDelLotto, ultimoTestoDelLotto, type
 import { lancioSlots, lancioBook, lancioCallNow, type LancioInfo, type LancioKind } from './lancio-crm';
 import { romeDayKey, romeHour } from './rome-time';
 import {
-  giorniLancio, modoPostPitch, puoRispondere, validaAtLancio, oreProponibili, testoSlots, bloccoSlotPerPrompt,
+  giorniLancio, modoPostPitch, modoEtichette, puoRispondere, validaAtLancio, oreProponibili, testoSlots, bloccoSlotPerPrompt,
   testoConfermaChiamata, testoConfermaPrenotazione, testoOraEsaurita, testoAtNonValido, raccogliRisposte,
   etichettaGiorno,
   TESTO_NESSUN_VENDITORE, TESTO_CHIAMATA_FUORI_ORARIO, TESTO_ERRORE_CRM, TESTO_DOPO_SCELTA, TESTO_CONGEDO_POST_PITCH,
-  type OreProponibili, type GiorniLancio, type ModoPostPitch,
+  type OreProponibili, type GiorniLancio, type ModoEtichette,
 } from './lancio-scelta';
 import {
   congedoLancio, contestoDi, historyDi, eventoAtDa, inviaBollaLancio, eventoLancio, tracciaTurnoLancio,
@@ -78,6 +78,9 @@ export async function turnoPostPitch(
   const eventoAt = eventoAtDa(ctx.settings);
   const giorni = giorniLancio(eventoAt);
   const modo = modoPostPitch(now, eventoAt);
+  // Come si chiamano i giorni adesso: `modo` dice se la chiamata immediata e' ancora
+  // possibile, `etichette` se il 6 e' "domani" o "oggi". Alle 20:40 del 5 sono diversi.
+  const etichette = modoEtichette(now, eventoAt);
 
   // Il congedo è già uscito e la fase non è terminale: il CRM aveva rifiutato lo scarto
   // e questo turno serve solo a ritentarlo. Niente modello, niente seconda bolla, nessuna
@@ -133,9 +136,9 @@ export async function turnoPostPitch(
   };
 
   /** Manda un testo con le ore (scritto dal codice) e segna che le ore sono state mostrate. */
-  const mostraOre = async (componi: (o: OreProponibili, g: GiorniLancio, m: ModoPostPitch) => string = testoSlots): Promise<'active'> => {
+  const mostraOre = async (componi: (o: OreProponibili, g: GiorniLancio, m: ModoEtichette) => string = testoSlots): Promise<'active'> => {
     const o = await leggiOre();
-    await inviaBollaLancio(supabase, c, componi(o, giorni, modo));
+    await inviaBollaLancio(supabase, c, componi(o, giorni, etichette));
     await salvaInfo({ ...info, slotsMostratiAt: now.toISOString() });
     if (o.mattina.length === 0 && o.pomeriggio.length === 0 && o.dopodomani.length === 0) {
       // Nessuna ora proposta: `lancio_slots_mostrati` direbbe il falso, e chi conta le
@@ -146,7 +149,7 @@ export async function turnoPostPitch(
       const nota = await sendCrmNota(supabase, c.conversationId, NOTA_SENZA_ORE);
       await eventoLancio(supabase, c, 'lancio_slots_vuoti', { notaInviata: nota.sent, errore: nota.error ?? null }, `[lancio] conv ${c.conversationId}: nessuna ora libera nei due giorni, nota al CRM`, 'warn');
     } else {
-      await eventoLancio(supabase, c, 'lancio_slots_mostrati', { mattina: o.mattina, pomeriggio: o.pomeriggio, dopodomani: o.dopodomani, modo }, `[lancio] conv ${c.conversationId}: ore proposte`);
+      await eventoLancio(supabase, c, 'lancio_slots_mostrati', { mattina: o.mattina, pomeriggio: o.pomeriggio, dopodomani: o.dopodomani, modo, etichette }, `[lancio] conv ${c.conversationId}: ore proposte`);
     }
     await tracciaTurnoLancio(supabase, c, 'slots');
     return 'active';
@@ -204,7 +207,7 @@ export async function turnoPostPitch(
     return sceltaFatta('gia_prenotato', { at: esito.appointmentAt, kind: esito.kind, tag });
   };
 
-  const bloccoSlot = faseScelta ? bloccoSlotPerPrompt(await leggiOre(), giorni, modo) : null;
+  const bloccoSlot = faseScelta ? bloccoSlotPerPrompt(await leggiOre(), giorni, etichette) : null;
   const r = await genera(historyDi(i.rows), {
     fase: 'post_pitch', nome: i.nome, eventoAt: ctx.settings.eventoAt, now,
     modo, risposteRaccolte: info.risposte.length, bloccoSlot,

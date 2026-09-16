@@ -10,6 +10,14 @@ import { romeDayKey, romeHour, romeMinute, romeOffset } from './rome-time';
 
 export type GiorniLancio = { evento: string; giornoDopo: string; dopodomani: string };
 export type ModoPostPitch = 'notte' | 'giorno';
+/**
+ * Come si chiamano i giorni ADESSO. Non è `modoPostPitch`: quello dice se la chiamata
+ * immediata è ancora possibile (la notte del webinar), questo dice soltanto se il 6 è
+ * "domani" o "oggi" e se il 7 è "dopodomani" o "oggi". Tenerli insieme faceva dire
+ * "oggi pomeriggio" alle 20:40 del 5 (il pomeriggio del 6) e "domani mattina" il 7
+ * (la mattina del 7, cioè stamattina).
+ */
+export type ModoEtichette = 'notte' | 'giorno' | 'dopodomani';
 export type MotivoAtNonValido = 'formato' | 'giorno_non_ammesso' | 'ora_non_tonda' | 'fuori_fascia' | 'troppo_vicino';
 export type ValidazioneAt =
   | { ok: true; kind: LancioKind; date: string; hour: number }
@@ -57,6 +65,20 @@ export function modoPostPitch(now: Date, eventoAt: Date): ModoPostPitch {
   const { giornoDopo } = giorniLancio(eventoAt);
   const ms = now.getTime();
   return ms >= eventoAt.getTime() && ms < istante(giornoDopo, FINE_NOTTE_HHMM) ? 'notte' : 'giorno';
+}
+
+/**
+ * Le etichette dei giorni si derivano dal GIORNO di Roma in cui siamo, non dalla finestra
+ * della notte: il 5 (a qualunque ora, anche prima delle 21) il 6 è "domani"; il 6 è
+ * "oggi"; il 7 le uniche ore rimaste sono quelle del 7, ed è "stamattina".
+ * Dopo il 7 non ci sono più ore prenotabili e le etichette non compaiono in nessun testo.
+ */
+export function modoEtichette(now: Date, eventoAt: Date): ModoEtichette {
+  const { giornoDopo } = giorniLancio(eventoAt);
+  const oggi = romeDayKey(now);
+  if (oggi === giornoDopo) return 'giorno';
+  // Chiavi 'YYYY-MM-DD': l'ordine alfabetico è l'ordine cronologico.
+  return oggi > giornoDopo ? 'dopodomani' : 'notte';
 }
 
 const minutiDelGiorno = (d: Date) => romeHour(d) * 60 + romeMinute(d);
@@ -150,18 +172,28 @@ const elencoOre = (ore: number[]) =>
   ore.length === 1 ? `alle ${ore[0]}` : `${ore.slice(0, -1).map((h) => `alle ${h}`).join(', ')} o alle ${ore[ore.length - 1]}`;
 const fasciaOre = (ore: number[]) => (ore.length === 1 ? `alle ${ore[0]}` : `dalle ${ore[0]}` + ` alle ${ore[ore.length - 1]}`);
 
-/** Come chiamare i due giorni a seconda di quando siamo: di notte "domani", di giorno "oggi". */
-function nomiGiorni(g: GiorniLancio, modo: ModoPostPitch) {
+/**
+ * Come chiamare i due giorni a seconda del giorno in cui siamo: il giorno dell'evento il
+ * 6 è "domani", il 6 è "oggi", il 7 il 7 è "stamattina" (e del 6 non resta niente da
+ * nominare: le sue ore sono tutte passate).
+ */
+function nomiGiorni(g: GiorniLancio, modo: ModoEtichette) {
+  if (modo === 'dopodomani') {
+    return { mattinaDopo: 'stamattina', pomDopo: 'oggi pomeriggio', giornoDopo: 'oggi', dopodomani: 'oggi', dopodomaniMattina: 'stamattina' };
+  }
   return modo === 'notte'
-    ? { mattinaDopo: 'domattina', pomDopo: 'domani pomeriggio', giornoDopo: 'domani', dopodomani: etichettaGiorno(g.dopodomani), dopodomaniMattina: `${etichettaGiorno(g.dopodomani)} dalle 9 alle 14` }
-    : { mattinaDopo: 'stamattina', pomDopo: 'oggi pomeriggio', giornoDopo: 'oggi', dopodomani: 'domani', dopodomaniMattina: 'domani mattina dalle 9 alle 14' };
+    ? { mattinaDopo: 'domattina', pomDopo: 'domani pomeriggio', giornoDopo: 'domani', dopodomani: etichettaGiorno(g.dopodomani), dopodomaniMattina: etichettaGiorno(g.dopodomani) }
+    : { mattinaDopo: 'stamattina', pomDopo: 'oggi pomeriggio', giornoDopo: 'oggi', dopodomani: 'domani', dopodomaniMattina: 'domani mattina' };
 }
 
 /** Il messaggio con le ore, scritto dal codice. Di giorno la mattina del 6 non si nomina. */
-export function testoSlots(ore: OreProponibili, giorni: GiorniLancio, modo: ModoPostPitch): string {
+export function testoSlots(ore: OreProponibili, giorni: GiorniLancio, modo: ModoEtichette): string {
   const n = nomiGiorni(giorni, modo);
   const mattina = modo === 'notte' ? ore.mattina : [];
-  const ddTesto = ore.dopodomani.length > 0 ? n.dopodomaniMattina : null;
+  // La fascia del giorno dopodomani si scrive dalle ore che restano davvero: il 7 alle
+  // 09:30 le 9 e le 10 sono già passate, e "dalle 9 alle 14" sarebbe un'ora promessa e
+  // poi rifiutata dalla regola dell'anticipo.
+  const ddTesto = ore.dopodomani.length > 0 ? `${n.dopodomaniMattina} ${fasciaOre(ore.dopodomani)}` : null;
   if (mattina.length > 0 && ore.pomeriggio.length > 0) {
     return `Per la call ho libero ${n.mattinaDopo} ${elencoOre(mattina)}, oppure ${n.pomDopo} ${fasciaOre(ore.pomeriggio)}: che ora preferisci?`;
   }
@@ -170,17 +202,26 @@ export function testoSlots(ore: OreProponibili, giorni: GiorniLancio, modo: Modo
     const coda = ddTesto ? ` Se puoi solo la mattina, ho ${ddTesto}.` : '';
     return `${testa}Per la call ho ${n.pomDopo} ${fasciaOre(ore.pomeriggio)}: che ora preferisci?${coda}`;
   }
-  if (ddTesto) return `Per ${n.giornoDopo} non ho più ore libere. Ho ${ddTesto}: che ora preferisci?`;
+  // Il 7 il giorno "senza più ore libere" sarebbe ieri: non si nomina, si propongono e
+  // basta le ore che restano.
+  if (ddTesto) {
+    return modo === 'dopodomani'
+      ? `Per la call ho ${ddTesto}: che ora preferisci?`
+      : `Per ${n.giornoDopo} non ho più ore libere. Ho ${ddTesto}: che ora preferisci?`;
+  }
   return 'Per questi due giorni non ho più ore libere: ti fa richiamare un nostro consulente, lascio nota.';
 }
 
 /** Il blocco per il system prompt: le sole stringhe che il modello può mettere nel tag. */
-export function bloccoSlotPerPrompt(ore: OreProponibili, giorni: GiorniLancio, modo: ModoPostPitch): string {
+export function bloccoSlotPerPrompt(ore: OreProponibili, giorni: GiorniLancio, modo: ModoEtichette): string {
   const riga = (date: string, h: number, nota: string) => `- ${atIso(date, h)} → ${etichettaGiorno(date)} alle ${h}:00 (${nota})`;
+  const notaDopodomani = modo === 'notte'
+    ? 'dopodomani mattina, solo se il lead può solo la mattina o lo chiede'
+    : modo === 'giorno' ? 'domani mattina' : 'stamattina';
   const righe = [
     ...ore.mattina.map((h) => riga(giorni.giornoDopo, h, modo === 'notte' ? 'domattina' : 'stamattina, SOLO se la chiede il lead: non proporla tu')),
     ...ore.pomeriggio.map((h) => riga(giorni.giornoDopo, h, modo === 'notte' ? 'domani pomeriggio' : 'oggi pomeriggio')),
-    ...ore.dopodomani.map((h) => riga(giorni.dopodomani, h, modo === 'notte' ? 'dopodomani mattina, solo se il lead può solo la mattina o lo chiede' : 'domani mattina')),
+    ...ore.dopodomani.map((h) => riga(giorni.dopodomani, h, notaDopodomani)),
   ];
   return [
     'ORE PRENOTABILI (nel tag [LANCIO:PRENOTA|...] copia ESATTAMENTE una di queste stringhe ISO, nessun altro giorno o ora esiste):',
@@ -203,11 +244,11 @@ export function testoConfermaPrenotazione(kind: LancioKind, at: string, nomeVend
   return `Perfetto, ci sentiamo ${oraLeggibile(at)}: ${chi}. Tieni il telefono a portata di mano.`;
 }
 
-export function testoOraEsaurita(hour: number, ore: OreProponibili, giorni: GiorniLancio, modo: ModoPostPitch): string {
+export function testoOraEsaurita(hour: number, ore: OreProponibili, giorni: GiorniLancio, modo: ModoEtichette): string {
   return `Le ${hour} si sono appena riempite. ${testoSlots(ore, giorni, modo)}`;
 }
 
-export function testoAtNonValido(ore: OreProponibili, giorni: GiorniLancio, modo: ModoPostPitch): string {
+export function testoAtNonValido(ore: OreProponibili, giorni: GiorniLancio, modo: ModoEtichette): string {
   return `Quell'ora non riesco a fissarla. ${testoSlots(ore, giorni, modo)}`;
 }
 
