@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   giorniLancio, modoPostPitch, modoEtichette, puoRispondere, validaAtLancio, parseLancioTag, stripLancioTags,
   oreProponibili, atIso, etichettaGiorno, testoSlots, bloccoSlotPerPrompt,
-  testoConfermaChiamata, testoConfermaPrenotazione, testoOraEsaurita, raccogliRisposte, MARKER_PULSANTE_RE,
+  testoConfermaChiamata, testoConfermaPrenotazione, testoOraEsaurita, raccogliRisposte,
 } from './lancio-scelta';
+import * as scelta from './lancio-scelta';
+import { MARKER_PULSANTE_WEBINAR } from './primo-messaggio';
 import type { LancioSlots } from './lancio-crm';
 
 const EVENTO = new Date('2026-10-05T21:00:00+02:00');
@@ -219,9 +221,19 @@ describe('raccogliRisposte', () => {
     const due = raccogliRisposte(uno, ['a', 'b', 'c', 'd', 'e', lunga, '  ']);
     expect(due.risposte).toHaveLength(6);
     expect(due.risposte[5]).toHaveLength(300);
-    expect(MARKER_PULSANTE_RE.test('ho seguito la LIVE web developer AI')).toBe(true);
+    expect(MARKER_PULSANTE_WEBINAR.test('ho seguito la LIVE web developer AI')).toBe(true);
   });
   it('conserva slotsMostratiAt', () => {
     expect(raccogliRisposte({ risposte: [], slotsMostratiAt: 'x' }, ['ciao']).slotsMostratiAt).toBe('x');
+  });
+});
+
+describe('il marker del pulsante vive solo in primo-messaggio (ruling C5)', () => {
+  it('lancio-scelta non esporta piu una copia della regex', () => {
+    expect('MARKER_PULSANTE_RE' in scelta).toBe(false);
+  });
+  it('raccogliRisposte scarta il testo del pulsante anche con altre maiuscole o senza emoji', () => {
+    const info = raccogliRisposte(null, ['Ho seguito la LIVE Web Developer AI e voglio saperne di più', 'faccio il barista']);
+    expect(info.risposte).toEqual(['faccio il barista']);
   });
 });
