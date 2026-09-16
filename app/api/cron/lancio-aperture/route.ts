@@ -16,6 +16,7 @@ import { inOpeningWindow } from '@/lib/sequence';
 import { lancioBenvenutoText } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
 import { templateName } from '@/lib/name';
+import { eRifiutoDiPolicy } from '@/lib/lancio-blast-motore';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -50,18 +51,6 @@ function authorized(req: NextRequest): boolean {
   if (req.headers.get('authorization') === `Bearer ${secret}`) return true;
   if (req.nextUrl.searchParams.get('secret') === secret) return true;
   return false;
-}
-
-/**
- * Il presidio categoria (`UTILITY_ONLY`) ha detto no: nessuna chiamata a Twilio e'
- * partita. Vale identico per ogni conversazione, quindi il run si ferma qui invece di
- * sbatterci contro mille volte — e nessuna riga `messages` racconta un invio che non
- * c'e' stato.
- */
-function eRifiutoDiPolicy(e: { message?: string; code?: number }): boolean {
-  if (typeof e?.code === 'number') return false;
-  const m = e?.message ?? '';
-  return m.includes('bloccato: categoria') || m.includes('non verificabile');
 }
 
 type Conv = {
