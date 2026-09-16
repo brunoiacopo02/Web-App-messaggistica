@@ -8,6 +8,8 @@ import type { GdoVariant, LancioIntake } from './bot-contract';
 import { gdoAgendaText, videoLinkForVariant } from './gdo-agenda';
 import { getLancioSettings } from './lancio-settings';
 import { lancioBenvenutoText } from './lancio-fase';
+import { leggiTettoOrario, sottoTettoOrario } from './lancio-tetto';
+import { contaBenvenutiUltimaOra } from './lancio-db';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -289,7 +291,8 @@ export async function enrollGdoLeadAsPostino(
  * - la guardia anti-doppione viene PRIMA della finestra: una chat gia' viva non riceve
  *   un secondo benvenuto nemmeno differito, ma entra comunque nel flusso lancio
  *   (`lancio_*` valorizzati) e la cronologia non si azzera;
- * - fuori dalla fascia 07-23, o con `lancio_attivo` spento, il lead e' preso in carico
+ * - fuori dalla fascia 07-23, con `lancio_attivo` spento, o oltre il tetto orario dei
+ *   benvenuti (`LANCIO_WELCOME_MAX_PER_HOUR`, spec §11.3), il lead e' preso in carico
  *   senza outbound: lo riprende il cron `lancio-aperture`, NON `sequence-touches`.
  *   Le esclusioni ci sono (Task 10): queste chat sono fuori dai cron di Mario
  *   — sequenza, nudge, promemoria, solleciti — finche' la fase non e' terminale,
@@ -359,10 +362,31 @@ async function enrollLancio(
   };
 
   const settings = await getLancioSettings(supabase);
-  const differita = !settings.attivo ? 'lancio_spento' : !inOpeningWindow(Date.now()) ? 'fuori_fascia' : null;
+  let differita: 'lancio_spento' | 'fuori_fascia' | 'tetto_orario' | null = !settings.attivo
+    ? 'lancio_spento'
+    : !inOpeningWindow(Date.now())
+      ? 'fuori_fascia'
+      : null;
+
+  // Tetto orario (spec §11.3): il benvenuto parte in tempo reale, quindi una campagna
+  // che spinge forte per un'ora rifarebbe il picco del 15/09 — 7.882 intake in un
+  // giorno e il numero uscito a qualita' LOW. Oltre il tetto NON si manda: il lead resta
+  // preso in carico e il benvenuto lo fa partire il cron `lancio-aperture`, che rispetta
+  // lo stesso tetto e spalma la coda. Il conteggio si fa solo se si sarebbe mandato
+  // davvero: col lancio spento o di notte sarebbe una query per niente.
+  const cap = leggiTettoOrario(process.env.LANCIO_WELCOME_MAX_PER_HOUR);
+  let inviatiUltimaOra: number | null = null;
+  if (!differita) {
+    inviatiUltimaOra = await contaBenvenutiUltimaOra(supabase, templateSid);
+    if (!sottoTettoOrario({ inviatiUltimaOra, cap })) differita = 'tetto_orario';
+  }
+
   if (differita) {
     await supabase.from('conversations').update(convUpdate).eq('id', conversationId);
-    await evento({ differita }, `[lancio] lead ${args.crmLeadId ?? args.phone} preso in carico, benvenuto differito (${differita})`);
+    await evento(
+      differita === 'tetto_orario' ? { differita, inviatiUltimaOra, cap } : { differita },
+      `[lancio] lead ${args.crmLeadId ?? args.phone} preso in carico, benvenuto differito (${differita})`,
+    );
     return { ok: true, conversationId, deferred: true };
   }
 

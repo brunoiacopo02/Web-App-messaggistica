@@ -15,9 +15,10 @@ import { getLancioSettings } from './lancio-settings';
 import { lancioBenvenutoText } from './lancio-fase';
 import { openingBody } from './persona';
 
-/** Fake del client Supabase: traccia update su conversations ed insert su event_log. */
-function makeSupabase() {
-  const calls = { updates: [] as any[], events: [] as any[] };
+/** Fake del client Supabase: traccia update su conversations ed insert su event_log.
+ *  `benvenutiUltimaOra` è il numero che il tetto orario del lancio legge da `messages`. */
+function makeSupabase(benvenutiUltimaOra = 0) {
+  const calls = { updates: [] as any[], events: [] as any[], conteggi: 0 };
   const supabase: any = {
     from(table: string) {
       if (table === 'conversations') {
@@ -33,8 +34,21 @@ function makeSupabase() {
         };
       }
       if (table === 'messages') {
+        // Due letture diverse sulla stessa tabella: la guardia anti-doppione (righe di
+        // questa chat) e il conteggio del tetto orario (`head: true`, nessuna riga, un
+        // numero su tutte le conversazioni).
         const chain: any = { eq: () => chain, gte: () => chain, limit: async () => ({ data: [] }) };
-        return { select: () => chain };
+        return {
+          select: (_colonne: string, opzioni?: { head?: boolean }) => {
+            if (!opzioni?.head) return chain;
+            calls.conteggi++;
+            const conteggio: any = {
+              eq: () => conteggio, gte: () => conteggio, not: () => conteggio,
+              then: (r: any) => r({ count: benvenutiUltimaOra, error: null }),
+            };
+            return conteggio;
+          },
+        };
       }
       return { insert(payload: any) { calls.events.push(payload); return Promise.resolve({}); } };
     },
@@ -433,7 +447,7 @@ describe('enrollGdoLeadAsPostino — arruolamento in modalità postino', () => {
  * Fake Supabase che sa anche leggere: serve alla guardia anti-doppione, che prima di
  * inviare guarda il crm_lead_id della conv e se un outbound è già partito di recente.
  */
-function makeSupabaseLeggibile(opts: { crmLeadId?: string | null; outboundRecenti?: number; lastInboundAt?: string | null }) {
+function makeSupabaseLeggibile(opts: { crmLeadId?: string | null; outboundRecenti?: number; lastInboundAt?: string | null; benvenutiUltimaOra?: number }) {
   const calls = { updates: [] as any[], events: [] as any[] };
   const supabase: any = {
     from(table: string) {
@@ -452,7 +466,11 @@ function makeSupabaseLeggibile(opts: { crmLeadId?: string | null; outboundRecent
       if (table === 'messages') {
         const rows = Array.from({ length: opts.outboundRecenti ?? 0 }, (_, i) => ({ id: i }));
         const chain: any = { eq: () => chain, gte: () => chain, limit: async () => ({ data: rows }) };
-        return { select: () => chain };
+        const conteggio: any = {
+          eq: () => conteggio, gte: () => conteggio, not: () => conteggio,
+          then: (r: any) => r({ count: opts.benvenutiUltimaOra ?? 0, error: null }),
+        };
+        return { select: (_c: string, opzioni?: { head?: boolean }) => (opzioni?.head ? conteggio : chain) };
       }
       return { insert(payload: any) { calls.events.push(payload); return Promise.resolve({}); } };
     },
@@ -642,6 +660,71 @@ describe('enrollLeadIntoMario — ramo lancio (B1)', () => {
     expect(res.ok).toBe(false);
     expect(calls.events.some((e) => e.type === 'send_error' && e.level === 'error')).toBe(true);
     expect(calls.events.find((e) => e.type === 'lancio_intake').payload.ok).toBe(false);
+  });
+
+  // Spec §11.3. Il 15/09 il numero ha incassato 7.882 intake in un giorno ed è uscito a
+  // qualità LOW: il benvenuto realtime, senza tetto, rifarebbe lo stesso picco.
+  describe('tetto orario dei benvenuti (LANCIO_WELCOME_MAX_PER_HOUR)', () => {
+    it('sotto il tetto il benvenuto parte come sempre', async () => {
+      vi.stubEnv('LANCIO_WELCOME_MAX_PER_HOUR', '200');
+      const { supabase, calls } = makeSupabase(199);
+      const res = await enrollLeadIntoMario(supabase, ARGS);
+      expect(res).toMatchObject({ ok: true, sid: 'SM_TEST' });
+      expect(res.deferred ?? false).toBe(false);
+      expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+      expect(calls.conteggi).toBe(1); // una sola query di conteggio per intake
+    });
+
+    it('al tetto NON manda: presa in carico, differita tetto_orario, nessun timbro', async () => {
+      vi.stubEnv('LANCIO_WELCOME_MAX_PER_HOUR', '200');
+      const { supabase, calls } = makeSupabase(200);
+      const res = await enrollLeadIntoMario(supabase, ARGS);
+
+      expect(res).toMatchObject({ ok: true, conversationId: 42, deferred: true });
+      expect(sendTemplateAndLog).not.toHaveBeenCalled();
+      // Stessi campi del caso `lancio_attivo=0`: il lead entra nel flusso lancio e il
+      // cron `lancio-aperture` lo trova come candidato.
+      expect(calls.updates).toHaveLength(1);
+      expect(calls.updates[0]).toMatchObject({
+        ai_owner: 'mario', ai_status: 'active', crm_lead_id: 'crm-L1',
+        lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa', lancio_ingresso: 'lista',
+      });
+      expect(calls.updates[0].lancio_benvenuto_at).toBeUndefined();
+      const evt = calls.events.find((e) => e.type === 'lancio_intake');
+      expect(evt.payload).toMatchObject({ differita: 'tetto_orario', inviatiUltimaOra: 200, cap: 200 });
+      expect(calls.events.some((e) => e.type === 'send_error')).toBe(false);
+    });
+
+    it('env spazzatura → tetto di default 200: a 199 parte, a 200 si differisce', async () => {
+      vi.stubEnv('LANCIO_WELCOME_MAX_PER_HOUR', 'duecento');
+      const sotto = makeSupabase(199);
+      await enrollLeadIntoMario(sotto.supabase, ARGS);
+      expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+
+      const sopra = makeSupabase(200);
+      const res = await enrollLeadIntoMario(sopra.supabase, ARGS);
+      expect(res.deferred).toBe(true);
+      expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+      expect(sopra.calls.events.find((e) => e.type === 'lancio_intake').payload)
+        .toMatchObject({ differita: 'tetto_orario', cap: 200 });
+    });
+
+    it('col lancio spento il tetto non si conta nemmeno: quella query non serve', async () => {
+      vi.mocked(getLancioSettings).mockResolvedValueOnce({ attivo: false } as never);
+      const { supabase, calls } = makeSupabase(500);
+      const res = await enrollLeadIntoMario(supabase, ARGS);
+      expect(res.deferred).toBe(true);
+      expect(calls.conteggi).toBe(0);
+      expect(calls.events.find((e) => e.type === 'lancio_intake').payload.differita).toBe('lancio_spento');
+    });
+
+    it('il tetto non tocca le aperture di Mario: quelle non passano da qui', async () => {
+      vi.stubEnv('LANCIO_WELCOME_MAX_PER_HOUR', '1');
+      const { supabase, calls } = makeSupabase(999);
+      await enrollLeadIntoMario(supabase, { phone: '+393331234567', firstName: 'Anna', crmFunnel: 'CORSO 10 ORE' });
+      expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+      expect(calls.conteggi).toBe(0);
+    });
   });
 
   it('senza campo lancio il flusso di sempre non cambia (nessuna lettura delle impostazioni)', async () => {

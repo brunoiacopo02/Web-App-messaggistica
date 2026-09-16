@@ -29,6 +29,17 @@ Se il template è categoria `MARKETING` (non `UTILITY`), il SID va aggiunto
 anche a `UTILITY_ONLY_ALLOW` (lista separata da virgole: valore esistente +
 `,HX...`).
 
+`LANCIO_WELCOME_MAX_PER_HOUR` (opzionale, default **200**) e' il tetto orario dei
+benvenuti del lancio, spec §11.3: contati sui 60 minuti scorrevoli, intake in tempo
+reale e cron `lancio-aperture` insieme, perche' il numero WhatsApp e' uno solo. Oltre il
+tetto il benvenuto NON parte e il lead resta preso in carico (`lancio_fase='attesa'`,
+nessun `lancio_benvenuto_at`): lo manda il cron ai run successivi. Serve a non rifare il
+picco del 15/09 (7.882 intake in un giorno, numero a qualita' LOW). Per alzarlo o
+abbassarlo senza toccare il codice:
+`npx vercel env add LANCIO_WELCOME_MAX_PER_HOUR production`. Da vedere in `event_log`:
+`lancio_intake` con `payload.differita='tetto_orario'` (intake) e `lancio_aperture_run`
+con `fermo='tetto_orario'` (cron).
+
 `LANCIO_ZOOM_TEMPLATE_SID` e `LANCIO_FOLLOWUP_TEMPLATE_SID` non sono ancora
 usati da nessun codice in questo blocco (arrivano con B4/B5): tenerli
 valorizzati in `.env.example`/Vercel non è bloccante per B1, ma è comodo

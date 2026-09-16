@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // simulato, il test lo vedrebbe funzionare anche se il route non lo usasse.
 
 type Filtro = [string, unknown];
-type Chiamata = { table: string; op: 'select' | 'insert' | 'update'; arg: unknown; filtri: Filtro[] };
+type Chiamata = { table: string; op: 'select' | 'insert' | 'update'; arg: unknown; filtri: Filtro[]; opzioni?: { head?: boolean } };
 const chiamate: Chiamata[] = [];
 
 type ConvFinta = {
@@ -44,11 +44,13 @@ const stato = {
   messagesInsertKo: false,
   /** La select dei candidati fallisce (migrazione non applicata). */
   convSelectError: null as { message: string; code?: string } | null,
+  /** Benvenuti gia' partiti nell'ultima ora: il numeratore del tetto orario. */
+  benvenutiUltimaOra: 0,
 };
 
 const valore = (rec: Chiamata, colonna: string) => rec.filtri.find(([c]) => c === colonna)?.[1];
 
-function esegui(rec: Chiamata): { data: unknown; error: unknown } {
+function esegui(rec: Chiamata): { data: unknown; error: unknown; count?: number } {
   if (rec.table === 'conversations' && rec.op === 'update') {
     const campi = rec.arg as Record<string, unknown>;
     const id = Number(valore(rec, 'id'));
@@ -81,6 +83,8 @@ function esegui(rec: Chiamata): { data: unknown; error: unknown } {
     return { data: liberi.slice(pagina[0], pagina[1] + 1), error: null };
   }
   if (rec.table === 'messages') {
+    // `head: true` = la query di conteggio del tetto orario: nessuna riga, un numero.
+    if (rec.opzioni?.head) return { data: null, error: null, count: stato.benvenutiUltimaOra };
     const ids = (valore(rec, '__in') as number[] | undefined) ?? [];
     const righe = ids.flatMap((id) =>
       (stato.outbound.get(id) ?? []).map((r) => ({ ...r, conversation_id: id })),
@@ -90,8 +94,8 @@ function esegui(rec: Chiamata): { data: unknown; error: unknown } {
   return { data: [], error: null };
 }
 
-function query(table: string, op: Chiamata['op'], arg: unknown) {
-  const rec: Chiamata = { table, op, arg, filtri: [] };
+function query(table: string, op: Chiamata['op'], arg: unknown, opzioni?: { head?: boolean }) {
+  const rec: Chiamata = { table, op, arg, filtri: [], opzioni };
   chiamate.push(rec);
   const q: Record<string, unknown> = {};
   for (const m of ['is', 'or', 'gte', 'lte', 'not', 'order', 'limit', 'single', 'maybeSingle', 'select']) {
@@ -108,7 +112,7 @@ function query(table: string, op: Chiamata['op'], arg: unknown) {
 vi.mock('@/lib/supabase/admin', () => ({
   getSupabaseAdmin: () => ({
     from: (table: string) => ({
-      select: (s: string) => query(table, 'select', s),
+      select: (s: string, opzioni?: { head?: boolean }) => query(table, 'select', s, opzioni),
       insert: (r: unknown) => query(table, 'insert', r),
       update: (r: unknown) => query(table, 'update', r),
     }),
@@ -179,6 +183,7 @@ beforeEach(() => {
   stato.timbri = new Map();
   stato.messagesInsertKo = false;
   stato.convSelectError = null;
+  stato.benvenutiUltimaOra = 0;
   sendTemplate.mockReset();
   sendTemplate.mockResolvedValue({ sid: 'SMtest', status: 'queued' });
   assertTemplateSendable.mockReset();
@@ -187,6 +192,7 @@ beforeEach(() => {
   process.env.LANCIO_WELCOME_TEMPLATE_SID = WELCOME;
   process.env.TWILIO_WHATSAPP_NUMBER_FENICE = 'whatsapp:+390000000';
   delete process.env.LANCIO_APERTURE_MAX_PER_RUN;
+  delete process.env.LANCIO_WELCOME_MAX_PER_HOUR;
 });
 
 afterEach(() => {
@@ -264,6 +270,46 @@ describe('GET /api/cron/lancio-aperture', () => {
     const body = await (await richiesta()).json();
     expect(sendTemplate).toHaveBeenCalledTimes(2);
     expect(body.inviati).toBe(2);
+  });
+
+  // Spec §11.3: il tetto è dello stesso numero WhatsApp, quindi questo cron non può
+  // essere la scorciatoia per rifare il picco che il tetto dell'intake ha appena evitato.
+  it('tetto orario già raggiunto: run fermo prima ancora di leggere i candidati', async () => {
+    process.env.LANCIO_WELCOME_MAX_PER_HOUR = '200';
+    stato.benvenutiUltimaOra = 200;
+    stato.convs = [conv(1), conv(2)];
+    const body = await (await richiesta()).json();
+
+    expect(sendTemplate).not.toHaveBeenCalled();
+    expect(selectSu('conversations')).toHaveLength(0);
+    expect(eventoRun()).toMatchObject({
+      type: 'lancio_aperture_run',
+      level: 'warn',
+      payload: { fermo: 'tetto_orario', inviatiUltimaOra: 200, tetto: 200, inviati: 0 },
+    });
+    expect(body).toMatchObject({ ok: true, inviati: 0, fermo: 'tetto_orario' });
+  });
+
+  it('il tetto vale anche DENTRO il run: si ferma quando lo raggiunge, non a fine lotto', async () => {
+    process.env.LANCIO_WELCOME_MAX_PER_HOUR = '200';
+    stato.benvenutiUltimaOra = 198; // due di spazio
+    stato.convs = [conv(1), conv(2), conv(3), conv(4)];
+    const body = await (await richiesta()).json();
+
+    expect(sendTemplate).toHaveBeenCalledTimes(2);
+    expect(body).toMatchObject({ inviati: 2, fermo: 'tetto_orario', candidati: 4 });
+    // Le chat non servite non sono state timbrate: il run dopo le ritrova candidate.
+    expect(stato.timbrate.has(3)).toBe(false);
+    expect(stato.timbrate.has(4)).toBe(false);
+  });
+
+  it('env spazzatura → tetto di default 200 (199 partiti: uno passa)', async () => {
+    process.env.LANCIO_WELCOME_MAX_PER_HOUR = 'boh';
+    stato.benvenutiUltimaOra = 199;
+    stato.convs = [conv(1), conv(2)];
+    const body = await (await richiesta()).json();
+    expect(sendTemplate).toHaveBeenCalledTimes(1);
+    expect(body).toMatchObject({ inviati: 1, fermo: 'tetto_orario', tetto: 200 });
   });
 
   it('un numero, un benvenuto: due chat sullo stesso telefono non si sommano', async () => {
@@ -386,7 +432,10 @@ describe('GET /api/cron/lancio-aperture', () => {
   it('una sola query messages per lotto, non una per conversazione', async () => {
     stato.convs = [conv(1), conv(2), conv(3)];
     await richiesta();
-    expect(selectSu('messages')).toHaveLength(1);
+    // Il conteggio del tetto orario (`head: true`) è una query sola per run, non per
+    // lotto: qui si contano solo le letture di righe.
+    expect(selectSu('messages').filter((c) => !c.opzioni?.head)).toHaveLength(1);
+    expect(selectSu('messages').filter((c) => c.opzioni?.head)).toHaveLength(1);
   });
 
   it('senza telefono non si manda niente', async () => {

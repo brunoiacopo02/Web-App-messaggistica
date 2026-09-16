@@ -10,6 +10,8 @@ import {
   CODICE_FREQUENCY_CAP,
   type RigaOutbound,
 } from '@/lib/lancio-aperture';
+import { leggiTettoOrario, sottoTettoOrario } from '@/lib/lancio-tetto';
+import { contaBenvenutiUltimaOra } from '@/lib/lancio-db';
 import { inOpeningWindow } from '@/lib/sequence';
 import { lancioBenvenutoText } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
@@ -123,6 +125,27 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, inviati: 0, attesi: 0, saltati: 0, capped: 0, falliti: 0, motivo: motivoFermo, attivo: settings.attivo });
   }
 
+  // Tetto orario (spec §11.3): lo stesso dell'intake, contato sulle stesse righe. Senza,
+  // questo cron sarebbe proprio il modo di rifare il picco che il tetto dell'intake
+  // evita — la coda differita si e' formata apposta perche' si stava andando troppo
+  // forte. Il conteggio comprende i benvenuti dell'intake: il numero WhatsApp e' uno solo
+  // e Meta guarda lui, non da quale pezzo di codice e' partito il messaggio.
+  const tettoOrario = leggiTettoOrario(process.env.LANCIO_WELCOME_MAX_PER_HOUR);
+  const inviatiUltimaOra = await contaBenvenutiUltimaOra(supabase, templateSid, now);
+  if (!sottoTettoOrario({ inviatiUltimaOra, cap: tettoOrario })) {
+    await logEvento(
+      supabase,
+      'lancio_aperture_run',
+      { fermo: 'tetto_orario', inviatiUltimaOra, tetto: tettoOrario, candidati: 0, inviati: 0, attivo: settings.attivo },
+      `[lancio] benvenuti differiti: run fermo, tetto orario raggiunto (${inviatiUltimaOra}/${tettoOrario})`,
+      'warn',
+    );
+    return NextResponse.json({
+      ok: true, candidati: 0, inviati: 0, attesi: 0, saltati: 0, capped: 0, falliti: 0, errori: 0,
+      fermo: 'tetto_orario', inviatiUltimaOra, tetto: tettoOrario, attivo: settings.attivo,
+    });
+  }
+
   // Candidati: chat del lancio in attesa, mai servite (`lancio_benvenuto_at is null`) e
   // non in mano a una persona. Il filtro sul timbro e' quello che tiene la coda corta:
   // senza, le chat gia' servite riempirebbero la prima pagina per sempre e le nuove non
@@ -211,6 +234,14 @@ export async function GET(req: NextRequest) {
         if (azione === 'salta') {
           saltati++;
           continue;
+        }
+
+        // Il tetto vale anche DENTRO il run: letto una volta sola all'inizio, un run da
+        // 100 invii potrebbe sfondarlo di 100. `tentati` e' quello che questo giro ha
+        // gia' aggiunto al numero.
+        if (!sottoTettoOrario({ inviatiUltimaOra: inviatiUltimaOra + tentati, cap: tettoOrario })) {
+          fermo = 'tetto_orario';
+          break;
         }
 
         // Il timbro PRIMA dell'invio: se due run si accavallano (il cron gira ogni 15'
@@ -367,7 +398,7 @@ export async function GET(req: NextRequest) {
   await logEvento(
     supabase,
     'lancio_aperture_run',
-    { candidati: convs.length, inviati, attesi, saltati, capped, falliti, errori, fermo, attivo: settings.attivo },
+    { candidati: convs.length, inviati, attesi, saltati, capped, falliti, errori, fermo, inviatiUltimaOra, tetto: tettoOrario, attivo: settings.attivo },
     `[lancio] benvenuti differiti: ${inviati} inviati, ${attesi} in attesa, ${saltati} saltati, ${capped} cap, ${falliti} falliti, ${errori} errori su ${convs.length} candidati`,
     falliti > 0 || errori > 0 || fermo ? 'warn' : 'info',
   );
@@ -382,6 +413,8 @@ export async function GET(req: NextRequest) {
     falliti,
     errori,
     fermo,
+    inviatiUltimaOra,
+    tetto: tettoOrario,
     attivo: settings.attivo,
   });
 }
