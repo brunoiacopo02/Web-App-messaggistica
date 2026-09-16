@@ -67,6 +67,14 @@ type RigaMessaggio = RigaLancio & { conversation_id: number };
 const BLOCCO_VALUTAZIONE = 200;
 const MAX_RIGHE_BLOCCO = BLOCCO_VALUTAZIONE * 40;
 /**
+ * Quanto indietro si legge la cronologia: `lancio_evento_at` meno 30 giorni. Le chat
+ * RIUSATE si portano dietro tutto il giro di Mario (mesi di messaggi), ma l'ancora del
+ * lancio e' sempre dopo il 14/09 — benvenuto o `lancio_intake` — quindi niente di utile
+ * vive prima di questo taglio. Senza, un blocco di chat riusate sfonda il tetto delle
+ * righe e il troncamento si porta via proprio le righe NUOVE (l'ordine e' crescente).
+ */
+const GIORNI_STORICO = 30;
+/**
  * Letture dell'evento `lancio_intake` per run (le chat riusate, senza benvenuto in
  * cronologia ne' colonna): oltre questo tetto quelle chat contano `ancora_ignota` adesso
  * e si rivalutano al run dopo, cinque minuti dopo. E' una `maybeSingle` a chat: in
@@ -74,12 +82,63 @@ const MAX_RIGHE_BLOCCO = BLOCCO_VALUTAZIONE * 40;
  */
 const MAX_LETTURE_INTAKE = 50;
 
-const contatoreSalti = (): Record<MotivoSalto, number> => ({
+/**
+ * Il marcatore su `lancio_info` delle chat che l'ancora non ce l'hanno proprio: ne'
+ * benvenuto, ne' colonna, ne' evento `lancio_intake`. Senza, quelle chat tornerebbero
+ * prime in coda (id bassi) a ogni run e si mangerebbero le 50 letture dell'intake per
+ * tutta la finestra, affamando le chat che l'ancora invece ce l'hanno. Restano candidate
+ * — entrano nei residui e nella restituzione al pool del Task 5 — ma non costano piu'
+ * una lettura.
+ */
+const CHIAVE_ANCORA_IGNOTA = 'followup_ancora_ignota_at';
+
+const ancoraIgnotaMarcata = (info: unknown): boolean => {
+  if (!info || typeof info !== 'object' || Array.isArray(info)) return false;
+  const v = (info as Record<string, unknown>)[CHIAVE_ANCORA_IGNOTA];
+  return typeof v === 'string' && v.trim() !== '';
+};
+
+/**
+ * Scrive il marcatore con un merge su quello che c'e' gia': `lancio_info` porta il
+ * congedo (C4) e le risposte di riscaldamento di B4, e un update alla cieca le
+ * cancellerebbe. Stessa regola di `marcaCongedo`: se la lettura fallisce NON si scrive —
+ * un marcatore in piu' non vale la perdita di quello che c'era.
+ */
+async function marcaAncoraIgnota(supabase: Supa, conversationId: number): Promise<void> {
+  const { data, error: erroreLettura } = await supabase
+    .from('conversations')
+    .select('lancio_info')
+    .eq('id', conversationId)
+    .maybeSingle();
+  if (erroreLettura) {
+    await logEvento(supabase, 'lancio_followup_ancora_non_marcata',
+      { conversationId, errore: erroreLettura.message, fase: 'lettura' },
+      `[lancio] conv ${conversationId}: lancio_info non letto, ancora ignota NON marcata — ${erroreLettura.message}`, 'warn');
+    return;
+  }
+  const attuale = (data as { lancio_info?: unknown } | null)?.lancio_info;
+  const base = attuale && typeof attuale === 'object' && !Array.isArray(attuale) ? (attuale as Record<string, unknown>) : {};
+  const { error } = await supabase
+    .from('conversations')
+    .update({ lancio_info: { ...base, [CHIAVE_ANCORA_IGNOTA]: new Date().toISOString() } as never })
+    .eq('id', conversationId);
+  if (error) {
+    await logEvento(supabase, 'lancio_followup_ancora_non_marcata',
+      { conversationId, errore: error.message, fase: 'scrittura' },
+      `[lancio] conv ${conversationId}: ancora ignota NON marcata — ${error.message}`, 'warn');
+  }
+}
+
+/** I motivi di `decideFollowup` piu' quello che nasce qui: da congedare ma senza numero. */
+type MotivoSaltoRoute = MotivoSalto | 'senza_telefono';
+
+const contatoreSalti = (): Record<MotivoSaltoRoute, number> => ({
   fase: 0,
   gia_inviato: 0,
   congedato: 0,
   ancora_ignota: 0,
   mai_scritto: 0,
+  senza_telefono: 0,
 });
 
 export async function GET(req: NextRequest) {
@@ -111,6 +170,8 @@ export async function GET(req: NextRequest) {
   const eventoMs = settings.eventoAt ? Date.parse(settings.eventoAt) : NaN;
   if (Number.isNaN(eventoMs)) return configError(['lancio_evento_at']);
   const evento = new Date(eventoMs);
+  // Il fondo della cronologia da leggere: tutte le ancore del lancio stanno dopo.
+  const tagliaStorico = new Date(eventoMs - GIORNI_STORICO * 24 * 60 * 60 * 1000).toISOString();
 
   // Config PRIMA della finestra, come nel blast Zoom: un template o un mittente che
   // mancano devono suonare al run fuori fascia del 6 mattina, non a follow-up iniziato.
@@ -203,6 +264,8 @@ export async function GET(req: NextRequest) {
   const daCongedare: { c: Candidata; leadWords: string }[] = [];
   let valutati = 0;
   let lettureIntake = 0;
+  let ancoreIgnoteMarcate = 0;
+  let blocchiTroncati = 0;
   for (let i = 0; i < coda.length && targets.length < max; i += BLOCCO_VALUTAZIONE) {
     if (Date.now() - t0 > TEMPO_MASSIMO_MS) break;
     const blocco = coda.slice(i, i + BLOCCO_VALUTAZIONE);
@@ -210,14 +273,36 @@ export async function GET(req: NextRequest) {
       .from('messages')
       .select('conversation_id, direction, body, template_sid, created_at')
       .in('conversation_id', blocco.map((c) => c.id))
+      // Taglio dello storico: prima del lancio non c'e' niente che serva a decidere.
+      .gte('created_at', tagliaStorico)
+      // Servono SOLO i messaggi del lead (l'interazione, l'ultimo testo) e il benvenuto
+      // (l'ancora): tutto il resto dell'outbound di Mario e' peso morto nel tetto righe.
+      .or(welcomeSid ? `direction.eq.in,template_sid.eq.${welcomeSid}` : 'direction.eq.in')
       .order('created_at', { ascending: true })
       .limit(MAX_RIGHE_BLOCCO);
     if (error) {
       await logCronQueryError(supabase, 'lancio_followup_messages_query_error', error);
       break;
     }
+    const righeBlocco = (data ?? []) as unknown as RigaMessaggio[];
+    // Il troncamento non e' innocuo: l'ordine e' crescente, quindi a cadere sono le righe
+    // PIU' NUOVE di tutte le chat del blocco — cioe' proprio quelle su cui si decide. Una
+    // chat letta a meta' sembrerebbe "non ha mai scritto" a ogni run (niente follow-up per
+    // tutta la finestra, in silenzio) o, peggio, farebbe leggere come ultimo testo un "no"
+    // vecchio e la manderebbe a DA_SCARTARE. Su una lettura tagliata non si decide nulla:
+    // il blocco intero conta `ancora_ignota` e si rivaluta al run dopo.
+    if (righeBlocco.length >= MAX_RIGHE_BLOCCO) {
+      blocchiTroncati++;
+      valutati += blocco.length;
+      saltati.ancora_ignota += blocco.length;
+      await logEvento(supabase, 'lancio_followup_blocco_troncato',
+        { blocco: Math.floor(i / BLOCCO_VALUTAZIONE), righe: righeBlocco.length, tetto: MAX_RIGHE_BLOCCO, conversazioni: blocco.length, primaChat: blocco[0]?.id ?? null, ultimaChat: blocco[blocco.length - 1]?.id ?? null },
+        `[lancio] follow-up: cronologia troncata sul blocco da ${blocco.length} chat (${righeBlocco.length} righe, tetto ${MAX_RIGHE_BLOCCO}) — nessuna decisione presa su queste chat`,
+        'warn');
+      continue;
+    }
     const perConv = new Map<number, RigaLancio[]>();
-    for (const r of (data ?? []) as unknown as RigaMessaggio[]) {
+    for (const r of righeBlocco) {
       const lista = perConv.get(r.conversation_id) ?? [];
       lista.push(r);
       perConv.set(r.conversation_id, lista);
@@ -226,11 +311,16 @@ export async function GET(req: NextRequest) {
       valutati++;
       const rows = perConv.get(c.id) ?? [];
       // L'ancora del lancio: colonna, poi benvenuto in cronologia, poi — solo per le chat
-      // riusate e solo entro il tetto — l'evento `lancio_intake`.
+      // riusate, solo entro il tetto e solo se non l'abbiamo gia' cercata invano in un run
+      // precedente — l'evento `lancio_intake`.
       let ancora = ancoraLancio({ rows, welcomeSid, benvenutoAt: c.lancio_benvenuto_at, ingressoAt: null });
-      if (!ancora && lettureIntake < MAX_LETTURE_INTAKE) {
+      if (!ancora && !ancoraIgnotaMarcata(c.lancio_info) && lettureIntake < MAX_LETTURE_INTAKE) {
         lettureIntake++;
         ancora = await leggiIngressoLancioAt(supabase, c.id);
+        if (!ancora) {
+          await marcaAncoraIgnota(supabase, c.id);
+          ancoreIgnoteMarcate++;
+        }
       }
       // `decideFollowup` rifa' in memoria il filtro del congedo (C4) e quello della fase:
       // se il filtro JSON della query cambiasse forma, il congedato esce comunque qui.
@@ -257,7 +347,7 @@ export async function GET(req: NextRequest) {
   if (dry) {
     return NextResponse.json({
       ok: true, dry: true, candidati: coda.length, valutati, nonValutati: coda.length - valutati,
-      targets: targets.length, daCongedare: daCongedare.length, saltati, lettureIntake, max, queryKo,
+      targets: targets.length, daCongedare: daCongedare.length, saltati, lettureIntake, blocchiTroncati, max, queryKo,
     });
   }
 
@@ -269,7 +359,15 @@ export async function GET(req: NextRequest) {
   for (const { c, leadWords } of daCongedare) {
     if (Date.now() - t0 > TEMPO_MASSIMO_MS) break;
     const phone = c.leads?.phone_e164 ?? null;
-    if (!phone) continue;
+    // Un congedo senza numero non e' un non-evento: il lead ha detto di no e nessuno lo
+    // sta scartando al CRM. Si conta e si scrive, invece di sparire fra le righe.
+    if (!phone) {
+      saltati.senza_telefono++;
+      await logEvento(supabase, 'lancio_followup_congedo_senza_telefono',
+        { conversationId: c.id, crmLeadId: c.crm_lead_id, leadWords: leadWords.slice(0, 300) },
+        `[lancio] conv ${c.id}: aveva detto di no ma non ha un numero, congedo non registrato`, 'warn');
+      continue;
+    }
     await marcaCongedo(supabase, c.id);
     const esitoCongedo = await congedoLancio(
       supabase,
@@ -296,7 +394,9 @@ export async function GET(req: NextRequest) {
       .in('conversation_id', targets.map((c) => c.id))
       .eq('template_sid', sid)
       .not('twilio_status', 'in', '(failed,undelivered)');
-    if (error) await logCronQueryError(supabase, 'lancio_followup_messages_query_error', error);
+    // Type suo: da `event_log` si deve capire QUALE delle due query su `messages` e'
+    // caduta — la cronologia (si smette di valutare) o questa (si rischia di rimandare).
+    if (error) await logCronQueryError(supabase, 'lancio_followup_idempotenza_query_error', error);
     for (const m of (spediti ?? []) as unknown as { conversation_id: number }[]) giaSpediti.add(m.conversation_id);
   }
 
@@ -364,6 +464,8 @@ export async function GET(req: NextRequest) {
     residui,
     saltati,
     lettureIntake,
+    ancoreIgnoteMarcate,
+    blocchiTroncati,
     tentati: stato.tentati,
     codici: stato.codici,
     fermo: stato.fermo,
@@ -394,6 +496,7 @@ export async function GET(req: NextRequest) {
     congedati,
     saltati,
     residui,
+    blocchiTroncati,
     fermo: stato.fermo,
     max,
     report: conti.report,

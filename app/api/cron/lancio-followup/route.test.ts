@@ -17,6 +17,7 @@ type Chiamata = {
   arg: unknown;
   filtri: Filtro[];
   opzioni?: { head?: boolean; count?: string };
+  singola?: boolean;
 };
 const chiamate: Chiamata[] = [];
 
@@ -46,6 +47,8 @@ const stato = {
   timbri: new Map<number, string>(),
   /** La select dei candidati fallisce (migrazione non applicata). */
   convSelectError: null as { message: string; code?: string } | null,
+  /** La select della seconda idempotenza fallisce: ha un type di evento suo. */
+  idempotenzaSelectError: null as { message: string; code?: string } | null,
   /** Chi era già timbrato quando Twilio è stato chiamato: il timbro viene PRIMA. */
   timbrateAllInvio: [] as number[][],
 };
@@ -72,6 +75,13 @@ function esegui(rec: Chiamata): { data: unknown; error: unknown; count?: number 
   if (rec.table === 'conversations' && rec.op === 'update') {
     const campi = rec.arg as Record<string, unknown>;
     const id = Number(rec.filtri.find((f) => f.m === 'eq' && f.args[0] === 'id')?.args[1]);
+    // Il merge su `lancio_info` (marcatore dell'ancora ignota) si applica davvero alla
+    // fixture: il run successivo deve vederlo, o la fame delle 50 letture non si prova.
+    if ('lancio_info' in campi) {
+      const c = stato.convs.find((x) => x.id === id);
+      if (c) c.lancio_info = campi.lancio_info as Record<string, unknown>;
+      return { data: [], error: null };
+    }
     if (!('lancio_followup_inviato_at' in campi)) return { data: [], error: null };
     if (campi.lancio_followup_inviato_at === null) {
       // Rilascio ancorato: si libera solo il timbro scritto da questo run.
@@ -95,6 +105,8 @@ function esegui(rec: Chiamata): { data: unknown; error: unknown; count?: number 
   if (rec.table === 'conversations') {
     if (stato.convSelectError) return { data: null, error: stato.convSelectError };
     const righe = filtraCandidati(rec);
+    // `maybeSingle()` è la rilettura di `lancio_info` prima del merge del marcatore.
+    if (rec.singola) return { data: righe[0] ?? null, error: null };
     if (rec.opzioni?.head) return { data: null, error: null, count: righe.length };
     const range = (rec.filtri.find((f) => f.m === 'range')?.args as number[] | undefined) ?? [0, 999];
     return { data: righe.slice(range[0], range[1] + 1), error: null };
@@ -102,8 +114,23 @@ function esegui(rec: Chiamata): { data: unknown; error: unknown; count?: number 
   if (rec.table === 'messages') {
     const ids = (arg(rec, 'in', 'conversation_id')?.args[1] as number[] | undefined) ?? [];
     // Con `eq('template_sid', …)` è la seconda idempotenza; senza, la cronologia.
-    if (arg(rec, 'eq', 'template_sid')) return { data: stato.spediti.filter((m) => ids.includes(m.conversation_id)), error: null };
-    const righe = ids.flatMap((id) => stato.messaggi.get(id) ?? []).sort((a, b) => a.created_at.localeCompare(b.created_at));
+    if (arg(rec, 'eq', 'template_sid')) {
+      if (stato.idempotenzaSelectError) return { data: null, error: stato.idempotenzaSelectError };
+      return { data: stato.spediti.filter((m) => ids.includes(m.conversation_id)), error: null };
+    }
+    let righe = ids.flatMap((id) => stato.messaggi.get(id) ?? []).sort((a, b) => a.created_at.localeCompare(b.created_at));
+    // Taglio dello storico: la cronologia di Mario prima del lancio non deve arrivare
+    // a `decideFollowup`, e il test lo deve vedere per davvero.
+    const taglio = arg(rec, 'gte', 'created_at')?.args[1] as string | undefined;
+    if (taglio) righe = righe.filter((r) => r.created_at >= taglio);
+    // `or('direction.eq.in,template_sid.eq.HX…')`: solo inbound e benvenuto.
+    const or = rec.filtri.find((f) => f.m === 'or')?.args[0] as string | undefined;
+    if (or) {
+      const clausole = or.split(',').map((s) => s.split('.'));
+      righe = righe.filter((r) =>
+        clausole.some(([col, , val]) => String((r as unknown as Record<string, unknown>)[col] ?? '') === val),
+      );
+    }
     return { data: righe, error: null };
   }
   return { data: [], error: null };
@@ -113,13 +140,16 @@ function query(table: string, op: Chiamata['op'], a: unknown, opzioni?: Chiamata
   const rec: Chiamata = { table, op, arg: a, filtri: [], opzioni };
   chiamate.push(rec);
   const q: Record<string, unknown> = {};
-  for (const m of ['eq', 'is', 'in', 'not', 'order', 'limit', 'range', 'gte', 'lte', 'select']) {
+  for (const m of ['eq', 'is', 'in', 'not', 'or', 'order', 'limit', 'range', 'gte', 'lte', 'select']) {
     q[m] = (...args: unknown[]) => {
       rec.filtri.push({ m, args });
       return q;
     };
   }
-  q.maybeSingle = () => q;
+  q.maybeSingle = () => {
+    rec.singola = true;
+    return q;
+  };
   q.then = (ok: (v: unknown) => unknown, ko?: (e: unknown) => unknown) =>
     Promise.resolve()
       .then(() => esegui(rec))
@@ -208,6 +238,18 @@ const eventi = () => insertIn('event_log');
 const tipiEvento = () => eventi().map((e) => e.type);
 const eventoRun = () => eventi().find((e) => e.type === 'lancio_followup_run');
 const selectConv = () => chiamate.find((c) => c.table === 'conversations' && c.op === 'select');
+/** La select della cronologia (l'altra select su `messages` è la seconda idempotenza). */
+const selectMessaggi = () =>
+  chiamate.find(
+    (c) => c.table === 'messages' && c.op === 'select' && !c.filtri.some((f) => f.m === 'eq' && f.args[0] === 'template_sid'),
+  );
+const updateConv = (id: number) =>
+  chiamate.filter(
+    (c) =>
+      c.table === 'conversations' &&
+      c.op === 'update' &&
+      c.filtri.some((f) => f.m === 'eq' && f.args[0] === 'id' && f.args[1] === id),
+  ).map((c) => c.arg as Record<string, unknown>);
 const upserts = () => chiamate.filter((c) => c.op === 'upsert').map((c) => c.arg as Record<string, unknown>);
 
 beforeEach(() => {
@@ -221,6 +263,7 @@ beforeEach(() => {
   stato.timbrate = new Set();
   stato.timbri = new Map();
   stato.convSelectError = null;
+  stato.idempotenzaSelectError = null;
   stato.timbrateAllInvio = [];
   stato.settings = { lancio_attivo: true, lancio_evento_at: EVENTO, lancio_sender: 'principale' };
   sendTemplate.mockReset().mockImplementation(async () => {
@@ -356,9 +399,34 @@ describe('GET /api/cron/lancio-followup — perimetro (C4) e decisione', () => {
     expect(leggiIngressoLancioAt).toHaveBeenCalledWith(expect.anything(), 1);
     expect(res.saltati.ancora_ignota).toBe(1);
     expect(sendTemplate).not.toHaveBeenCalled();
+    // Su una chat mai vista, se l'intake risponde, l'ancora c'è e il follow-up parte.
     leggiIngressoLancioAt.mockResolvedValue('2026-09-20T09:00:00Z');
+    stato.convs = [conv(9, { lancio_benvenuto_at: null })];
+    stato.messaggi.set(9, [{ conversation_id: 9, direction: 'in', body: 'si', template_sid: null, created_at: '2026-09-20T10:30:00Z' }]);
     chiamate.length = 0;
     await expect((await richiesta()).json()).resolves.toMatchObject({ sent: 1 });
+  });
+
+  it('chi non ha proprio un ancora si marca su lancio_info e al run dopo non costa una lettura', async () => {
+    stato.convs = [conv(1, { lancio_benvenuto_at: null, lancio_info: { risposte: ['ok'] } })];
+    stato.messaggi.set(1, [{ conversation_id: 1, direction: 'in', body: 'si', template_sid: null, created_at: '2026-09-20T10:30:00Z' }]);
+    const res = await (await richiesta()).json();
+    expect(res.saltati.ancora_ignota).toBe(1);
+    expect((eventoRun()?.payload as Record<string, unknown>).ancoreIgnoteMarcate).toBe(1);
+    // Il merge tiene quello che c'era (C4: `congedo_at` e le risposte di B4 non si toccano).
+    const scritto = updateConv(1).map((u) => u.lancio_info as Record<string, unknown>).filter(Boolean);
+    expect(scritto).toHaveLength(1);
+    expect(scritto[0]).toMatchObject({ risposte: ['ok'], followup_ancora_ignota_at: expect.any(String) });
+    expect(scritto[0]).not.toHaveProperty('congedo_at');
+    // Run gemello: la chat è ancora candidata (entra nei residui e nel pool del Task 5)
+    // ma non si mangia più una delle 50 letture dell'intake.
+    leggiIngressoLancioAt.mockClear();
+    chiamate.length = 0;
+    const dopo = await (await richiesta()).json();
+    expect(leggiIngressoLancioAt).not.toHaveBeenCalled();
+    expect(dopo.candidati).toBe(1);
+    expect(dopo.saltati.ancora_ignota).toBe(1);
+    expect(sendTemplate).not.toHaveBeenCalled();
   });
 
   it('un no secco come ultimo inbound non congeda: riceve il follow-up (C1 aggiornato)', async () => {
@@ -404,6 +472,57 @@ describe('GET /api/cron/lancio-followup — perimetro (C4) e decisione', () => {
     const res = await (await richiesta()).json();
     expect(res).toMatchObject({ sent: 1, residui: 0, nonValutati: 1 });
     expect(sendTemplate).toHaveBeenCalledWith(expect.objectContaining({ to: tel(2) }));
+  });
+
+  it('la cronologia si legge dal taglio dello storico in poi e solo per le righe che servono', async () => {
+    // Chat riusata: dietro ha mesi di giro di Mario, compreso un "non mi interessa" di
+    // luglio che non c'entra niente con questo lancio.
+    stato.messaggi.set(1, [
+      { conversation_id: 1, direction: 'in', body: 'no grazie non mi interessa', template_sid: null, created_at: '2026-07-01T09:00:00Z' },
+      { conversation_id: 1, direction: 'out', body: 'ok ciao', template_sid: null, created_at: '2026-07-01T09:05:00Z' },
+      ...righe(1, ['si', '2026-09-20T10:30:00Z']),
+    ]);
+    const res = await (await richiesta()).json();
+    const f = selectMessaggi()?.filtri ?? [];
+    // `lancio_evento_at` è il 5/10 alle 21:00 di Roma = 19:00Z; meno 30 giorni.
+    expect(f).toContainEqual({ m: 'gte', args: ['created_at', '2026-09-05T19:00:00.000Z'] });
+    expect(f).toContainEqual({ m: 'or', args: [`direction.eq.in,template_sid.eq.${WELCOME}`] });
+    // Deciso sulle sole righe del lancio: riceve il follow-up, non viene scartato.
+    expect(res).toMatchObject({ sent: 2, congedati: 0 });
+    expect(congedoLancio).not.toHaveBeenCalled();
+  });
+
+  it('cronologia troncata: nessuna decisione sul blocco, warn e tutto ancora_ignota', async () => {
+    // Oltre il tetto di righe l ordine crescente butta via le righe PIU NUOVE: decidere
+    // su una lettura tagliata vuol dire non mandare per sempre o scartare per un no vecchio.
+    stato.messaggi.set(1, [
+      ...righe(1, ['si', '2026-09-20T10:30:00Z']),
+      ...Array.from({ length: 8000 }, (_, k) => ({
+        conversation_id: 1,
+        direction: 'in',
+        body: `riga ${k}`,
+        template_sid: null,
+        created_at: `2026-09-${String(21 + (k % 9)).padStart(2, '0')}T10:00:00Z`,
+      })),
+    ]);
+    const res = await (await richiesta()).json();
+    expect(res).toMatchObject({ sent: 0, congedati: 0, blocchiTroncati: 1 });
+    expect(res.saltati.ancora_ignota).toBe(2);
+    expect(sendTemplate).not.toHaveBeenCalled();
+    const troncato = eventi().find((e) => e.type === 'lancio_followup_blocco_troncato');
+    expect(troncato?.level).toBe('warn');
+    expect(troncato?.payload).toMatchObject({ blocco: 0, righe: expect.any(Number), conversazioni: 2 });
+  });
+
+  it('da congedare ma senza numero: si conta e si scrive, non sparisce', async () => {
+    stato.convs = [conv(1, { leads: null }), conv(2)];
+    stato.messaggi.set(1, righe(1, ['si', '2026-09-20T10:30:00Z'], ['non mi interessa', '2026-10-06T00:30:00Z']));
+    const res = await (await richiesta()).json();
+    expect(res).toMatchObject({ sent: 1, congedati: 0 });
+    expect(res.saltati.senza_telefono).toBe(1);
+    expect(tipiEvento()).toContain('lancio_followup_congedo_senza_telefono');
+    expect(congedoLancio).not.toHaveBeenCalled();
+    expect(marcaCongedo).not.toHaveBeenCalled();
   });
 
   it('mittente secondario chiesto ma non disponibile: warn e si parte dal principale', async () => {
@@ -504,6 +623,13 @@ describe('GET /api/cron/lancio-followup — invio col motore', () => {
     expect(p.nonValutati).toBe(1);
     expect(p.inviati + p.riparati + p.capped + p.falliti + p.incerti + p.saltatiInvio + p.errori + p.residui).toBe(3);
     expect(res).toMatchObject({ sent: 1, failed: 1, skip: 1, nonValutati: 1 });
+  });
+
+  it('la query della seconda idempotenza ha un type di evento suo', async () => {
+    stato.idempotenzaSelectError = { message: 'column messages.twilio_status does not exist', code: '42703' };
+    await expect((await richiesta()).json()).resolves.toMatchObject({ sent: 2 });
+    expect(tipiEvento()).toContain('lancio_followup_idempotenza_query_error');
+    expect(tipiEvento()).not.toContain('lancio_followup_messages_query_error');
   });
 
   it('il run si scrive anche senza candidati', async () => {
