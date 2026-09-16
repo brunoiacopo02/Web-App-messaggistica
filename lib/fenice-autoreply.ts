@@ -285,7 +285,16 @@ export function isSoloPresaDAtto(body: string | null | undefined): boolean {
 }
 
 const MAX_ROUNDS_PER_DRAIN = 5; // anti-runaway: round di accorpamento per esecuzione
+/** Quanti turni del lancio al massimo in un solo drain: il lead che scrive a raffica va
+ *  seguito, ma un turno costa modello + CRM + Twilio e il drain ha un lucchetto sopra. */
+const MAX_GIRI_LANCIO = 3;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Millisecondi di un `created_at`, 0 se manca o non si legge: serve solo a confrontare
+ *  due righe della stessa cronologia, mai a decidere un orario. */
+const quando = (v: string | null | undefined): number => {
+  const ms = v ? Date.parse(v) : NaN;
+  return Number.isFinite(ms) ? ms : 0;
+};
 
 /**
  * Best-effort: ACCORPA i messaggi del lead. Attende la finestra di latenza (5-40s) e poi
@@ -449,6 +458,7 @@ export async function drainMarioReplies(
   }
 
   let finalStatus = 'active';
+  let giriLancio = 0;
   // Giornate già al completo: il bot non le propone. Si legge una volta per drain,
   // non per turno. Senza BOOKING_DAILY_CAP la lista è vuota e non si tocca il DB.
   const giorniPieni = await datePiene(supabase, tettoGiornaliero(process.env.BOOKING_DAILY_CAP), new Date());
@@ -479,6 +489,24 @@ export async function drainMarioReplies(
           // post-pitch ricomincerebbe da capo a ogni messaggio del lead.
           lancioInfo: lancio.lancio_info ?? null,
         });
+        giriLancio++;
+        // Un inbound arrivato DURANTE il turno restava senza risposta fino al messaggio
+        // successivo: il turno dura 5-20 secondi (modello + CRM + Twilio), il lead scrive
+        // "ok" e subito dopo "alle 10", e la traccia `fenice_ai_reply` viene scritta a
+        // turno finito — quindi per il re-drive di `bot-followups` quel secondo messaggio
+        // risultava già gestito. Si rilegge la cronologia di adesso e si fa un altro giro
+        // solo se c'è qualcosa di STRETTAMENTE più nuovo dell'inbound appena lavorato:
+        // un turno che ha taciuto (fuori orario, solo media) lascia scoperto lo STESSO
+        // inbound, e senza questo confronto il drain lo rilavorerebbe a vuoto.
+        //
+        // Solo mentre il lancio resta 'active': un congedo o un passaggio umano hanno
+        // chiuso la partita, e `lancio.lancio_fase` qui è quella del claim — un secondo
+        // giro rifarebbe il turno con una fase che a DB non c'è più.
+        const dopoIlTurno = await loadHistory();
+        const iNuovo = nextUnansweredInboundIndex(dopoIlTurno);
+        const arrivatoDurante =
+          iNuovo >= 0 && quando(dopoIlTurno[iNuovo].created_at) > quando(rows[inboundIdx].created_at);
+        if (finalStatus === 'active' && arrivatoDurante && giriLancio < MAX_GIRI_LANCIO) continue;
         break;
       }
 

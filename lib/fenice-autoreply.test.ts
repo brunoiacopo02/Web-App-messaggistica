@@ -352,7 +352,9 @@ function makeDrainSupabase(claimedRow: ClaimedRow, initialRows: FakeMsgRow[]) {
     },
   };
 
-  return { supabase, calls };
+  // `messagesRows` esce di proposito: e' l'unico modo per simulare un messaggio del lead
+  // arrivato MENTRE il turno era in corso (il turno vero dura 5-20 secondi).
+  return { supabase, calls, messagesRows };
 }
 
 describe('drainMarioReplies — guardia canSendOutcome dal vivo', () => {
@@ -1829,6 +1831,62 @@ describe('drainMarioReplies — aggancio del turno lancio', () => {
     expect(input).toMatchObject({ conversationId: 45, fase, lancioInfo: info, inboundBody: 'qual è il codice?' });
     expect(input.rows[1]).toMatchObject({ direction: 'in', created_at: SI.created_at });
     expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+
+  // Il lead scrive "ok", il turno parte, e mentre gira (modello + CRM + Twilio) scrive
+  // "alle 10". Prima il drain usciva col `break` e quel secondo messaggio non riceveva
+  // risposta: la traccia `fenice_ai_reply` viene scritta a turno finito, quindi per il
+  // re-drive risultava gia' gestito e restava scoperto fino al messaggio dopo.
+  it('un inbound arrivato DURANTE il turno fa un secondo giro nello stesso drain', async () => {
+    const { supabase, calls, messagesRows } = makeDrainSupabase(
+      { id: 47, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L7', bot_outcome: null, gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
+        lancio_slug: 'webdev-2026-10', lancio_fase: 'post_pitch', leads: { first_name: 'Anna' } },
+      [WELCOME, { ...SI, body: 'ok', created_at: '2026-10-05T22:40:00Z' }],
+    );
+    vi.mocked(eseguiTurnoLancio)
+      .mockImplementationOnce(async () => {
+        // La bolla del turno, e subito dopo il lead che scrive di nuovo.
+        messagesRows.push({ direction: 'out', body: 'Quando ti chiamiamo?', template_sid: null, created_at: '2026-10-05T22:40:08Z' });
+        messagesRows.push({ direction: 'in', body: 'alle 10', template_sid: null, created_at: '2026-10-05T22:40:11Z' });
+        return 'active';
+      })
+      .mockImplementationOnce(async () => {
+        messagesRows.push({ direction: 'out', body: 'Perfetto, alle 10.', template_sid: null, created_at: '2026-10-05T22:40:20Z' });
+        return 'active';
+      });
+    await drainMarioReplies(supabase, 47, '+393331234567', () => 0);
+    expect(eseguiTurnoLancio).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(eseguiTurnoLancio).mock.calls[0][1].inboundBody).toBe('ok');
+    expect(vi.mocked(eseguiTurnoLancio).mock.calls[1][1].inboundBody).toBe('alle 10');
+    expect(generateMarioReply).not.toHaveBeenCalled();
+    expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+
+  it('nessun messaggio nuovo durante il turno: un giro solo, il drain non rilavora lo stesso inbound', async () => {
+    const { supabase } = makeDrainSupabase(
+      { id: 48, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L8', bot_outcome: null, gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
+        lancio_slug: 'webdev-2026-10', lancio_fase: 'link_inviato' },
+      [WELCOME, SI],
+    );
+    // Il turno tace (fuori orario, solo media): l'inbound resta scoperto, ma e' lo STESSO.
+    vi.mocked(eseguiTurnoLancio).mockResolvedValue('active');
+    await drainMarioReplies(supabase, 48, '+393331234567', () => 0);
+    expect(eseguiTurnoLancio).toHaveBeenCalledTimes(1);
+  });
+
+  it('un turno che chiude (congedo) non fa un secondo giro, nemmeno con un messaggio nuovo', async () => {
+    const { supabase, messagesRows } = makeDrainSupabase(
+      { id: 49, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L9', bot_outcome: null, gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
+        lancio_slug: 'webdev-2026-10', lancio_fase: 'post_pitch' },
+      [WELCOME, { ...SI, body: 'non mi interessa', created_at: '2026-10-05T22:40:00Z' }],
+    );
+    vi.mocked(eseguiTurnoLancio).mockImplementationOnce(async () => {
+      messagesRows.push({ direction: 'out', body: 'Nessun problema!', template_sid: null, created_at: '2026-10-05T22:40:08Z' });
+      messagesRows.push({ direction: 'in', body: 'anzi aspetta', template_sid: null, created_at: '2026-10-05T22:40:11Z' });
+      return 'closed';
+    });
+    await drainMarioReplies(supabase, 49, '+393331234567', () => 0);
+    expect(eseguiTurnoLancio).toHaveBeenCalledTimes(1);
   });
 
   it('senza lancio_info sulla conversazione il turno riceve null, non undefined', async () => {
