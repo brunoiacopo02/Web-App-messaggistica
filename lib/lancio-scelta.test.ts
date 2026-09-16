@@ -143,20 +143,44 @@ describe('testi', () => {
     expect(s).toContain('domani mattina');
   });
   // Il pulsante premuto alle 20:40 del 5 (il link e' gia' partito, la live non e' ancora
-  // cominciata): il 6 e' domani, non oggi.
-  it('alle 20:40 del 5 il giorno dopo si chiama domani, non oggi', () => {
+  // cominciata): fuori dalla notte del webinar la mattina non si propone da sola, ma i
+  // giorni si chiamano col nome del 5 — il 6 e' domani, il 7 e' "mercoledi 7 ottobre".
+  it('alle 20:40 del 5 i giorni hanno il nome del 5, e la mattina non si propone', () => {
     const ora = t('2026-10-05T20:40:00+02:00');
-    const s = testoSlots(oreProponibili(SLOTS, ora, EVENTO), GIORNI, modoEtichette(ora, EVENTO));
-    expect(s).toBe('Per la call ho libero domattina alle 9, alle 11 o alle 14, oppure domani pomeriggio dalle 15 alle 20: che ora preferisci?');
+    const s = testoSlots(oreProponibili(SLOTS, ora, EVENTO), GIORNI, modoEtichette(ora, EVENTO), modoPostPitch(ora, EVENTO) === 'notte');
+    expect(s).toBe('Per la call ho domani pomeriggio dalle 15 alle 20: che ora preferisci? Se puoi solo la mattina, ho mercoledì 7 ottobre dalle 9 alle 14.');
+    expect(s).not.toContain('oggi');
   });
-  // Alle 02:00 il giorno di Roma e' gia' il 6: le ore della mattina restano prenotabili
-  // (il blocco del prompt le tiene) ma non si propongono da sole, come in tutto il 6.
-  it('alle 02:00 del 6 si dice oggi, non domani', () => {
+  // Alle 02:00 del 6 le due decisioni divergono: la mattina si propone ancora (siamo
+  // nella notte del webinar, `modoPostPitch`), ma si chiama "stamattina" perche' il
+  // giorno di Roma e' gia' il 6.
+  it('alle 02:00 del 6 la mattina si propone ancora, ma si chiama stamattina', () => {
     const ora = t('2026-10-06T02:00:00+02:00');
-    const s = testoSlots(oreProponibili(SLOTS, ora, EVENTO), GIORNI, modoEtichette(ora, EVENTO));
-    expect(s).toContain('oggi pomeriggio dalle 15 alle 20');
+    const ore = oreProponibili(SLOTS, ora, EVENTO);
+    const s = testoSlots(ore, GIORNI, modoEtichette(ora, EVENTO), modoPostPitch(ora, EVENTO) === 'notte');
+    expect(s).toBe('Per la call ho libero stamattina alle 9, alle 11 o alle 14, oppure oggi pomeriggio dalle 15 alle 20: che ora preferisci?');
     expect(s).not.toContain('domattina');
-    expect(s).toContain('domani mattina dalle 9 alle 14');
+    // E il modello le vede come ore da proporre, senza il "solo se la chiede il lead".
+    const b = bloccoSlotPerPrompt(ore, GIORNI, modoEtichette(ora, EVENTO), true);
+    expect(b).toContain('2026-10-06T09:00:00+02:00 → martedì 6 ottobre alle 9:00 (stamattina)');
+    expect(b).not.toContain('non proporla tu');
+  });
+
+  it('alle 02:00 del 6 con la mattina piena: "Stamattina e tutto pieno", non "Domattina"', () => {
+    const ora = t('2026-10-06T02:00:00+02:00');
+    const ore = oreProponibili({ ...SLOTS, mattina: [], mattinaEsaurita: true }, ora, EVENTO);
+    const s = testoSlots(ore, GIORNI, modoEtichette(ora, EVENTO), true);
+    expect(s).toContain('Stamattina è tutto pieno');
+    expect(s).toContain('oggi pomeriggio dalle 15 alle 20');
+  });
+
+  // Le due decisioni sono separate anche nell'altro verso: alle 20:40 del 5 le etichette
+  // sono quelle della notte ma la mattina NON si propone (la live non e' ancora finita:
+  // chi risponde al pulsante alle 20:40 e' fuori dalla notte di `modoPostPitch`).
+  it('etichette e proposta della mattina sono due parametri distinti', () => {
+    const ore = oreProponibili(SLOTS, NOTTE, EVENTO);
+    expect(testoSlots(ore, GIORNI, 'notte', false)).toBe('Per la call ho domani pomeriggio dalle 15 alle 20: che ora preferisci? Se puoi solo la mattina, ho mercoledì 7 ottobre dalle 9 alle 14.');
+    expect(testoSlots(ore, GIORNI, 'giorno', true)).toContain('stamattina alle 9, alle 11 o alle 14');
   });
   // Il 7 il 6 non esiste piu': le sue ore sono tutte passate e non si nomina.
   it('alle 09:30 del 7 la mattina di oggi e stamattina, e del 6 non si parla', () => {

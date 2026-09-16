@@ -448,16 +448,28 @@ describe('turnoPostPitch — [LANCIO:SLOTS], [LANCIO:NO], finestra', () => {
     expect(sendFreeText).toHaveBeenCalledTimes(2);
   });
 
-  // Il pulsante premuto alle 20:40 del 5, prima che la live cominci: la chiamata
-  // immediata non c'e' ancora (modo 'giorno', e' la regola di modoPostPitch), ma i giorni
-  // si chiamano come li chiama chi scrive il 5 — il 6 e' domani. Prima la bolla diceva
-  // "oggi pomeriggio" parlando del pomeriggio del giorno dopo.
-  it('alle 20:40 del 5 le ore sono quelle di domani, anche se la chiamata subito non c e', async () => {
+  // Il pulsante premuto alle 20:40 del 5, prima che la live cominci. Fuori dalla notte
+  // del webinar: niente chiamata immediata e niente proposta spontanea della mattina del
+  // 6 (la regola di `modoPostPitch`, invariata). Le PAROLE pero' sono quelle di chi
+  // scrive il 5: il 7 e' "mercoledi 7 ottobre", non "domani mattina". Prima la bolla
+  // diceva "oggi pomeriggio" parlando del pomeriggio del 6 e "domani mattina" del 7.
+  it('alle 20:40 del 5 i giorni si chiamano col nome del 5, e la mattina non si propone', async () => {
     genera.mockResolvedValueOnce(modello({ lancioTag: { tag: 'SLOTS' } }));
     const { supabase } = makeSupabase();
     await turnoPostPitch(supabase, scelta('una call'), ctx(new Date('2026-10-05T20:40:00+02:00')));
     expect(genera.mock.calls[0][1].modo).toBe('giorno');
-    expect(bolle()[0]).toBe(SLOT_TEXT_NOTTE);
+    expect(bolle()[0]).toBe('Per la call ho domani pomeriggio dalle 15 alle 20: che ora preferisci? Se puoi solo la mattina, ho mercoledì 7 ottobre dalle 9 alle 14.');
+  });
+
+  // Alle 02:00 del 6 le due decisioni divergono: la chiamata immediata c'e' ancora
+  // (`modo` notte) e con lei la proposta della mattina, ma i giorni si chiamano come li
+  // chiama chi scrive il 6 — "stamattina", non "domattina".
+  it('alle 02:00 del 6 la mattina si propone ancora, con le parole di oggi', async () => {
+    genera.mockResolvedValueOnce(modello({ lancioTag: { tag: 'SLOTS' } }));
+    const { supabase } = makeSupabase();
+    await turnoPostPitch(supabase, scelta('una call'), ctx(new Date('2026-10-06T02:00:00+02:00')));
+    expect(genera.mock.calls[0][1].modo).toBe('notte');
+    expect(bolle()[0]).toBe('Per la call ho libero stamattina alle 9, alle 11 o alle 14, oppure oggi pomeriggio dalle 15 alle 20: che ora preferisci?');
   });
 
   it('modello vuoto senza tag: silenzio definitivo', async () => {

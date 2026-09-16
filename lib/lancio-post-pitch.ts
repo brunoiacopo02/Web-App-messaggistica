@@ -81,6 +81,11 @@ export async function turnoPostPitch(
   // Come si chiamano i giorni adesso: `modo` dice se la chiamata immediata e' ancora
   // possibile, `etichette` se il 6 e' "domani" o "oggi". Alle 20:40 del 5 sono diversi.
   const etichette = modoEtichette(now, eventoAt);
+  // La mattina del giorno dopo si propone da soli finche' siamo nella notte del webinar
+  // (fino alle 03:00): e' una decisione di opportunita', non di lessico, e resta attaccata
+  // a `modoPostPitch`. Alle 02:00 del 6 la mattina si propone ancora, ma si chiama
+  // "stamattina": le due cose divergono e vanno passate separate ai testi.
+  const mattinaProponibile = modo === 'notte';
 
   // Il congedo è già uscito e la fase non è terminale: il CRM aveva rifiutato lo scarto
   // e questo turno serve solo a ritentarlo. Niente modello, niente seconda bolla, nessuna
@@ -135,10 +140,15 @@ export async function turnoPostPitch(
     return ore;
   };
 
+  /** Come si compone il testo con le ore: etichette dei giorni e permesso di proporre la
+   *  mattina viaggiano insieme, cosi' ogni variante (nessun venditore, ora esaurita, ora
+   *  non valida) li riceve tutti e due senza doverli ricordare. */
+  type ComponiTesto = (o: OreProponibili, g: GiorniLancio, m: ModoEtichette, mattinaOk: boolean) => string;
+
   /** Manda un testo con le ore (scritto dal codice) e segna che le ore sono state mostrate. */
-  const mostraOre = async (componi: (o: OreProponibili, g: GiorniLancio, m: ModoEtichette) => string = testoSlots): Promise<'active'> => {
+  const mostraOre = async (componi: ComponiTesto = testoSlots): Promise<'active'> => {
     const o = await leggiOre();
-    await inviaBollaLancio(supabase, c, componi(o, giorni, etichette));
+    await inviaBollaLancio(supabase, c, componi(o, giorni, etichette, mattinaProponibile));
     await salvaInfo({ ...info, slotsMostratiAt: now.toISOString() });
     if (o.mattina.length === 0 && o.pomeriggio.length === 0 && o.dopodomani.length === 0) {
       // Nessuna ora proposta: `lancio_slots_mostrati` direbbe il falso, e chi conta le
@@ -149,7 +159,7 @@ export async function turnoPostPitch(
       const nota = await sendCrmNota(supabase, c.conversationId, NOTA_SENZA_ORE);
       await eventoLancio(supabase, c, 'lancio_slots_vuoti', { notaInviata: nota.sent, errore: nota.error ?? null }, `[lancio] conv ${c.conversationId}: nessuna ora libera nei due giorni, nota al CRM`, 'warn');
     } else {
-      await eventoLancio(supabase, c, 'lancio_slots_mostrati', { mattina: o.mattina, pomeriggio: o.pomeriggio, dopodomani: o.dopodomani, modo, etichette }, `[lancio] conv ${c.conversationId}: ore proposte`);
+      await eventoLancio(supabase, c, 'lancio_slots_mostrati', { mattina: o.mattina, pomeriggio: o.pomeriggio, dopodomani: o.dopodomani, modo, etichette, mattinaProponibile }, `[lancio] conv ${c.conversationId}: ore proposte`);
     }
     await tracciaTurnoLancio(supabase, c, 'slots');
     return 'active';
@@ -207,7 +217,7 @@ export async function turnoPostPitch(
     return sceltaFatta('gia_prenotato', { at: esito.appointmentAt, kind: esito.kind, tag });
   };
 
-  const bloccoSlot = faseScelta ? bloccoSlotPerPrompt(await leggiOre(), giorni, etichette) : null;
+  const bloccoSlot = faseScelta ? bloccoSlotPerPrompt(await leggiOre(), giorni, etichette, mattinaProponibile) : null;
   const r = await genera(historyDi(i.rows), {
     fase: 'post_pitch', nome: i.nome, eventoAt: ctx.settings.eventoAt, now,
     modo, risposteRaccolte: info.risposte.length, bloccoSlot,
@@ -222,7 +232,7 @@ export async function turnoPostPitch(
   switch (tag?.tag) {
     case 'CHIAMA_ORA': {
       // Regola dura: la chiamata immediata esiste solo la notte del webinar.
-      if (modo !== 'notte') return mostraOre((o, g, m) => `${TESTO_CHIAMATA_FUORI_ORARIO} ${testoSlots(o, g, m)}`);
+      if (modo !== 'notte') return mostraOre((o, g, m, mattinaOk) => `${TESTO_CHIAMATA_FUORI_ORARIO} ${testoSlots(o, g, m, mattinaOk)}`);
       const leadId = await leadIdPerCrm();
       if (!leadId) return erroreCrm('lancio_lead_senza_crm', { tag: 'CHIAMA_ORA' });
       const esito = await lancioCallNow({ leadId, info: { risposte: info.risposte }, note: NOTA_SCELTA });
@@ -231,7 +241,7 @@ export async function turnoPostPitch(
         return sceltaFatta('chiama_ora', { venditore: esito.venditore });
       }
       if (esito.motivo === 'gia_prenotato') return giaPrenotato(esito, 'CHIAMA_ORA');
-      if (esito.motivo === 'nessun_venditore') return mostraOre((o, g, m) => `${TESTO_NESSUN_VENDITORE} ${testoSlots(o, g, m)}`);
+      if (esito.motivo === 'nessun_venditore') return mostraOre((o, g, m, mattinaOk) => `${TESTO_NESSUN_VENDITORE} ${testoSlots(o, g, m, mattinaOk)}`);
       // `conflitto` compreso: il client l'ha già ritentato una volta, qui si dice al lead
       // di riscrivere invece di martellare il CRM dentro il turno.
       return erroreCrm('lancio_crm_errore', { tag: 'CHIAMA_ORA', ...esito });
@@ -254,9 +264,9 @@ export async function turnoPostPitch(
         // Le ore aggiornate sono nella risposta: si ripropone da quelle, non da quelle di
         // prima. `esito.slots` è già `LancioSlots | null` letto dal client: niente cast.
         ore = oreProponibili(esito.slots, now, eventoAt);
-        return mostraOre((o, g, m) => testoOraEsaurita(v.hour, o, g, m));
+        return mostraOre((o, g, m, mattinaOk) => testoOraEsaurita(v.hour, o, g, m, mattinaOk));
       }
-      if (esito.motivo === 'nessun_venditore') return mostraOre((o, g, m) => `${TESTO_NESSUN_VENDITORE} ${testoSlots(o, g, m)}`);
+      if (esito.motivo === 'nessun_venditore') return mostraOre((o, g, m, mattinaOk) => `${TESTO_NESSUN_VENDITORE} ${testoSlots(o, g, m, mattinaOk)}`);
       if (esito.motivo === 'fuori_regole') {
         await eventoLancio(supabase, c, 'lancio_at_non_valido', { at: tag.at, motivo: 'crm_fuori_regole' }, `[lancio] conv ${c.conversationId}: il CRM rifiuta ${tag.at} (422)`, 'warn');
         return mostraOre(testoAtNonValido);
