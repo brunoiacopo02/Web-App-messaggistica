@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { fetchAllRows } from '@/lib/supabase/paginate';
 import { sendTemplateAndLog } from '@/lib/messaging';
-import { classificaPrimoMessaggio } from '@/lib/primo-messaggio';
+import { classificaPrimoMessaggio, vaRiagganciato } from '@/lib/primo-messaggio';
 import { LANCIO_SLUG } from '@/lib/lancio-fase';
 import { impostaFaseLancio } from '@/lib/lancio-db';
 import { templateName } from '@/lib/name';
@@ -114,6 +114,10 @@ export async function POST(req: NextRequest) {
   let inviati = 0, falliti = 0;
   // Prese dal webhook mentre il ciclo era in corso: non sono ne' invii ne' fallimenti.
   let giaPrese = 0;
+  // Entrate nel lancio dal pulsante del webinar: adottate e passate a post_pitch, ma
+  // senza riaggancio (vedi `vaRiagganciato`). Contate a parte perche' non sono ne'
+  // invii ne' fallimenti, e perche' la loro presenza qui e' una notizia.
+  let pulsante = 0;
   const errori: string[] = [];
   const esempi = muti.slice(0, 5).map((c: any) => ({ conv: c.id, scrittoIl: c.last_inbound_at }));
 
@@ -201,6 +205,12 @@ export async function POST(req: NextRequest) {
         scrittoIl: primoRiga?.created_at ?? now,
       });
 
+      // Chi e' arrivato dal pulsante del webinar si ferma qui: ha la fase, ha il lead sul
+      // CRM, e a rispondergli ci pensa il turno del lancio nel drain. Il riaggancio di
+      // Marta ("ci eravamo persi a meta' discorso") sarebbe una seconda voce sulla stessa
+      // persona, con un testo che col webinar non c'entra niente.
+      if (!vaRiagganciato(esito)) { pulsante++; continue; }
+
       const nome = templateName(l.first_name);
       const res = await sendTemplateAndLog(
         admin, c.id, l.phone, templateSid, 'Riaggancio (mai risposto)', from,
@@ -213,13 +223,13 @@ export async function POST(req: NextRequest) {
 
     await admin.from('event_log').insert({
       type: 'adotta_mai_risposti',
-      payload: { candidate: muti.length, inviati, falliti, giaPrese, dal } as never,
-      message: `[bot-fissatore] recupero di chi ci ha scritto per primo: ${inviati} riaggancio partiti, ${falliti} falliti, ${giaPrese} gia' prese dal webhook`,
+      payload: { candidate: muti.length, inviati, falliti, giaPrese, pulsante, dal } as never,
+      message: `[bot-fissatore] recupero di chi ci ha scritto per primo: ${inviati} riaggancio partiti, ${falliti} falliti, ${giaPrese} gia' prese dal webhook, ${pulsante} entrate nel lancio dal pulsante`,
       level: falliti > 0 ? 'warn' : 'info',
     });
   }
 
   return NextResponse.json({
-    ok: true, dal, candidate: muti.length, esaminate: convs.length, inviati, falliti, giaPrese, esegui, errori, esempi,
+    ok: true, dal, candidate: muti.length, esaminate: convs.length, inviati, falliti, giaPrese, pulsante, esegui, errori, esempi,
   });
 }

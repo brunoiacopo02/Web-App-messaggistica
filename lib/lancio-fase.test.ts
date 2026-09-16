@@ -180,9 +180,9 @@ describe('haCongedo — il marcatore durevole', () => {
   });
 });
 
-describe('pulsanteRiportaInPostPitch — il pulsante del webinar vince, ma non si ripete', () => {
-  it('riporta a post_pitch ogni fase che non sia già il dopo-pitch, chiuso compreso', () => {
-    for (const fase of ['attesa', 'posto_bloccato', 'link_inviato', 'followup_inviato', 'restituito', 'chiuso']) {
+describe('pulsanteRiportaInPostPitch — elenco chiuso di fasi che il pulsante riporta', () => {
+  it('riporta a post_pitch dalle quattro fasi del prima-e-durante, chiuso compreso', () => {
+    for (const fase of ['attesa', 'posto_bloccato', 'link_inviato', 'chiuso']) {
       expect(pulsanteRiportaInPostPitch(fase)).toBe(true);
     }
   });
@@ -196,5 +196,14 @@ describe('pulsanteRiportaInPostPitch — il pulsante del webinar vince, ma non s
   it('non riscrive post_pitch né scelta_fatta: nessun lancio_fase_cambiata doppio', () => {
     expect(pulsanteRiportaInPostPitch('post_pitch')).toBe(false);
     expect(pulsanteRiportaInPostPitch('scelta_fatta')).toBe(false);
+  });
+
+  it('non tocca followup_inviato (la chat è del flusso standard di B5) né restituito (è del GDO)', () => {
+    expect(pulsanteRiportaInPostPitch('followup_inviato')).toBe(false);
+    expect(pulsanteRiportaInPostPitch('restituito')).toBe(false);
+  });
+
+  it('una fase che non riconosce non si tocca: l elenco è chiuso', () => {
+    expect(pulsanteRiportaInPostPitch('boh')).toBe(false);
   });
 });

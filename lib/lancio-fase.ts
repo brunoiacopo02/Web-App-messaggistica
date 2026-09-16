@@ -21,21 +21,34 @@ export function isLancioFase(v: unknown): v is LancioFase {
 /** Con queste fasi il lancio è finito per quella chat: torna a Mario (o al GDO). */
 export const LANCIO_FASI_TERMINALI: readonly LancioFase[] = ['chiuso', 'restituito'];
 
-/** Le fasi che il pulsante del webinar NON riscrive: sono già il dopo-pitch. */
-const FASI_GIA_POST_PITCH: ReadonlySet<string> = new Set<string>(['post_pitch', 'scelta_fatta']);
+/**
+ * Le UNICHE fasi da cui il pulsante del webinar riporta in `post_pitch`. Elenco chiuso:
+ * quello che non è qui dentro non si tocca (`''` = chat mai entrata nel lancio).
+ */
+const FASI_CHE_IL_PULSANTE_RIPORTA: ReadonlySet<string> = new Set<string>([
+  '', 'attesa', 'posto_bloccato', 'link_inviato', 'chiuso',
+]);
 
 /**
  * Il pulsante del webinar deve (ri)portare questa chat in `post_pitch`?
  *
- * Il marker vince su tutto — chi lo preme sta chiedendo adesso, qualunque cosa sia
- * successa prima: una chat in `attesa`, col link già inviato, o perfino `chiuso` da un
- * no di settimane fa torna al dopo-pitch. Non si riscrive però una fase che c'è già:
- * `post_pitch` e `scelta_fatta` SONO il dopo-pitch, e un secondo tocco del pulsante (o
- * la stessa frase incollata due volte) lascerebbe solo un `lancio_fase_cambiata` in più
- * senza cambiare niente — e su `scelta_fatta` cancellerebbe anche l'avanzamento.
+ * Il marker vince su chi possiede la chat e su quello che il lead aveva detto prima — una
+ * chat in `attesa`, col link già inviato, o perfino `chiuso` da un no di settimane fa
+ * torna al dopo-pitch, e così una chat che nel lancio non c'è mai entrata (fase nulla).
+ * Non vince invece su chi ha già preso in mano quella persona DOPO il pitch:
+ *
+ *  - `post_pitch` e `scelta_fatta` sono già il dopo-pitch: riscriverli lascerebbe solo un
+ *    `lancio_fase_cambiata` in più (e su `scelta_fatta` cancellerebbe l'avanzamento);
+ *  - da `followup_inviato` il flusso standard di B5 possiede la chat, e il pulsante
+ *    premuto una seconda volta non deve rimetterla in coda al pitch;
+ *  - `restituito` vuol dire che quel lead è tornato al GDO: riportarlo nel lancio
+ *    glielo toglierebbe di mano.
+ *
+ * Nei casi in cui torna falso il pulsante si registra lo stesso (evento `lancio_pulsante`
+ * con `faseInvariata`): il fatto che l'abbia premuto si vede nei pannelli comunque.
  */
 export function pulsanteRiportaInPostPitch(fase: string | null | undefined): boolean {
-  return !FASI_GIA_POST_PITCH.has(fase ?? '');
+  return FASI_CHE_IL_PULSANTE_RIPORTA.has(fase ?? '');
 }
 
 /** Le fasi che questo blocco (B1) sa gestire nel turno. Le altre arrivano con B4/B5. */

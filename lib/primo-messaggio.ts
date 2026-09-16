@@ -42,6 +42,18 @@ export function isMarkerPulsanteWebinar(body: string | null | undefined): boolea
   return MARKER_PULSANTE_WEBINAR.test(body ?? '');
 }
 
+/**
+ * A questo lead va mandato il riaggancio di Marta ("ci eravamo persi a meta' discorso")?
+ *
+ * No a chi e' arrivato dal pulsante del webinar: quella chat entra nel lancio, e a
+ * rispondergli ci pensa il turno del lancio nel drain. Il riaggancio di Marta sopra un
+ * lead del lancio sarebbe una seconda voce sulla stessa persona, per giunta con un testo
+ * che col webinar non c'entra niente.
+ */
+export function vaRiagganciato(esito: EsitoPrimoMessaggio): boolean {
+  return esito.tipo !== 'lancio_pulsante';
+}
+
 export function classificaPrimoMessaggio(input: {
   primoInbound: string | null | undefined;
   inboundCorrente: string | null | undefined;

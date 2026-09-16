@@ -4,6 +4,7 @@ import {
   isMarkerPulsanteWebinar,
   TESTO_PULSANTE_WEBINAR,
   PROVENIENZA_LANCIO_WEBDEV,
+  vaRiagganciato,
 } from './primo-messaggio';
 
 const TELEGRAM = 'Buongiorno, sono nel canale Telegram e mi hanno indicato questo contatto per più informazioni su Fenice Academy';
@@ -64,5 +65,25 @@ describe('classificaPrimoMessaggio — i tre esiti non si confondono (vincolo PO
     // molto diversa" e non devono mai finire nello stesso esito.
     expect(classificaPrimoMessaggio({ primoInbound: TELEGRAM, inboundCorrente: TESTO_PULSANTE_WEBINAR }))
       .toEqual({ tipo: 'lancio_pulsante', provenienza: PROVENIENZA_LANCIO_WEBDEV });
+  });
+});
+
+describe('vaRiagganciato — chi NON deve ricevere il riaggancio di Marta', () => {
+  it('chi arriva dal pulsante del webinar non si riaggancia: risponde il turno del lancio', () => {
+    expect(vaRiagganciato({ tipo: 'lancio_pulsante', provenienza: PROVENIENZA_LANCIO_WEBDEV })).toBe(false);
+  });
+
+  it('Telegram e inbound spontaneo si riagganciano come sempre', () => {
+    expect(vaRiagganciato({ tipo: 'telegram', provenienza: 'TELEGRAM' })).toBe(true);
+    expect(vaRiagganciato({ tipo: 'inbound', provenienza: 'INBOUND' })).toBe(true);
+  });
+
+  it('e la stessa decisione che prende il cron, letta dall esito della classificazione', () => {
+    expect(vaRiagganciato(classificaPrimoMessaggio({
+      primoInbound: TESTO_PULSANTE_WEBINAR, inboundCorrente: TESTO_PULSANTE_WEBINAR,
+    }))).toBe(false);
+    expect(vaRiagganciato(classificaPrimoMessaggio({
+      primoInbound: 'ciao, mi interessa il corso', inboundCorrente: 'ciao, mi interessa il corso',
+    }))).toBe(true);
   });
 });

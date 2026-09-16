@@ -230,14 +230,24 @@ export async function POST(req: NextRequest) {
         // `impostaFaseLancio` (lib/lancio-db.ts) e' l'unico scrittore di `lancio_fase` e
         // si scrive da solo l'evento `lancio_fase_cambiata`. Await e non `after()`: e' un
         // update solo, e la fase deve essere sul posto prima che il drain parta qui sotto.
-        if (pulsanteRiportaInPostPitch(conv.lancio_fase)) {
+        // L'elenco delle fasi da cui si rientra e' chiuso (vedi la funzione): da
+        // `followup_inviato` e `restituito` la fase NON si muove — dopo il follow-up la
+        // chat e' del flusso standard di B5, e un restituito e' tornato al GDO.
+        const cambiaFase = pulsanteRiportaInPostPitch(conv.lancio_fase);
+        if (cambiaFase) {
           await impostaFaseLancio(supabase, conversationId, 'post_pitch');
           conv.lancio_fase = 'post_pitch';
         }
+        // L'evento si scrive SEMPRE, anche a fase invariata: che quella persona abbia
+        // premuto il pulsante si deve vedere nei pannelli comunque.
         await supabase.from('event_log').insert({
           type: 'lancio_pulsante',
-          payload: { conversationId, giaDiMario: conv.ai_owner === 'mario' } as never,
-          message: `[lancio] ${phone} ha premuto il pulsante del webinar (conv ${conversationId})`,
+          payload: {
+            conversationId,
+            giaDiMario: conv.ai_owner === 'mario',
+            ...(cambiaFase ? {} : { faseInvariata: true }),
+          } as never,
+          message: `[lancio] ${phone} ha premuto il pulsante del webinar (conv ${conversationId})${cambiaFase ? '' : `, fase ${conv.lancio_fase} invariata`}`,
           level: 'info',
         });
       }
