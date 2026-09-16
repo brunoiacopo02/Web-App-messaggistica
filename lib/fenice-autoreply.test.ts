@@ -1834,10 +1834,12 @@ describe('drainMarioReplies — aggancio del turno lancio', () => {
   });
 
   // Il lead scrive "ok", il turno parte, e mentre gira (modello + CRM + Twilio) scrive
-  // "alle 10". Prima il drain usciva col `break` e quel secondo messaggio non riceveva
-  // risposta: la traccia `fenice_ai_reply` viene scritta a turno finito, quindi per il
-  // re-drive risultava gia' gestito e restava scoperto fino al messaggio dopo.
-  it('un inbound arrivato DURANTE il turno fa un secondo giro nello stesso drain', async () => {
+  // "alle 10". La bolla del turno viene scritta DOPO, alla fine: in cronologia il secondo
+  // messaggio resta sotto la bolla, e il criterio "primo inbound dopo l'ultimo outbound"
+  // non lo vede proprio. Prima il drain usciva col `break` e nessuno gli rispondeva: la
+  // traccia `fenice_ai_reply` viene scritta a turno finito, quindi per il re-drive quel
+  // messaggio risultava gia' gestito.
+  it('un inbound arrivato DURANTE il turno, PRIMA della bolla, fa un secondo giro', async () => {
     const { supabase, calls, messagesRows } = makeDrainSupabase(
       { id: 47, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L7', bot_outcome: null, gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
         lancio_slug: 'webdev-2026-10', lancio_fase: 'post_pitch', leads: { first_name: 'Anna' } },
@@ -1845,9 +1847,9 @@ describe('drainMarioReplies — aggancio del turno lancio', () => {
     );
     vi.mocked(eseguiTurnoLancio)
       .mockImplementationOnce(async () => {
-        // La bolla del turno, e subito dopo il lead che scrive di nuovo.
+        // L'ordine vero: il lead scrive mentre il turno gira, la bolla esce dopo.
+        messagesRows.push({ direction: 'in', body: 'alle 10', template_sid: null, created_at: '2026-10-05T22:40:05Z' });
         messagesRows.push({ direction: 'out', body: 'Quando ti chiamiamo?', template_sid: null, created_at: '2026-10-05T22:40:08Z' });
-        messagesRows.push({ direction: 'in', body: 'alle 10', template_sid: null, created_at: '2026-10-05T22:40:11Z' });
         return 'active';
       })
       .mockImplementationOnce(async () => {
@@ -1858,8 +1860,51 @@ describe('drainMarioReplies — aggancio del turno lancio', () => {
     expect(eseguiTurnoLancio).toHaveBeenCalledTimes(2);
     expect(vi.mocked(eseguiTurnoLancio).mock.calls[0][1].inboundBody).toBe('ok');
     expect(vi.mocked(eseguiTurnoLancio).mock.calls[1][1].inboundBody).toBe('alle 10');
+    // Il secondo giro non rilavora l'"ok": quel messaggio e' stato consumato dal primo
+    // turno e non torna mai come messaggio da gestire.
+    expect(vi.mocked(eseguiTurnoLancio).mock.calls.filter((c) => c[1].inboundBody === 'ok')).toHaveLength(1);
     expect(generateMarioReply).not.toHaveBeenCalled();
     expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+
+  // L'altro ordine (il lead scrive DOPO la bolla) deve continuare a funzionare: e' il
+  // caso che il criterio vecchio vedeva, e che non va perso.
+  it('un inbound arrivato DOPO la bolla fa comunque un secondo giro', async () => {
+    const { supabase, messagesRows } = makeDrainSupabase(
+      { id: 50, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L10', bot_outcome: null, gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
+        lancio_slug: 'webdev-2026-10', lancio_fase: 'post_pitch' },
+      [WELCOME, { ...SI, body: 'ok', created_at: '2026-10-05T22:40:00Z' }],
+    );
+    vi.mocked(eseguiTurnoLancio)
+      .mockImplementationOnce(async () => {
+        messagesRows.push({ direction: 'out', body: 'Quando ti chiamiamo?', template_sid: null, created_at: '2026-10-05T22:40:08Z' });
+        messagesRows.push({ direction: 'in', body: 'alle 10', template_sid: null, created_at: '2026-10-05T22:40:11Z' });
+        return 'active';
+      })
+      .mockImplementationOnce(async () => 'active');
+    await drainMarioReplies(supabase, 50, '+393331234567', () => 0);
+    expect(eseguiTurnoLancio).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(eseguiTurnoLancio).mock.calls[1][1].inboundBody).toBe('alle 10');
+  });
+
+  // Il lead che scrive a raffica: tre giri e ci si ferma, anche se continua.
+  it('al massimo 3 turni di lancio per drain', async () => {
+    const { supabase, messagesRows } = makeDrainSupabase(
+      { id: 51, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L11', bot_outcome: null, gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
+        lancio_slug: 'webdev-2026-10', lancio_fase: 'post_pitch' },
+      [WELCOME, { ...SI, body: 'ok', created_at: '2026-10-05T22:40:00Z' }],
+    );
+    let n = 0;
+    vi.mocked(eseguiTurnoLancio).mockImplementation(async () => {
+      n += 1;
+      messagesRows.push({ direction: 'in', body: 'ancora ' + n, template_sid: null, created_at: '2026-10-05T22:4' + n + ':00Z' });
+      messagesRows.push({ direction: 'out', body: 'ok', template_sid: null, created_at: '2026-10-05T22:4' + n + ':05Z' });
+      return 'active';
+    });
+    await drainMarioReplies(supabase, 51, '+393331234567', () => 0);
+    expect(eseguiTurnoLancio).toHaveBeenCalledTimes(3);
+    vi.mocked(eseguiTurnoLancio).mockReset();
+    vi.mocked(eseguiTurnoLancio).mockResolvedValue('active');
   });
 
   it('nessun messaggio nuovo durante il turno: un giro solo, il drain non rilavora lo stesso inbound', async () => {
@@ -1881,8 +1926,8 @@ describe('drainMarioReplies — aggancio del turno lancio', () => {
       [WELCOME, { ...SI, body: 'non mi interessa', created_at: '2026-10-05T22:40:00Z' }],
     );
     vi.mocked(eseguiTurnoLancio).mockImplementationOnce(async () => {
+      messagesRows.push({ direction: 'in', body: 'anzi aspetta', template_sid: null, created_at: '2026-10-05T22:40:05Z' });
       messagesRows.push({ direction: 'out', body: 'Nessun problema!', template_sid: null, created_at: '2026-10-05T22:40:08Z' });
-      messagesRows.push({ direction: 'in', body: 'anzi aspetta', template_sid: null, created_at: '2026-10-05T22:40:11Z' });
       return 'closed';
     });
     await drainMarioReplies(supabase, 49, '+393331234567', () => 0);

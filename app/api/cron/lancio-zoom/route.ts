@@ -324,6 +324,8 @@ export async function GET(req: NextRequest) {
       if (giaSpediti.has(c.id)) {
         // Riparazione: il messaggio era gia' a DB e manca solo la fase. Stessa guardia
         // dell'invio — fra la select e adesso la chat puo' essere andata avanti da sola.
+        // Qui il timbro non c'e' ancora, e se la guardia scatta resta nullo: non serve,
+        // perche' la fase avanzata basta a tenere questa chat fuori dai candidati.
         await impostaFaseLancio(supabase, c.id, 'link_inviato', {
           lancio_link_inviato_at: new Date().toISOString(),
         }, { soloDaFasi: FASI_BERSAGLIO });
@@ -394,8 +396,13 @@ export async function GET(req: NextRequest) {
         // Compare-and-set sulla fase, non un update alla cieca: mentre il blast girava,
         // il turno dell'attesa (B1) puo' aver portato questa chat a `posto_bloccato` —
         // o il lead puo' aver gia' premuto il pulsante. Scrivere `link_inviato` sopra
-        // una fase piu' avanzata la riporterebbe indietro col link ormai partito. Il
-        // timbro invece si scrive comunque: l'invio e' andato e non si ripete.
+        // una fase piu' avanzata la riporterebbe indietro col link ormai partito.
+        //
+        // Se la guardia scatta non si scrive NIENTE, `lancio_link_inviato_at` compreso:
+        // a proteggere dal doppio invio non e' questa riga ma il claim di sopra, che il
+        // timbro l'ha gia' scritto PRIMA di chiamare Twilio (e con lo stesso valore,
+        // quindi qui sarebbe comunque un no-op). Una chat con la fase avanti e il timbro
+        // messo esce da sola dai candidati del run successivo.
         await impostaFaseLancio(supabase, c.id, 'link_inviato', { lancio_link_inviato_at: timbro }, { soloDaFasi: FASI_BERSAGLIO });
         return 'sent';
       } catch (err) {

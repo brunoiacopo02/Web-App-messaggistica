@@ -297,6 +297,26 @@ const quando = (v: string | null | undefined): number => {
 };
 
 /**
+ * L'inbound piu' recente che il turno ha davanti: e' l'ultimo messaggio del lotto che il
+ * turno consuma, e quindi la soglia per sapere se ne e' arrivato un altro mentre girava.
+ *
+ * Si guarda il TEMPO, non la posizione rispetto all'ultimo outbound: il turno del lancio
+ * scrive la sua bolla alla FINE (dopo 5-20 secondi), quindi un messaggio arrivato durante
+ * il turno finisce in cronologia PRIMA di quella bolla — per
+ * `nextUnansweredInboundIndex`, che cerca il primo inbound dopo l'ultimo outbound, quel
+ * messaggio semplicemente non esiste.
+ */
+export function ultimoInboundAt(righe: readonly DrainMsgRow[]): number {
+  return righe.reduce((max, m) => (m.direction === 'in' ? Math.max(max, quando(m.created_at)) : max), 0);
+}
+
+/** Il primo inbound piu' nuovo della soglia, -1 se non c'e': e' arrivato DURANTE il turno,
+ *  ovunque sia finito rispetto alla bolla. */
+export function indiceInboundDopo(righe: readonly DrainMsgRow[], soglia: number): number {
+  return righe.findIndex((m) => m.direction === 'in' && quando(m.created_at) > soglia);
+}
+
+/**
  * Best-effort: ACCORPA i messaggi del lead. Attende la finestra di latenza (5-40s) e poi
  * risponde UNA volta a tutti i messaggi arrivati (cronologia dall'arruolamento in poi,
  * via ai_started_at). Se durante l'attesa/elaborazione arrivano altri messaggi, fa un altro
@@ -458,7 +478,6 @@ export async function drainMarioReplies(
   }
 
   let finalStatus = 'active';
-  let giriLancio = 0;
   // Giornate già al completo: il bot non le propone. Si legge una volta per drain,
   // non per turno. Senza BOOKING_DAILY_CAP la lista è vuota e non si tocca il DB.
   const giorniPieni = await datePiene(supabase, tettoGiornaliero(process.env.BOOKING_DAILY_CAP), new Date());
@@ -480,33 +499,40 @@ export async function drainMarioReplies(
       const videoGiaInviato = rows.some((m) => m.direction === 'out' && containsVideoLink(m.body));
 
       if (lancioInCorso(lancio)) {
-        finalStatus = await eseguiTurnoLancio(supabase, {
-          conversationId, phone, from, crmLeadId,
-          fase: lancio.lancio_fase ?? null,
-          nome: gdo.leads?.first_name ?? null,
-          rows, inboundBody,
-          // Le risposte del riscaldamento (e il marcatore del congedo): senza, il turno
-          // post-pitch ricomincerebbe da capo a ogni messaggio del lead.
-          lancioInfo: lancio.lancio_info ?? null,
-        });
-        giriLancio++;
-        // Un inbound arrivato DURANTE il turno restava senza risposta fino al messaggio
-        // successivo: il turno dura 5-20 secondi (modello + CRM + Twilio), il lead scrive
-        // "ok" e subito dopo "alle 10", e la traccia `fenice_ai_reply` viene scritta a
-        // turno finito — quindi per il re-drive di `bot-followups` quel secondo messaggio
-        // risultava già gestito. Si rilegge la cronologia di adesso e si fa un altro giro
-        // solo se c'è qualcosa di STRETTAMENTE più nuovo dell'inbound appena lavorato:
-        // un turno che ha taciuto (fuori orario, solo media) lascia scoperto lo STESSO
-        // inbound, e senza questo confronto il drain lo rilavorerebbe a vuoto.
-        //
-        // Solo mentre il lancio resta 'active': un congedo o un passaggio umano hanno
-        // chiuso la partita, e `lancio.lancio_fase` qui è quella del claim — un secondo
-        // giro rifarebbe il turno con una fase che a DB non c'è più.
-        const dopoIlTurno = await loadHistory();
-        const iNuovo = nextUnansweredInboundIndex(dopoIlTurno);
-        const arrivatoDurante =
-          iNuovo >= 0 && quando(dopoIlTurno[iNuovo].created_at) > quando(rows[inboundIdx].created_at);
-        if (finalStatus === 'active' && arrivatoDurante && giriLancio < MAX_GIRI_LANCIO) continue;
+        // Il turno del lancio dura 5-20 secondi (modello + CRM + Twilio) e scrive la sua
+        // bolla alla fine: un messaggio del lead arrivato nel frattempo ("ok" e subito
+        // dopo "alle 10") resta sotto la bolla in cronologia e nessuno gli risponde piu'
+        // — la traccia `fenice_ai_reply` viene scritta a turno finito, quindi anche il
+        // re-drive di `bot-followups` lo considera gestito. Qui si gira finche' arrivano
+        // messaggi NUOVI, al massimo MAX_GIRI_LANCIO volte: il confronto e' sul tempo
+        // dell'ultimo inbound che il turno ha visto, non sulla posizione rispetto
+        // all'ultima bolla.
+        let righeTurno = rows;
+        let inboundTurno = inboundBody;
+        for (let giro = 0; giro < MAX_GIRI_LANCIO; giro++) {
+          // La soglia si prende PRIMA del turno: dopo, la cronologia e' gia' cambiata.
+          const ultimoVisto = ultimoInboundAt(righeTurno);
+          finalStatus = await eseguiTurnoLancio(supabase, {
+            conversationId, phone, from, crmLeadId,
+            fase: lancio.lancio_fase ?? null,
+            nome: gdo.leads?.first_name ?? null,
+            rows: righeTurno, inboundBody: inboundTurno,
+            // Le risposte del riscaldamento (e il marcatore del congedo): senza, il turno
+            // post-pitch ricomincerebbe da capo a ogni messaggio del lead.
+            lancioInfo: lancio.lancio_info ?? null,
+          });
+          // Solo mentre il lancio resta 'active': un congedo o un passaggio umano hanno
+          // chiuso la partita, e `lancio.lancio_fase` qui e' quella del claim — un altro
+          // giro rifarebbe il turno con una fase che a DB non c'e' piu'.
+          if (finalStatus !== 'active') break;
+          const dopoIlTurno = await loadHistory();
+          const iNuovo = indiceInboundDopo(dopoIlTurno, ultimoVisto);
+          // Niente di nuovo: un turno che ha taciuto (fuori orario, solo media) lascia
+          // scoperto lo STESSO inbound, e rilavorarlo sarebbe un giro a vuoto.
+          if (iNuovo < 0) break;
+          righeTurno = dopoIlTurno;
+          inboundTurno = dopoIlTurno[iNuovo].body ?? '';
+        }
         break;
       }
 
