@@ -97,6 +97,9 @@ export type AdoptGate = {
   handedOffAt?: string | null;
   /** Esiste una QUALUNQUE riga in uscita su questa conversazione, anche senza SID. */
   hasOutbound: boolean;
+  /** L'inbound corrente e' il pulsante del webinar (lib/primo-messaggio.ts): la storia
+   *  della chat non conta, la richiesta e' esplicita e fatta adesso. */
+  lancioPulsante?: boolean;
 };
 
 /**
@@ -124,6 +127,7 @@ export function shouldAdoptInbound(g: AdoptGate): boolean {
   if (!g.toMatchesFenice || !g.adoptionOn || !g.autoReplyOn) return false;
   if (g.aiOwner !== null) return false;
   if (g.aiPausedAt || g.handedOffAt) return false;
+  if (g.lancioPulsante) return true;
   return !g.hasOutbound;
 }
 
