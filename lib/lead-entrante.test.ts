@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { pushLeadEntrante } from './lead-entrante';
+import { pushLeadEntrante, type PushLeadEntranteArgs } from './lead-entrante';
 
-const ARGS = {
+const ARGS: PushLeadEntranteArgs = {
   conversationId: 42,
   telefono: '+393200431888',
   nome: null,
@@ -156,5 +156,18 @@ describe('pushLeadEntrante', () => {
     const evento = calls.events.find((e) => e.type === 'lead_entrante_push_error');
     expect(evento).toBeDefined();
     expect(evento.payload).toMatchObject({ conversationId: 42, motivo: 'not_configured' });
+  });
+
+  it('provenienza "Lancio Web Dev AI" viaggia com e, senza maiuscole: la normalizza il CRM', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, status: 200, text: async () => JSON.stringify({ ok: true, leadId: 'uuid-l', creato: true }),
+    })));
+    const { supabase, calls } = makeSupabase();
+    const res = await pushLeadEntrante(supabase, { ...ARGS, provenienza: 'Lancio Web Dev AI', primoMessaggio: 'Ho seguito la live Web Developer AI e voglio saperne di più 🚀' });
+    expect(res).toEqual({ ok: true, leadId: 'uuid-l' });
+    const [, init] = (globalThis.fetch as any).mock.calls[0];
+    expect(JSON.parse(init.body).provenienza).toBe('Lancio Web Dev AI');
+    expect(calls.updates).toEqual([{ crm_lead_id: 'uuid-l' }]);
+    expect(calls.events.find((e) => e.type === 'lead_entrante_push').payload.provenienza).toBe('Lancio Web Dev AI');
   });
 });
