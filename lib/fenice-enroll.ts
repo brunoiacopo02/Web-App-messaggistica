@@ -376,15 +376,24 @@ async function enrollLancio(
   // davvero: col lancio spento o di notte sarebbe una query per niente.
   const cap = leggiTettoOrario(process.env.LANCIO_WELCOME_MAX_PER_HOUR);
   let inviatiUltimaOra: number | null = null;
+  // Conteggio illeggibile = tetto raggiunto. Si sbaglia dalla parte del differire: il
+  // cron ripassa ogni 15 minuti, quindi il prezzo e' un ritardo; lasciar passare alla
+  // cieca proprio mentre il DB e' in affanno e' il modo di ritrovarsi col picco.
   if (!differita) {
     inviatiUltimaOra = await contaBenvenutiUltimaOra(supabase, templateSid);
-    if (!sottoTettoOrario({ inviatiUltimaOra, cap })) differita = 'tetto_orario';
+    if (inviatiUltimaOra === null || !sottoTettoOrario({ inviatiUltimaOra, cap })) {
+      differita = 'tetto_orario';
+    }
   }
 
   if (differita) {
     await supabase.from('conversations').update(convUpdate).eq('id', conversationId);
     await evento(
-      differita === 'tetto_orario' ? { differita, inviatiUltimaOra, cap } : { differita },
+      differita !== 'tetto_orario'
+        ? { differita }
+        : inviatiUltimaOra === null
+          ? { differita, motivo: 'conteggio_fallito', cap }
+          : { differita, inviatiUltimaOra, cap },
       `[lancio] lead ${args.crmLeadId ?? args.phone} preso in carico, benvenuto differito (${differita})`,
     );
     return { ok: true, conversationId, deferred: true };

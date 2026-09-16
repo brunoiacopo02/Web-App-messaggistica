@@ -135,14 +135,17 @@ describe('contaBenvenutiUltimaOra', () => {
     expect(calls.conteggi[0].filtri.some(([, col]) => col === 'conversation_id')).toBe(false);
   });
 
-  it('count nullo → 0', async () => {
+  it('query riuscita senza count → 0: l’ora è vuota, non illeggibile', async () => {
     const { supabase } = makeSupabase({ count: null });
     expect(await contaBenvenutiUltimaOra(supabase, 'HX_W')).toBe(0);
   });
 
-  it('query fallita → 0 (si lascia passare) ma con la traccia a voce alta', async () => {
+  // Fail CLOSED: `null` non è `0`. Chi chiama lo tratta come tetto raggiunto e differisce,
+  // perché il cron ripassa ogni 15 minuti (il prezzo è un ritardo) mentre lasciar passare
+  // alla cieca mentre il DB è in affanno è il modo di ripetere il 15/09.
+  it('query fallita → null (non 0) con la traccia a voce alta', async () => {
     const { supabase, calls } = makeSupabase({ erroreConteggio: { message: 'timeout' } });
-    expect(await contaBenvenutiUltimaOra(supabase, 'HX_W')).toBe(0);
+    expect(await contaBenvenutiUltimaOra(supabase, 'HX_W')).toBeNull();
     expect(eventiDiTipo(calls, 'lancio_tetto_non_letto')[0]).toMatchObject({ level: 'warn' });
   });
 

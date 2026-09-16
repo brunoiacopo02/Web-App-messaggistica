@@ -119,15 +119,18 @@ export async function leggiIngressoLancioAt(
  * `queued`/`sent`/`accepted` contano: sono messaggi gia' consegnati a Meta, ed e' Meta a
  * misurare la qualita'.
  *
- * Se la query fallisce si torna 0, cioe' si lascia passare: un guasto di lettura non deve
- * ammutolire il lancio. Resta la traccia, perche' un tetto che non si legge piu' e' una
- * cosa da vedere subito.
+ * Se la query fallisce si torna `null`, NON zero: chi chiama deve trattarlo come "tetto
+ * raggiunto" e differire. Il tetto esiste per non ripetere il 15/09, e un conteggio che
+ * non si legge non e' una licenza di mandare — il benvenuto differito lo riprende il cron
+ * ogni 15 minuti, quindi il prezzo di sbagliare in questa direzione e' un ritardo, quello
+ * di sbagliare nell'altra e' un numero bruciato. Resta la traccia
+ * (`lancio_tetto_non_letto`): un tetto che non si legge piu' e' da vedere subito.
  */
 export async function contaBenvenutiUltimaOra(
   supabase: Supa,
   welcomeSid: string,
   nowMs: number = Date.now(),
-): Promise<number> {
+): Promise<number | null> {
   const soglia = new Date(nowMs - FINESTRA_TETTO_MS).toISOString();
   const { count, error } = await supabase
     .from('messages')
@@ -140,10 +143,10 @@ export async function contaBenvenutiUltimaOra(
     await supabase.from('event_log').insert({
       type: 'lancio_tetto_non_letto',
       payload: { welcomeSid, errore: error.message } as never,
-      message: `[lancio] tetto orario non leggibile, benvenuti lasciati passare — ${error.message}`,
+      message: `[lancio] tetto orario non leggibile, benvenuti differiti — ${error.message}`,
       level: 'warn',
     });
-    return 0;
+    return null;
   }
   return count ?? 0;
 }

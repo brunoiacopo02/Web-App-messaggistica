@@ -17,7 +17,7 @@ import { openingBody } from './persona';
 
 /** Fake del client Supabase: traccia update su conversations ed insert su event_log.
  *  `benvenutiUltimaOra` è il numero che il tetto orario del lancio legge da `messages`. */
-function makeSupabase(benvenutiUltimaOra = 0) {
+function makeSupabase(benvenutiUltimaOra = 0, erroreConteggio = false) {
   const calls = { updates: [] as any[], events: [] as any[], conteggi: 0 };
   const supabase: any = {
     from(table: string) {
@@ -44,7 +44,10 @@ function makeSupabase(benvenutiUltimaOra = 0) {
             calls.conteggi++;
             const conteggio: any = {
               eq: () => conteggio, gte: () => conteggio, not: () => conteggio,
-              then: (r: any) => r({ count: benvenutiUltimaOra, error: null }),
+              then: (r: any) => r({
+                count: erroreConteggio ? null : benvenutiUltimaOra,
+                error: erroreConteggio ? { message: 'timeout' } : null,
+              }),
             };
             return conteggio;
           },
@@ -707,6 +710,22 @@ describe('enrollLeadIntoMario — ramo lancio (B1)', () => {
       expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
       expect(sopra.calls.events.find((e) => e.type === 'lancio_intake').payload)
         .toMatchObject({ differita: 'tetto_orario', cap: 200 });
+    });
+
+    // Fail CLOSED (ruling della review T13): un conteggio che non si legge NON è una
+    // licenza di mandare. Il cron ripassa ogni 15 minuti, quindi il prezzo di differire
+    // è un ritardo; quello di mandare alla cieca mentre il DB è in affanno è il picco.
+    it('conteggio illeggibile: si differisce lo stesso, con il motivo scritto', async () => {
+      const { supabase, calls } = makeSupabase(0, true);
+      const res = await enrollLeadIntoMario(supabase, ARGS);
+
+      expect(res).toMatchObject({ ok: true, conversationId: 42, deferred: true });
+      expect(sendTemplateAndLog).not.toHaveBeenCalled();
+      expect(calls.updates[0].lancio_benvenuto_at).toBeUndefined();
+      expect(calls.updates[0]).toMatchObject({ lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa' });
+      expect(calls.events.find((e) => e.type === 'lancio_intake').payload)
+        .toMatchObject({ differita: 'tetto_orario', motivo: 'conteggio_fallito', cap: 200 });
+      expect(calls.events.some((e) => e.type === 'lancio_tetto_non_letto')).toBe(true);
     });
 
     it('col lancio spento il tetto non si conta nemmeno: quella query non serve', async () => {

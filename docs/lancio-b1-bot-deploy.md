@@ -40,6 +40,14 @@ abbassarlo senza toccare il codice:
 `lancio_intake` con `payload.differita='tetto_orario'` (intake) e `lancio_aperture_run`
 con `fermo='tetto_orario'` (cron).
 
+Se il conteggio del tetto non si riesce a leggere (query in errore) si **differisce lo
+stesso**: intake con `payload.motivo='conteggio_fallito'`, cron fermo con
+`fermo='tetto_non_leggibile'`, piu' l'evento `lancio_tetto_non_letto`. E' voluto: i
+benvenuti differiti li riprende il cron ogni 15 minuti, quindi si paga un ritardo, mentre
+mandare alla cieca mentre il DB e' in affanno e' proprio il modo di rifare il picco. Se
+gli eventi `lancio_tetto_non_letto` si accumulano, i benvenuti sono fermi: e' un problema
+di DB, non del lancio.
+
 `LANCIO_ZOOM_TEMPLATE_SID` e `LANCIO_FOLLOWUP_TEMPLATE_SID` non sono ancora
 usati da nessun codice in questo blocco (arrivano con B4/B5): tenerli
 valorizzati in `.env.example`/Vercel non è bloccante per B1, ma è comodo

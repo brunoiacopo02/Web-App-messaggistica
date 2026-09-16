@@ -46,6 +46,8 @@ const stato = {
   convSelectError: null as { message: string; code?: string } | null,
   /** Benvenuti gia' partiti nell'ultima ora: il numeratore del tetto orario. */
   benvenutiUltimaOra: 0,
+  /** Il conteggio del tetto orario fallisce: il run deve fermarsi, non tirare dritto. */
+  conteggioError: null as { message: string } | null,
 };
 
 const valore = (rec: Chiamata, colonna: string) => rec.filtri.find(([c]) => c === colonna)?.[1];
@@ -84,7 +86,10 @@ function esegui(rec: Chiamata): { data: unknown; error: unknown; count?: number 
   }
   if (rec.table === 'messages') {
     // `head: true` = la query di conteggio del tetto orario: nessuna riga, un numero.
-    if (rec.opzioni?.head) return { data: null, error: null, count: stato.benvenutiUltimaOra };
+    if (rec.opzioni?.head) {
+      if (stato.conteggioError) return { data: null, error: stato.conteggioError };
+      return { data: null, error: null, count: stato.benvenutiUltimaOra };
+    }
     const ids = (valore(rec, '__in') as number[] | undefined) ?? [];
     const righe = ids.flatMap((id) =>
       (stato.outbound.get(id) ?? []).map((r) => ({ ...r, conversation_id: id })),
@@ -184,6 +189,7 @@ beforeEach(() => {
   stato.messagesInsertKo = false;
   stato.convSelectError = null;
   stato.benvenutiUltimaOra = 0;
+  stato.conteggioError = null;
   sendTemplate.mockReset();
   sendTemplate.mockResolvedValue({ sid: 'SMtest', status: 'queued' });
   assertTemplateSendable.mockReset();
@@ -288,6 +294,24 @@ describe('GET /api/cron/lancio-aperture', () => {
       payload: { fermo: 'tetto_orario', inviatiUltimaOra: 200, tetto: 200, inviati: 0 },
     });
     expect(body).toMatchObject({ ok: true, inviati: 0, fermo: 'tetto_orario' });
+  });
+
+  // Fail CLOSED (ruling della review T13): il tetto che non si legge ferma il run. La
+  // coda non si perde, il cron ripassa fra 15 minuti.
+  it('conteggio del tetto illeggibile: run fermo, nessun invio alla cieca', async () => {
+    stato.conteggioError = { message: 'timeout' };
+    stato.convs = [conv(1), conv(2)];
+    const body = await (await richiesta()).json();
+
+    expect(sendTemplate).not.toHaveBeenCalled();
+    expect(selectSu('conversations')).toHaveLength(0);
+    expect(tipiEvento()).toContain('lancio_tetto_non_letto');
+    expect(eventoRun()).toMatchObject({
+      type: 'lancio_aperture_run',
+      level: 'warn',
+      payload: { fermo: 'tetto_non_leggibile', inviati: 0 },
+    });
+    expect(body).toMatchObject({ ok: true, inviati: 0, fermo: 'tetto_non_leggibile' });
   });
 
   it('il tetto vale anche DENTRO il run: si ferma quando lo raggiunge, non a fine lotto', async () => {

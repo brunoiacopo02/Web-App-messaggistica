@@ -131,7 +131,24 @@ export async function GET(req: NextRequest) {
   // forte. Il conteggio comprende i benvenuti dell'intake: il numero WhatsApp e' uno solo
   // e Meta guarda lui, non da quale pezzo di codice e' partito il messaggio.
   const tettoOrario = leggiTettoOrario(process.env.LANCIO_WELCOME_MAX_PER_HOUR);
-  const inviatiUltimaOra = await contaBenvenutiUltimaOra(supabase, templateSid, now);
+  const conteggio = await contaBenvenutiUltimaOra(supabase, templateSid, now);
+  // Conteggio illeggibile: il run non parte. Mandare alla cieca proprio mentre il DB e'
+  // in affanno e' il modo di rifare il picco; la coda non si perde, il cron ripassa fra
+  // 15 minuti. (L'evento `lancio_tetto_non_letto` lo scrive gia' il conteggio.)
+  if (conteggio === null) {
+    await logEvento(
+      supabase,
+      'lancio_aperture_run',
+      { fermo: 'tetto_non_leggibile', tetto: tettoOrario, candidati: 0, inviati: 0, attivo: settings.attivo },
+      '[lancio] benvenuti differiti: run fermo, tetto orario non leggibile',
+      'warn',
+    );
+    return NextResponse.json({
+      ok: true, candidati: 0, inviati: 0, attesi: 0, saltati: 0, capped: 0, falliti: 0, errori: 0,
+      fermo: 'tetto_non_leggibile', inviatiUltimaOra: null, tetto: tettoOrario, attivo: settings.attivo,
+    });
+  }
+  const inviatiUltimaOra = conteggio;
   if (!sottoTettoOrario({ inviatiUltimaOra, cap: tettoOrario })) {
     await logEvento(
       supabase,
