@@ -16,6 +16,7 @@ import { sendOutcome, inviaNotaAlCrm, registraEsitoSenzaLeadId } from './bot-out
 import { NOTA_VIDEO, NOTA_NOEMI } from './gdo-context-note';
 import { OPENING_ENV_KEYS, personaForConversation } from './persona';
 import { eseguiTurnoLancio } from './lancio-turno';
+import { TESTO_POSTO_BLOCCATO } from './lancio-fase';
 
 describe('shouldAutoReply', () => {
   const ok = { toMatchesFenice: true, autoReplyOn: true, aiOwner: 'mario', aiStatus: 'active' };
@@ -279,6 +280,10 @@ type ClaimedRow = {
   lancio_slug?: string | null;
   lancio_fase?: string | null;
   lancio_info?: unknown;
+  /** Le colonne che il ramo del lancio rilegge fra un giro e l'altro. */
+  ai_status?: string | null;
+  ai_owner?: string | null;
+  ai_paused_at?: string | null;
   leads?: { first_name?: string | null } | null;
 };
 type FakeMsgRow = { direction: string; body: string; template_sid: string | null; created_at: string };
@@ -297,6 +302,26 @@ function makeDrainSupabase(claimedRow: ClaimedRow, initialRows: FakeMsgRow[]) {
     from(table: string) {
       if (table === 'conversations') {
         return {
+          // La rilettura della riga fra un giro e l'altro del lancio: torna la fixture
+          // VIVA, cosi' un turno che sposta la fase la sposta anche per il giro dopo.
+          select() {
+            const stub: any = {
+              eq() { return stub; },
+              maybeSingle: async () => ({
+                data: {
+                  crm_lead_id: claimedRow.crm_lead_id,
+                  ai_status: claimedRow.ai_status ?? 'active',
+                  ai_owner: claimedRow.ai_owner ?? 'mario',
+                  ai_paused_at: claimedRow.ai_paused_at ?? null,
+                  lancio_slug: claimedRow.lancio_slug ?? null,
+                  lancio_fase: claimedRow.lancio_fase ?? null,
+                  lancio_info: claimedRow.lancio_info ?? null,
+                },
+                error: null,
+              }),
+            };
+            return stub;
+          },
           update(payload: any) {
             // Claim: valorizza solo il lucchetto, ai_status non viene toccato.
             if (payload.ai_lock_at && !('ai_status' in payload)) {
@@ -354,6 +379,8 @@ function makeDrainSupabase(claimedRow: ClaimedRow, initialRows: FakeMsgRow[]) {
 
   // `messagesRows` esce di proposito: e' l'unico modo per simulare un messaggio del lead
   // arrivato MENTRE il turno era in corso (il turno vero dura 5-20 secondi).
+  // La riga viva: i test la muovono per simulare quello che il turno scrive a DB.
+  supabase.__row = claimedRow;
   return { supabase, calls, messagesRows };
 }
 
@@ -1905,6 +1932,72 @@ describe('drainMarioReplies — aggancio del turno lancio', () => {
     expect(eseguiTurnoLancio).toHaveBeenCalledTimes(3);
     vi.mocked(eseguiTurnoLancio).mockReset();
     vi.mocked(eseguiTurnoLancio).mockResolvedValue('active');
+  });
+
+  // Il caso vero del B1: il lead scrive "si", e mentre il turno gira scrive "si si".
+  // Il primo giro manda "posto bloccato" e porta la fase a `posto_bloccato`; il secondo
+  // giro DEVE vedere la fase nuova, altrimenti il ramo `gia_bloccato` non scatta e il
+  // lead si prende due volte lo stesso messaggio.
+  it('il secondo giro rilegge la fase: niente "posto bloccato" due volte', async () => {
+    const { supabase, calls, messagesRows } = makeDrainSupabase(
+      { id: 52, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L12', bot_outcome: null, gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
+        lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa' },
+      [WELCOME, { ...SI, body: 'sì', created_at: '2026-10-01T10:00:00Z' }],
+    );
+    // Stand-in del turno vero: si comporta come `decideLancioTurno` sulle due fasi —
+    // da 'attesa' manda il testo fisso e sposta la fase, da 'posto_bloccato' tace.
+    vi.mocked(eseguiTurnoLancio).mockImplementation(async (_supa: any, i: any) => {
+      if (i.fase === 'attesa') {
+        messagesRows.push({ direction: 'in', body: 'sì sì', template_sid: null, created_at: '2026-10-01T10:00:05Z' });
+        await supabase.from('messages').insert({ conversation_id: 52, direction: 'out', body: TESTO_POSTO_BLOCCATO });
+        await supabase.from('event_log').insert({ type: 'lancio_posto_bloccato', payload: { conversationId: 52 }, message: 'posto bloccato', level: 'info' });
+        (supabase as any).__row.lancio_fase = 'posto_bloccato';
+      }
+      return 'active';
+    });
+    await drainMarioReplies(supabase, 52, '+393331234567', () => 0);
+    expect(eseguiTurnoLancio).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(eseguiTurnoLancio).mock.calls[0][1].fase).toBe('attesa');
+    expect(vi.mocked(eseguiTurnoLancio).mock.calls[1][1]).toMatchObject({ fase: 'posto_bloccato', inboundBody: 'sì sì' });
+    expect(calls.messageInserts.filter((m) => m.body === TESTO_POSTO_BLOCCATO)).toHaveLength(1);
+    expect(calls.events.filter((e) => e.type === 'lancio_posto_bloccato')).toHaveLength(1);
+    vi.mocked(eseguiTurnoLancio).mockReset();
+    vi.mocked(eseguiTurnoLancio).mockResolvedValue('active');
+  });
+
+  // Fase terminale scritta dal primo giro (congedo accettato dal CRM): anche se il turno
+  // ha restituito 'active' — il congedo da ritentare lo fa — non si riscrive al lead.
+  it('se il primo giro porta la fase fuori dal lancio, il secondo non parte', async () => {
+    const { supabase, calls, messagesRows } = makeDrainSupabase(
+      { id: 53, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L13', bot_outcome: null, gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
+        lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa' },
+      [WELCOME, { ...SI, body: 'non mi interessa', created_at: '2026-10-01T10:00:00Z' }],
+    );
+    vi.mocked(eseguiTurnoLancio).mockImplementationOnce(async () => {
+      messagesRows.push({ direction: 'in', body: 'anzi aspetta', template_sid: null, created_at: '2026-10-01T10:00:05Z' });
+      (supabase as any).__row.lancio_fase = 'chiuso';
+      return 'active';
+    });
+    await drainMarioReplies(supabase, 53, '+393331234567', () => 0);
+    expect(eseguiTurnoLancio).toHaveBeenCalledTimes(1);
+    expect(calls.events.find((e) => e.type === 'lancio_giro_interrotto')).toMatchObject({ payload: { motivo: 'fase_chiuso' } });
+  });
+
+  // Un umano prende in mano la chat mentre il turno gira: il bot non ci torna sopra.
+  it('chat passata a un umano durante il turno: nessun secondo giro', async () => {
+    const { supabase, calls, messagesRows } = makeDrainSupabase(
+      { id: 54, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L14', bot_outcome: null, gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
+        lancio_slug: 'webdev-2026-10', lancio_fase: 'post_pitch' },
+      [WELCOME, { ...SI, body: 'ok', created_at: '2026-10-01T10:00:00Z' }],
+    );
+    vi.mocked(eseguiTurnoLancio).mockImplementationOnce(async () => {
+      messagesRows.push({ direction: 'in', body: 'ancora una cosa', template_sid: null, created_at: '2026-10-01T10:00:05Z' });
+      (supabase as any).__row.ai_paused_at = '2026-10-01T10:00:06Z';
+      return 'active';
+    });
+    await drainMarioReplies(supabase, 54, '+393331234567', () => 0);
+    expect(eseguiTurnoLancio).toHaveBeenCalledTimes(1);
+    expect(calls.events.find((e) => e.type === 'lancio_giro_interrotto')).toMatchObject({ payload: { motivo: 'chat_di_un_umano' } });
   });
 
   it('nessun messaggio nuovo durante il turno: un giro solo, il drain non rilavora lo stesso inbound', async () => {

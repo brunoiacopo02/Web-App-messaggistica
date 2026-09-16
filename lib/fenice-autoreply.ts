@@ -477,6 +477,46 @@ export async function drainMarioReplies(
     return (data ?? []) as DrainMsgRow[];
   }
 
+  /**
+   * La riga della chat come la legge il ramo del lancio, riletta ADESSO: le stesse
+   * colonne che il claim aveva fotografato, piu' i due campi che dicono se la chat e'
+   * ancora del bot. Serve solo dal secondo giro del lancio in poi — costa una select in
+   * piu' per giro in piu', e senza di essa il turno successivo lavorerebbe su una fase
+   * gia' vecchia. Torna `null` quando un altro giro non si deve fare.
+   */
+  async function rileggiRigaLancio(): Promise<{ lancio_fase: string | null; lancio_info: LancioInfo | null; crm_lead_id: string | null } | null> {
+    const { data, error } = await supabase
+      .from('conversations')
+      .select('crm_lead_id, ai_status, ai_owner, ai_paused_at, lancio_slug, lancio_fase, lancio_info')
+      .eq('id', conversationId)
+      .maybeSingle();
+    const riga = data as {
+      crm_lead_id?: string | null; ai_status?: string | null; ai_owner?: string | null; ai_paused_at?: string | null;
+      lancio_slug?: string | null; lancio_fase?: string | null; lancio_info?: LancioInfo | null;
+    } | null;
+    const motivo = error
+      ? `rilettura_fallita:${error.message}`
+      : !riga
+        ? 'riga_sparita'
+        : riga.ai_paused_at || riga.ai_owner !== 'mario'
+          ? 'chat_di_un_umano'
+          : riga.ai_status !== 'active' && riga.ai_status !== 'replying'
+            ? `stato_${riga.ai_status ?? 'nullo'}`
+            : !lancioInCorso(riga)
+              ? `fase_${riga.lancio_fase ?? 'nulla'}`
+              : null;
+    if (motivo === null && riga) {
+      return { lancio_fase: riga.lancio_fase ?? null, lancio_info: riga.lancio_info ?? null, crm_lead_id: riga.crm_lead_id ?? null };
+    }
+    await supabase.from('event_log').insert({
+      type: 'lancio_giro_interrotto',
+      payload: { conversationId, motivo } as never,
+      message: `[lancio] conv ${conversationId}: niente altro giro nel drain (${motivo})`,
+      level: 'info',
+    });
+    return null;
+  }
+
   let finalStatus = 'active';
   // Giornate già al completo: il bot non le propone. Si legge una volta per drain,
   // non per turno. Senza BOOKING_DAILY_CAP la lista è vuota e non si tocca il DB.
@@ -507,29 +547,47 @@ export async function drainMarioReplies(
         // messaggi NUOVI, al massimo MAX_GIRI_LANCIO volte: il confronto e' sul tempo
         // dell'ultimo inbound che il turno ha visto, non sulla posizione rispetto
         // all'ultima bolla.
+        //
+        // Dal secondo giro in poi si rilegge anche la RIGA della chat: il turno di prima
+        // ha mosso `lancio_fase` e `lancio_info` (e puo' aver adottato il lead, quindi
+        // `crm_lead_id`). Con la fotografia del claim, un lead che scrive "si" e poi
+        // "si si" si prendeva due volte "posto bloccato": al secondo giro la fase era
+        // ancora 'attesa' e il ramo `gia_bloccato` non scattava mai.
         let righeTurno = rows;
         let inboundTurno = inboundBody;
+        let faseTurno = lancio.lancio_fase ?? null;
+        let infoTurno = lancio.lancio_info ?? null;
+        let leadIdTurno = crmLeadId;
         for (let giro = 0; giro < MAX_GIRI_LANCIO; giro++) {
           // La soglia si prende PRIMA del turno: dopo, la cronologia e' gia' cambiata.
           const ultimoVisto = ultimoInboundAt(righeTurno);
           finalStatus = await eseguiTurnoLancio(supabase, {
-            conversationId, phone, from, crmLeadId,
-            fase: lancio.lancio_fase ?? null,
+            conversationId, phone, from,
+            crmLeadId: leadIdTurno,
+            fase: faseTurno,
             nome: gdo.leads?.first_name ?? null,
             rows: righeTurno, inboundBody: inboundTurno,
             // Le risposte del riscaldamento (e il marcatore del congedo): senza, il turno
             // post-pitch ricomincerebbe da capo a ogni messaggio del lead.
-            lancioInfo: lancio.lancio_info ?? null,
+            lancioInfo: infoTurno,
           });
           // Solo mentre il lancio resta 'active': un congedo o un passaggio umano hanno
-          // chiuso la partita, e `lancio.lancio_fase` qui e' quella del claim — un altro
-          // giro rifarebbe il turno con una fase che a DB non c'e' piu'.
+          // chiuso la partita.
           if (finalStatus !== 'active') break;
           const dopoIlTurno = await loadHistory();
           const iNuovo = indiceInboundDopo(dopoIlTurno, ultimoVisto);
           // Niente di nuovo: un turno che ha taciuto (fuori orario, solo media) lascia
           // scoperto lo STESSO inbound, e rilavorarlo sarebbe un giro a vuoto.
           if (iNuovo < 0) break;
+          const riga = await rileggiRigaLancio();
+          // La chat non e' piu' nostra da servire (fase terminale, umano subentrato,
+          // conversazione chiusa da un esito): si esce e basta. Il messaggio nuovo lo
+          // vede chi di dovere — un altro giro scriverebbe al lead a nome di una fase
+          // che a DB non c'e' piu'.
+          if (!riga) break;
+          faseTurno = riga.lancio_fase;
+          infoTurno = riga.lancio_info;
+          leadIdTurno = riga.crm_lead_id;
           righeTurno = dopoIlTurno;
           inboundTurno = dopoIlTurno[iNuovo].body ?? '';
         }
