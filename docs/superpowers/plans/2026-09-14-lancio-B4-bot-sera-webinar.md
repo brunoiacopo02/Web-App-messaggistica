@@ -12,6 +12,8 @@
 
 ## Global Constraints
 
+- **Numero e rischio ban (spec §11, aggiunto 16/09):** il blast Zoom e ogni invio massivo leggono il mittente da `app_settings.lancio_sender` (`principale` | `secondario`); lotti da **200 ogni 5 minuti** (non 400); **freno automatico** se in un lotto i falliti/undelivered superano il 10 % o compaiono 63018/63049/63051 (evento + notifica admin, ripresa manuale); ordine di invio per intenzione (`posto_bloccato` → interagito → mai risposto); go/no-go alle 18:00 del 5/10 con `scripts/qualita-numero.mjs` esteso ai due account (qualità ≥ MEDIUM e limite ≥ 10K sul mittente scelto). Il secondo client Twilio, i template sul secondo account e il routing inbound per `To` sono un task aggiuntivo del B4 (T11 "Mittente secondario").
+
 - **Perimetro B4 e basta.** Il marker del pulsante `wa.me` e l'adozione dei numeri sconosciuti sono del B2: qui si assume che una conversazione arrivi in `lancio_fase='post_pitch'` con `crm_lead_id` valorizzato. Il follow-up del 6, il flusso standard con la live editata e le restituzioni sono del B5. L'intake, le fasi `attesa`/`posto_bloccato` e le esclusioni dai cron esistenti sono del B1.
 - **Nessuna migrazione.** Le colonne `conversations.lancio_slug / lancio_fase / lancio_ingresso / lancio_link_inviato_at / lancio_info` e le chiavi `app_settings` (`lancio_zoom_link`, `lancio_attivo`, `lancio_evento_at`) sono del B1 (spec §3.2).
 - **Numero a qualità LOW: nessun messaggio spontaneo** oltre al blast del link e alle risposte di conferma. Ogni messaggio del bot in questo blocco è o il template del blast o una risposta a un inbound del lead.

@@ -223,3 +223,24 @@ Ogni blocco: spec → piano (`writing-plans`) → esecuzione subagent-driven con
 - **Ore dichiarate**: se i venditori del turno "giorno dopo" non compilano il calendario del 6/10 entro il 5, la mattina risulta piena e tutto va alle Conferme. Il pannello `/lancio` lo mostra in rosso; promemoria del lunedì già esistente.
 - **Intake in timeout**: il push lancio eredita il timeout 15 s e la regola "un `network_error` è già arrivato, non si rimanda".
 - **Branch inbound**: 22 commit di distanza da main; se il rebase è troppo conflittuale si reimplementa il solo necessario (adozione + marker) sopra main.
+
+## 11. Numero WhatsApp, capacità e rischio ban (aggiunto 16/09 dopo il flood del 15/09)
+
+Fatti che vincolano (vedi memorie `reference_whatsapp_regole_piattaforma`, `project_incident_flood_lista133`):
+- I **limiti di invio** (250 / 1K / 10K / 100K contatti per 24 h) sono per **Business Portfolio Meta**; la **qualità** (HIGH/MEDIUM/LOW) è per numero, calcolata sui 7 giorni da blocchi e segnalazioni. Un numero **nuovo** parte da 250 (1K dopo la verifica dell'azienda) e sale di tier solo usando almeno metà del limite in 7 giorni con qualità non LOW.
+- Il numero attuale del bot (`+393520413199`) è a qualità **LOW** dopo il flood della lista 133 (7.882 push in un giorno). Il PO ha sospeso i lead nuovi al bot fino a sab 19/09 h13.
+- Esiste un **secondo numero su un altro account Twilio** (nuovo, limiti bassi). Se sta sotto un altro Business Manager ha capacità propria; se sta sotto lo stesso, condivide il tier ma non la qualità.
+- Il 5/10 alle 20:00 vanno mandati ~3.000 template in poco più di un'ora; il 6/10 fino a ~3.000 follow-up. Il 15/09 il numero ha retto un volume simile ma ne è uscito a LOW: **il rischio è la qualità (livelli 1-3: flagged, restricted, ban del numero), non il limite numerico**.
+
+Regole che entrano nei piani B4/B5/B6:
+
+1. **Mittente per fase, senza deploy.** Impostazione `lancio_sender` (`principale` | `secondario`) letta dal blast Zoom, dal follow-up e dal benvenuto. Il bot ottiene un secondo client Twilio (`TWILIO_ACCOUNT_SID_2`, `TWILIO_AUTH_TOKEN_2`, `TWILIO_WHATSAPP_NUMBER_2`), i **3 template vanno creati e approvati anche sul secondo account** (i Content SID sono per account), e il webhook inbound del secondo numero deve puntare al bot (routing per `To`). Le risposte a un template partito dal numero X restano sul numero X.
+2. **Riscaldamento del secondo numero** dal 21/09: i benvenuti della lista d'attesa partono dal numero con tier e qualità migliori; se il PO lo decide, dal secondario, per portarlo a 10K entro il 5/10 (servono ≥7 giorni sopra metà del limite con qualità ≥ MEDIUM).
+3. **Tetto orario sui benvenuti realtime** (`LANCIO_WELCOME_MAX_PER_HOUR`, default 200): oltre, il benvenuto viene differito e lo riprende il cron a ≤400/h. Nessun picco "a forma di blast" fuori dal 5/10.
+4. **Go/no-go la sera del 5/10 (ore 18:00)** con lo script `scripts/qualita-numero.mjs` esteso a entrambi gli account: il mittente del blast deve avere **qualità ≥ MEDIUM e limite ≥ 10K** (o ≥ 3× la coorte). Se nessun numero passa: blast in **ordine di intenzione** — prima chi ha risposto sì (`posto_bloccato`), poi chi ha interagito, per ultimi i mai-risposti — spezzato sui due numeri, e i mai-risposti si mandano solo se la qualità regge dopo i primi lotti (decisione PO da prendere quel giorno).
+5. **Ritmo del blast**: lotti da **200 ogni 5 minuti** (2.400/h) dalle 19:30, non 400: 3.000 link entro ~75 minuti, senza la forma del blast del 13/07.
+6. **Freno automatico**: se in un lotto i falliti/undelivered superano il 10 %, o compaiono i codici 63018 (rate limit), 63049 (frequency cap), 63051 (sender locked), il run si ferma da solo, scrive l'evento e avvisa l'admin; la ripresa è manuale (`lancio_attivo`).
+7. **Categoria template**: i tre template devono risultare **approvati UTILITY** su ogni account usato (rilanciare `create-lancio-templates.mjs`); un template MARKETING va in `UTILITY_ONLY_ALLOW` solo per scelta esplicita.
+8. **Monitoraggio quotidiano** dal 21/09 al 7/10: qualità, tier e consegna/lettura a 7 giorni di entrambi i numeri, annotati nel file di recap; soglia d'allarme = qualità LOW o lettura < 60 %.
+9. **Il follow-up del 6/10** resta limitato a chi ha interagito (spec §5.5): è il messaggio più "marketing" del lancio ed è quello che pesa di più sulla qualità.
+10. **Mai ripushare un `network_error`** e mai un secondo benvenuto: le guardie del B1 (`lancio_benvenuto_at`, `BOT_PUSHED` in `NO_REPUSH_RESULTS`) sono la difesa contro le doppie aperture.
