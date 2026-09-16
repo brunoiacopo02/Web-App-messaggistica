@@ -64,6 +64,10 @@
     {
       "path": "/api/cron/lancio-zoom",
       "schedule": "*/5 17-18 5 10 *"
+    },
+    {
+      "path": "/api/cron/lancio-followup",
+      "schedule": "*/5 10-11,15-17 6-7 10 *"
     }
   ]
 }
