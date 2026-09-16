@@ -56,6 +56,10 @@
     {
       "path": "/api/cron/crm-lead-status",
       "schedule": "15,45 * * * *"
+    },
+    {
+      "path": "/api/cron/lancio-aperture",
+      "schedule": "*/15 5-21 * * *"
     }
   ]
 }

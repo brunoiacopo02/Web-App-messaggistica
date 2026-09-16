@@ -4,6 +4,7 @@ import { MessageThread } from '@/components/MessageThread';
 import { isConversazioneChat, mondoDi, mondoLabel } from '@/lib/chat-perimetro';
 import { segmentOf, fermaReason } from '@/lib/lead-segments';
 import { ChatStatusPill, ReasonPill, SegmentPill } from '@/components/fenice/status';
+import { lancioFaseLabel } from '@/lib/lancio-fase';
 import { formatRomeDateTime } from '@/lib/rome-time';
 import { isWindowOpen } from '@/lib/utils';
 import { ChatTakeover } from './_components/ChatTakeover';
@@ -25,7 +26,7 @@ export default async function ChatConversationPage({
   const [convRes, msgsRes] = await Promise.all([
     supabase.from('conversations').select(`
       id, last_inbound_at, last_message_at, ai_owner, ai_status, ai_paused_at, gdo_agenda_at, gdo_video_sent_at,
-      bot_outcome, bot_scheduled_at,
+      bot_outcome, bot_scheduled_at, lancio_slug, lancio_fase,
       lead:leads(id, first_name, last_name, phone_e164)
     `).eq('id', id).single(),
     // Storia intera: nessun taglio a ai_started_at, a differenza di /fenice/conversazioni.
@@ -74,6 +75,11 @@ export default async function ChatConversationPage({
           {conv.ai_paused_at && (
             <span className="rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-100">
               Bot fermo
+            </span>
+          )}
+          {conv.lancio_slug && (
+            <span className="rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-100">
+              Lancio · {lancioFaseLabel(conv.lancio_fase)}
             </span>
           )}
           {appuntamento && <span>Appuntamento: {appuntamento}</span>}

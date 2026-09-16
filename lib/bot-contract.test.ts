@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { isoWithOffset, parseIntakePayload, parseSendAgendaPayload, validateOutcomeBody, parseAppointmentSetPayload , parsePreviousLeads,
+import { describe, it, expect, vi } from 'vitest';
+import { isoWithOffset, parseIntakePayload, parseSendAgendaPayload, validateOutcomeBody, parseAppointmentSetPayload , parsePreviousLeads, parseLancioField,
 } from './bot-contract';
 
 describe('isoWithOffset', () => {
@@ -164,6 +164,7 @@ describe('parseSendAgendaPayload', () => {
         companyId: 'fenice',
         personKey: null,
         previousLeadIds: [],
+        lancio: null,
         variant: { lavora: true, haFamiglia: false, offertaDelMese: false },
       },
     });
@@ -238,5 +239,57 @@ describe('parsePreviousLeads', () => {
   it("un campo che non e' una lista vale lista vuota", () => {
     expect(parsePreviousLeads('boh')).toEqual([]);
     expect(parsePreviousLeads(undefined)).toEqual([]);
+  });
+});
+
+describe('parseIntakePayload — campo lancio (contratto v1.6)', () => {
+  const base = { leadId: 'u1', name: 'Anna', phone: '333 123 4567', email: null, funnel: 'Lancio Web Dev AI', companyId: 'fenice' };
+
+  it('senza campo lancio il payload è quello di sempre: lancio null', () => {
+    const r = parseIntakePayload(base);
+    expect(r.ok && r.value.lancio).toBeNull();
+  });
+
+  it('con lancio valido lo porta dentro così com\'è', () => {
+    const r = parseIntakePayload({ ...base, lancio: { slug: 'webdev-2026-10', ingresso: 'lista' } });
+    expect(r.ok && r.value.lancio).toEqual({ slug: 'webdev-2026-10', ingresso: 'lista' });
+  });
+
+  it('pulsante_webinar è l\'altro ingresso ammesso', () => {
+    expect(parseLancioField({ slug: 'webdev-2026-10', ingresso: 'pulsante_webinar' }))
+      .toEqual({ slug: 'webdev-2026-10', ingresso: 'pulsante_webinar' });
+  });
+
+  it('un ingresso sconosciuto ricade su lista: il lead va comunque arruolato', () => {
+    expect(parseLancioField({ slug: 'webdev-2026-10', ingresso: 'boh' })?.ingresso).toBe('lista');
+  });
+
+  // Uno slug che non conosciamo di solito e' un refuso lato CRM: il lead si lavora lo
+  // stesso (l'unico flusso lancio che abbiamo e' questo) ma non deve passare in silenzio,
+  // o nessuno saprebbe dire perche' quelle persone hanno ricevuto il benvenuto del 5/10.
+  it('uno slug sconosciuto si accetta ma si sente: console.warn', () => {
+    const spia = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(parseLancioField({ slug: 'webdev-2027-03', ingresso: 'lista' }))
+      .toEqual({ slug: 'webdev-2027-03', ingresso: 'lista' });
+    expect(spia).toHaveBeenCalledTimes(1);
+    expect(String(spia.mock.calls[0][0])).toContain('webdev-2027-03');
+    spia.mockRestore();
+  });
+
+  it('lo slug atteso non fa rumore', () => {
+    const spia = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    parseLancioField({ slug: 'webdev-2026-10', ingresso: 'lista' });
+    expect(spia).not.toHaveBeenCalled();
+    spia.mockRestore();
+  });
+
+  it('senza slug non è un lancio: null, e il resto del payload resta valido', () => {
+    expect(parseLancioField({ ingresso: 'lista' })).toBeNull();
+    expect(parseLancioField({ slug: '  ' })).toBeNull();
+    expect(parseLancioField('webdev-2026-10')).toBeNull();
+    expect(parseLancioField(null)).toBeNull();
+    const r = parseIntakePayload({ ...base, lancio: 'spazzatura' });
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.value.lancio).toBeNull();
   });
 });

@@ -5,7 +5,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { RefreshCw, Sparkles, MessageSquare, Search, CalendarClock } from 'lucide-react';
-import { ChatStatusPill } from '@/components/fenice/status';
+import { ChatStatusPill, StatusPill } from '@/components/fenice/status';
+import { lancioFaseLabel } from '@/lib/lancio-fase';
 import { StatCard } from '@/components/fenice/StatCard';
 
 type Row = {
@@ -15,6 +16,7 @@ type Row = {
   name: string;
   lastMessageAt: string;
   hasSummary: boolean;
+  lancioFase: string | null;
 };
 
 type Msg = { id: number; direction: 'in' | 'out'; body: string; created_at: string; is_template: boolean };
@@ -62,8 +64,10 @@ export function ConversationsPanel({ rows }: { rows: Row[] }) {
   const [loading, setLoading] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [soloLancio, setSoloLancio] = useState(false);
 
   const filtered = rows.filter((r) => {
+    if (soloLancio && !r.lancioFase) return false;
     const q = query.trim().toLowerCase();
     if (!q) return true;
     return r.name.toLowerCase().includes(q) || r.phone.toLowerCase().includes(q);
@@ -119,6 +123,16 @@ export function ConversationsPanel({ rows }: { rows: Row[] }) {
               className="h-9 rounded-xl pl-9"
             />
           </div>
+          <button
+            type="button"
+            onClick={() => setSoloLancio((v) => !v)}
+            className={cn(
+              'mt-2 w-full rounded-lg border px-2 py-1 text-xs font-semibold transition-colors',
+              soloLancio ? 'border-amber-500/40 bg-amber-500/15 text-amber-800 dark:text-amber-200' : 'border-border/70 text-muted-foreground hover:bg-muted',
+            )}
+          >
+            {soloLancio ? 'Solo lancio · attivo' : 'Solo lancio'}
+          </button>
         </div>
         <div className="flex-1 overflow-y-auto p-2">
           {filtered.length === 0 && <div className="p-4 text-sm text-muted-foreground">Nessun lead.</div>}
@@ -135,6 +149,7 @@ export function ConversationsPanel({ rows }: { rows: Row[] }) {
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="truncate text-sm font-medium">{r.name || r.phone}</span>
+                  {r.lancioFase && <StatusPill label={lancioFaseLabel(r.lancioFase)} tone="amber" dot={false} />}
                   <ChatStatusPill status={r.status} />
                 </div>
                 <div className="flex items-center justify-between text-xs text-muted-foreground">

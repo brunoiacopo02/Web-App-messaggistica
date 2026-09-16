@@ -16,6 +16,8 @@ import {
 } from '@/lib/gdo-video-followup';
 import { romeHour, romeMinute, romeDaysBetween } from '@/lib/rome-time';
 import { templateName } from '@/lib/name';
+import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
+import { logCronQueryError } from '@/lib/cron-query-error';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -85,7 +87,7 @@ export async function GET(req: NextRequest) {
   // margine (il fuso e i bordi di mezzanotte non devono tagliare fuori nessuno) e
   // decideGdoVideoFollowup scarta il resto con `giorniDaAgenda`.
   const da = new Date(Date.now() - 3 * 86400_000).toISOString();
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('conversations')
     .select(`
       id, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at,
@@ -105,7 +107,11 @@ export async function GET(req: NextRequest) {
     // Disdetta chiesta: sollecitare il video di una call che il lead vuole spostare è
     // solo danno.
     .is('cancel_requested_at', null)
+    // Lancio in corso: nessun sollecito. Con lancio chiuso/restituito il lead GDO
+    // torna normale.
+    .or(FILTRO_FUORI_LANCIO)
     .limit(500);
+  if (error) await logCronQueryError(supabase, 'gdo_video_followups_query_error', error);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const convs = (data ?? []) as any[];

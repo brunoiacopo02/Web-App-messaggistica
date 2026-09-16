@@ -13,7 +13,7 @@ export default async function FeniceConversazioniPage() {
   const admin = getSupabaseAdmin();
   const { data: convs } = await admin
     .from('conversations')
-    .select('id, ai_status, last_message_at, ai_summary_at, leads(phone_e164, first_name, last_name)')
+    .select('id, ai_status, last_message_at, ai_summary_at, lancio_slug, lancio_fase, leads(phone_e164, first_name, last_name)')
     .eq('ai_owner', 'mario')
     .order('last_message_at', { ascending: false })
     .limit(200);
@@ -25,6 +25,7 @@ export default async function FeniceConversazioniPage() {
     name: [c.leads?.first_name, c.leads?.last_name].filter(Boolean).join(' '),
     lastMessageAt: c.last_message_at as string,
     hasSummary: Boolean(c.ai_summary_at),
+    lancioFase: c.lancio_slug ? ((c.lancio_fase as string | null) ?? 'attesa') : null,
   }));
 
   return (

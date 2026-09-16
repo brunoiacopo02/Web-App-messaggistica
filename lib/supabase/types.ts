@@ -108,6 +108,13 @@ export type Database = {
           last_inbound_at: string | null
           last_message_at: string
           last_message_preview: string | null
+          lancio_slug: string | null
+          lancio_fase: string | null
+          lancio_ingresso: string | null
+          lancio_link_inviato_at: string | null
+          lancio_followup_inviato_at: string | null
+          lancio_info: Json | null
+          lancio_benvenuto_at: string | null
           lead_id: number
           unread_count: number
           wa_number: string | null
@@ -148,6 +155,13 @@ export type Database = {
           last_inbound_at?: string | null
           last_message_at?: string
           last_message_preview?: string | null
+          lancio_slug?: string | null
+          lancio_fase?: string | null
+          lancio_ingresso?: string | null
+          lancio_link_inviato_at?: string | null
+          lancio_followup_inviato_at?: string | null
+          lancio_info?: Json | null
+          lancio_benvenuto_at?: string | null
           lead_id: number
           unread_count?: number
           wa_number?: string | null
@@ -188,6 +202,13 @@ export type Database = {
           last_inbound_at?: string | null
           last_message_at?: string
           last_message_preview?: string | null
+          lancio_slug?: string | null
+          lancio_fase?: string | null
+          lancio_ingresso?: string | null
+          lancio_link_inviato_at?: string | null
+          lancio_followup_inviato_at?: string | null
+          lancio_info?: Json | null
+          lancio_benvenuto_at?: string | null
           lead_id?: number
           unread_count?: number
           wa_number?: string | null
@@ -212,6 +233,7 @@ export type Database = {
       // NB: tabella aggiunta a mano (migration 20260827000001_crm_lead_status, colonne
       // contatto_umano_* dalla 20260829000001) in attesa
       // del prossimo `npm run supabase:gen-types`, che la riprodurrà identica.
+      // Colonne `lancio_*` di conversations aggiunte a mano (migration 20260914000001_lancio_webdev).
       crm_lead_status: {
         Row: {
           agenda_status: string | null

@@ -299,3 +299,52 @@ describe('ultimaAttivitaMs', () => {
     expect(ultimaAttivitaMs(c, NOW)).toBe(NOW);
   });
 });
+
+describe('lancio Web Dev AI — fuori dalle classificazioni, dentro il re-drive', () => {
+  const lancio = { lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa' };
+
+  it('decideFollowupAction: mai NON_RISPOSTO/INTERROTTO/scarto su un lancio in corso', () => {
+    expect(decide({ msgs: [out(14 * D, 'delivered')], lancio: true })).toBe('none');
+    expect(decide({ msgs: [out(130 * H, 'delivered'), inb(125 * H)], hasInbound: true, lastInboundAtMs: NOW - 125 * H, lancio: true })).toBe('none');
+    expect(decide({ msgs: [out(60 * H, 'failed'), out(30 * H, 'failed', SEQ_SIDS[0])], lancio: true })).toBe('none');
+  });
+
+  // Col kill-switch invii acceso i rami send_touch/nudge_free sono raggiungibili: la
+  // guardia del lancio sta prima di tutto, quindi non si arriva né a un invio né a una
+  // classificazione. Gli stessi input senza `lancio` un esito lo darebbero.
+  it('decideFollowupAction: nemmeno a sequenza accesa esce un touch o un nudge', () => {
+    const trackA = { msgs: [out(14 * D, 'delivered')], sequenceEnabled: true };
+    const trackB = {
+      msgs: [out(130 * H, 'delivered'), inb(125 * H)], hasInbound: true,
+      lastInboundAtMs: NOW - 125 * H, sequenceEnabled: true,
+    };
+    expect(decide({ ...trackA, lancio: true })).toBe('none');
+    expect(decide({ ...trackB, lancio: true })).toBe('none');
+    expect(decide(trackA)).toBe('non_risposto');
+    expect(decide(trackB)).toBe('interrotto_classify');
+  });
+
+  it('serveCronologia: il re-drive resta (ha scritto e nessuno ha risposto)', () => {
+    const c: CronConvRow = {
+      ai_status: 'active', ai_started_at: at(2 * D), last_message_at: at(H), last_inbound_at: at(H),
+      bot_outcome: null, gdo_agenda_at: null, ...lancio,
+    };
+    expect(serveCronologia(c, NOW)).toBe(true);
+  });
+
+  it('serveCronologia: niente cronologia per classificare un lancio in corso, anche a 10 giorni', () => {
+    const c: CronConvRow = {
+      ai_status: 'active', ai_started_at: at(10 * D), last_message_at: at(10 * D), last_inbound_at: null,
+      bot_outcome: null, gdo_agenda_at: null, ...lancio,
+    };
+    expect(serveCronologia(c, NOW)).toBe(false);
+  });
+
+  it('serveCronologia: lancio chiuso → regole di sempre', () => {
+    const c: CronConvRow = {
+      ai_status: 'active', ai_started_at: at(10 * D), last_message_at: at(10 * D), last_inbound_at: null,
+      bot_outcome: null, gdo_agenda_at: null, lancio_slug: 'webdev-2026-10', lancio_fase: 'chiuso',
+    };
+    expect(serveCronologia(c, NOW)).toBe(true);
+  });
+});

@@ -1,4 +1,5 @@
 import { decideTrackA, decideTrackB, TRACKB_GIVEUP_H, type MsgLite } from './sequence';
+import { lancioInCorso } from './lancio-fase';
 
 const H = 3600_000;
 
@@ -18,6 +19,8 @@ export type CronConvRow = {
   last_inbound_at: string | null;
   bot_outcome: string | null;
   gdo_agenda_at: string | null;
+  lancio_slug?: string | null;
+  lancio_fase?: string | null;
 };
 
 const ms = (iso: string | null | undefined): number | null => {
@@ -72,6 +75,11 @@ export function serveCronologia(c: CronConvRow, nowMs: number): boolean {
   //    Non vale su handed_off/booked: lì risponde una persona.
   if (guidataDalBot && ultimoMessaggioEInbound(c)) return true;
 
+  // 1b. Lancio Web Dev AI in corso: il re-drive sopra vale (il turno lo fa lib/lancio-turno),
+  //     ma nessuna classificazione — questi lead escono dal bot solo con le restituzioni
+  //     del lancio (B5), mai per silenzio prima dell'8/10 (spec A5).
+  if (lancioInCorso(c)) return false;
+
   // 2. Da qui in poi si decide solo di classificare, e queste tre categorie non si
   //    classificano mai: l'esito del lead di un GDO non è nostro, un esito già dato è
   //    terminale, e i watchdog leggono soltanto l'ultima attività.
@@ -118,7 +126,13 @@ export function decideFollowupAction(input: {
   nudgesSent?: number;
   /** Lead di proprietà di un GDO (`gdo_agenda_at`): il bot fa solo da canale. */
   gdoPostino?: boolean;
+  /** Chat del lancio con fase non terminale: mai classificare. */
+  lancio?: boolean;
 }): FollowupAction {
+  // Chat del lancio Web Dev AI: l'esito lo decide il flusso del lancio (B5). Una
+  // classificazione di Mario qui restituirebbe al CRM un lead che sta aspettando il 5/10.
+  if (input.lancio === true) return 'none';
+
   // Lead del GDO: l'esito non è nostro da decidere. Una classificazione automatica
   // arriverebbe al CRM come esito su un lead che sta lavorando un commerciale.
   if (input.gdoPostino === true) return 'none';

@@ -6,13 +6,16 @@ vi.mock('./twilio', () => ({ sendFreeText: vi.fn(async () => ({ sid: 'SM_fake', 
 vi.mock('./bot-report', () => ({ generateBotReport: vi.fn(async () => ({})) }));
 vi.mock('./bot-outcome', () => ({
   sendOutcome: vi.fn(async () => ({ sent: true })),
+  inviaNotaAlCrm: vi.fn(async () => ({ sent: true })),
   registraEsitoSenzaLeadId: vi.fn(async () => ({ decisione: 'registrato', chiudi: true })),
 }));
+vi.mock('./lancio-turno', () => ({ eseguiTurnoLancio: vi.fn(async () => 'active') }));
 
 import { generateMarioReply, GDO_CONTEXT_NOTE } from './mario';
-import { registraEsitoSenzaLeadId, sendOutcome } from './bot-outcome';
+import { sendOutcome, inviaNotaAlCrm, registraEsitoSenzaLeadId } from './bot-outcome';
 import { NOTA_VIDEO, NOTA_NOEMI } from './gdo-context-note';
 import { OPENING_ENV_KEYS, personaForConversation } from './persona';
+import { eseguiTurnoLancio } from './lancio-turno';
 
 describe('shouldAutoReply', () => {
   const ok = { toMatchesFenice: true, autoReplyOn: true, aiOwner: 'mario', aiStatus: 'active' };
@@ -34,44 +37,6 @@ describe('shouldAutoReply', () => {
   it('falso se handed_off o booked', () => {
     expect(shouldAutoReply({ ...ok, aiStatus: 'handed_off' })).toBe(false);
     expect(shouldAutoReply({ ...ok, aiStatus: 'booked' })).toBe(false);
-  });
-});
-
-describe('shouldAdoptInbound', () => {
-  const ok = {
-    toMatchesFenice: true,
-    adoptionOn: true,
-    autoReplyOn: true,
-    aiOwner: null,
-    aiPausedAt: null,
-    handedOffAt: null,
-    hasOutbound: false,
-  };
-  it('vero: il lead ha scritto per primo e la chat non è di nessuno', () => {
-    expect(shouldAdoptInbound(ok)).toBe(true);
-  });
-  it('falso se il numero non è quello di Fenice', () => {
-    expect(shouldAdoptInbound({ ...ok, toMatchesFenice: false })).toBe(false);
-  });
-  it('falso a interruttore spento', () => {
-    expect(shouldAdoptInbound({ ...ok, adoptionOn: false })).toBe(false);
-  });
-  // Il kill-switch del pannello lo si spegne durante un incidente: adottare senza
-  // poter rispondere lascia quella chat fuori da tutte le reti di recupero.
-  it('falso col bot generale spento dal pannello: non si adotta chi non si può servire', () => {
-    expect(shouldAdoptInbound({ ...ok, autoReplyOn: false })).toBe(false);
-  });
-  it('falso se la chat è già di qualcuno', () => {
-    expect(shouldAdoptInbound({ ...ok, aiOwner: 'mario' })).toBe(false);
-  });
-  it('falso col fermo manuale o con la chat passata a una persona', () => {
-    expect(shouldAdoptInbound({ ...ok, aiPausedAt: '2026-09-04T10:00:00Z' })).toBe(false);
-    expect(shouldAdoptInbound({ ...ok, handedOffAt: '2026-09-04T10:00:00Z' })).toBe(false);
-  });
-  // Il caso che conta di più: una chat di campagna ha ai_owner nullo e un outbound
-  // partito. Adottarla vorrebbe dire mettere il bot sopra 2.680 conversazioni.
-  it('falso se un messaggio nostro è già partito (campagne, invii a mano)', () => {
-    expect(shouldAdoptInbound({ ...ok, hasOutbound: true })).toBe(false);
   });
 });
 
@@ -241,6 +206,22 @@ describe('shouldReopen', () => {
   it('non riapre se aiStatus è null', () => {
     expect(shouldReopen({ aiOwner: 'mario', aiStatus: null })).toBe(false);
   });
+
+  // Il lead del lancio che ha detto "non mi interessa" si e' sentito rispondere "non ti
+  // scrivo piu' per questo evento". Se riscrive, riaprire lo rimetterebbe in mano al bot
+  // subito dopo quella promessa: a questo serve il marcatore durevole in `lancio_info`.
+  it('NON riapre una chat del lancio gia congedata', () => {
+    expect(shouldReopen({
+      aiOwner: 'mario', aiStatus: 'closed',
+      lancioSlug: 'webdev-2026-10', lancioInfo: { congedo_at: '2026-09-21T10:00:00Z' },
+    })).toBe(false);
+  });
+
+  it('una chat del lancio senza congedo si riapre come sempre, e il marcatore da solo non basta', () => {
+    expect(shouldReopen({ aiOwner: 'mario', aiStatus: 'closed', lancioSlug: 'webdev-2026-10', lancioInfo: null })).toBe(true);
+    // Senza `lancio_slug` non e' una chat del lancio: il marcatore non c'entra.
+    expect(shouldReopen({ aiOwner: 'mario', aiStatus: 'closed', lancioInfo: { congedo_at: '2026-09-21T10:00:00Z' } })).toBe(true);
+  });
 });
 
 describe('canSendOutcome', () => {
@@ -295,6 +276,9 @@ type ClaimedRow = {
   gdo_video_watched_at?: string | null;
   gdo_video_followups_sent?: number | null;
   gdo_noemi_reminded_at?: string | null;
+  lancio_slug?: string | null;
+  lancio_fase?: string | null;
+  leads?: { first_name?: string | null } | null;
 };
 type FakeMsgRow = { direction: string; body: string; template_sid: string | null; created_at: string };
 
@@ -566,108 +550,6 @@ describe('drainMarioReplies — guardia canSendOutcome dal vivo', () => {
     await drainMarioReplies(supabase, 60, '+391234567890', () => 0);
 
     expect(calls.convUpdates.some((u) => typeof u.gdo_video_watched_at === 'string')).toBe(true);
-  });
-});
-
-// Un lead adottato dal webhook non ha `crm_lead_id`: il CRM non lo conosce ancora e
-// l'esito non ha dove andare. Le DECISIONI (declassamento, guardia sulla data, richiamo
-// senza data) vivono in `registraEsitoSenzaLeadId`, accanto a `sendOutcome`, e hanno i
-// loro test in `lib/bot-outcome.test.ts`: qui si verifica il collegamento.
-describe('drainMarioReplies — esito di un lead che il CRM non conosce', () => {
-  const OPENING: FakeMsgRow = { direction: 'out', body: 'apertura', template_sid: null, created_at: '2026-09-01T10:00:00Z' };
-
-  beforeEach(() => {
-    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
-    vi.mocked(generateMarioReply).mockReset();
-    vi.mocked(sendOutcome).mockClear();
-    vi.mocked(registraEsitoSenzaLeadId).mockClear();
-    vi.mocked(registraEsitoSenzaLeadId).mockResolvedValue({ decisione: 'registrato', chiudi: true });
-  });
-  afterEach(() => { vi.unstubAllEnvs(); });
-
-  type Risposta = Awaited<ReturnType<typeof generateMarioReply>>;
-  function conEsito(claimedRow: ClaimedRow, body: string, reply: Risposta) {
-    const rows: FakeMsgRow[] = [
-      OPENING,
-      { direction: 'in', body, template_sid: null, created_at: '2026-09-04T09:00:00Z' },
-    ];
-    const fake = makeDrainSupabase(claimedRow, rows);
-    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply);
-    return fake;
-  }
-
-  it("l'esito passa dalle decisioni condivise, non dalla rete, e porta con se' l'appuntamento gia' in piedi", async () => {
-    const claimedRow: ClaimedRow = {
-      id: 7246, ai_started_at: null, crm_lead_id: null,
-      bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: '2026-09-08T15:00:00+02:00',
-    };
-    const { supabase } = conEsito(claimedRow, 'lasciamo stare, non mi interessa piu', {
-      visibleReply: 'Va bene, mi segno tutto.',
-      appointmentFixed: false, passToHuman: false, videoWatched: false,
-      outcome: 'DA_SCARTARE', discardReason: 'ci ha ripensato',
-    });
-
-    await drainMarioReplies(supabase, 7246, '+391234567890', () => 0);
-
-    // Niente rete: senza leadId non c'e' dove consegnare.
-    expect(sendOutcome).not.toHaveBeenCalled();
-    expect(registraEsitoSenzaLeadId).toHaveBeenCalledTimes(1);
-    const chiamata = vi.mocked(registraEsitoSenzaLeadId).mock.calls[0];
-    expect(chiamata[1]).toBe(7246);
-    expect(chiamata[2]).toMatchObject({ outcome: 'DA_SCARTARE', discardReason: 'ci ha ripensato' });
-    // Le parole vere del lead, non la parafrasi del modello.
-    expect(chiamata[2].leadWords).toBe('lasciamo stare, non mi interessa piu');
-    // Lo stato in piedi arriva dal claim: senza, la decisione declasserebbe l'appuntamento.
-    expect(chiamata[3]).toEqual({
-      botOutcome: 'APPUNTAMENTO', botScheduledAt: '2026-09-08T15:00:00+02:00',
-    });
-  });
-
-  it('decisione che chiude: il bot smette di parlare', async () => {
-    vi.mocked(registraEsitoSenzaLeadId).mockResolvedValueOnce({ decisione: 'registrato', chiudi: true });
-    const claimedRow: ClaimedRow = { id: 7247, ai_started_at: null, crm_lead_id: null, bot_outcome: null };
-    const { supabase, calls } = conEsito(claimedRow, 'va bene giovedi alle 15', {
-      visibleReply: 'Perfetto, ti ho fissato giovedi alle 15.',
-      appointmentFixed: true, passToHuman: false, videoWatched: false,
-      outcome: 'APPUNTAMENTO', scheduledAt: '2026-09-10T15:00:00+02:00',
-    });
-
-    await drainMarioReplies(supabase, 7247, '+391234567890', () => 0);
-
-    expect(calls.finalStatusWrites).toEqual(['closed']);
-  });
-
-  // Il caso della domenica e del richiamo senza data: la conversazione resta viva
-  // apposta, il bot deve poter ancora chiedere una data buona invece di sparire.
-  it('decisione che NON chiude: la conversazione resta attiva', async () => {
-    vi.mocked(registraEsitoSenzaLeadId).mockResolvedValueOnce({ decisione: 'data_non_fissabile', chiudi: false });
-    const claimedRow: ClaimedRow = { id: 7248, ai_started_at: null, crm_lead_id: null, bot_outcome: null };
-    const { supabase, calls } = conEsito(claimedRow, 'per me va bene domenica', {
-      visibleReply: 'Ci provo, ti confermo.',
-      appointmentFixed: true, passToHuman: false, videoWatched: false,
-      outcome: 'APPUNTAMENTO', scheduledAt: '2026-09-13T15:00:00+02:00',
-    });
-
-    await drainMarioReplies(supabase, 7248, '+391234567890', () => 0);
-
-    expect(calls.finalStatusWrites).toEqual(['active']);
-  });
-
-  // Sui lead dei GDO l'esito non e' nostro: il ramo non deve nemmeno essere sfiorato.
-  it('lead postino: nessuna registrazione locale, il lead e\' del GDO', async () => {
-    const claimedRow: ClaimedRow = {
-      id: 7249, ai_started_at: null, crm_lead_id: null, bot_outcome: null,
-      gdo_agenda_at: '2026-09-01T10:00:00Z', gdo_video_url: 'https://esempio/v', gdo_video_sent_at: '2026-09-01T10:05:00Z',
-    };
-    const { supabase } = conEsito(claimedRow, 'non mi interessa piu', {
-      visibleReply: 'Va bene.',
-      appointmentFixed: false, passToHuman: false, videoWatched: false,
-      outcome: 'DA_SCARTARE',
-    });
-
-    await drainMarioReplies(supabase, 7249, '+391234567890', () => 0);
-
-    expect(registraEsitoSenzaLeadId).not.toHaveBeenCalled();
   });
 });
 
@@ -1552,6 +1434,258 @@ function makeStatefulDrainSupabase(row: FakeConvRow, initialRows: FakeMsgRow[]) 
   return { supabase, calls, conv };
 }
 
+// Prima di questo, un secondo numero dato dal lead in chat moriva lì: il bot
+// rispondeva "lo segno, avviso Noemi" e non lo segnava nessuno. [NOTA|...] fa
+// arrivare davvero la nota alle Conferme, senza mai chiudere la conversazione:
+// non è un esito.
+describe('il secondo recapito del lead arriva al CRM come NOTA, senza chiudere la conversazione', () => {
+  // Recapito alternativo per una chiamata che il lead GIÀ aspetta: qui la nota basta,
+  // la telefonata è già assegnata a qualcuno. Non è il caso del lead che CHIEDE di
+  // essere chiamato — quello vuole anche [PASSAGGIO_UMANO], e ha il suo test sotto.
+  const rows: FakeMsgRow[] = [
+    { direction: 'out', body: 'apertura', template_sid: null, created_at: '2026-07-29T10:00:00Z' },
+    { direction: 'in', body: 'per la chiamata di Noemi meglio il 3924538096, l\'altro numero ce l\'ho spento', template_sid: null, created_at: '2026-07-29T10:10:00Z' },
+  ];
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.stubEnv('BOT_WEBHOOK_SECRET', 'shh');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(sendOutcome).mockClear();
+    vi.mocked(inviaNotaAlCrm).mockReset();
+    vi.mocked(inviaNotaAlCrm).mockResolvedValue({ sent: true });
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('invia la nota al CRM e la conversazione resta viva (non è un esito)', async () => {
+    const claimedRow: ClaimedRow = { id: 95, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto, lo passo a chi ti chiama.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+      notaCrm: 'Secondo recapito del lead: 3924538096',
+    });
+
+    await drainMarioReplies(supabase, 95, '+391234567890', () => 0);
+
+    expect(inviaNotaAlCrm).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(inviaNotaAlCrm).mock.calls[0]).toEqual([
+      supabase, 95, 'crm1', 'Secondo recapito del lead: 3924538096', undefined, 'shh',
+    ]);
+    // Il messaggio al lead è partito una sola volta, il tag non ci resta dentro.
+    expect(calls.messageInserts.map((m: any) => m.body)).toEqual(['Perfetto, lo passo a chi ti chiama.']);
+    // Non è un esito: nessuna chiamata a sendOutcome, la conversazione resta active.
+    expect(sendOutcome).not.toHaveBeenCalled();
+    expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+
+  it('lead non-CRM (nessun crm_lead_id): non tenta l\'invio', async () => {
+    const claimedRow: ClaimedRow = { id: 96, ai_started_at: null, crm_lead_id: null, bot_outcome: null };
+    const { supabase } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto, lo passo a chi ti chiama.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+      notaCrm: 'Secondo recapito del lead: 3924538096',
+    });
+
+    await drainMarioReplies(supabase, 96, '+391234567890', () => 0);
+
+    expect(inviaNotaAlCrm).not.toHaveBeenCalled();
+  });
+
+  it('un invio fallito non manda in errore il turno: il messaggio al lead resta partito', async () => {
+    const claimedRow: ClaimedRow = { id: 97, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(inviaNotaAlCrm).mockRejectedValueOnce(new Error('rete giù'));
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto, lo passo a chi ti chiama.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+      notaCrm: 'Secondo recapito del lead: 3924538096',
+    });
+
+    await drainMarioReplies(supabase, 97, '+391234567890', () => 0);
+
+    expect(calls.messageInserts).toHaveLength(1);
+    expect(calls.events.some((e: any) => e.type === 'nota_secondo_recapito_non_inviata')).toBe(true);
+    // L'eccezione non è arrivata al catch del drain: al retry non rimanderebbe la
+    // stessa risposta al lead una seconda volta.
+    expect(calls.events.some((e: any) => e.type === 'fenice_ai_error')).toBe(false);
+    expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+
+  it('la risposta del CRM diversa da 2xx si logga ma non blocca il turno', async () => {
+    const claimedRow: ClaimedRow = { id: 98, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(inviaNotaAlCrm).mockResolvedValueOnce({ sent: false, status: 500, error: 'http_500' });
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto, lo passo a chi ti chiama.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+      notaCrm: 'Secondo recapito del lead: 3924538096',
+    });
+
+    await drainMarioReplies(supabase, 98, '+391234567890', () => 0);
+
+    expect(calls.events.some((e: any) => e.type === 'nota_secondo_recapito_non_inviata')).toBe(true);
+    expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+
+  it('senza BOT_WEBHOOK_SECRET non tenta l\'invio e lo logga', async () => {
+    vi.stubEnv('BOT_WEBHOOK_SECRET', '');
+    const claimedRow: ClaimedRow = { id: 99, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto, lo passo a chi ti chiama.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+      notaCrm: 'Secondo recapito del lead: 3924538096',
+    });
+
+    await drainMarioReplies(supabase, 99, '+391234567890', () => 0);
+
+    expect(inviaNotaAlCrm).not.toHaveBeenCalled();
+    expect(calls.events.some((e: any) => e.type === 'nota_secondo_recapito_non_inviata')).toBe(true);
+  });
+
+  it('senza il tag notaCrm non chiama mai il CRM per la nota', async () => {
+    const claimedRow: ClaimedRow = { id: 100, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const { supabase } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Certo, dimmi pure.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 100, '+391234567890', () => 0);
+
+    expect(inviaNotaAlCrm).not.toHaveBeenCalled();
+  });
+
+  // Il finding di review (round 1): il vincolo "una NOTA non impedisce un esito
+  // successivo nello stesso turno" era verificato solo a livello di parsing
+  // (mario.test.ts, coesistenza dei due tag nel testo) e per ispezione del codice
+  // (nessun break/return prima di `if (result.outcome)`). Qui la prova end-to-end:
+  // il modello emette [NOTA|...] insieme a un [ESITO:...] nello stesso turno, ed
+  // entrambi i canali devono partire nello stesso drain.
+  it('nota ed esito nello stesso turno: partono entrambi (la nota non blocca l\'esito)', async () => {
+    const claimedRow: ClaimedRow = { id: 101, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Va bene, allora non se ne parla più.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+      notaCrm: 'Secondo recapito del lead: 3924538096',
+      outcome: 'DA_SCARTARE', discardReason: 'non interessato',
+    });
+
+    await drainMarioReplies(supabase, 101, '+391234567890', () => 0);
+
+    expect(inviaNotaAlCrm).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(inviaNotaAlCrm).mock.calls[0]).toEqual([
+      supabase, 101, 'crm1', 'Secondo recapito del lead: 3924538096', undefined, 'shh',
+    ]);
+    expect(sendOutcome).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({
+      outcome: 'DA_SCARTARE', discardReason: 'non interessato',
+    });
+    // L'esito chiude la conversazione come farebbe senza la nota: la nota non ha
+    // deviato o interrotto il percorso normale dell'esito.
+    expect(calls.finalStatusWrites).toEqual(['closed']);
+  });
+});
+
+// Il lead che CHIEDE di essere chiamato e lascia un numero non è il caso sopra: la
+// [NOTA|...] da sola non cambia lo stato del lead e non assegna la telefonata a
+// nessuno, quindi al lead si risponde "lo passo a chi ti chiama" e poi non lo chiama
+// nessuno. Il prompt ora ordina i due tag insieme; qui si verifica che il drain li
+// porti davvero fino in fondo tutti e due.
+describe('il lead chiede di essere chiamato e lascia un numero: nota E passaggio a una persona', () => {
+  const rows: FakeMsgRow[] = [
+    { direction: 'out', body: 'apertura', template_sid: null, created_at: '2026-07-29T10:00:00Z' },
+    { direction: 'in', body: 'puoi farmi chiamare su questo numero, 3924538096', template_sid: null, created_at: '2026-07-29T10:10:00Z' },
+  ];
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.stubEnv('BOT_WEBHOOK_SECRET', 'shh');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(sendOutcome).mockClear();
+    vi.mocked(inviaNotaAlCrm).mockReset();
+    vi.mocked(inviaNotaAlCrm).mockResolvedValue({ sent: true });
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('partono entrambi: il numero a chi telefona, la richiesta a una persona', async () => {
+    const claimedRow: ClaimedRow = { id: 102, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Ti faccio richiamare da una collega su quel numero.',
+      appointmentFixed: false, passToHuman: true, videoWatched: false,
+      notaCrm: 'Secondo recapito del lead: 3924538096, sue parole: "puoi farmi chiamare su questo numero, 3924538096"',
+    });
+
+    await drainMarioReplies(supabase, 102, '+391234567890', () => 0);
+
+    // Il numero arriva a chi telefona...
+    expect(inviaNotaAlCrm).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(inviaNotaAlCrm).mock.calls[0][3]).toContain('3924538096');
+    // ...e la telefonata viene assegnata davvero a una persona.
+    expect(sendOutcome).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'CONTATTO_UMANO' });
+    expect(calls.finalStatusWrites).toEqual(['handed_off']);
+    // Nessun tag tecnico nella bolla che riceve il lead.
+    expect(calls.messageInserts.map((m: any) => m.body).join(' ')).not.toContain('[NOTA');
+  });
+});
+
+// I due giorni prenotabili che il modello ha visto in questo turno devono arrivare fino
+// alla guardia sulla data, altrimenti dopo le 20:00 la finestra ruota e la call appena
+// promessa in chat viene scartata: al lead "ci vediamo domani", al CRM "appuntamento
+// non fissato", e non lo chiama nessuno.
+describe('la finestra vista dal modello viaggia fino all\'esito', () => {
+  const rows: FakeMsgRow[] = [
+    { direction: 'out', body: 'apertura', template_sid: null, created_at: '2026-07-29T10:00:00Z' },
+    { direction: 'in', body: 'va bene domani alle 20', template_sid: null, created_at: '2026-07-29T10:10:00Z' },
+  ];
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(sendOutcome).mockClear();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('passa a sendOutcome i giorni che il prompt di quel turno mostrava', async () => {
+    const claimedRow: ClaimedRow = { id: 103, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const { supabase } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto, ci sentiamo domani alle 20.',
+      appointmentFixed: true, passToHuman: false, videoWatched: false,
+      outcome: 'APPUNTAMENTO', scheduledAt: '2026-09-11T20:00:00+02:00',
+      bookingDays: ['2026-09-11', '2026-09-12'],
+    });
+
+    await drainMarioReplies(supabase, 103, '+391234567890', () => 0);
+
+    expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({
+      outcome: 'APPUNTAMENTO',
+      date: '2026-09-11T20:00:00+02:00',
+      bookingDays: ['2026-09-11', '2026-09-12'],
+    });
+  });
+
+  it('senza i giorni (chiamante che non li conosce) l\'esito parte lo stesso: la guardia ricalcola', async () => {
+    const claimedRow: ClaimedRow = { id: 104, ai_started_at: null, crm_lead_id: 'crm1', bot_outcome: null };
+    const { supabase } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto.',
+      appointmentFixed: true, passToHuman: false, videoWatched: false,
+      outcome: 'APPUNTAMENTO', scheduledAt: '2026-09-11T20:00:00+02:00',
+    });
+
+    await drainMarioReplies(supabase, 104, '+391234567890', () => 0);
+
+    expect(sendOutcome).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendOutcome).mock.calls[0][2].bookingDays).toBeUndefined();
+  });
+});
+
 describe('fermo manuale del bot su una singola chat', () => {
   const OPENING: FakeMsgRow = { direction: 'out', body: 'apertura', template_sid: null, created_at: '2026-07-01T10:00:00Z' };
   const INBOUND: FakeMsgRow = { direction: 'in', body: 'ciao', template_sid: null, created_at: '2026-08-01T09:00:00Z' };
@@ -1625,5 +1759,246 @@ describe('fermo manuale del bot su una singola chat', () => {
 
     expect(conv.ai_status).toBe('booked');
     expect(conv.ai_lock_at).toBe('2026-08-01T12:31:00Z'); // il lucchetto altrui resta
+  });
+});
+
+describe('drainMarioReplies — aggancio del turno lancio', () => {
+  const WELCOME: FakeMsgRow = { direction: 'out', body: 'benvenuto lancio', template_sid: 'HX_W', created_at: '2026-09-20T10:00:00Z' };
+  const SI: FakeMsgRow = { direction: 'in', body: 'si', template_sid: null, created_at: '2026-09-20T10:05:00Z' };
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(eseguiTurnoLancio).mockClear();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('con un lancio in corso il round lo fa eseguiTurnoLancio: Mario non viene interpellato', async () => {
+    const { supabase, calls } = makeDrainSupabase(
+      { id: 42, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L1', bot_outcome: null, gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
+        lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa', leads: { first_name: 'Anna' } },
+      [WELCOME, SI],
+    );
+    await drainMarioReplies(supabase, 42, '+393331234567', () => 0);
+    expect(eseguiTurnoLancio).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(eseguiTurnoLancio).mock.calls[0][1]).toMatchObject({
+      conversationId: 42, phone: '+393331234567', crmLeadId: 'crm-L1', fase: 'attesa', nome: 'Anna', inboundBody: 'si',
+    });
+    expect(generateMarioReply).not.toHaveBeenCalled();
+    expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+
+  it('lo stato finale è quello che il turno lancio restituisce', async () => {
+    vi.mocked(eseguiTurnoLancio).mockResolvedValueOnce('closed');
+    const { supabase, calls } = makeDrainSupabase(
+      { id: 43, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L2', bot_outcome: null, gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
+        lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa' },
+      [WELCOME, { ...SI, body: 'no' }],
+    );
+    await drainMarioReplies(supabase, 43, '+393331234567', () => 0);
+    expect(calls.finalStatusWrites).toEqual(['closed']);
+  });
+
+  it('lancio chiuso: torna Mario di sempre', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({ visibleReply: 'ciao', appointmentFixed: false, passToHuman: false, videoWatched: false } as any);
+    const { supabase } = makeDrainSupabase(
+      { id: 44, ai_started_at: '2026-09-20T09:00:00Z', crm_lead_id: 'crm-L3', bot_outcome: null, gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null,
+        lancio_slug: 'webdev-2026-10', lancio_fase: 'chiuso' },
+      [WELCOME, SI],
+    );
+    await drainMarioReplies(supabase, 44, '+393331234567', () => 0);
+    expect(eseguiTurnoLancio).not.toHaveBeenCalled();
+    expect(generateMarioReply).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('drainMarioReplies — un claim fallito non e un silenzio', () => {
+  /** Finto minimo: il claim risponde con l'errore dato, tutto il resto raccoglie. */
+  function supabaseClaimKo(error: { message: string; code?: string } | null) {
+    const eventi: any[] = [];
+    const supabase: any = {
+      from(table: string) {
+        if (table === 'conversations') {
+          return {
+            update() {
+              const q: any = {
+                eq: () => q, is: () => q, or: () => q, select: () => q,
+                single: () => Promise.resolve({ data: null, error }),
+              };
+              return q;
+            },
+          };
+        }
+        return { insert: (p: any) => { eventi.push(p); return Promise.resolve({ data: null }); } };
+      },
+    };
+    return { supabase, eventi };
+  }
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.mocked(generateMarioReply).mockReset();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+
+  // Le colonne `lancio_*` sono entrate in questa select: con la migrazione non applicata
+  // il claim torna `data: null` come una conversazione non claimabile, e il bot tacerebbe
+  // per TUTTI senza una riga di log.
+  it('colonna sconosciuta (42703): riga event_log di errore e console.error, senza lanciare', async () => {
+    const spia = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { supabase, eventi } = supabaseClaimKo({
+      message: 'column conversations.lancio_slug does not exist', code: '42703',
+    });
+    await expect(drainMarioReplies(supabase, 77, '+393331234567', () => 0)).resolves.toBeUndefined();
+    const riga = eventi.find((e) => e.type === 'fenice_ai_claim_error');
+    expect(riga).toMatchObject({ level: 'error', payload: { conversationId: 77, code: '42703' } });
+    expect(spia).toHaveBeenCalled();
+    expect(generateMarioReply).not.toHaveBeenCalled();
+  });
+
+  it('PGRST116 (nessuna riga) resta muto: e il caso normale di una conv gia claimata', async () => {
+    const { supabase, eventi } = supabaseClaimKo({ message: 'no rows', code: 'PGRST116' });
+    await drainMarioReplies(supabase, 78, '+393331234567', () => 0);
+    expect(eventi.map((e) => e.type)).not.toContain('fenice_ai_claim_error');
+  });
+});
+
+describe('shouldAdoptInbound', () => {
+  const ok = {
+    toMatchesFenice: true,
+    adoptionOn: true,
+    autoReplyOn: true,
+    aiOwner: null,
+    aiPausedAt: null,
+    handedOffAt: null,
+    hasOutbound: false,
+  };
+  it('vero: il lead ha scritto per primo e la chat non è di nessuno', () => {
+    expect(shouldAdoptInbound(ok)).toBe(true);
+  });
+  it('falso se il numero non è quello di Fenice', () => {
+    expect(shouldAdoptInbound({ ...ok, toMatchesFenice: false })).toBe(false);
+  });
+  it('falso a interruttore spento', () => {
+    expect(shouldAdoptInbound({ ...ok, adoptionOn: false })).toBe(false);
+  });
+  // Il kill-switch del pannello lo si spegne durante un incidente: adottare senza
+  // poter rispondere lascia quella chat fuori da tutte le reti di recupero.
+  it('falso col bot generale spento dal pannello: non si adotta chi non si può servire', () => {
+    expect(shouldAdoptInbound({ ...ok, autoReplyOn: false })).toBe(false);
+  });
+  it('falso se la chat è già di qualcuno', () => {
+    expect(shouldAdoptInbound({ ...ok, aiOwner: 'mario' })).toBe(false);
+  });
+  it('falso col fermo manuale o con la chat passata a una persona', () => {
+    expect(shouldAdoptInbound({ ...ok, aiPausedAt: '2026-09-04T10:00:00Z' })).toBe(false);
+    expect(shouldAdoptInbound({ ...ok, handedOffAt: '2026-09-04T10:00:00Z' })).toBe(false);
+  });
+  // Il caso che conta di più: una chat di campagna ha ai_owner nullo e un outbound
+  // partito. Adottarla vorrebbe dire mettere il bot sopra 2.680 conversazioni.
+  it('falso se un messaggio nostro è già partito (campagne, invii a mano)', () => {
+    expect(shouldAdoptInbound({ ...ok, hasOutbound: true })).toBe(false);
+  });
+});
+
+// Un lead adottato dal webhook non ha `crm_lead_id`: il CRM non lo conosce ancora e
+// l'esito non ha dove andare. Le DECISIONI (declassamento, guardia sulla data, richiamo
+// senza data) vivono in `registraEsitoSenzaLeadId`, accanto a `sendOutcome`, e hanno i
+// loro test in `lib/bot-outcome.test.ts`: qui si verifica il collegamento.
+describe('drainMarioReplies — esito di un lead che il CRM non conosce', () => {
+  const OPENING: FakeMsgRow = { direction: 'out', body: 'apertura', template_sid: null, created_at: '2026-09-01T10:00:00Z' };
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(sendOutcome).mockClear();
+    vi.mocked(registraEsitoSenzaLeadId).mockClear();
+    vi.mocked(registraEsitoSenzaLeadId).mockResolvedValue({ decisione: 'registrato', chiudi: true });
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  type Risposta = Awaited<ReturnType<typeof generateMarioReply>>;
+  function conEsito(claimedRow: ClaimedRow, body: string, reply: Risposta) {
+    const rows: FakeMsgRow[] = [
+      OPENING,
+      { direction: 'in', body, template_sid: null, created_at: '2026-09-04T09:00:00Z' },
+    ];
+    const fake = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply);
+    return fake;
+  }
+
+  it("l'esito passa dalle decisioni condivise, non dalla rete, e porta con se' l'appuntamento gia' in piedi", async () => {
+    const claimedRow: ClaimedRow = {
+      id: 7246, ai_started_at: null, crm_lead_id: null,
+      bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: '2026-09-08T15:00:00+02:00',
+    };
+    const { supabase } = conEsito(claimedRow, 'lasciamo stare, non mi interessa piu', {
+      visibleReply: 'Va bene, mi segno tutto.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+      outcome: 'DA_SCARTARE', discardReason: 'ci ha ripensato',
+    });
+
+    await drainMarioReplies(supabase, 7246, '+391234567890', () => 0);
+
+    // Niente rete: senza leadId non c'e' dove consegnare.
+    expect(sendOutcome).not.toHaveBeenCalled();
+    expect(registraEsitoSenzaLeadId).toHaveBeenCalledTimes(1);
+    const chiamata = vi.mocked(registraEsitoSenzaLeadId).mock.calls[0];
+    expect(chiamata[1]).toBe(7246);
+    expect(chiamata[2]).toMatchObject({ outcome: 'DA_SCARTARE', discardReason: 'ci ha ripensato' });
+    // Le parole vere del lead, non la parafrasi del modello.
+    expect(chiamata[2].leadWords).toBe('lasciamo stare, non mi interessa piu');
+    // Lo stato in piedi arriva dal claim: senza, la decisione declasserebbe l'appuntamento.
+    expect(chiamata[3]).toEqual({
+      botOutcome: 'APPUNTAMENTO', botScheduledAt: '2026-09-08T15:00:00+02:00',
+    });
+  });
+
+  it('decisione che chiude: il bot smette di parlare', async () => {
+    vi.mocked(registraEsitoSenzaLeadId).mockResolvedValueOnce({ decisione: 'registrato', chiudi: true });
+    const claimedRow: ClaimedRow = { id: 7247, ai_started_at: null, crm_lead_id: null, bot_outcome: null };
+    const { supabase, calls } = conEsito(claimedRow, 'va bene giovedi alle 15', {
+      visibleReply: 'Perfetto, ti ho fissato giovedi alle 15.',
+      appointmentFixed: true, passToHuman: false, videoWatched: false,
+      outcome: 'APPUNTAMENTO', scheduledAt: '2026-09-10T15:00:00+02:00',
+    });
+
+    await drainMarioReplies(supabase, 7247, '+391234567890', () => 0);
+
+    expect(calls.finalStatusWrites).toEqual(['closed']);
+  });
+
+  // Il caso della domenica e del richiamo senza data: la conversazione resta viva
+  // apposta, il bot deve poter ancora chiedere una data buona invece di sparire.
+  it('decisione che NON chiude: la conversazione resta attiva', async () => {
+    vi.mocked(registraEsitoSenzaLeadId).mockResolvedValueOnce({ decisione: 'data_non_fissabile', chiudi: false });
+    const claimedRow: ClaimedRow = { id: 7248, ai_started_at: null, crm_lead_id: null, bot_outcome: null };
+    const { supabase, calls } = conEsito(claimedRow, 'per me va bene domenica', {
+      visibleReply: 'Ci provo, ti confermo.',
+      appointmentFixed: true, passToHuman: false, videoWatched: false,
+      outcome: 'APPUNTAMENTO', scheduledAt: '2026-09-13T15:00:00+02:00',
+    });
+
+    await drainMarioReplies(supabase, 7248, '+391234567890', () => 0);
+
+    expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+
+  // Sui lead dei GDO l'esito non e' nostro: il ramo non deve nemmeno essere sfiorato.
+  it('lead postino: nessuna registrazione locale, il lead e\' del GDO', async () => {
+    const claimedRow: ClaimedRow = {
+      id: 7249, ai_started_at: null, crm_lead_id: null, bot_outcome: null,
+      gdo_agenda_at: '2026-09-01T10:00:00Z', gdo_video_url: 'https://esempio/v', gdo_video_sent_at: '2026-09-01T10:05:00Z',
+    };
+    const { supabase } = conEsito(claimedRow, 'non mi interessa piu', {
+      visibleReply: 'Va bene.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+      outcome: 'DA_SCARTARE',
+    });
+
+    await drainMarioReplies(supabase, 7249, '+391234567890', () => 0);
+
+    expect(registraEsitoSenzaLeadId).not.toHaveBeenCalled();
   });
 });

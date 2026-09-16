@@ -4,6 +4,7 @@ import { verifySignature } from '@/lib/bot-hmac';
 import { parseIntakePayload } from '@/lib/bot-contract';
 import { enrollLeadIntoMario } from '@/lib/fenice-enroll';
 import { toE164 } from '@/lib/phone';
+import { LANCIO_SLUG } from '@/lib/lancio-fase';
 import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
@@ -93,6 +94,19 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  // Slug di lancio che non conosciamo: si lavora lo stesso (l'unico flusso lancio che
+  // abbiamo e' questo), ma resta scritto. Di solito e' un refuso lato CRM, e senza
+  // questa riga nessuno saprebbe dire perche' quelle persone hanno ricevuto il
+  // benvenuto del 5 ottobre.
+  if (p.lancio && p.lancio.slug !== LANCIO_SLUG) {
+    await supabase.from('event_log').insert({
+      type: 'lancio_slug_ignoto',
+      payload: { crmLeadId: p.leadId, slug: p.lancio.slug, atteso: LANCIO_SLUG } as never,
+      message: `[lancio] slug sconosciuto "${p.lancio.slug}" sul lead ${p.leadId}: lavorato come "${LANCIO_SLUG}"`,
+      level: 'warn',
+    });
+  }
+
   try {
     const res = await enrollLeadIntoMario(supabase, {
       phone,
@@ -100,6 +114,7 @@ export async function POST(req: NextRequest) {
       email: p.email,
       crmLeadId: p.leadId,
       crmFunnel: p.funnel,
+      lancio: p.lancio ?? null,
     });
     await supabase.from('event_log').insert({
       type: 'bot_intake',

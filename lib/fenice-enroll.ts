@@ -1,11 +1,15 @@
 import type { getSupabaseAdmin } from './supabase/admin';
 import { findOrCreateLeadConversation, sendTemplateAndLog } from './messaging';
 import { feniceOpening } from './fenice-opening';
-import { inSendWindow } from './sequence';
+import { inOpeningWindow } from './sequence';
 import { normalizeFunnel, variantIndexFor, openingEnvKey, openingBody, openingWaysFor } from './persona';
 import { firstNameOf, templateName } from './name';
-import type { GdoVariant } from './bot-contract';
+import type { GdoVariant, LancioIntake } from './bot-contract';
 import { gdoAgendaText, videoLinkForVariant } from './gdo-agenda';
+import { getLancioSettings } from './lancio-settings';
+import { lancioBenvenutoText } from './lancio-fase';
+import { leggiTettoOrario, sottoTettoOrario } from './lancio-tetto';
+import { contaBenvenutiUltimaOra } from './lancio-db';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -16,6 +20,14 @@ export type EnrollArgs = {
   email?: string | null;
   crmLeadId?: string | null;
   crmFunnel?: string | null;
+  /** Lead del lancio (contratto v1.6): benvenuto del lancio al posto dell'apertura. */
+  lancio?: LancioIntake | null;
+};
+
+export type EnrollResult = {
+  ok: boolean; conversationId: number; sid?: string; error?: string; deferred?: boolean; duplicato?: boolean;
+  /** L'apertura non e' partita perche' ricoprirebbe una chat gia' viva (`apreSopraChatViva`). */
+  aperturaSaltata?: boolean;
 };
 
 /**
@@ -70,7 +82,12 @@ export function apreSopraChatViva(g: {
 export async function enrollLeadIntoMario(
   supabase: Supa,
   args: EnrollArgs,
-): Promise<{ ok: boolean; conversationId: number; sid?: string; error?: string; deferred?: boolean; aperturaSaltata?: boolean }> {
+): Promise<EnrollResult> {
+  // Lead del lancio: un flusso a parte, con il suo template e le sue fasi. Sta prima di
+  // tutto il resto perche' nessuna delle regole di Mario (A/B delle aperture, funnel
+  // C/T/J, sequenza) deve poter toccare questi lead.
+  if (args.lancio) return enrollLancio(supabase, { ...args, lancio: args.lancio });
+
   const templateSid = process.env.FENICE_OPENING_TEMPLATE_SID;
   const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
   if (!templateSid || !from) {
@@ -142,10 +159,14 @@ export async function enrollLeadIntoMario(
     ...(args.crmFunnel ? { crm_funnel: args.crmFunnel } : {}),
   };
 
-  // Apertura differita: di notte i template aprono peggio (-10pt risposta) e
-  // disturbano. La conv viene comunque presa in carico da Mario, senza outbound:
-  // sarà il cron sequence-touches a inviare l'apertura al primo run in fascia.
-  if (!inSendWindow(Date.now())) {
+  // Apertura differita: nel cuore della notte i template aprono peggio (-10pt
+  // risposta) e disturbano. La conv viene comunque presa in carico da Mario, senza
+  // outbound: sarà il cron sequence-touches a inviare l'apertura al primo run in
+  // fascia, cioè alle 07:00.
+  // La fascia qui è quella LARGA (07:00-23:00, `inOpeningWindow`) e non quella dei
+  // touch: è il primo messaggio a chi ha appena lasciato il numero, e una risposta
+  // se l'aspetta. Vedi il commento su `inOpeningWindow` per i numeri.
+  if (!inOpeningWindow(Date.now())) {
     await supabase.from('conversations').update(convUpdate).eq('id', conversationId);
     await supabase.from('event_log').insert({
       type: 'fenice_enroll_deferred',
@@ -154,6 +175,31 @@ export async function enrollLeadIntoMario(
       level: 'info',
     });
     return { ok: true, conversationId, deferred: true };
+  }
+
+  // Ritento del CRM sullo stesso lead: l'apertura è già partita, non se ne manda una
+  // seconda. Serve dal 09/09/2026, quando il CRM ha iniziato a ritentare sui 429 e sui
+  // timeout (113 in 30 giorni: il loro AbortSignal scatta a 5s, ma la nostra richiesta
+  // era arrivata lo stesso). Senza questa guardia ogni ritento è un secondo "ciao" allo
+  // stesso lead — il modo più veloce per farsi bloccare da un numero già a qualità LOW.
+  //
+  // La guardia guarda la CHAT, non il leadId: un outbound nelle ultime 12 ore basta a
+  // fermare l'apertura. Il leadId non serviva e anzi lasciava passare il caso peggiore —
+  // il CRM tiene più lead per lo stesso numero (1.708 gruppi con presenze diverse), noi
+  // deduplichiamo la chat per numero, quindi in un blast due leadId della stessa persona
+  // cadono nella stessa conversazione e quella sentirebbe due "ciao" di fila. Per la
+  // stessa ragione non serve la loro `personKey`: è lo stesso numero, quindi è già la
+  // stessa chat. La persona che torna dopo giorni ha l'ultimo outbound fuori finestra e
+  // riceve la sua apertura come sempre.
+  const guardia = args.crmLeadId ? await apertutaDaFermare(supabase, conversationId) : null;
+  if (guardia) {
+    await supabase.from('event_log').insert({
+      type: 'fenice_enroll_duplicato',
+      payload: { phone: args.phone, conversationId, crmLeadId: args.crmLeadId, motivo: guardia } as never,
+      message: `Intake ripetuto per lead ${args.crmLeadId}: ${guardia}, nessun reinvio`,
+      level: 'info',
+    });
+    return { ok: true, conversationId, duplicato: true };
   }
 
   // Selezione apertura: legacy (Mario) di default; se NEW_OPENING_ENABLED === '1'
@@ -200,6 +246,42 @@ export async function enrollLeadIntoMario(
   });
 
   return { ok: res.ok, conversationId, sid: res.sid, error: res.error };
+}
+
+/**
+ * Perché fermare l'apertura, o null per mandarla.
+ *
+ * Due motivi, misurati sul ripescaggio del 09/09 sera: su 46 conversazioni ripushate dal
+ * CRM, 26 hanno ricevuto un secondo messaggio entro 24 ore dal primo (la più ravvicinata
+ * a 2 ore e mezza) e 25 erano chat in cui il lead aveva risposto negli ultimi 7 giorni.
+ * Il solo controllo sull'outbound recente ne avrebbe fermate circa metà: chi ci sta
+ * parlando da giorni non deve sentirsi dire "ciao" da capo, e la distanza dall'ultimo
+ * invio non lo dice.
+ */
+async function apertutaDaFermare(
+  supabase: Supa,
+  conversationId: number,
+): Promise<'apertura_recente' | 'conversazione_viva' | null> {
+  const soglia = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
+  const { data: out } = await supabase
+    .from('messages')
+    .select('id')
+    .eq('conversation_id', conversationId)
+    .eq('direction', 'out')
+    .gte('created_at', soglia)
+    .limit(1);
+  if ((out?.length ?? 0) > 0) return 'apertura_recente';
+
+  const { data: conv } = await supabase
+    .from('conversations')
+    .select('last_inbound_at')
+    .eq('id', conversationId)
+    .maybeSingle();
+  const ultimoInbound = (conv as { last_inbound_at: string | null } | null)?.last_inbound_at;
+  if (ultimoInbound && Date.now() - new Date(ultimoInbound).getTime() <= 7 * 24 * 60 * 60 * 1000) {
+    return 'conversazione_viva';
+  }
+  return null;
 }
 
 export type GdoEnrollArgs = {
@@ -289,5 +371,149 @@ export async function enrollGdoLeadAsPostino(
     level: res.ok ? 'info' : 'error',
   });
 
+  return { ok: res.ok, conversationId, sid: res.sid, error: res.error };
+}
+
+/**
+ * Arruolamento di un lead del lancio "Web Developer AI" (spec §5.1).
+ *
+ * Differenze dal flusso di Mario, tutte volute:
+ * - il primo messaggio e' il template di benvenuto del lancio, l'UNICO messaggio
+ *   preimpostato che questo blocco manda (il numero e' a qualita' LOW);
+ * - la guardia anti-doppione viene PRIMA della finestra: una chat gia' viva non riceve
+ *   un secondo benvenuto nemmeno differito, ma entra comunque nel flusso lancio
+ *   (`lancio_*` valorizzati) e la cronologia non si azzera;
+ * - fuori dalla fascia 07-23, con `lancio_attivo` spento, o oltre il tetto orario dei
+ *   benvenuti (`LANCIO_WELCOME_MAX_PER_HOUR`, spec §11.3), il lead e' preso in carico
+ *   senza outbound: lo riprende il cron `lancio-aperture`, NON `sequence-touches`.
+ *   Le esclusioni ci sono (Task 10): queste chat sono fuori dai cron di Mario
+ *   — sequenza, nudge, promemoria, solleciti — finche' la fase non e' terminale,
+ *   via `FILTRO_FUORI_LANCIO`.
+ */
+async function enrollLancio(
+  supabase: Supa,
+  args: EnrollArgs & { lancio: LancioIntake },
+): Promise<EnrollResult> {
+  const templateSid = process.env.LANCIO_WELCOME_TEMPLATE_SID;
+  const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
+  if (!templateSid || !from) {
+    throw new Error('LANCIO_WELCOME_TEMPLATE_SID o TWILIO_WHATSAPP_NUMBER_FENICE non configurati');
+  }
+
+  const firstName = args.firstName ?? undefined;
+  const { conversationId } = await findOrCreateLeadConversation(supabase, {
+    phone: args.phone,
+    firstName,
+    lastName: args.lastName ?? undefined,
+    email: args.email ?? undefined,
+  });
+
+  const lancioFields = {
+    lancio_slug: args.lancio.slug,
+    lancio_fase: 'attesa',
+    lancio_ingresso: args.lancio.ingresso,
+    // Chat riusata: l'esito del giro precedente resta scritto sulla riga. Va azzerato
+    // qui, all'ingresso nel lancio, o la restituzione di fine lancio (NON_RISPOSTO) si
+    // troverebbe davanti un APPUNTAMENTO vecchio e `resolveOutcomeAction` la
+    // declasserebbe a NOTA — su un lead che con questo lancio non c'entra niente.
+    // Su una conversazione appena creata sono gia' null: scriverli non cambia nulla.
+    bot_outcome: null,
+    bot_outcome_at: null,
+    bot_scheduled_at: null,
+  };
+  const base = { phone: args.phone, conversationId, crmLeadId: args.crmLeadId ?? null, slug: args.lancio.slug, ingresso: args.lancio.ingresso };
+  const evento = (extra: Record<string, unknown>, message: string) =>
+    supabase.from('event_log').insert({
+      type: 'lancio_intake',
+      payload: { ...base, ...extra } as never,
+      message,
+      level: 'info',
+    });
+
+  const guardia = args.crmLeadId ? await apertutaDaFermare(supabase, conversationId) : null;
+  if (guardia) {
+    await supabase.from('conversations')
+      .update({ ...lancioFields, ai_owner: 'mario', crm_lead_id: args.crmLeadId ?? null, crm_funnel: args.crmFunnel ?? null })
+      .eq('id', conversationId);
+    // Una chat chiusa (o mai governata) torna attiva; una booked/handed_off resta a chi ce l'ha in mano.
+    await supabase.from('conversations')
+      .update({ ai_status: 'active' })
+      .eq('id', conversationId)
+      .or('ai_status.is.null,ai_status.eq.closed');
+    await evento({ duplicato: true, motivo: guardia }, `[lancio] lead ${args.crmLeadId}: chat gia' viva (${guardia}), nessun benvenuto, entra nel flusso lancio`);
+    return { ok: true, conversationId, duplicato: true };
+  }
+
+  const convUpdate = {
+    ai_owner: 'mario',
+    ai_status: 'active',
+    ai_started_at: new Date().toISOString(),
+    crm_lead_id: args.crmLeadId ?? null,
+    crm_funnel: args.crmFunnel ?? null,
+    ...lancioFields,
+  };
+
+  const settings = await getLancioSettings(supabase);
+  let differita: 'lancio_spento' | 'fuori_fascia' | 'tetto_orario' | null = !settings.attivo
+    ? 'lancio_spento'
+    : !inOpeningWindow(Date.now())
+      ? 'fuori_fascia'
+      : null;
+
+  // Tetto orario (spec §11.3): il benvenuto parte in tempo reale, quindi una campagna
+  // che spinge forte per un'ora rifarebbe il picco del 15/09 — 7.882 intake in un
+  // giorno e il numero uscito a qualita' LOW. Oltre il tetto NON si manda: il lead resta
+  // preso in carico e il benvenuto lo fa partire il cron `lancio-aperture`, che rispetta
+  // lo stesso tetto e spalma la coda. Il conteggio si fa solo se si sarebbe mandato
+  // davvero: col lancio spento o di notte sarebbe una query per niente.
+  const cap = leggiTettoOrario(process.env.LANCIO_WELCOME_MAX_PER_HOUR);
+  let inviatiUltimaOra: number | null = null;
+  // Conteggio illeggibile = tetto raggiunto. Si sbaglia dalla parte del differire: il
+  // cron ripassa ogni 15 minuti, quindi il prezzo e' un ritardo; lasciar passare alla
+  // cieca proprio mentre il DB e' in affanno e' il modo di ritrovarsi col picco.
+  if (!differita) {
+    inviatiUltimaOra = await contaBenvenutiUltimaOra(supabase, templateSid);
+    if (inviatiUltimaOra === null || !sottoTettoOrario({ inviatiUltimaOra, cap })) {
+      differita = 'tetto_orario';
+    }
+  }
+
+  if (differita) {
+    await supabase.from('conversations').update(convUpdate).eq('id', conversationId);
+    await evento(
+      differita !== 'tetto_orario'
+        ? { differita }
+        : inviatiUltimaOra === null
+          ? { differita, motivo: 'conteggio_fallito', cap }
+          : { differita, inviatiUltimaOra, cap },
+      `[lancio] lead ${args.crmLeadId ?? args.phone} preso in carico, benvenuto differito (${differita})`,
+    );
+    return { ok: true, conversationId, deferred: true };
+  }
+
+  const res = await sendTemplateAndLog(
+    supabase, conversationId, args.phone, templateSid, 'Lancio benvenuto', from,
+    { '1': templateName(firstName) }, lancioBenvenutoText(firstName),
+  );
+  // Il benvenuto e' partito: si timbra `lancio_benvenuto_at`, che e' il lucchetto letto
+  // dal cron `lancio-aperture` (una riga timbrata non e' nemmeno candidata). Se l'invio
+  // e' fallito NON si timbra: il cron deve poterci riprovare.
+  await supabase
+    .from('conversations')
+    .update(res.ok ? { ...convUpdate, lancio_benvenuto_at: new Date().toISOString() } : convUpdate)
+    .eq('id', conversationId);
+
+  if (!res.ok) {
+    await supabase.from('event_log').insert({
+      type: 'send_error',
+      payload: { ...base, error: res.error } as never,
+      message: `[lancio] benvenuto fallito per ${args.phone}: ${res.error}`,
+      level: 'error',
+    });
+  }
+  await evento(
+    { sid: res.sid ?? null, ok: res.ok, error: res.error ?? null },
+    res.ok ? `[lancio] benvenuto inviato a ${args.phone}` : `[lancio] benvenuto NON partito per ${args.phone}`,
+  );
   return { ok: res.ok, conversationId, sid: res.sid, error: res.error };
 }

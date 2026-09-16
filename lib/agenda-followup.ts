@@ -2,6 +2,8 @@ import type { getSupabaseAdmin } from './supabase/admin';
 import { sendFreeText } from './twilio';
 import { romeHour } from './rome-time';
 import { firstNameOf } from './name';
+import { FILTRO_FUORI_LANCIO } from './lancio-fase';
+import { logCronQueryError } from './cron-query-error';
 
 const H = 3600_000;
 
@@ -97,10 +99,16 @@ export async function runAgendaFollowups(
   if (convIds.length === 0) return { sent: 0, skipped: 0 };
 
   // 2. Stato delle conversazioni candidate.
-  const { data: convs } = await supabase
+  const { data: convs, error: errConvs } = await supabase
     .from('conversations')
     .select('id, lead_id, ai_status, bot_outcome, bot_followups_sent, gdo_agenda_at')
-    .in('id', convIds);
+    .in('id', convIds)
+    // Lancio Web Dev AI: il link di prenotazione in chat non e' suo, ma l'intake del
+    // lancio azzera `bot_outcome` e rimette `ai_status='active'` — cioe' scioglie la
+    // guardia `terminal` — e su una chat riusata il link di Mario puo' essere ancora
+    // dentro le 24 ore. Senza questo filtro il sollecito free-text partirebbe.
+    .or(FILTRO_FUORI_LANCIO);
+  if (errConvs) await logCronQueryError(supabase, 'agenda_followup_query_error', errConvs);
 
   const leadIds = [...new Set((convs ?? []).map((c) => c.lead_id))];
   const { data: leads } = await supabase

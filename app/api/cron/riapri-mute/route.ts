@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { enrollLeadIntoMario } from '@/lib/fenice-enroll';
 import { fetchAllRows } from '@/lib/supabase/paginate';
+import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
+import { logCronQueryError } from '@/lib/cron-query-error';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -43,13 +45,28 @@ export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin();
   const started = Date.now();
 
-  const convs = await fetchAllRows<any>((from, to) => admin
-    .from('conversations')
-    .select('id, crm_lead_id, crm_funnel, lead_id, ai_status, bot_outcome')
-    .eq('ai_owner', 'mario')
-    .gte('ai_started_at', dal)
-    .order('id', { ascending: true })
-    .range(from, to));
+  // `fetchAllRows` rilancia l'errore della pagina: qui lo si trasforma in una riga
+  // event_log prima di uscire, altrimenti resta solo un 500 senza spiegazione.
+  type ConvMuta = {
+    id: number; crm_lead_id: string | null; crm_funnel: string | null;
+    lead_id: number | null; ai_status: string | null; bot_outcome: string | null;
+  };
+  let convs: ConvMuta[];
+  try {
+    convs = await fetchAllRows<ConvMuta>((from, to) => admin
+      .from('conversations')
+      .select('id, crm_lead_id, crm_funnel, lead_id, ai_status, bot_outcome')
+      .eq('ai_owner', 'mario')
+      .gte('ai_started_at', dal)
+      // Le chat del lancio hanno il loro recupero (lancio-aperture): qui
+      // enrollLeadIntoMario manderebbe l'apertura di Mario sopra il benvenuto del lancio.
+      .or(FILTRO_FUORI_LANCIO)
+      .order('id', { ascending: true })
+      .range(from, to));
+  } catch (e) {
+    await logCronQueryError(admin, 'riapri_mute_query_error', { message: e instanceof Error ? e.message : 'errore' });
+    return NextResponse.json({ ok: false, error: 'query_error' }, { status: 500 });
+  }
 
   // Servono due insiemi distinti, e la differenza e' tutta qui:
   //  - chi ha un messaggio in uscita PARTITO (con SID Twilio) non va toccato;
@@ -109,7 +126,7 @@ export async function POST(req: NextRequest) {
   if (esegui) {
     for (const c of mute) {
       if (inviati + falliti >= max || Date.now() - started > BUDGET_MS) break;
-      const l = anagrafica.get(c.lead_id);
+      const l = c.lead_id == null ? undefined : anagrafica.get(c.lead_id);
       if (!l) { falliti++; if (errori.length < 5) errori.push(`conv ${c.id}: nessun numero`); continue; }
       try {
         const res = await enrollLeadIntoMario(admin, {
