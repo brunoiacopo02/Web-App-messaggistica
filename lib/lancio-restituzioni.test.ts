@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   RESTITUZIONE_ATTESA_MS, NOTA_RESTITUZIONE, FASI_RESTITUIBILI, restituzioniAttive, decideRestituzione,
-  esitoRestituzioneDalCrm, notaInboundDopoRestituzione, type CandidataRestituzione,
+  esitoRestituzioneDalCrm, notaInboundDopoRestituzione, fuoriFinestraCron, type CandidataRestituzione,
 } from './lancio-restituzioni';
 
 const H = 3600_000;
@@ -25,6 +25,20 @@ describe('restituzioniAttive — dal giorno dopo dopodomani (8/10 per l evento d
     expect(restituzioniAttive(new Date('2026-10-08T00:00:00+02:00'), EVENTO)).toBe(true);
     expect(restituzioniAttive(new Date('2026-10-20T10:00:00+02:00'), EVENTO)).toBe(true);
     expect(restituzioniAttive(new Date('2026-10-08T10:00:00+02:00'), new Date('2026-10-12T21:00:00+02:00'))).toBe(false);
+  });
+});
+
+describe('fuoriFinestraCron — l evento spostato fuori dalle date scritte a mano in vercel.json', () => {
+  it('dentro 8/10-15/11 no; dopo il 15/11 si; prima della data delle restituzioni mai', () => {
+    expect(fuoriFinestraCron(new Date('2026-10-08T10:00:00+02:00'), EVENTO)).toBe(false);
+    expect(fuoriFinestraCron(new Date('2026-11-15T10:00:00+01:00'), EVENTO)).toBe(false);
+    expect(fuoriFinestraCron(new Date('2026-11-16T10:00:00+01:00'), EVENTO)).toBe(true);
+    expect(fuoriFinestraCron(new Date('2026-12-01T10:00:00+01:00'), EVENTO)).toBe(true);
+    // Restituzioni non ancora attive: non c'e' niente da segnalare.
+    expect(fuoriFinestraCron(new Date('2026-10-07T10:00:00+02:00'), EVENTO)).toBe(false);
+    // Evento spostato a fine novembre: le restituzioni partirebbero il 1/12, quando il
+    // cron non gira piu'.
+    expect(fuoriFinestraCron(new Date('2026-12-02T10:00:00+01:00'), new Date('2026-11-29T21:00:00+01:00'))).toBe(true);
   });
 });
 

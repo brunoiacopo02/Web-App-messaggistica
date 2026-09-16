@@ -10,7 +10,7 @@ import { runPool } from '@/lib/run-pool';
 import { batchMax, LANCIO_BLAST_CONCURRENCY } from '@/lib/lancio-zoom-blast';
 import { ancoraLancio, haInteragito } from '@/lib/lancio-followup';
 import {
-  restituzioniAttive, decideRestituzione, esitoRestituzioneDalCrm, NOTA_RESTITUZIONE,
+  restituzioniAttive, fuoriFinestraCron, decideRestituzione, esitoRestituzioneDalCrm, NOTA_RESTITUZIONE,
   type MotivoNiente, type MotivoRestituzione,
 } from '@/lib/lancio-restituzioni';
 import { autorizzatoCron, leggiParametriCron, logEvento, leggiCoda, TEMPO_MASSIMO_MS } from '@/lib/lancio-blast-motore';
@@ -58,8 +58,11 @@ export async function GET(req: NextRequest) {
 
   const supabase: Supa = getSupabaseAdmin();
   const settings = await getLancioSettings(supabase);
+  // Ogni run porta con se' la data dell'evento e la bandierina del calendario: le date
+  // del cron stanno scritte a mano in vercel.json e non seguono `lancio_evento_at`.
+  let contesto: Record<string, unknown> = { evento_at: settings.eventoAt ?? null };
   const scriviRun = (payload: Record<string, unknown>, message: string, level: 'info' | 'warn' | 'error' = 'info') =>
-    logEvento(supabase, 'lancio_restituzioni_run', payload, message, level);
+    logEvento(supabase, 'lancio_restituzioni_run', { ...contesto, ...payload }, message, level);
 
   const parametri = leggiParametriCron(req, { nowRichiedeSolo: true });
   if (!parametri.ok) return NextResponse.json({ ok: false, error: parametri.errore }, { status: 400 });
@@ -72,6 +75,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, skipped: 'config', missing: ['lancio_evento_at'] });
   }
   const evento = new Date(eventoMs);
+  contesto = { ...contesto, fuori_finestra_cron: fuoriFinestraCron(now, evento) };
   const tagliaStorico = new Date(eventoMs - GIORNI_STORICO * 24 * 60 * 60 * 1000).toISOString();
   const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE ?? '';
   const welcomeSid = process.env.LANCIO_WELCOME_TEMPLATE_SID || null;
@@ -160,23 +164,37 @@ export async function GET(req: NextRequest) {
 
   if (dry) {
     const motivi = daRestituire.reduce<Record<string, number>>((acc, d) => ({ ...acc, [d.motivo]: (acc[d.motivo] ?? 0) + 1 }), {});
-    return NextResponse.json({ ok: true, dry: true, candidati: coda.length, valutati, daRestituire: daRestituire.length, motivi, scartiDaRitentare: scartiDaRitentare.length, niente, blocchiTroncati, queryKo });
+    const prova = { dry: true, candidati: coda.length, valutati, daRestituire: daRestituire.length, motivi, scartiDaRitentare: scartiDaRitentare.length, niente, blocchiTroncati, queryKo };
+    // Il run si scrive SEMPRE, prova compresa: un dry senza traccia e' indistinguibile
+    // da un cron che non e' partito, ed e' proprio la domanda che ci si fa il giorno dopo.
+    await scriviRun(prova, `[lancio] restituzioni (prova): ${daRestituire.length} da restituire su ${coda.length} candidati, ${scartiDaRitentare.length} scarti da ritentare`, queryKo ? 'warn' : 'info');
+    return NextResponse.json({ ok: true, ...prova });
   }
 
   // ─────────────── C2: gli scarti rifiutati dopo un congedo ───────────────
-  let scartiRitentati = 0;
-  let scartiChiusi = 0;
+  // `senza_telefono` e `residui` esistono perche' un lead che questo passo non riesce a
+  // chiudere ci ricasca a ogni run: senza un numero nel riepilogo nessuno se ne accorge.
+  const scarti = { ritentati: 0, chiusi: 0, senza_telefono: 0, residui: 0 };
+  let scartiVisti = 0;
   for (const { c, rows } of scartiDaRitentare) {
     if (Date.now() - t0 > TEMPO_MASSIMO_MS) break;
+    scartiVisti++;
     if (c.bot_outcome !== null) {
       // Il CRM ha gia' registrato l'esito (o `sendOutcome` l'ha chiuso localmente sul
       // 403): manca solo la fase. Nessuna chiamata al CRM.
       await impostaFaseLancio(supabase, c.id, 'chiuso');
-      scartiChiusi++;
+      scarti.chiusi++;
       continue;
     }
     const phone = c.leads?.phone_e164 ?? null;
-    if (!phone) continue;
+    if (!phone) {
+      // Senza numero il congedo non si puo' ritentare: la riga resta appesa a ogni run
+      // finche' qualcuno non guarda il lead. Una volta per run, per chat, lo si dice.
+      scarti.senza_telefono++;
+      await logEvento(supabase, 'lancio_scarto_senza_telefono', { conversationId: c.id, crmLeadId: c.crm_lead_id, fase: c.lancio_fase },
+        `[lancio] conv ${c.id}: scarto dopo congedo non ritentabile, manca il numero di telefono`, 'warn');
+      continue;
+    }
     const esito = await congedoLancio(
       supabase,
       { conversationId: c.id, phone, from, crmLeadId: c.crm_lead_id, fase: c.lancio_fase },
@@ -184,7 +202,7 @@ export async function GET(req: NextRequest) {
       NOTA_SCARTO_RITENTATO,
       { giaInviato: true },
     );
-    scartiRitentati++;
+    scarti.ritentati++;
     await logEvento(supabase, 'lancio_scarto_ritentato_da_cron', { conversationId: c.id, crmLeadId: c.crm_lead_id, fase: c.lancio_fase, stato: esito },
       `[lancio] conv ${c.id}: scarto dopo congedo ritentato dal cron (${esito})`, esito === 'closed' ? 'info' : 'warn');
   }
@@ -225,7 +243,10 @@ export async function GET(req: NextRequest) {
       await impostaFaseLancio(supabase, c.id, 'restituito');
       // `sendOutcome` chiude gia' su 2xx e 403; sul 404 no. Idempotente.
       await supabase.from('conversations').update({ ai_status: 'closed' }).eq('id', c.id);
-      await logEvento(supabase, 'lancio_restituito', { conversationId: c.id, crmLeadId: c.crm_lead_id, motivo, esito, status: res.status ?? null, sent: res.sent },
+      // Evento distinto sui terminali: `lancio_restituito` deve restare contabile come
+      // "lead davvero tornati nel pool", senza dentro i 403/404 che pool non hanno visto.
+      await logEvento(supabase, esito === 'terminale' ? 'lancio_restituito_terminale' : 'lancio_restituito',
+        { conversationId: c.id, crmLeadId: c.crm_lead_id, motivo, esito, status: res.status ?? null, sent: res.sent },
         esito === 'terminale'
           ? `[lancio] conv ${c.id}: il CRM ha rifiutato (${res.status}), segnata restituita per non ritentare`
           : `[lancio] conv ${c.id} restituita al pool (${esito}): ${NOTA_RESTITUZIONE[motivo]}`,
@@ -240,17 +261,20 @@ export async function GET(req: NextRequest) {
     }
   });
 
+  scarti.residui = scartiDaRitentare.length - scartiVisti;
   const residui = lotto.length - serviti;
   const nonValutati = coda.length - valutati;
   const riepilogo = {
     candidati: coda.length, valutati, nonValutati, daRestituire: lotto.length,
     restituiti, giaRestituiti, rifiutati, rifiutateDalCrm, nonConfermate, errori, residui,
-    scartiRitentati, scartiChiusi, niente, blocchiTroncati, max, queryKo,
+    // `scartiRitentati`/`scartiChiusi` restano piatti: sono il contratto del route.
+    scartiRitentati: scarti.ritentati, scartiChiusi: scarti.chiusi, scarti,
+    niente, blocchiTroncati, max, queryKo,
   };
   await scriviRun(
     riepilogo,
-    `[lancio] restituzioni: ${restituiti} restituiti, ${giaRestituiti} gia' restituiti, ${rifiutati} rifiutati (403/404), ${rifiutateDalCrm} non rimessi nel pool dal CRM, ${nonConfermate} non confermati, ${errori} errori, ${scartiRitentati} scarti ritentati, ${scartiChiusi} scarti chiusi, ${residui} residui (su ${lotto.length} da restituire, ${coda.length} candidati)`,
-    errori > 0 || rifiutateDalCrm > 0 || nonConfermate > 0 || queryKo ? 'warn' : 'info',
+    `[lancio] restituzioni: ${restituiti} restituiti, ${giaRestituiti} gia' restituiti, ${rifiutati} rifiutati (403/404), ${rifiutateDalCrm} non rimessi nel pool dal CRM, ${nonConfermate} non confermati, ${errori} errori, ${scarti.ritentati} scarti ritentati, ${scarti.chiusi} scarti chiusi, ${scarti.senza_telefono} scarti senza telefono, ${scarti.residui} scarti residui, ${residui} residui (su ${lotto.length} da restituire, ${coda.length} candidati)`,
+    errori > 0 || rifiutateDalCrm > 0 || nonConfermate > 0 || scarti.senza_telefono > 0 || queryKo ? 'warn' : 'info',
   );
   return NextResponse.json({ ok: true, ...riepilogo });
 }

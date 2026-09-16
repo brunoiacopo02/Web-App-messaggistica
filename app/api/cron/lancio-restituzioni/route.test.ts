@@ -133,16 +133,31 @@ describe('GET /api/cron/lancio-restituzioni — cancelli', () => {
     expect(sendOutcome).toHaveBeenCalledTimes(1);
     expect(sendOutcome).toHaveBeenCalledWith(expect.anything(), 2, expect.anything());
   });
-  it('dry: decide e conta, non chiama il CRM', async () => {
+  it('dry: decide e conta, non chiama il CRM, ma il run resta scritto', async () => {
     const res = await (await richiesta('dry=1')).json();
     expect(res).toMatchObject({ dry: true, daRestituire: 2 });
     expect(res.motivi).toEqual({ mai_risposto: 2 });
     expect(sendOutcome).not.toHaveBeenCalled();
+    // "sempre" vuol dire anche in prova: un dry che non lascia traccia non si distingue
+    // da un cron che non e' partito.
+    expect(eventoRun()?.payload).toMatchObject({ dry: true, daRestituire: 2 });
   });
   it('query fallita: queryKo e log', async () => {
     stato.convSelectError = { message: 'column does not exist', code: '42703' };
     await expect((await richiesta()).json()).resolves.toMatchObject({ queryKo: true, restituiti: 0 });
     expect(tipi()).toContain('lancio_restituzioni_query_error');
+  });
+});
+
+describe('GET /api/cron/lancio-restituzioni — il run si racconta', () => {
+  it('il riepilogo porta evento_at e dice se il calendario del cron non copre piu le restituzioni', async () => {
+    await richiesta();
+    expect(eventoRun()?.payload).toMatchObject({ evento_at: EVENTO, fuori_finestra_cron: false });
+  });
+  it('evento spostato oltre le date di vercel.json: bandierina alzata', async () => {
+    vi.setSystemTime(new Date('2026-11-20T10:00:00+01:00'));
+    await richiesta();
+    expect(eventoRun()?.payload).toMatchObject({ fuori_finestra_cron: true });
   });
 });
 
@@ -196,6 +211,24 @@ describe('GET /api/cron/lancio-restituzioni — decisioni e CRM', () => {
     expect(sendOutcome).not.toHaveBeenCalled();
     expect(tipi()).toContain('lancio_scarto_ritentato_da_cron');
   });
+  it('C2: uno scarto senza telefono si conta e si vede, non sparisce a ogni run', async () => {
+    stato.convs = [conv(1, { lancio_info: { congedo_at: '2026-10-05T23:00:00Z' }, leads: { phone_e164: null, first_name: 'mario' } })];
+    const res = await (await richiesta()).json();
+    expect(congedoLancio).not.toHaveBeenCalled();
+    expect(res.scarti).toMatchObject({ senza_telefono: 1, ritentati: 0, residui: 0 });
+    expect(tipi()).toContain('lancio_scarto_senza_telefono');
+  });
+  it('C2: se il tempo finisce, gli scarti non lavorati restano contati come residui', async () => {
+    stato.convs = [
+      conv(1, { lancio_info: { congedo_at: '2026-10-05T23:00:00Z' } }),
+      conv(2, { lancio_info: { congedo_at: '2026-10-05T23:30:00Z' } }),
+    ];
+    // Il primo congedo brucia tutto il budget: il secondo non parte e deve restare visibile.
+    congedoLancio.mockImplementationOnce(async () => { vi.advanceTimersByTime(300_000); return 'closed'; });
+    const res = await (await richiesta()).json();
+    expect(congedoLancio).toHaveBeenCalledTimes(1);
+    expect(res.scarti).toMatchObject({ ritentati: 1, residui: 1 });
+  });
   it('200 con returnedToPool:false e skipped (locked_appointment, scelta_fatta): warn, fase INTATTA, nessun restituito', async () => {
     stato.convs = [conv(1), conv(2)];
     sendOutcome
@@ -226,6 +259,11 @@ describe('GET /api/cron/lancio-restituzioni — decisioni e CRM', () => {
     sendOutcome.mockResolvedValueOnce({ sent: false, status: 403, error: 'http_403' }).mockResolvedValueOnce({ sent: false, status: 404, error: 'http_404' });
     await expect((await richiesta()).json()).resolves.toMatchObject({ restituiti: 0, rifiutati: 2, errori: 0 });
     expect(impostaFaseLancio).toHaveBeenCalledTimes(2);
+    // Evento distinto: contare i `lancio_restituito` deve dare i ritorni nel pool VERI.
+    expect(eventi().filter((e) => e.type === 'lancio_restituito')).toHaveLength(0);
+    const terminali = eventi().filter((e) => e.type === 'lancio_restituito_terminale');
+    expect(terminali).toHaveLength(2);
+    expect(terminali.map((e) => (e.payload as Record<string, unknown>).status).sort()).toEqual([403, 404]);
   });
   it('rete o 5xx: nessuna fase scritta, errore contato, si riprova al run dopo', async () => {
     stato.convs = [conv(1)];

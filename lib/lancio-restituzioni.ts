@@ -29,6 +29,25 @@ export function restituzioniAttive(now: Date, eventoAt: Date): boolean {
   return romeDayKey(now) > giorniLancio(eventoAt).dopodomani;
 }
 
+/**
+ * Le date del cron in `vercel.json` sono scritte a mano (8-31 ottobre, 1-15 novembre) e
+ * NON si derivano dall'evento: Vercel non legge i nostri setting. Se qualcuno sposta
+ * `lancio_evento_at` senza toccare `vercel.json`, le restituzioni diventano attive in un
+ * giorno in cui il cron non gira piu' — e non succede niente, in silenzio. Questa e' la
+ * finestra vera del cron, in UTC come i cron di Vercel.
+ */
+export function dentroFinestraCron(now: Date): boolean {
+  const mese = now.getUTCMonth() + 1;
+  const giorno = now.getUTCDate();
+  return (mese === 10 && giorno >= 8) || (mese === 11 && giorno <= 15);
+}
+
+/** Le restituzioni sarebbero attive ma il calendario del cron non le copre: bandierina
+ *  nel riepilogo del run, cosi' un evento spostato si vede nei log invece di sparire. */
+export function fuoriFinestraCron(now: Date, eventoAt: Date): boolean {
+  return restituzioniAttive(now, eventoAt) && !dentroFinestraCron(now);
+}
+
 export type MotivoNiente = 'senza_crm' | 'esito_presente' | 'fase' | 'ancora_ignota' | 'incoerente' | 'attesa_48h' | 'ha_risposto';
 export type DecisioneRestituzione =
   | { kind: 'restituisci'; motivo: MotivoRestituzione }
