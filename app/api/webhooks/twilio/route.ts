@@ -13,6 +13,7 @@ import { segnalaRispostaDopoTerzoNr } from '@/lib/risposta-post-nr';
 import { classificaPrimoMessaggio, isMarkerPulsanteWebinar } from '@/lib/primo-messaggio';
 import { LANCIO_SLUG, pulsanteRiportaInPostPitch, pulsanteScriveFase } from '@/lib/lancio-fase';
 import { impostaFaseLancio } from '@/lib/lancio-db';
+import { getLancioSettings } from '@/lib/lancio-settings';
 import { pushLeadEntrante } from '@/lib/lead-entrante';
 
 export const runtime = 'nodejs';
@@ -206,8 +207,16 @@ export async function POST(req: NextRequest) {
       // lista d'attesa ha la chat aperta da settimane e preme il pulsante la sera del 5:
       // e' quel messaggio che conta, non il primo. Un inbound SENZA marker invece non
       // tocca mai `lancio_fase`: le fasi le muove il turno del lancio dentro il drain.
-      const lancioPulsante = isMarkerPulsanteWebinar(messageBody);
-      if (conv && lancioPulsante) {
+      const markerPulsante = isMarkerPulsanteWebinar(messageBody);
+      // L'interruttore `lancio_pulsante_attivo` si legge SOLO quando il marker c'e'
+      // davvero: sull'inbound normale — cioe' su tutti — il gate non costa nessuna query
+      // in piu', e sulla frase del pulsante ne costa una sola (`app_settings`, la stessa
+      // riga che legge il resto del lancio). Spento, il marker vale come assente: non
+      // arriva a `shouldAdoptInbound`, non arriva a `classificaPrimoMessaggio`, e
+      // `pulsanteScriveFase` lo dice con `pulsante_spento`.
+      const pulsanteAttivo = markerPulsante ? (await getLancioSettings(supabase)).pulsanteAttivo : false;
+      const lancioPulsante = markerPulsante && pulsanteAttivo;
+      if (conv && markerPulsante) {
         // Il gate dell'adozione, valutato qui perche' e' la seconda delle due sole
         // condizioni che autorizzano a scrivere lo stato del lancio (vedi
         // `pulsanteScriveFase`). Col pulsante `shouldAdoptInbound` non guarda
@@ -224,9 +233,10 @@ export async function POST(req: NextRequest) {
           aiPausedAt: conv.ai_paused_at,
           handedOffAt: conv.handed_off_at,
           hasOutbound: true,
-          lancioPulsante: true,
+          lancioPulsante,
         });
         const decisione = pulsanteScriveFase({
+          pulsanteAttivo,
           aiOwner: conv.ai_owner,
           aiPausedAt: conv.ai_paused_at,
           handedOffAt: conv.handed_off_at,
@@ -350,7 +360,7 @@ export async function POST(req: NextRequest) {
           // Il messaggio corrente e' il fallback: se la lettura fallisce o la riga non si
           // vede ancora, e' comunque il primo inbound di questa conversazione.
           const primoMessaggioTesto = primoRigaInbound?.body ?? messageBody;
-          const esito = classificaPrimoMessaggio({ primoInbound: primoMessaggioTesto, inboundCorrente: messageBody });
+          const esito = classificaPrimoMessaggio({ primoInbound: primoMessaggioTesto, inboundCorrente: messageBody, pulsanteAttivo });
           const provenienza = esito.provenienza;
           // Cinque minuti indietro, e non `now`: il messaggio che ha innescato questa
           // adozione e' stato inserito qui sopra col `created_at` di default, cioe'
@@ -363,12 +373,17 @@ export async function POST(req: NextRequest) {
           // Effetto voluto: chi manda tre messaggi di fila in due minuti se li vede
           // leggere tutti, invece che solo l'ultimo.
           const startedAtAdozione = new Date(Date.now() - 5 * 60_000).toISOString();
-          const { error: erroreAdozione } = await supabase.from('conversations').update({
+          // Compare-and-set su `ai_owner`, come nel cron: due messaggi dello stesso numero
+          // nuovo arrivano insieme (succede: il lead manda "ciao" e poi il vero
+          // messaggio), Twilio apre due richieste e senza questa condizione entrambe
+          // adottano e entrambe spingono il lead al CRM. Nessuna riga tornata = l'ha
+          // presa l'altra richiesta: qui non si logga e non si spinge niente.
+          const { data: adottate, error: erroreAdozione } = await supabase.from('conversations').update({
             ai_owner: 'mario',
             ai_status: 'active',
             ai_started_at: startedAtAdozione,
             crm_funnel: provenienza,
-          }).eq('id', conversationId);
+          }).eq('id', conversationId).is('ai_owner', null).select('id');
           if (erroreAdozione) {
             // Sul database lo stato e' rimasto quello vecchio: NON si muta la copia in
             // memoria e NON si scrive il log di adozione, altrimenti mentirebbe (il claim
@@ -379,6 +394,11 @@ export async function POST(req: NextRequest) {
               message: `[bot-fissatore] adozione fallita per ${phone}: ${erroreAdozione.message}`,
               level: 'error',
             });
+          } else if (!adottate || adottate.length === 0) {
+            // Presa da un'altra richiesta in volo. Non si tocca la copia in memoria: e'
+            // quella richiesta a rispondere (il suo `drainMarioReplies` risponde anche a
+            // questo inbound, che a quel punto e' gia' in `messages`), e il suo push al
+            // CRM e' gia' partito. Un secondo giro qui vorrebbe dire due lead entranti.
           } else {
             // La copia in memoria serve subito dopo: e' quella che `shouldAutoReply` legge.
             conv.ai_owner = 'mario';

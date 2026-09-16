@@ -6,7 +6,7 @@ vi.mock('./messaging', () => ({
 }));
 
 vi.mock('./lancio-settings', () => ({
-  getLancioSettings: vi.fn(async () => ({ attivo: true, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null, eventoAt: null })),
+  getLancioSettings: vi.fn(async () => ({ attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null, eventoAt: null })),
 }));
 
 import { apreSopraChatViva, enrollGdoLeadAsPostino, enrollLeadIntoMario } from './fenice-enroll';
@@ -595,7 +595,7 @@ describe('enrollLeadIntoMario — ramo lancio (B1)', () => {
     vi.setSystemTime(MEZZOGIORNO);
     vi.stubEnv('LANCIO_WELCOME_TEMPLATE_SID', 'HX_LANCIO_WELCOME');
     vi.stubEnv('NEW_OPENING_ENABLED', '1'); // anche col flag A/B acceso il lancio non passa dalle aperture C/T/J
-    vi.mocked(getLancioSettings).mockResolvedValue({ attivo: true, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null, eventoAt: null });
+    vi.mocked(getLancioSettings).mockResolvedValue({ attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null, eventoAt: null });
   });
 
   it("manda il template di benvenuto del lancio, non un'apertura di Mario/Marta", async () => {
@@ -657,7 +657,7 @@ describe('enrollLeadIntoMario — ramo lancio (B1)', () => {
   });
 
   it('con lancio_attivo spento prende in carico ma NON manda: differita, la riprende il cron lancio', async () => {
-    vi.mocked(getLancioSettings).mockResolvedValueOnce({ attivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null, eventoAt: null });
+    vi.mocked(getLancioSettings).mockResolvedValueOnce({ attivo: false, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null, eventoAt: null });
     const { supabase, calls } = makeSupabase();
     const res = await enrollLeadIntoMario(supabase, ARGS);
     expect(res).toMatchObject({ ok: true, conversationId: 42, deferred: true });

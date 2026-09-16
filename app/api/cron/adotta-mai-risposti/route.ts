@@ -5,6 +5,7 @@ import { sendTemplateAndLog } from '@/lib/messaging';
 import { classificaPrimoMessaggio, vaRiagganciato } from '@/lib/primo-messaggio';
 import { LANCIO_SLUG } from '@/lib/lancio-fase';
 import { impostaFaseLancio } from '@/lib/lancio-db';
+import { getLancioSettings } from '@/lib/lancio-settings';
 import { templateName } from '@/lib/name';
 import { inSendWindow } from '@/lib/sequence';
 import { assertTemplateSendable } from '@/lib/twilio';
@@ -32,6 +33,11 @@ export const maxDuration = 300;
  * lista deve restare vuota: ricontrollarla ogni tanto e' il modo per accorgersi se
  * l'adozione ha smesso di funzionare.
  *
+ * Non guarda `INBOUND_ADOPTION_ENABLED`, ed e' voluto: e' il recupero a mano dell'
+ * arretrato, si lancia quando lo si vuole lanciare e deve poter adottare anche mentre
+ * l'adozione automatica del webhook e' spenta. Il pulsante del webinar invece ha il suo
+ * interruttore condiviso col webhook (`lancio_pulsante_attivo` in `app_settings`).
+ *
  * POST { dal?: 'YYYY-MM-DD', esegui?: boolean, max?: number }
  */
 
@@ -58,6 +64,11 @@ export async function POST(req: NextRequest) {
 
   const admin = getSupabaseAdmin();
   const started = Date.now();
+
+  // Lo stesso interruttore del webhook, letto UNA volta per run e non per lead: spento,
+  // il marker del pulsante vale come assente e questi lead tornano a essere TELEGRAM o
+  // INBOUND, riaggancio di Marta compreso.
+  const { pulsanteAttivo } = await getLancioSettings(admin);
 
   // Candidati: nessun padrone, il lead ha scritto, sul numero Fenice, nessuno l'ha
   // presa in mano. Il filtro sugli outbound si fa dopo, in memoria: PostgREST non sa
@@ -149,7 +160,7 @@ export async function POST(req: NextRequest) {
         .order('created_at', { ascending: true }).limit(1);
       const primoRiga = (primi ?? [])[0] as { body: string | null; created_at: string } | undefined;
       // Qui il primo inbound e' anche l'ultimo: la chat ha un solo messaggio, il suo.
-      const esito = classificaPrimoMessaggio({ primoInbound: primoRiga?.body, inboundCorrente: primoRiga?.body });
+      const esito = classificaPrimoMessaggio({ primoInbound: primoRiga?.body, inboundCorrente: primoRiga?.body, pulsanteAttivo });
       const provenienza = esito.provenienza;
 
       const now = new Date().toISOString();
@@ -230,6 +241,6 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({
-    ok: true, dal, candidate: muti.length, esaminate: convs.length, inviati, falliti, giaPrese, pulsante, esegui, errori, esempi,
+    ok: true, dal, candidate: muti.length, esaminate: convs.length, inviati, falliti, giaPrese, pulsante, pulsanteAttivo, esegui, errori, esempi,
   });
 }

@@ -10,9 +10,19 @@ type Supa = ReturnType<typeof getSupabaseAdmin>;
  * `lancio_attivo` e' l'interruttore del blocco B1: spento, l'intake prende in carico il
  * lead ma non manda il benvenuto (lo riprende il cron `lancio-aperture` quando si
  * accende). E' l'unico modo di avere un kill-switch sull'outbound senza perdere lead.
+ *
+ * `lancio_pulsante_attivo` e' l'interruttore del pulsante WhatsApp del webinar (B2):
+ * spento, il marker viene trattato come ASSENTE ovunque — chi scrive quella frase resta
+ * un inbound normale. Serve perche' il marker e' un testo, non un segnale: prima della
+ * sera del 5/10 una frase qualunque che contenga "live web developer ai" porterebbe in
+ * `post_pitch` un lead in `attesa`, e quel lead perderebbe il blast dello Zoom. Sta in
+ * `app_settings` e non in una env perche' si accende la sera stessa, senza deploy:
+ *   update app_settings set value='true'::jsonb where key='lancio_pulsante_attivo';
+ * Chiave assente o valore strano = spento (si sbaglia dalla parte del silenzio).
  */
 export const LANCIO_SETTING_KEYS = [
   'lancio_attivo',
+  'lancio_pulsante_attivo',
   'lancio_zoom_link',
   'lancio_video_live_link',
   'offerta_del_mese_link',
@@ -22,6 +32,8 @@ export type LancioSettingKey = (typeof LANCIO_SETTING_KEYS)[number];
 
 export type LancioSettings = {
   attivo: boolean;
+  /** Il pulsante del webinar e' riconosciuto? Spento = marker trattato come assente. */
+  pulsanteAttivo: boolean;
   zoomLink: string | null;
   videoLiveLink: string | null;
   offertaDelMeseLink: string | null;
@@ -30,6 +42,7 @@ export type LancioSettings = {
 
 export const LANCIO_SETTINGS_DEFAULT: LancioSettings = {
   attivo: false,
+  pulsanteAttivo: false,
   zoomLink: null,
   videoLiveLink: null,
   offertaDelMeseLink: null,
@@ -53,6 +66,7 @@ export function parseLancioSettings(rows: { key: string; value: unknown }[]): La
   const byKey = new Map(rows.map((r) => [r.key, r.value]));
   return {
     attivo: isAttivo(byKey.get('lancio_attivo')),
+    pulsanteAttivo: isAttivo(byKey.get('lancio_pulsante_attivo')),
     zoomLink: stringaOrNull(byKey.get('lancio_zoom_link')),
     videoLiveLink: stringaOrNull(byKey.get('lancio_video_live_link')),
     offertaDelMeseLink: stringaOrNull(byKey.get('offerta_del_mese_link')),

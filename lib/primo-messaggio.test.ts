@@ -87,3 +87,28 @@ describe('vaRiagganciato — chi NON deve ricevere il riaggancio di Marta', () =
     }))).toBe(true);
   });
 });
+
+describe('classificaPrimoMessaggio — interruttore lancio_pulsante_attivo', () => {
+  it('col pulsante spento il marker vale come assente: resta un inbound normale', () => {
+    expect(classificaPrimoMessaggio({
+      primoInbound: TESTO_PULSANTE_WEBINAR, inboundCorrente: TESTO_PULSANTE_WEBINAR, pulsanteAttivo: false,
+    })).toEqual({ tipo: 'inbound', provenienza: 'INBOUND' });
+  });
+
+  it('col pulsante spento un Telegram resta Telegram: si torna esattamente a prima del lancio', () => {
+    expect(classificaPrimoMessaggio({
+      primoInbound: 'Ciao! Vorrei ricevere informazioni sul corso',
+      inboundCorrente: TESTO_PULSANTE_WEBINAR,
+      pulsanteAttivo: false,
+    }).tipo).toBe('inbound');
+  });
+
+  it('acceso, o non passato affatto, il marker vince come sempre', () => {
+    expect(classificaPrimoMessaggio({
+      primoInbound: null, inboundCorrente: TESTO_PULSANTE_WEBINAR, pulsanteAttivo: true,
+    }).tipo).toBe('lancio_pulsante');
+    expect(classificaPrimoMessaggio({
+      primoInbound: null, inboundCorrente: TESTO_PULSANTE_WEBINAR,
+    }).tipo).toBe('lancio_pulsante');
+  });
+});

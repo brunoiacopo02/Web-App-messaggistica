@@ -53,7 +53,7 @@ export function pulsanteRiportaInPostPitch(fase: string | null | undefined): boo
 
 /** Perché il pulsante non ha potuto scrivere: chi ha in mano quella chat, o cosa è spento. */
 export type MotivoPulsanteOrfano =
-  | 'bot_spento' | 'adozione_spenta' | 'in_pausa' | 'passata_umano' | 'altro_owner';
+  | 'pulsante_spento' | 'bot_spento' | 'adozione_spenta' | 'in_pausa' | 'passata_umano' | 'altro_owner';
 
 export type DecisionePulsante =
   | { scrive: true }
@@ -78,6 +78,8 @@ export type DecisionePulsante =
  * riclassifica quel pulsante e la porta in `post_pitch` quando l'adozione si accende.
  */
 export function pulsanteScriveFase(i: {
+  /** `lancio_pulsante_attivo` da `app_settings`: spento, il marker non vale niente. */
+  pulsanteAttivo: boolean;
   aiOwner: string | null;
   aiPausedAt?: string | null;
   handedOffAt?: string | null;
@@ -88,6 +90,10 @@ export function pulsanteScriveFase(i: {
   /** `INBOUND_ADOPTION_ENABLED === '1'`. */
   adozioneAttiva: boolean;
 }): DecisionePulsante {
+  // L'interruttore viene prima di tutto: spento, il marker e' solo del testo, e chi lo
+  // scrive e' un inbound come un altro. Il pulsante premuto si registra lo stesso —
+  // vedere le pressioni PRIMA di accendere e' metà del motivo per cui esiste la traccia.
+  if (!i.pulsanteAttivo) return { scrive: false, motivo: 'pulsante_spento' };
   if (i.aiOwner === 'mario' && !i.aiPausedAt && !i.handedOffAt) return { scrive: true };
   if (i.adottaOra) return { scrive: true };
   // L'ordine dice CHI ha in mano la chat prima di dire cosa è spento: un passaggio a

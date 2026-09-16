@@ -57,8 +57,15 @@ export function vaRiagganciato(esito: EsitoPrimoMessaggio): boolean {
 export function classificaPrimoMessaggio(input: {
   primoInbound: string | null | undefined;
   inboundCorrente: string | null | undefined;
+  /**
+   * L'interruttore `lancio_pulsante_attivo` (lib/lancio-settings.ts). Spento, il marker
+   * del pulsante vale come assente: quella persona e' un inbound come un altro, e la
+   * classificazione torna a essere quella di prima del lancio. Default acceso: chi
+   * ragiona solo sui testi (i test del modulo) non deve passarlo.
+   */
+  pulsanteAttivo?: boolean;
 }): EsitoPrimoMessaggio {
-  if (isMarkerPulsanteWebinar(input.inboundCorrente)) {
+  if ((input.pulsanteAttivo ?? true) && isMarkerPulsanteWebinar(input.inboundCorrente)) {
     return { tipo: 'lancio_pulsante', provenienza: PROVENIENZA_LANCIO_WEBDEV };
   }
   // OR e non solo il primo: un Telegram scritto ORA (dopo un primo messaggio diverso)
