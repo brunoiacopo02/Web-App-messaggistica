@@ -12,7 +12,9 @@
 
 ## Global Constraints
 
-- **Numero e rischio ban (spec §11, aggiunto 16/09):** il blast Zoom e ogni invio massivo leggono il mittente da `app_settings.lancio_sender` (`principale` | `secondario`); lotti da **200 ogni 5 minuti** (non 400); **freno automatico** se in un lotto i falliti/undelivered superano il 10 % o compaiono 63018/63049/63051 (evento + notifica admin, ripresa manuale); ordine di invio per intenzione (`posto_bloccato` → interagito → mai risposto); go/no-go alle 18:00 del 5/10 con `scripts/qualita-numero.mjs` esteso ai due account (qualità ≥ MEDIUM e limite ≥ 10K sul mittente scelto). Il secondo client Twilio, i template sul secondo account e il routing inbound per `To` sono un task aggiuntivo del B4 (T11 "Mittente secondario").
+- **Numero e rischio ban (spec §11, aggiunto 16/09):** il blast Zoom e ogni invio massivo leggono il mittente da `app_settings.lancio_sender` (`principale` | `secondario`); lotti da **200 ogni 5 minuti** (non 400); **freno automatico** se in un lotto i falliti/undelivered superano il 10 % o compaiono 63018/63049/63051 (evento + notifica admin, ripresa manuale); ordine di invio per intenzione (`posto_bloccato` → interagito → mai risposto); go/no-go alle 18:00 del 5/10 con `scripts/qualita-numero.mjs` esteso ai due account (qualità ≥ MEDIUM e limite ≥ 10K sul mittente scelto). Il secondo client Twilio, i template sul secondo account e il routing inbound per `To` sono il **Task 11 "Mittente secondario"**, in coda a questo piano.
+
+- **Mittente secondario: si costruisce spento (spec §11.1, stato PO del 16/09 sera).** Il numero dell'"Account fenice 2" (account Twilio e Business Manager separati) **non ha ancora le verifiche legali Twilio**: finché Bruno non dà il via, `app_settings.lancio_sender` vale `principale` e **ogni** invio del lancio parte dal numero storico. Il Task 11 costruisce l'impianto (secondo client Twilio da `TWILIO2_ACCOUNT_SID` / `TWILIO2_API_KEY_SID` / `TWILIO2_API_KEY_SECRET` / `TWILIO2_WHATSAPP_NUMBER`, SID dei template `LANCIO2_*`, inbound per `To`) e lo lascia staccato: lettura fail-closed (qualsiasi cosa diversa da `secondario` — chiave assente, valore sporco, env mancanti, conteggio illeggibile — è `principale`), quota di riscaldamento 50 benvenuti/giorno sul secondario e, oltre la quota, **lo stesso run prosegue dal principale**. Solo il benvenuto può usare il secondario: il blast Zoom continua a partire dal principale (Task 3 lo segnala con `lancio_sender_secondario_non_disponibile`). I **valori** delle env non stanno nel repo e non si leggono né si stampano: in `.env.example` ci sono solo i nomi, commentati.
 
 - **Perimetro B4 e basta.** Il marker del pulsante `wa.me` e l'adozione dei numeri sconosciuti sono del B2: qui si assume che una conversazione arrivi in `lancio_fase='post_pitch'` con `crm_lead_id` valorizzato. Il follow-up del 6, il flusso standard con la live editata e le restituzioni sono del B5. L'intake, le fasi `attesa`/`posto_bloccato` e le esclusioni dai cron esistenti sono del B1.
 - **Nessuna migrazione.** Le colonne `conversations.lancio_slug / lancio_fase / lancio_ingresso / lancio_link_inviato_at / lancio_info` e le chiavi `app_settings` (`lancio_zoom_link`, `lancio_attivo`, `lancio_evento_at`) sono del B1 (spec §3.2).
@@ -66,7 +68,8 @@ Il B1 si esegue prima di questo piano (ordine della nota di riconciliazione: B1 
 - `lib/lancio-effetti.ts` — gli effetti condivisi dai turni del B4: una bolla, un evento, la traccia `fenice_ai_reply`, silenzio temporaneo/definitivo, congedo, passaggio umano (il B1 tiene le sue copie inline).
 - `lib/lancio-assistenza.ts` — `turnoAssistenza`: il turno della fase `link_inviato` (risposta breve del modello fino alle 23:59 del giorno dell'evento; congedo su un no; dopo mezzanotte silenzio tracciato).
 - `lib/lancio-post-pitch.ts` — `turnoPostPitch` (due domande, la scelta, le chiamate al CRM, le conferme) e `turnoDopoScelta` (fase `scelta_fatta`: un solo "Ricevuto", le parole del lead al CRM come nota).
-- Test: `lib/run-pool.test.ts`, `lib/lancio-zoom-blast.test.ts`, `app/api/cron/lancio-zoom/route.test.ts`, `lib/lancio-crm.test.ts`, `lib/lancio-scelta.test.ts`, `lib/lancio-orologio.test.ts`, `lib/lancio-assistenza.test.ts`, `lib/lancio-post-pitch.test.ts`.
+- `lib/wa-mittente.ts` (Task 11) — da quale numero e da quale account Twilio esce un messaggio del lancio: lettura delle env `TWILIO2_*`/`LANCIO2_*`, `decidiMittente` (fail-closed), `risolviInvio` (numero e SID dello stesso account), `mittenteDaNumero` (inbound). Nasce spento.
+- Test: `lib/run-pool.test.ts`, `lib/lancio-zoom-blast.test.ts`, `app/api/cron/lancio-zoom/route.test.ts`, `lib/lancio-crm.test.ts`, `lib/lancio-scelta.test.ts`, `lib/lancio-orologio.test.ts`, `lib/lancio-assistenza.test.ts`, `lib/lancio-post-pitch.test.ts`, `lib/wa-mittente.test.ts` (Task 11).
 
 **Modificati**
 - `app/api/cron/send-batch/route.ts` — importa `runPool` da `lib/run-pool.ts` (rimossa la copia privata).
@@ -77,7 +80,8 @@ Il B1 si esegue prima di questo piano (ordine della nota di riconciliazione: B1 
 - `lib/lancio-turno.ts` (B1) — `switch` sulla fase in testa a `eseguiTurnoLancio`: `link_inviato` → `turnoAssistenza`, `post_pitch` → `turnoPostPitch`, `scelta_fatta` → `turnoDopoScelta`, il resto → il turno del B1; `TurnoLancioInput` cresce di `lancioInfo`, `now?`, `rows[].created_at?`.
 - `lib/fenice-autoreply.ts` (B1) — la select del claim legge anche `lancio_info`; il ramo lancio del B1 passa `lancioInfo` e `created_at` delle righe. Nessun secondo ramo.
 - Test toccati: `lib/lancio-prompt.test.ts`, `lib/lancio-reply.test.ts`, `lib/lancio-turno.test.ts`, `lib/fenice-autoreply.test.ts` (il ramo lancio scavalca Mario anche in `link_inviato`/`post_pitch`).
-- `.env.example` — `LANCIO_ZOOM_TEMPLATE_SID` (se il B1 non l'ha già messo), `LANCIO_BATCH_MAX`, `CRM_LANCIO_URL`, `LANCIO_FAKE_NOW`, `LANCIO_FAKE_NOW_ARMED`.
+- `.env.example` — `LANCIO_ZOOM_TEMPLATE_SID` (se il B1 non l'ha già messo), `LANCIO_BATCH_MAX`, `CRM_LANCIO_URL`, `LANCIO_FAKE_NOW`, `LANCIO_FAKE_NOW_ARMED`; col Task 11 anche i **nomi** (commentati, senza valori) di `TWILIO2_ACCOUNT_SID`, `TWILIO2_API_KEY_SID`, `TWILIO2_API_KEY_SECRET`, `TWILIO2_WHATSAPP_NUMBER`, `TWILIO2_AUTH_TOKEN`, `LANCIO2_*_TEMPLATE_SID`, più `LANCIO_WELCOME_MAX_PER_DAY_SECONDARIO`.
+- Task 11 (mittente secondario, spento): `lib/twilio.ts` (client, categoria/corpo del template e firma per account), `lib/lancio-db.ts` (`contaBenvenutiOggiSecondario`), `lib/fenice-enroll.ts` e `app/api/cron/lancio-aperture/route.ts` (mittente del benvenuto), `app/api/webhooks/twilio/route.ts` (inbound sul secondo numero), `lib/fenice-autoreply.ts` (si risponde dal numero della chat), più i test di quei file.
 
 **Non si creano** (nota di riconciliazione): `lib/lancio-model.ts`, `lib/lancio-drain.ts`, `setLancioFase`, un `LancioSettings` con le chiavi grezze.
 
@@ -2513,7 +2517,7 @@ git commit -m "feat(lancio): turno di assistenza dopo il link Zoom (fino a mezza
 - Test: `lib/lancio-post-pitch.test.ts`
 
 **Interfaces:**
-- Consumes: `lancioSlots`, `lancioBook`, `lancioCallNow`, `LancioInfo` (Task 4); tutto `lib/lancio-scelta.ts` (Task 5); `generateLancioReply` (Task 6); `RISPOSTE_RISCALDAMENTO` (Task 6); gli effetti di `lib/lancio-effetti.ts` (Task 7); `impostaFaseLancio` (B1 Task 8); `sendOutcome`, `sendCrmNota` (`lib/bot-outcome.ts`); `pushLeadEntrante` (B2, `lib/lead-entrante.ts`); `type Json` (`lib/supabase/types.ts`).
+- Consumes: `lancioSlots`, `lancioBook`, `lancioCallNow`, `LancioInfo`, `LancioSlots`, `LancioKind` (Task 4, **già in repo**: `lib/lancio-crm.ts`, commit 8ebf914); tutto `lib/lancio-scelta.ts` (Task 5), compreso `etichettaGiorno`; `romeDayKey`, `romeHour` da `lib/rome-time.ts` (l'ora dell'appuntamento già preso); `generateLancioReply` (Task 6); `RISPOSTE_RISCALDAMENTO` (Task 6); gli effetti di `lib/lancio-effetti.ts` (Task 7); `impostaFaseLancio` (B1 Task 8); `sendOutcome`, `sendCrmNota` (`lib/bot-outcome.ts`); `pushLeadEntrante` (B2, `lib/lead-entrante.ts`); `type Json` (`lib/supabase/types.ts`).
 - Produces:
   ```ts
   export async function turnoPostPitch(supabase, i: TurnoLancioInput, ctx: { settings: LancioSettings; now: Date }): Promise<StatoTurno>;
@@ -2521,14 +2525,22 @@ git commit -m "feat(lancio): turno di assistenza dopo il link Zoom (fino a mezza
   export const NOTA_SCELTA = 'Lancio Web Dev AI: ha premuto il pulsante dopo la live.';
   export const PROVENIENZA_LANCIO = 'Lancio Web Dev AI';
   ```
-  Eventi: `lancio_post_pitch_domanda`, `lancio_slots_mostrati`, `lancio_slots_non_letti` (warn), `lancio_slots_vuoti` (warn), `lancio_at_non_valido`, `lancio_scelta` (`tipo: 'chiama_ora' | 'prenota'`), `lancio_crm_errore` (error), `lancio_lead_senza_crm` (error), `lancio_congedo`, `lancio_dopo_scelta`, `lancio_silenzio`, `fenice_ai_reply` (`lancio: true`).
+  Eventi: `lancio_post_pitch_domanda`, `lancio_slots_mostrati`, `lancio_slots_non_letti` (warn), `lancio_slots_vuoti` (warn), `lancio_at_non_valido`, `lancio_scelta` (`tipo: 'chiama_ora' | 'prenota' | 'gia_prenotato'`), `lancio_crm_errore` (error), `lancio_lead_senza_crm` (error), `lancio_congedo`, `lancio_dopo_scelta`, `lancio_silenzio`, `fenice_ai_reply` (`lancio: true`).
+
+**Il client CRM com'è davvero** (Task 4 chiuso, commit 8ebf914): questo task si scrive contro `lib/lancio-crm.ts` in repo, non contro la bozza di firme del Task 4.
+- Gli errori sono un'unione discriminata su **`motivo`** (mai `kind`, mai `error`/`body`): `ora_esaurita { slots: LancioSlots | null }`, `gia_prenotato { appointmentAt: string | null; kind: LancioKind | null }`, `conflitto`, `nessun_venditore`, `fuori_regole`, `info_non_valida`, `forbidden`, `not_found`, `rete { detail }`, `http { status; detail }`, `not_configured`. `kind` esiste ancora, ma è **solo** il tipo di slot (`'mattina' | 'pomeriggio' | 'dopodomani'`) dentro i successi e dentro `gia_prenotato`.
+- I successi: `lancioSlots` → `{ ok: true; slots: LancioSlots }`; `lancioBook` → `{ ok: true; kind; venditore?; deduped? }`; `lancioCallNow` → `{ ok: true; venditore; deduped? }`.
+- In `LancioSlots`, `mattina` può valere la stringa `'conferme'` (il dopodomani lo prendono le Conferme): `oreProponibili` (Task 5) la tratta già come "nessuna ora di mattina dal CRM", non serve un ramo qui. `pomeriggio` è opzionale, e ci sono `mattinaEsaurita?` e `oreAmmesse?` (il codice non legge `oreAmmesse`: le ore vere restano quelle di `oreProponibili`).
+- Il `409 conflitto` **è già stato ritentato una volta dal client**: qui NON si ritenta di nuovo, si va sul testo di errore come per un `http`.
+- La riga `lancio_crm_call` su `event_log` **la scrive il client** a ogni chiamata (endpoint, status, motivo, ms, tentativi): i turni non la duplicano. Qui si scrive solo `lancio_crm_errore`, cioè "il lead è rimasto senza scelta registrata".
 
 Regole del turno (spec §5.4, "regole dure nel codice"):
 - **Finestra:** `puoRispondere(now, eventoAt, 'post_pitch')` falso ⇒ silenzio **temporaneo** (senza `fenice_ai_reply`: il re-drive delle 08:30 fa rispondere). `modo = modoPostPitch(now, eventoAt)`: di giorno `[LANCIO:CHIAMA_ORA]` non si esegue mai (si risponde con `TESTO_CHIAMATA_FUORI_ORARIO` + le ore), le ore proposte sono quelle di `oreProponibili` (che di giorno tiene la mattina del 6 solo se `at ≥ now+1h`) e `testoSlots` in modo `giorno` non la nomina.
 - **`lancio_info`:** a ogni turno `raccogliRisposte(lancioInfo, [inboundBody])` (il marker del pulsante non entra); si salva su `conversations.lancio_info` (update diretto: la fase non cambia, `impostaFaseLancio` serve solo ai cambi di fase) e viaggia in `info: { risposte }` su `book` e `call-now`.
 - **Ore:** si chiedono al CRM (`lancioSlots(giornoDopo)`) solo in fase di scelta (`risposte ≥ 2` o slot già mostrati) e quando un tag le richiede — una chiamata di rete al massimo per turno, dentro il drain il lead aspetta. CRM giù ⇒ `oreProponibili(null)` (pomeriggio e dopodomani restano) + `lancio_slots_non_letti`.
 - **Tag:** `CHIAMA_ORA` → `lancioCallNow`; `PRENOTA|iso` → `validaAtLancio` poi `lancioBook`; `SLOTS` → `testoSlots`; `NO` → congedo post-pitch (`TESTO_CONGEDO_POST_PITCH`, fase `chiuso` con `lancio_info`, `DA_SCARTARE` "non interessato"); nessun tag → la risposta del modello (riscaldamento).
-- **Esiti CRM:** `200` → conferma con testo fisso (`testoConfermaChiamata` / `testoConfermaPrenotazione`), `impostaFaseLancio(…, 'scelta_fatta', { lancio_info })`, `lancio_scelta`, stato `closed`; `409 ora_esaurita` → `testoOraEsaurita(hour, oreProponibili(slots aggiornati))`; `409 nessun_venditore` → `TESTO_NESSUN_VENDITORE` + `testoSlots` (propone domani); `422 fuori_regole` e `at` non valido → `testoAtNonValido` (chiede un'altra ora); `403`/`http`/`rete`/`not_configured` → `TESTO_ERRORE_CRM` + `lancio_crm_errore`, stato `active`.
+- **Esiti CRM** (si guarda `esito.ok` e poi `esito.motivo`): `ok` → conferma con testo fisso (`testoConfermaChiamata` / `testoConfermaPrenotazione`), `impostaFaseLancio(…, 'scelta_fatta', { lancio_info })`, `lancio_scelta`, stato `closed`; `gia_prenotato` → testo fisso che ricorda al lead l'appuntamento che ha già (`testoGiaPrenotato`, dal `appointmentAt` della risposta) e **stessa strada della prenotazione riuscita** — fase `scelta_fatta`, `lancio_scelta` con `tipo:'gia_prenotato'`, stato `closed`: niente secondo `book`/`call-now`, l'ora sul CRM c'è già e riscriverla sarebbe un doppione; `ora_esaurita` → `testoOraEsaurita(hour, oreProponibili(esito.slots))`, cioè dagli slot aggiornati che arrivano nella risposta; `nessun_venditore` → `TESTO_NESSUN_VENDITORE` + `testoSlots` (propone domani); `fuori_regole` e `at` non valido → `testoAtNonValido` (chiede un'altra ora); `conflitto` (già ritentato dal client, qui non si ritenta), `info_non_valida`, `forbidden`, `not_found`, `http`, `rete`, `not_configured` → `TESTO_ERRORE_CRM` + `lancio_crm_errore`, stato `active`.
+- **`gia_prenotato` senza ora:** `appointmentAt` può essere `null` (il CRM sa che c'è un appuntamento ma non lo espone). Allora il testo è quello generico ("hai già un appuntamento fissato con noi"): non si inventa un'ora e non si chiede al lead di rifissare, che è esattamente il caso in cui il B3 risponde 409.
 - **`crm_lead_id` null:** prima di `book`/`call-now` si rilegge `conversations.crm_lead_id`; se è ancora null si richiama `pushLeadEntrante` (idempotente lato CRM: dedup per numero) con `provenienza='Lancio Web Dev AI'`, il primo inbound e il suo `created_at`; se non torna un `leadId` ⇒ `TESTO_ERRORE_CRM` + `lancio_lead_senza_crm`, nessuna scelta registrata.
 - **Dopo la scelta** (fase `scelta_fatta`, stato `closed` riaperto dal webhook): al primo messaggio `TESTO_DOPO_SCELTA`, ai successivi silenzio definitivo; in ogni caso le parole del lead vanno al CRM come nota (`sendCrmNota`) perché le legga chi lo chiama.
 
@@ -2674,21 +2686,51 @@ describe('turnoPostPitch — [LANCIO:CHIAMA_ORA]', () => {
 
   it('409 nessun_venditore: "tutti occupati, fissiamo domani?" + le ore, active', async () => {
     genera.mockResolvedValueOnce(modello({ lancioTag: { tag: 'CHIAMA_ORA' } }));
-    vi.mocked(lancioCallNow).mockResolvedValueOnce({ ok: false, kind: 'nessun_venditore' });
+    vi.mocked(lancioCallNow).mockResolvedValueOnce({ ok: false, motivo: 'nessun_venditore' });
     const { supabase } = makeSupabase();
     expect(await turnoPostPitch(supabase, scelta('adesso'), ctx())).toBe('active');
     expect(bolle()).toEqual([`${TESTO_NESSUN_VENDITORE} ${SLOT_TEXT_NOTTE}`]);
     expect(impostaFaseLancio).not.toHaveBeenCalled();
   });
 
+  it('409 gia_prenotato: gli si ricorda l ora che ha gia, niente seconda chiamata, scelta_fatta, closed', async () => {
+    genera.mockResolvedValueOnce(modello({ lancioTag: { tag: 'CHIAMA_ORA' } }));
+    vi.mocked(lancioCallNow).mockResolvedValueOnce({ ok: false, motivo: 'gia_prenotato', appointmentAt: '2026-10-06T11:00:00+02:00', kind: 'mattina' });
+    const { supabase, calls } = makeSupabase();
+    expect(await turnoPostPitch(supabase, scelta('adesso'), ctx())).toBe('closed');
+    expect(lancioCallNow).toHaveBeenCalledTimes(1);
+    expect(bolle()).toEqual(['Risulta che hai già un appuntamento con noi martedì 6 ottobre alle 11:00: ti chiamiamo lì, non serve fissarne un altro.']);
+    expect(impostaFaseLancio).toHaveBeenCalledWith(expect.anything(), 42, 'scelta_fatta', { lancio_info: { risposte: ['studio informatica', 'il progetto finale', 'adesso'] } });
+    expect(eventi(calls, 'lancio_scelta')[0].payload).toMatchObject({ tipo: 'gia_prenotato', at: '2026-10-06T11:00:00+02:00', kind: 'mattina' });
+    expect(eventi(calls, 'lancio_crm_errore')).toHaveLength(0);
+  });
+
+  it('409 gia_prenotato senza appointmentAt: testo generico, stessa strada', async () => {
+    genera.mockResolvedValueOnce(modello({ lancioTag: { tag: 'CHIAMA_ORA' } }));
+    vi.mocked(lancioCallNow).mockResolvedValueOnce({ ok: false, motivo: 'gia_prenotato', appointmentAt: null, kind: null });
+    const { supabase } = makeSupabase();
+    expect(await turnoPostPitch(supabase, scelta('adesso'), ctx())).toBe('closed');
+    expect(bolle()).toEqual(['Risulta che hai già un appuntamento fissato con noi: ti richiamiamo noi, non serve fissarne un altro.']);
+  });
+
   it('CRM in errore (rete/http): testo di errore, evento error, active, niente fase', async () => {
     genera.mockResolvedValueOnce(modello({ lancioTag: { tag: 'CHIAMA_ORA' } }));
-    vi.mocked(lancioCallNow).mockResolvedValueOnce({ ok: false, kind: 'rete', error: 'ECONNRESET' });
+    vi.mocked(lancioCallNow).mockResolvedValueOnce({ ok: false, motivo: 'rete', detail: 'ECONNRESET' });
     const { supabase, calls } = makeSupabase();
     expect(await turnoPostPitch(supabase, scelta('adesso'), ctx())).toBe('active');
     expect(bolle()).toEqual([TESTO_ERRORE_CRM]);
     expect(eventi(calls, 'lancio_crm_errore')[0].level).toBe('error');
     expect(impostaFaseLancio).not.toHaveBeenCalled();
+  });
+
+  it('409 conflitto (gia ritentato dal client): errore, nessun terzo tentativo', async () => {
+    genera.mockResolvedValueOnce(modello({ lancioTag: { tag: 'CHIAMA_ORA' } }));
+    vi.mocked(lancioCallNow).mockResolvedValueOnce({ ok: false, motivo: 'conflitto' });
+    const { supabase, calls } = makeSupabase();
+    expect(await turnoPostPitch(supabase, scelta('adesso'), ctx())).toBe('active');
+    expect(lancioCallNow).toHaveBeenCalledTimes(1);
+    expect(bolle()).toEqual([TESTO_ERRORE_CRM]);
+    expect(eventi(calls, 'lancio_crm_errore')[0].payload).toMatchObject({ motivo: 'conflitto' });
   });
 });
 
@@ -2717,7 +2759,7 @@ describe('turnoPostPitch — [LANCIO:PRENOTA|iso]', () => {
 
   it('409 ora_esaurita: ripropone dagli slot AGGIORNATI del CRM, non da quelli letti prima', async () => {
     genera.mockResolvedValueOnce(prenota(AT9));
-    vi.mocked(lancioBook).mockResolvedValueOnce({ ok: false, kind: 'ora_esaurita', slots: { date: '2026-10-06', mattina: [{ hour: 11, liberi: 1 }], pomeriggio: { aperto: true, ore: [15, 16, 17, 18, 19, 20] }, mattinaEsaurita: false } });
+    vi.mocked(lancioBook).mockResolvedValueOnce({ ok: false, motivo: 'ora_esaurita', slots: { date: '2026-10-06', mattina: [{ hour: 11, liberi: 1 }], pomeriggio: { aperto: true, ore: [15, 16, 17, 18, 19, 20] }, mattinaEsaurita: false } });
     const { supabase, calls } = makeSupabase();
     expect(await turnoPostPitch(supabase, scelta('alle 9'), ctx())).toBe('active');
     expect(bolle()).toEqual(['Le 9 si sono appena riempite. Per la call ho libero domattina alle 11, oppure domani pomeriggio dalle 15 alle 20: che ora preferisci?']);
@@ -2727,15 +2769,26 @@ describe('turnoPostPitch — [LANCIO:PRENOTA|iso]', () => {
 
   it('409 nessun_venditore su book: propone domani con le ore', async () => {
     genera.mockResolvedValueOnce(prenota(AT9));
-    vi.mocked(lancioBook).mockResolvedValueOnce({ ok: false, kind: 'nessun_venditore' });
+    vi.mocked(lancioBook).mockResolvedValueOnce({ ok: false, motivo: 'nessun_venditore' });
     const { supabase } = makeSupabase();
     await turnoPostPitch(supabase, scelta('alle 9'), ctx());
     expect(bolle()).toEqual([`${TESTO_NESSUN_VENDITORE} ${SLOT_TEXT_NOTTE}`]);
   });
 
+  it('409 gia_prenotato su book: l ora che ha gia, nessun secondo book, scelta_fatta, closed', async () => {
+    genera.mockResolvedValueOnce(prenota(AT9));
+    vi.mocked(lancioBook).mockResolvedValueOnce({ ok: false, motivo: 'gia_prenotato', appointmentAt: '2026-10-07T10:00:00+02:00', kind: 'dopodomani' });
+    const { supabase, calls } = makeSupabase();
+    expect(await turnoPostPitch(supabase, scelta('alle 9'), ctx())).toBe('closed');
+    expect(lancioBook).toHaveBeenCalledTimes(1);
+    expect(bolle()).toEqual(['Risulta che hai già un appuntamento con noi mercoledì 7 ottobre alle 10:00: ti chiamiamo lì, non serve fissarne un altro.']);
+    expect(impostaFaseLancio).toHaveBeenCalledWith(expect.anything(), 42, 'scelta_fatta', expect.objectContaining({ lancio_info: expect.anything() }));
+    expect(eventi(calls, 'lancio_scelta')[0].payload).toMatchObject({ tipo: 'gia_prenotato', at: '2026-10-07T10:00:00+02:00', kind: 'dopodomani' });
+  });
+
   it('422 fuori_regole: chiede un altra ora con le ore', async () => {
     genera.mockResolvedValueOnce(prenota(AT9));
-    vi.mocked(lancioBook).mockResolvedValueOnce({ ok: false, kind: 'fuori_regole' });
+    vi.mocked(lancioBook).mockResolvedValueOnce({ ok: false, motivo: 'fuori_regole' });
     const { supabase, calls } = makeSupabase();
     await turnoPostPitch(supabase, scelta('alle 9'), ctx());
     expect(bolle()).toEqual([`Quell'ora non riesco a fissarla. ${SLOT_TEXT_NOTTE}`]);
@@ -2766,7 +2819,7 @@ describe('turnoPostPitch — [LANCIO:PRENOTA|iso]', () => {
 
   it('500 dal CRM: testo di errore, active', async () => {
     genera.mockResolvedValueOnce(prenota(AT9));
-    vi.mocked(lancioBook).mockResolvedValueOnce({ ok: false, kind: 'http', status: 500, body: 'boom' });
+    vi.mocked(lancioBook).mockResolvedValueOnce({ ok: false, motivo: 'http', status: 500, detail: 'boom' });
     const { supabase } = makeSupabase();
     expect(await turnoPostPitch(supabase, scelta('alle 9'), ctx())).toBe('active');
     expect(bolle()).toEqual([TESTO_ERRORE_CRM]);
@@ -2784,7 +2837,7 @@ describe('turnoPostPitch — [LANCIO:SLOTS], [LANCIO:NO], finestra', () => {
   });
 
   it('SLOTS con il CRM giù: pomeriggio e dopodomani restano, mattina no, evento warn', async () => {
-    vi.mocked(lancioSlots).mockResolvedValue({ ok: false, kind: 'rete', error: 'timeout' });
+    vi.mocked(lancioSlots).mockResolvedValue({ ok: false, motivo: 'rete', detail: 'timeout' });
     genera.mockResolvedValueOnce(modello({ lancioTag: { tag: 'SLOTS' } }));
     const { supabase, calls } = makeSupabase();
     await turnoPostPitch(supabase, scelta('domani'), ctx());
@@ -2922,10 +2975,12 @@ import { RISPOSTE_RISCALDAMENTO } from './lancio-prompt';
 import { impostaFaseLancio } from './lancio-db';
 import { sendOutcome, sendCrmNota } from './bot-outcome';
 import { pushLeadEntrante } from './lead-entrante';
-import { lancioSlots, lancioBook, lancioCallNow, type LancioInfo, type LancioSlots } from './lancio-crm';
+import { lancioSlots, lancioBook, lancioCallNow, type LancioInfo, type LancioKind } from './lancio-crm';
+import { romeDayKey, romeHour } from './rome-time';
 import {
   giorniLancio, modoPostPitch, puoRispondere, validaAtLancio, oreProponibili, testoSlots, bloccoSlotPerPrompt,
   testoConfermaChiamata, testoConfermaPrenotazione, testoOraEsaurita, testoAtNonValido, raccogliRisposte,
+  etichettaGiorno,
   TESTO_NESSUN_VENDITORE, TESTO_CHIAMATA_FUORI_ORARIO, TESTO_ERRORE_CRM, TESTO_DOPO_SCELTA, TESTO_CONGEDO_POST_PITCH,
   type OreProponibili, type GiorniLancio, type ModoPostPitch,
 } from './lancio-scelta';
@@ -2940,6 +2995,25 @@ export const NOTA_SCELTA = 'Lancio Web Dev AI: ha premuto il pulsante dopo la li
 export const PROVENIENZA_LANCIO = 'Lancio Web Dev AI';
 const NOTA_CONGEDO = 'Lancio Web Dev AI: ha seguito la live ma non vuole una call.';
 const NOTA_SENZA_ORE = 'Lancio Web Dev AI: vuole una call ma non ci sono più ore libere nei due giorni dopo la live.';
+/** `gia_prenotato` senza `appointmentAt`: il CRM dice che l'ora c'è ma non qual è. */
+const TESTO_GIA_PRENOTATO_SENZA_ORA =
+  'Risulta che hai già un appuntamento fissato con noi: ti richiamiamo noi, non serve fissarne un altro.';
+
+/**
+ * 409 `gia_prenotato` (contratto §6.2): il lead ha già la sua ora sul CRM — l'ha presa
+ * dal sito, dai GDO, o da un turno di questo stesso bot andato a buon fine di cui non
+ * ha visto la conferma. Non è un errore da far vedere al lead: gli si ricorda l'ora che
+ * ha, e basta. L'ora si formatta con gli stessi ferri dei testi fissi (`etichettaGiorno`
+ * + l'ora di Roma), così "martedì 6 ottobre alle 11:00" è scritto una volta sola in
+ * tutto il blocco.
+ */
+function testoGiaPrenotato(appointmentAt: string | null): string {
+  if (!appointmentAt) return TESTO_GIA_PRENOTATO_SENZA_ORA;
+  const ms = Date.parse(appointmentAt);
+  if (!Number.isFinite(ms)) return TESTO_GIA_PRENOTATO_SENZA_ORA;
+  const d = new Date(ms);
+  return `Risulta che hai già un appuntamento con noi ${etichettaGiorno(romeDayKey(d))} alle ${romeHour(d)}:00: ti chiamiamo lì, non serve fissarne un altro.`;
+}
 
 /**
  * Fase `post_pitch` (spec §5.4): il lead ha premuto il pulsante dopo la live. Due domande
@@ -2982,7 +3056,7 @@ export async function turnoPostPitch(
     if (ore) return ore;
     const r = await lancioSlots(giorni.giornoDopo);
     if (!r.ok) {
-      await eventoLancio(supabase, c, 'lancio_slots_non_letti', { kind: r.kind }, `[lancio] conv ${c.conversationId}: slot non letti dal CRM (${r.kind}), propongo pomeriggio e dopodomani`, 'warn');
+      await eventoLancio(supabase, c, 'lancio_slots_non_letti', { motivo: r.motivo }, `[lancio] conv ${c.conversationId}: slot non letti dal CRM (${r.motivo}), propongo pomeriggio e dopodomani`, 'warn');
     }
     ore = oreProponibili(r.ok ? r.slots : null, now, eventoAt);
     return ore;
@@ -3026,11 +3100,25 @@ export async function turnoPostPitch(
     return res.ok && res.leadId ? res.leadId : null;
   };
 
-  const sceltaFatta = async (tipo: 'chiama_ora' | 'prenota', extra: Record<string, unknown>): Promise<'closed'> => {
+  const sceltaFatta = async (tipo: 'chiama_ora' | 'prenota' | 'gia_prenotato', extra: Record<string, unknown>): Promise<'closed'> => {
     await impostaFaseLancio(supabase, c.conversationId, 'scelta_fatta', { lancio_info: info as unknown as Json });
     await eventoLancio(supabase, c, 'lancio_scelta', { tipo, ...extra }, `[lancio] conv ${c.conversationId}: scelta ${tipo}`);
     await tracciaTurnoLancio(supabase, c, `scelta_${tipo}`);
     return 'closed';
+  };
+
+  /**
+   * Il CRM dice che il lead ha già un appuntamento (409 `gia_prenotato`, da `book` o da
+   * `call-now`). Si chiude come una prenotazione riuscita — stessa fase, stesso evento,
+   * stesso `closed` — perché per il lead il risultato è lo stesso: ha la sua ora. Quello
+   * che NON si fa è riprovare: l'appuntamento c'è già e un secondo giro lo duplicherebbe.
+   */
+  const giaPrenotato = async (
+    esito: { appointmentAt: string | null; kind: LancioKind | null },
+    tag: string,
+  ): Promise<'closed'> => {
+    await inviaBollaLancio(supabase, c, testoGiaPrenotato(esito.appointmentAt));
+    return sceltaFatta('gia_prenotato', { at: esito.appointmentAt, kind: esito.kind, tag });
   };
 
   const bloccoSlot = faseScelta ? bloccoSlotPerPrompt(await leggiOre(), giorni, modo) : null;
@@ -3056,7 +3144,10 @@ export async function turnoPostPitch(
         await inviaBollaLancio(supabase, c, testoConfermaChiamata(esito.venditore.nome));
         return sceltaFatta('chiama_ora', { venditore: esito.venditore });
       }
-      if (esito.kind === 'nessun_venditore') return mostraOre((o, g, m) => `${TESTO_NESSUN_VENDITORE} ${testoSlots(o, g, m)}`);
+      if (esito.motivo === 'gia_prenotato') return giaPrenotato(esito, 'CHIAMA_ORA');
+      if (esito.motivo === 'nessun_venditore') return mostraOre((o, g, m) => `${TESTO_NESSUN_VENDITORE} ${testoSlots(o, g, m)}`);
+      // `conflitto` compreso: il client l'ha già ritentato una volta, qui si dice al lead
+      // di riscrivere invece di martellare il CRM dentro il turno.
       return erroreCrm('lancio_crm_errore', { tag: 'CHIAMA_ORA', ...esito });
     }
     case 'PRENOTA': {
@@ -3072,13 +3163,15 @@ export async function turnoPostPitch(
         await inviaBollaLancio(supabase, c, testoConfermaPrenotazione(esito.kind, tag.at, esito.venditore?.nome ?? null));
         return sceltaFatta('prenota', { at: tag.at, kind: esito.kind, venditore: esito.venditore ?? null, deduped: esito.deduped === true });
       }
-      if (esito.kind === 'ora_esaurita') {
-        // Le ore aggiornate sono nella risposta: si ripropone da quelle, non da quelle di prima.
-        ore = oreProponibili(esito.slots as LancioSlots | null, now, eventoAt);
+      if (esito.motivo === 'gia_prenotato') return giaPrenotato(esito, 'PRENOTA');
+      if (esito.motivo === 'ora_esaurita') {
+        // Le ore aggiornate sono nella risposta: si ripropone da quelle, non da quelle di
+        // prima. `esito.slots` è già `LancioSlots | null` letto dal client: niente cast.
+        ore = oreProponibili(esito.slots, now, eventoAt);
         return mostraOre((o, g, m) => testoOraEsaurita(v.hour, o, g, m));
       }
-      if (esito.kind === 'nessun_venditore') return mostraOre((o, g, m) => `${TESTO_NESSUN_VENDITORE} ${testoSlots(o, g, m)}`);
-      if (esito.kind === 'fuori_regole') {
+      if (esito.motivo === 'nessun_venditore') return mostraOre((o, g, m) => `${TESTO_NESSUN_VENDITORE} ${testoSlots(o, g, m)}`);
+      if (esito.motivo === 'fuori_regole') {
         await eventoLancio(supabase, c, 'lancio_at_non_valido', { at: tag.at, motivo: 'crm_fuori_regole' }, `[lancio] conv ${c.conversationId}: il CRM rifiuta ${tag.at} (422)`, 'warn');
         return mostraOre(testoAtNonValido);
       }
@@ -3341,7 +3434,7 @@ git commit -m "docs(lancio): env del blast Zoom, del client CRM e dell'orologio 
 
 1. B1 in produzione: migrazione applicata, `LANCIO_WELCOME_TEMPLATE_SID` e `LANCIO_ZOOM_TEMPLATE_SID` in env (se Meta li ha approvati MARKETING, anche in `UTILITY_ONLY_ALLOW`), `app_settings`: `lancio_attivo=true`, `lancio_zoom_link` e `lancio_evento_at='2026-10-05T21:00:00+02:00'` valorizzati.
 2. B2 in produzione: il marker del pulsante porta la chat in `post_pitch` (`event_log.type='lancio_pulsante'`).
-3. B3 sul CRM: le tre rotte `/api/bot/lancio/*` rispondono (anche solo `409` finché i turni sono vuoti: la prova vuole vedere i testi di ripiego). Un turno "giorno dopo" di prova per il 6/10 con almeno un venditore, se si vuole vedere la conferma con il nome.
+3. B3 sul CRM: le tre rotte `/api/bot/lancio/*` rispondono (anche solo `409` finché i turni sono vuoti: la prova vuole vedere i testi di ripiego). Un turno "giorno dopo" di prova per il 6/10 con almeno un venditore, se si vuole vedere la conferma con il nome. **I 409 devono portare il campo `motivo`** (`ora_esaurita` / `gia_prenotato` / `conflitto` / `nessun_venditore`): il client (`lib/lancio-crm.ts`) discrimina su quello, e un 409 senza `motivo` diventa un `http` generico, cioè il testo di errore invece del ripiego giusto. Si verifica con una chiamata a mano: `curl -s -o /dev/null -w '%{http_code}' …/api/bot/lancio/slots` non basta, serve vedere il corpo.
 4. Un numero WhatsApp di test già arruolato nel lancio (B1 Task 12, punto 4) in fase `posto_bloccato`, con il suo `conversationId` (`select id, lancio_fase, crm_lead_id from conversations where wa_number like '%<numero>%'`).
 
 - [ ] **Step 5: Env di produzione**
@@ -3388,7 +3481,8 @@ Dal numero di test scrivere, uno alla volta, e leggere la risposta e `event_log`
 2. Rispondere ("faccio il barista") → seconda domanda; `lancio_info.risposte` ha 1 voce.
 3. Rispondere ("il progetto finale") → la domanda della scelta, verbatim: "Preferisci che ti chiami un nostro consulente adesso, anche se è tardi, oppure fissiamo una call domani?". In `event_log` deve esserci la lettura degli slot (nessun `lancio_slots_non_letti` se il CRM risponde).
 4. "domani" → le ore scritte dal codice ("Per la call ho libero domattina alle …, oppure domani pomeriggio dalle 15 alle 20: che ora preferisci?"), `lancio_slots_mostrati`, `lancio_info.slotsMostratiAt` valorizzato.
-5. "alle 9" → `book` sul CRM: con un venditore in turno "Perfetto, ci sentiamo martedì 6 ottobre alle 9:00: ti chiama <Nome>. Tieni il telefono a portata di mano."; fase `scelta_fatta`, `ai_status='closed'`, `lancio_scelta` con `tipo='prenota'`; sul CRM il lead di test ha l'appuntamento. Senza turni: il testo di `ora_esaurita`/`nessun_venditore` e la fase resta `post_pitch`.
+5. "alle 9" → `book` sul CRM: con un venditore in turno "Perfetto, ci sentiamo martedì 6 ottobre alle 9:00: ti chiama <Nome>. Tieni il telefono a portata di mano."; fase `scelta_fatta`, `ai_status='closed'`, `lancio_scelta` con `tipo='prenota'`; sul CRM il lead di test ha l'appuntamento. Senza turni: il testo di `ora_esaurita`/`nessun_venditore` e la fase resta `post_pitch`. In `event_log` c'è la riga `lancio_crm_call` scritta dal client (`endpoint:'book'`, `motivo:null`, `status`, `ms`, `tentativi`): è da lì che si legge cosa ha risposto davvero il CRM, e nei turni non c'è nessun'altra riga che lo dica.
+5-bis. **Appuntamento già preso** (409 `gia_prenotato`): senza toccare l'appuntamento appena creato, riportare a mano la sola conversazione in `post_pitch` (`update conversations set lancio_fase='post_pitch', ai_status='active' where id=<id>`), rifare 1-3 e chiedere di nuovo un'ora. Atteso: "Risulta che hai già un appuntamento con noi martedì 6 ottobre alle 9:00: ti chiamiamo lì, non serve fissarne un altro.", fase di nuovo `scelta_fatta`, `lancio_scelta` con `tipo='gia_prenotato'`, e **sul CRM un solo appuntamento** (nessun secondo `book`: in `event_log` una sola riga `lancio_crm_call` per questo giro, con `motivo='gia_prenotato'`). Se il CRM risponde 409 senza `appointmentAt`, il testo atteso è quello generico ("Risulta che hai già un appuntamento fissato con noi: ti richiamiamo noi…").
 6. "grazie" → "Ricevuto, lo passo al consulente che ti chiama." e la nota al CRM; un secondo "ok" → silenzio.
 7. Riportare la conversazione in `post_pitch` a mano (`update conversations set lancio_fase='post_pitch', lancio_info=null, ai_status='active' where id=<id>` + annullare l'appuntamento di prova sul CRM) e ripetere 1-3, poi "adesso" → `call-now`: "Perfetto, ti chiama <Nome> tra pochissimo." oppure "Stasera i consulenti sono tutti occupati: fissiamo domani? …" con `409`.
 8. `LANCIO_FAKE_NOW=2026-10-06T10:00:00+02:00` (redeploy), stessa chat riportata in `post_pitch` con `lancio_info` a due risposte: "chiamami adesso" → "A quest'ora fissiamo direttamente la call. Per la call ho oggi pomeriggio dalle 15 alle 20: …" (niente `call-now`, niente ore di mattina nel testo).
@@ -3406,6 +3500,681 @@ Poi: la conversazione di test torna com'era (`lancio_fase='posto_bloccato'`, `la
 - [ ] **Step 10: Report finale**
 
 Nel report di chiusura del blocco: esito dei punti 1-9 dello Step 8 (con i testi ricevuti), stato del re-drive (Task 0 Step 5), categoria Meta del template "Link Zoom" (UTILITY o MARKETING ⇒ `UTILITY_ONLY_ALLOW`), eventuali stub creati al Task 0 da riassorbire nel B1/B2, e i punti aperti della sezione "Self-review" qui sotto.
+
+---
+
+### Task 11: Mittente secondario (costruito, spento di default)
+
+**Files:**
+- Create: `lib/wa-mittente.ts`
+- Test: `lib/wa-mittente.test.ts`
+- Modify: `lib/twilio.ts` (client, categoria, corpo e firma per account), `lib/twilio.test.ts`, `lib/lancio-db.ts` (`contaBenvenutiOggiSecondario`), `lib/lancio-db.test.ts`, `lib/fenice-enroll.ts` (`enrollLancio`: mittente del benvenuto realtime), `lib/fenice-enroll.test.ts`, `app/api/cron/lancio-aperture/route.ts` (benvenuti differiti), `app/api/cron/lancio-aperture/route.test.ts`, `app/api/webhooks/twilio/route.ts` (inbound sul secondo numero), `lib/fenice-autoreply.ts` (il bot risponde dal numero su cui il lead ha scritto), `lib/fenice-autoreply.test.ts`, `.env.example`
+- Verify, non toccare: `app/api/cron/lancio-zoom/route.ts` — legge già `settings.sender` e, se vale `secondario`, scrive `lancio_sender_secondario_non_disponibile` e parte dal principale (Task 3, in repo). Quel comportamento **resta**: il blast del 5/10 sono ~3.000 template in un'ora e non è il carico con cui si riscalda un numero nuovo. Il secondario, in questo task, manda solo i benvenuti.
+
+**Interfaces:**
+- Consumes: `LancioSender`, `getLancioSettings` (`lib/lancio-settings.ts`: la chiave `lancio_sender` esiste già in `app_settings`, seminata dalla migrazione del B1 col valore `'principale'`, e `parseSender` è già fail-closed); `romeDayKey`, `romeOffset` (`lib/rome-time.ts`); `sendTemplate`, `validateTwilioSignature` (`lib/twilio.ts`); `sendTemplateAndLog` (`lib/messaging.ts`); `lancioBenvenutoText` (B1, `lib/lancio-fase.ts`); `templateName` (`lib/name.ts`).
+- Produces:
+  ```ts
+  // lib/wa-mittente.ts — tutto puro tranne `leggiMittenteEnv`, che legge solo `process.env`
+  export type Mittente = 'principale' | 'secondario';
+  export type ChiaveTemplateLancio = 'welcome' | 'zoom' | 'followup';
+  export type MittenteEnv = {
+    numeroPrincipale: string | null;
+    numeroSecondario: string | null;
+    secondarioCompleto: boolean;                    // le quattro TWILIO2_* ci sono tutte
+    template: Record<ChiaveTemplateLancio, { principale: string | null; secondario: string | null }>;
+  };
+  export function leggiMittenteEnv(env?: NodeJS.ProcessEnv): MittenteEnv;
+  export const CAP_BENVENUTI_SECONDARIO_DEFAULT = 50;
+  export function leggiCapSecondario(raw: string | undefined | null): number;
+  export function decidiMittente(i: {
+    setting: string | null | undefined; envPresenti: boolean;
+    benvenutiOggiSecondario: number | null; cap: number;
+  }): Mittente;
+  export type InvioLancio = { mittente: Mittente; from: string; contentSid: string; fallback: boolean };
+  export function risolviInvio(chiave: ChiaveTemplateLancio, voluto: Mittente, e: MittenteEnv): InvioLancio | null;
+  export function mittenteDaNumero(to: string | null | undefined, e: MittenteEnv): Mittente | null;
+  // lib/lancio-db.ts
+  export function contaBenvenutiOggiSecondario(supabase: Supa, nowMs?: number): Promise<number | null>;
+  ```
+  Eventi nuovi: `lancio_benvenuto_secondario` (info, uno per benvenuto partito dal secondo numero: è il contatore della quota giornaliera), `lancio_sender_fallback` (warn, SID del template mancante sul secondo account ⇒ quel messaggio parte dal principale), `lancio_quota_secondario_non_letta` (warn), `lancio_firma_secondario_senza_token` (error, inbound sul secondo numero con `TWILIO2_AUTH_TOKEN` assente).
+
+Decisioni fissate qui (spec §11 e §11.1, delibera PO del 16/09):
+- **Il secondario nasce spento e resta spento.** Il numero dell'"Account fenice 2" non ha ancora le verifiche legali di Twilio: finché Bruno non dà il via, `app_settings.lancio_sender` vale `principale` e **tutti** gli invii partono dal numero storico. Questo task costruisce l'impianto e lo lascia staccato; accenderlo sarà una riga di `app_settings` più le env, senza deploy di codice.
+- **Lettura fail-closed.** Il mittente è `secondario` solo se: l'impostazione vale esattamente `secondario` (già normalizzata da `parseSender`), le quattro `TWILIO2_*` ci sono tutte, la quota giornaliera è > 0 e il conteggio dei benvenuti di oggi si è potuto leggere ed è sotto la quota. Qualunque altra combinazione — chiave assente, valore sporco, env mancanti, conteggio illeggibile — è `principale`. Sbagliare verso il numero verificato costa un messaggio da un numero sano; sbagliare verso l'altro costa un messaggio che non parte, o che parte da un numero senza verifica.
+- **Solo il benvenuto.** Usano il secondario il benvenuto realtime (`enrollLancio` in `lib/fenice-enroll.ts`) e il benvenuto differito (`/api/cron/lancio-aperture`), con **quota di riscaldamento 50/giorno** (giorno di Roma, `LANCIO_WELCOME_MAX_PER_DAY_SECONDARIO`). Oltre la quota **lo stesso run prosegue dal principale**: nessuna coda e nessun rinvio, chi si iscrive per 51° riceve il benvenuto subito, dal numero di sempre. Il tetto orario `LANCIO_WELCOME_MAX_PER_HOUR` resta quello che è e continua a contare i benvenuti del **principale**: è il ritmo del numero a rischio, e le due manopole misurano due cose diverse.
+- **I Content SID sono per account.** Il 15/09 l'altra sessione ha replicato 38 template sull'Account fenice 2, tutti `pending`. I SID replicati si mettono in `LANCIO2_WELCOME_TEMPLATE_SID` / `LANCIO2_ZOOM_TEMPLATE_SID` / `LANCIO2_FOLLOWUP_TEMPLATE_SID`. Se il SID del secondario **manca** per quel messaggio, il messaggio parte dal principale (numero + SID del principale, mai incrociati) e si scrive `lancio_sender_fallback`: un SID dell'account 1 spedito dall'account 2 è un errore Twilio, non un ripiego.
+- **Inbound.** Il webhook accetta oggi solo `To === TWILIO_WHATSAPP_NUMBER_FENICE`. Diventa "uno dei nostri numeri" via `mittenteDaNumero`, e la firma si valida con il token **dell'account su cui il messaggio è arrivato**. La conversazione è la stessa (`conversations.wa_number` lo scrive già il webhook a ogni inbound) e il drain risponde da quel numero: la finestra 24h vale per coppia (numero azienda, numero lead), quindi rispondere dal numero sbagliato o non parte o spezza la chat in due.
+- **Firma del secondo account.** `validateRequest` di Twilio vuole l'**auth token** dell'account: la coppia API key SID/secret serve a chiamare le API, non a validare le firme. Quindi serve anche `TWILIO2_AUTH_TOKEN` (dalla console dell'Account fenice 2). Se manca, l'inbound sul secondo numero viene **rifiutato** (403) e si scrive `lancio_firma_secondario_senza_token`: è lo stato in cui il numero è oggi, e un webhook che accettasse richieste non firmate sarebbe peggio di uno che le rifiuta.
+- **Le credenziali non stanno nel repo** e non si leggono né si stampano: in `.env.example` vanno solo i nomi, commentati. Chi esegue questo task non deve mai aprire un `.env.local` né ripetere un valore in chat.
+- **Perché si scrive da zero e non si prende il branch `feat/secondo-numero-wa`.** Quel branch (`lib/wa-mittente.ts`) risolve un problema diverso: secondo numero **sullo stesso account** Twilio (nessuna credenziale propria, nessun SID diverso, nessuna firma diversa), scelta per **percentuale casuale** dei nuovi lead (`FENICE_NUMERO2_QUOTA`) e stickiness su `wa_number`. Qui l'account è separato (client, SID dei template e auth token propri) e la scelta è una manopola esplicita con una quota giornaliera. Si riusa **l'idea** di `eNumeroDelBot` — l'inbound deve conoscere tutti i numeri del bot, altrimenti chi risponde al secondo scrive nel vuoto — che qui diventa `mittenteDaNumero` (dice anche *quale*, perché serve a scegliere token e client). Il file si scrive nuovo sullo stesso percorso: il branch non si merge e, se un giorno lo si recupererà, il conflitto sarà su un file solo.
+
+- [ ] **Step 1: Write the failing test — la decisione del mittente**
+
+`lib/wa-mittente.test.ts`:
+```ts
+import { describe, it, expect } from 'vitest';
+import {
+  leggiMittenteEnv, leggiCapSecondario, decidiMittente, risolviInvio, mittenteDaNumero,
+  CAP_BENVENUTI_SECONDARIO_DEFAULT, type MittenteEnv,
+} from './wa-mittente';
+
+const ENV_COMPLETO = {
+  TWILIO_WHATSAPP_NUMBER_FENICE: 'whatsapp:+393520413199',
+  TWILIO2_ACCOUNT_SID: 'AC2', TWILIO2_API_KEY_SID: 'SK2', TWILIO2_API_KEY_SECRET: 'segreto',
+  TWILIO2_WHATSAPP_NUMBER: 'whatsapp:+393522070047',
+  LANCIO_WELCOME_TEMPLATE_SID: 'HX_W1', LANCIO2_WELCOME_TEMPLATE_SID: 'HX_W2',
+  LANCIO_ZOOM_TEMPLATE_SID: 'HX_Z1',
+} as NodeJS.ProcessEnv;
+
+const env = (over: Record<string, string | undefined> = {}): MittenteEnv =>
+  leggiMittenteEnv({ ...ENV_COMPLETO, ...over } as NodeJS.ProcessEnv);
+
+describe('leggiMittenteEnv', () => {
+  it('le quattro TWILIO2_* ci sono tutte ⇒ secondarioCompleto', () => {
+    expect(env().secondarioCompleto).toBe(true);
+    expect(env().numeroSecondario).toBe('whatsapp:+393522070047');
+  });
+  it('ne manca una (o è vuota) ⇒ secondarioCompleto false', () => {
+    expect(env({ TWILIO2_API_KEY_SECRET: undefined }).secondarioCompleto).toBe(false);
+    expect(env({ TWILIO2_ACCOUNT_SID: '   ' }).secondarioCompleto).toBe(false);
+  });
+  it('i SID dei template sono per account, e possono mancare sul secondo', () => {
+    expect(env().template.welcome).toEqual({ principale: 'HX_W1', secondario: 'HX_W2' });
+    expect(env().template.zoom).toEqual({ principale: 'HX_Z1', secondario: null });
+  });
+});
+
+describe('leggiCapSecondario', () => {
+  it('assente o sporca ⇒ 50; numero valido ⇒ quello; 0 ⇒ 0 (spento)', () => {
+    expect(leggiCapSecondario(undefined)).toBe(CAP_BENVENUTI_SECONDARIO_DEFAULT);
+    expect(leggiCapSecondario('')).toBe(50);
+    expect(leggiCapSecondario('cinquanta')).toBe(50);
+    expect(leggiCapSecondario('-3')).toBe(50);
+    expect(leggiCapSecondario('20')).toBe(20);
+    expect(leggiCapSecondario('0')).toBe(0);
+  });
+});
+
+describe('decidiMittente: nel dubbio si parte dal numero verificato', () => {
+  const base = { envPresenti: true, benvenutiOggiSecondario: 0, cap: 50 };
+  it('impostazione assente, vuota o malformata ⇒ principale', () => {
+    expect(decidiMittente({ ...base, setting: null })).toBe('principale');
+    expect(decidiMittente({ ...base, setting: '' })).toBe('principale');
+    expect(decidiMittente({ ...base, setting: 'secondarioo' })).toBe('principale');
+    expect(decidiMittente({ ...base, setting: 'si' })).toBe('principale');
+  });
+  it('impostazione secondario ma env incomplete ⇒ principale', () => {
+    expect(decidiMittente({ ...base, setting: 'secondario', envPresenti: false })).toBe('principale');
+  });
+  it('quota a zero (lo stato di oggi) ⇒ principale', () => {
+    expect(decidiMittente({ ...base, setting: 'secondario', cap: 0 })).toBe('principale');
+  });
+  it('conteggio illeggibile ⇒ principale', () => {
+    expect(decidiMittente({ ...base, setting: 'secondario', benvenutiOggiSecondario: null })).toBe('principale');
+  });
+  it('quota raggiunta ⇒ principale (lo stesso run continua, non si accoda niente)', () => {
+    expect(decidiMittente({ ...base, setting: 'secondario', benvenutiOggiSecondario: 50, cap: 50 })).toBe('principale');
+    expect(decidiMittente({ ...base, setting: 'secondario', benvenutiOggiSecondario: 51, cap: 50 })).toBe('principale');
+  });
+  it('quota non raggiunta, tutto a posto ⇒ secondario', () => {
+    expect(decidiMittente({ ...base, setting: 'secondario', benvenutiOggiSecondario: 49, cap: 50 })).toBe('secondario');
+    expect(decidiMittente({ ...base, setting: 'SECONDARIO', benvenutiOggiSecondario: 0, cap: 50 })).toBe('secondario');
+  });
+});
+
+describe('risolviInvio: numero e SID dello stesso account, mai incrociati', () => {
+  it('secondario con il suo SID: numero 2 + SID 2, nessun fallback', () => {
+    expect(risolviInvio('welcome', 'secondario', env())).toEqual({
+      mittente: 'secondario', from: 'whatsapp:+393522070047', contentSid: 'HX_W2', fallback: false,
+    });
+  });
+  it('secondario SENZA il SID replicato: tutto dal principale, fallback segnalato', () => {
+    expect(risolviInvio('zoom', 'secondario', env())).toEqual({
+      mittente: 'principale', from: 'whatsapp:+393520413199', contentSid: 'HX_Z1', fallback: true,
+    });
+  });
+  it('principale: nessun fallback', () => {
+    expect(risolviInvio('welcome', 'principale', env())).toMatchObject({ mittente: 'principale', contentSid: 'HX_W1', fallback: false });
+  });
+  it('senza numero o SID principale non si manda niente: null', () => {
+    expect(risolviInvio('welcome', 'principale', env({ LANCIO_WELCOME_TEMPLATE_SID: undefined }))).toBeNull();
+    expect(risolviInvio('followup', 'principale', env())).toBeNull();
+  });
+});
+
+describe('mittenteDaNumero: su quale numero è arrivato', () => {
+  it('riconosce i due numeri e ignora gli altri', () => {
+    expect(mittenteDaNumero('whatsapp:+393520413199', env())).toBe('principale');
+    expect(mittenteDaNumero('whatsapp:+393522070047', env())).toBe('secondario');
+    expect(mittenteDaNumero('whatsapp:+390000000000', env())).toBeNull();
+    expect(mittenteDaNumero(null, env())).toBeNull();
+  });
+  it('numero 2 configurato a metà: non è un nostro numero (non sapremmo validarne la firma)', () => {
+    expect(mittenteDaNumero('whatsapp:+393522070047', env({ TWILIO2_API_KEY_SID: undefined }))).toBeNull();
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `bunx vitest run lib/wa-mittente.test.ts`
+Expected: FAIL — `Cannot find module './wa-mittente'`.
+
+- [ ] **Step 3: Write `lib/wa-mittente.ts`**
+
+```ts
+/**
+ * Da quale numero WhatsApp esce l'outbound del lancio, e da quale account Twilio.
+ *
+ * Perche' esiste (spec §11): la qualita' Meta si misura PER NUMERO e il numero storico
+ * del bot (+39 352 041 3199) e' sceso a LOW dopo il flood del 15/09. Un secondo numero
+ * sano - "Account fenice 2", account Twilio e Business Manager separati - permette di
+ * spalmare i primi contatti mentre il primo si riabilita. Non serve a fare piu' volume:
+ * i limiti di messaggistica sono per business portfolio, la qualita' no.
+ *
+ * Perche' e' spento (delibera PO del 16/09): quel numero non ha ancora le verifiche
+ * legali su Twilio. Quindi l'impianto c'e' e la manopola no: `app_settings.lancio_sender`
+ * vale `principale` e ogni lettura e' fail-closed. Accendere il secondario sara' una
+ * riga di `app_settings` piu' le env, senza toccare il codice.
+ *
+ * Modulo PURO (solo `leggiMittenteEnv` guarda `process.env`): niente rete, niente DB.
+ * Le credenziali non compaiono qui e non vanno lette da nessuno: qui ci sono i NOMI.
+ */
+
+export type Mittente = 'principale' | 'secondario';
+export type ChiaveTemplateLancio = 'welcome' | 'zoom' | 'followup';
+
+export type MittenteEnv = {
+  numeroPrincipale: string | null;
+  numeroSecondario: string | null;
+  /** Le quattro `TWILIO2_*` ci sono tutte: senza, il secondario non e' nemmeno pensabile. */
+  secondarioCompleto: boolean;
+  /** I Content SID sono per account: lo stesso template ha due SID diversi. */
+  template: Record<ChiaveTemplateLancio, { principale: string | null; secondario: string | null }>;
+};
+
+const NOMI_TEMPLATE: Record<ChiaveTemplateLancio, { principale: string; secondario: string }> = {
+  welcome: { principale: 'LANCIO_WELCOME_TEMPLATE_SID', secondario: 'LANCIO2_WELCOME_TEMPLATE_SID' },
+  zoom: { principale: 'LANCIO_ZOOM_TEMPLATE_SID', secondario: 'LANCIO2_ZOOM_TEMPLATE_SID' },
+  followup: { principale: 'LANCIO_FOLLOWUP_TEMPLATE_SID', secondario: 'LANCIO2_FOLLOWUP_TEMPLATE_SID' },
+};
+
+/** Una env vuota o fatta di spazi e' una env che non c'e': su Vercel capita. */
+function val(env: NodeJS.ProcessEnv, chiave: string): string | null {
+  const v = env[chiave];
+  return typeof v === 'string' && v.trim() !== '' ? v.trim() : null;
+}
+
+export function leggiMittenteEnv(env: NodeJS.ProcessEnv = process.env): MittenteEnv {
+  const numeroSecondario = val(env, 'TWILIO2_WHATSAPP_NUMBER');
+  const credenziali = [
+    val(env, 'TWILIO2_ACCOUNT_SID'),
+    val(env, 'TWILIO2_API_KEY_SID'),
+    val(env, 'TWILIO2_API_KEY_SECRET'),
+    numeroSecondario,
+  ];
+  const template = {} as MittenteEnv['template'];
+  for (const chiave of Object.keys(NOMI_TEMPLATE) as ChiaveTemplateLancio[]) {
+    template[chiave] = {
+      principale: val(env, NOMI_TEMPLATE[chiave].principale),
+      secondario: val(env, NOMI_TEMPLATE[chiave].secondario),
+    };
+  }
+  return {
+    numeroPrincipale: val(env, 'TWILIO_WHATSAPP_NUMBER_FENICE'),
+    numeroSecondario,
+    secondarioCompleto: credenziali.every((v) => v !== null),
+    template,
+  };
+}
+
+/** Riscaldamento: 50 benvenuti al giorno sul secondario (delibera 16/09). `0` = spento,
+ *  ed e' lo stato in cui il numero resta finche' Bruno non da' il via. */
+export const CAP_BENVENUTI_SECONDARIO_DEFAULT = 50;
+
+export function leggiCapSecondario(raw: string | undefined | null): number {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return CAP_BENVENUTI_SECONDARIO_DEFAULT;
+  const n = Number(raw);
+  // Un valore sporco non deve diventare "quota infinita": si torna al riscaldamento.
+  if (!Number.isFinite(n) || n < 0) return CAP_BENVENUTI_SECONDARIO_DEFAULT;
+  return Math.floor(n);
+}
+
+/**
+ * Da quale numero parte QUESTO messaggio. Fail-closed in ogni ramo: il principale e' il
+ * numero verificato, il secondario e' quello che potrebbe non poter spedire affatto.
+ * `benvenutiOggiSecondario === null` vuol dire "non sono riuscito a contarli": si sbaglia
+ * dalla parte del numero sano, come fa gia' il tetto orario del benvenuto.
+ */
+export function decidiMittente(i: {
+  setting: string | null | undefined;
+  envPresenti: boolean;
+  benvenutiOggiSecondario: number | null;
+  cap: number;
+}): Mittente {
+  if ((i.setting ?? '').trim().toLowerCase() !== 'secondario') return 'principale';
+  if (!i.envPresenti) return 'principale';
+  if (i.cap <= 0) return 'principale';
+  if (i.benvenutiOggiSecondario === null) return 'principale';
+  return i.benvenutiOggiSecondario < i.cap ? 'secondario' : 'principale';
+}
+
+export type InvioLancio = { mittente: Mittente; from: string; contentSid: string; fallback: boolean };
+
+/**
+ * Numero e Content SID dello STESSO account. Se il template non e' stato replicato sul
+ * secondo account (il 15/09 ne sono stati replicati 38, tutti `pending`), il messaggio
+ * parte tutto dal principale e chi chiama lo segnala (`lancio_sender_fallback`): un SID
+ * dell'account 1 spedito dall'account 2 non e' un ripiego, e' un errore Twilio.
+ * `null` = non si puo' mandare niente (manca il numero o il SID principale).
+ */
+export function risolviInvio(chiave: ChiaveTemplateLancio, voluto: Mittente, e: MittenteEnv): InvioLancio | null {
+  const t = e.template[chiave];
+  if (voluto === 'secondario' && e.secondarioCompleto && e.numeroSecondario && t.secondario) {
+    return { mittente: 'secondario', from: e.numeroSecondario, contentSid: t.secondario, fallback: false };
+  }
+  if (!e.numeroPrincipale || !t.principale) return null;
+  return { mittente: 'principale', from: e.numeroPrincipale, contentSid: t.principale, fallback: voluto === 'secondario' };
+}
+
+/**
+ * Su quale dei nostri numeri e' arrivato (o da quale parte) un messaggio. Serve al
+ * webhook per accettare l'inbound e scegliere il token con cui validare la firma, e a
+ * `lib/twilio.ts` per scegliere il client giusto a partire dal `from`.
+ * Un secondo numero configurato a meta' NON e' un nostro numero: non sapremmo validarne
+ * la firma, e accettare un inbound non verificato e' peggio che rifiutarlo.
+ */
+export function mittenteDaNumero(to: string | null | undefined, e: MittenteEnv): Mittente | null {
+  if (!to) return null;
+  if (e.numeroPrincipale && to === e.numeroPrincipale) return 'principale';
+  if (e.secondarioCompleto && e.numeroSecondario && to === e.numeroSecondario) return 'secondario';
+  return null;
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `bunx vitest run lib/wa-mittente.test.ts`
+Expected: PASS.
+
+- [ ] **Step 5: Write the failing test — client e firma per account (`lib/twilio.test.ts`)**
+
+In testa al file, il mock di `twilio` deve registrare con quali credenziali viene costruito il client (oggi le butta via):
+```ts
+const twilioFactory = vi.fn(() => ({ messages: { create: messagesCreate } }));
+const validateRequestMock = vi.fn(() => true);
+vi.mock('twilio', () => ({
+  default: (...a: unknown[]) => twilioFactory(...(a as [])),
+  validateRequest: (...a: unknown[]) => validateRequestMock(...(a as [])),
+}));
+```
+(`messagesCreate` e il resto del file restano com'erano; aggiungi `twilioFactory.mockClear(); validateRequestMock.mockClear();` nel `beforeEach` esistente.)
+
+In coda, due `describe` nuovi:
+```ts
+describe('account del mittente: lo decide il numero `from`', () => {
+  beforeEach(() => {
+    process.env.TWILIO_WHATSAPP_NUMBER_FENICE = 'whatsapp:+393520413199';
+    process.env.TWILIO2_ACCOUNT_SID = 'AC2';
+    process.env.TWILIO2_API_KEY_SID = 'SK2';
+    process.env.TWILIO2_API_KEY_SECRET = 'segreto2';
+    process.env.TWILIO2_WHATSAPP_NUMBER = 'whatsapp:+393522070047';
+  });
+
+  it('dal numero principale: client dell account 1, come sempre', async () => {
+    messagesCreate.mockResolvedValueOnce({ sid: 'SM1', status: 'queued' });
+    await sendFreeText({ to: '+393331234567', body: 'ciao', from: 'whatsapp:+393520413199' });
+    expect(twilioFactory).toHaveBeenCalledWith('AC_test', 'tok_test');
+  });
+
+  it('dal secondo numero: client dell account 2, con la sua API key', async () => {
+    messagesCreate.mockResolvedValueOnce({ sid: 'SM2', status: 'queued' });
+    await sendFreeText({ to: '+393331234567', body: 'ciao', from: 'whatsapp:+393522070047' });
+    expect(twilioFactory).toHaveBeenCalledWith('SK2', 'segreto2', { accountSid: 'AC2' });
+  });
+
+  it('numero 2 configurato a meta: si resta sull account 1 (nessun invio a vuoto)', async () => {
+    delete process.env.TWILIO2_API_KEY_SECRET;
+    messagesCreate.mockResolvedValueOnce({ sid: 'SM3', status: 'queued' });
+    await sendFreeText({ to: '+393331234567', body: 'ciao', from: 'whatsapp:+393522070047' });
+    expect(twilioFactory).toHaveBeenCalledWith('AC_test', 'tok_test');
+  });
+});
+
+describe('validateTwilioSignature: il token e quello dell account su cui e arrivato', () => {
+  beforeEach(() => {
+    process.env.TWILIO_VALIDATE_SIGNATURE = 'true';
+    process.env.TWILIO2_AUTH_TOKEN = 'tok2';
+  });
+
+  it('principale: token 1', async () => {
+    await validateTwilioSignature({ url: 'https://x', signature: 's', params: {} });
+    expect(validateRequestMock).toHaveBeenCalledWith('tok_test', 's', 'https://x', {});
+  });
+
+  it('secondario: token 2', async () => {
+    await validateTwilioSignature({ url: 'https://x', signature: 's', params: {}, account: 'secondario' });
+    expect(validateRequestMock).toHaveBeenCalledWith('tok2', 's', 'https://x', {});
+  });
+
+  it('secondario senza TWILIO2_AUTH_TOKEN: false, non si valida col token sbagliato', async () => {
+    delete process.env.TWILIO2_AUTH_TOKEN;
+    const ok = await validateTwilioSignature({ url: 'https://x', signature: 's', params: {}, account: 'secondario' });
+    expect(ok).toBe(false);
+    expect(validateRequestMock).not.toHaveBeenCalled();
+  });
+});
+```
+
+- [ ] **Step 6: Run test to verify it fails**
+
+Run: `bunx vitest run lib/twilio.test.ts`
+Expected: FAIL — il client si costruisce sempre con le credenziali dell'account 1 e `account` non esiste in `ValidateSigInput`.
+
+- [ ] **Step 7: `lib/twilio.ts` — un client, una basic auth e un token per account**
+
+Aggiungi in testa `import { leggiMittenteEnv, mittenteDaNumero, type Mittente } from './wa-mittente';` e sostituisci `getClient` con questi tre pezzi:
+```ts
+/** L'account si deduce dal numero da cui si sta spedendo: nessun chiamante deve
+ *  ricordarsi di passare un parametro in piu' (e sbagliarlo). */
+function accountDa(from?: string): Mittente {
+  return mittenteDaNumero(from, leggiMittenteEnv()) ?? 'principale';
+}
+
+/** Le credenziali REST dell'account. Account 2: API key SID/secret + accountSid (le
+ *  chiavi API bastano per le API; per le FIRME serve l'auth token, vedi in fondo). */
+function credenziali(account: Mittente): { user: string; pass: string; accountSid?: string } | null {
+  if (account === 'secondario') {
+    const sid = process.env.TWILIO2_ACCOUNT_SID;
+    const key = process.env.TWILIO2_API_KEY_SID;
+    const secret = process.env.TWILIO2_API_KEY_SECRET;
+    if (!sid || !key || !secret) return null;
+    return { user: key, pass: secret, accountSid: sid };
+  }
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const tok = process.env.TWILIO_AUTH_TOKEN;
+  if (!sid || !tok) return null;
+  return { user: sid, pass: tok };
+}
+
+function getClient(account: Mittente = 'principale') {
+  const c = credenziali(account);
+  if (!c) throw new Error(`Missing Twilio credentials (${account})`);
+  return c.accountSid ? twilio(c.user, c.pass, { accountSid: c.accountSid }) : twilio(c.user, c.pass);
+}
+```
+In `sendTemplate` e `sendFreeText` il numero si risolve **prima** del client:
+```ts
+  const from = input.from ?? fromNumber();
+  const account = accountDa(from);
+  await assertTemplateSendable(input.contentSid, account);   // solo in sendTemplate
+  const client = getClient(account);
+```
+e dentro `messages.create` si passa `from` (non più `input.from ?? fromNumber()`).
+
+`getTemplateCategory`, `getTemplateBody` e `assertTemplateSendable` prendono l'account e usano `credenziali(account)` al posto delle due env fisse; le due cache si chiavano `${account}:${contentSid}`, perché lo stesso testo ha SID diversi sui due account:
+```ts
+export async function getTemplateCategory(contentSid: string, account: Mittente = 'principale'): Promise<string | null> {
+  const key = `${account}:${contentSid}`;
+  if (_templateCategoryCache.has(key)) return _templateCategoryCache.get(key)!;
+  const c = credenziali(account);
+  if (!c) return null;
+  const res = await fetch(`https://content.twilio.com/v1/Content/${contentSid}/ApprovalRequests`, {
+    headers: { Authorization: 'Basic ' + Buffer.from(`${c.user}:${c.pass}`).toString('base64') },
+  });
+  if (!res.ok) throw new Error(`categoria del template ${contentSid} non verificabile (HTTP ${res.status})`);
+  const data = (await res.json()) as { whatsapp?: { category?: string } };
+  const cat = data?.whatsapp?.category ?? null;
+  _templateCategoryCache.set(key, cat);
+  return cat;
+}
+```
+Stesso trattamento per `getTemplateBody(contentSid, account: Mittente = 'principale')` (cache `${account}:${contentSid}`, credenziali da `credenziali(account)`) e per `assertTemplateSendable(contentSid, account: Mittente = 'principale')`, che passa `account` a `getTemplateCategory`.
+
+Infine la firma:
+```ts
+export type ValidateSigInput = {
+  url: string;
+  signature: string;
+  params: Record<string, string>;
+  /** L'account su cui il messaggio e' arrivato (dal campo `To` del webhook). */
+  account?: Mittente;
+};
+
+export async function validateTwilioSignature(input: ValidateSigInput): Promise<boolean> {
+  if (process.env.TWILIO_VALIDATE_SIGNATURE === 'false') return true;
+  // `validateRequest` vuole l'AUTH TOKEN dell'account: la API key non firma i webhook.
+  // Senza il token dell'account 2 non si puo' verificare niente, e un inbound non
+  // verificato non si accetta: si rifiuta e lo si scrive (lo fa il webhook).
+  const tok = input.account === 'secondario' ? process.env.TWILIO2_AUTH_TOKEN : process.env.TWILIO_AUTH_TOKEN;
+  if (!tok) return false;
+  return validateRequest(tok, input.signature, input.url, input.params);
+}
+```
+
+- [ ] **Step 8: Il contatore della quota giornaliera (`lib/lancio-db.ts`)**
+
+Test in coda a `lib/lancio-db.test.ts`, con lo stesso finto Supabase usato per `contaBenvenutiUltimaOra` (che registra i filtri e restituisce `{ count, error }`):
+```ts
+describe('contaBenvenutiOggiSecondario', () => {
+  it('conta gli eventi di oggi (giorno di Roma) e passa i filtri giusti', async () => {
+    const { supabase, filtri } = fakeCount(7);
+    await expect(contaBenvenutiOggiSecondario(supabase, Date.parse('2026-09-21T00:30:00+02:00'))).resolves.toBe(7);
+    expect(filtri).toContainEqual(['eq', 'type', 'lancio_benvenuto_secondario']);
+    expect(filtri).toContainEqual(['gte', 'created_at', '2026-09-20T22:00:00.000Z']);
+  });
+  it('query in errore: null, cioe fail-closed (chi chiama torna al principale)', async () => {
+    const { supabase } = fakeCount(null, { message: 'colonna assente' });
+    await expect(contaBenvenutiOggiSecondario(supabase, Date.now())).resolves.toBeNull();
+  });
+});
+```
+Implementazione:
+```ts
+import { romeDayKey, romeOffset } from './rome-time';
+
+/**
+ * Quanti benvenuti sono partiti OGGI (giorno di Roma) dal numero secondario.
+ *
+ * Si contano gli eventi `lancio_benvenuto_secondario`, non le righe `messages`: il
+ * benvenuto parte da due strade (intake realtime e cron `lancio-aperture`) e `messages`
+ * non dice da quale numero e' uscito. L'evento lo scrive solo chi ha spedito davvero dal
+ * secondario, quindi il conteggio e' esattamente la quota consumata.
+ *
+ * `null` = non si e' potuto contare: chi chiama torna al principale (fail-closed).
+ */
+export async function contaBenvenutiOggiSecondario(supabase: Supa, nowMs: number = Date.now()): Promise<number | null> {
+  const giorno = romeDayKey(new Date(nowMs));
+  // Mezzanotte italiana con l'offset di QUEL giorno: l'ancora a mezzogiorno UTC e' immune
+  // dal cambio dell'ora (stesso trucco di `lib/lancio-scelta.ts`).
+  const inizio = new Date(`${giorno}T00:00:00${romeOffset(new Date(`${giorno}T12:00:00Z`))}`).toISOString();
+  const { count, error } = await supabase
+    .from('event_log')
+    .select('id', { head: true, count: 'exact' })
+    .eq('type', 'lancio_benvenuto_secondario')
+    .gte('created_at', inizio);
+  if (error) {
+    await supabase.from('event_log').insert({
+      type: 'lancio_quota_secondario_non_letta',
+      payload: { errore: error.message } as never,
+      message: `[lancio] quota del mittente secondario non leggibile, si manda dal principale — ${error.message}`,
+      level: 'warn',
+    });
+    return null;
+  }
+  return count ?? 0;
+}
+```
+
+- [ ] **Step 9: Il benvenuto realtime (`lib/fenice-enroll.ts`, `enrollLancio`)**
+
+`templateSid` e `from` letti in testa restano **solo** per la guardia di configurazione e per il tetto orario (che conta il ritmo del principale). La scelta del mittente si fa dove si sta per spedire, subito prima di `sendTemplateAndLog`:
+```ts
+  // Mittente (spec §11.1): il secondo numero e' in riscaldamento e oggi e' spento
+  // (`lancio_sender='principale'`). La quota si conta solo se il secondario e' davvero in
+  // gioco: altrimenti sarebbe una query a ogni intake per niente.
+  const envMittente = leggiMittenteEnv();
+  const capSecondario = leggiCapSecondario(process.env.LANCIO_WELCOME_MAX_PER_DAY_SECONDARIO);
+  const inGioco = settings.sender === 'secondario' && envMittente.secondarioCompleto && capSecondario > 0;
+  const benvenutiOggiSecondario = inGioco ? await contaBenvenutiOggiSecondario(supabase) : null;
+  const invio = risolviInvio('welcome', decidiMittente({
+    setting: settings.sender,
+    envPresenti: envMittente.secondarioCompleto,
+    benvenutiOggiSecondario,
+    cap: capSecondario,
+  }), envMittente);
+  if (!invio) throw new Error('LANCIO_WELCOME_TEMPLATE_SID o TWILIO_WHATSAPP_NUMBER_FENICE non configurati');
+  if (invio.fallback) {
+    await supabase.from('event_log').insert({
+      type: 'lancio_sender_fallback',
+      payload: { ...base, chiave: 'welcome' } as never,
+      message: '[lancio] benvenuto: SID del template assente sul secondo account, si manda dal principale',
+      level: 'warn',
+    });
+  }
+
+  const res = await sendTemplateAndLog(
+    supabase, conversationId, args.phone, invio.contentSid, 'Lancio benvenuto', invio.from,
+    { '1': templateName(firstName) }, lancioBenvenutoText(firstName),
+  );
+  // La quota del secondario si consuma solo se il messaggio e' partito davvero.
+  if (res.ok && invio.mittente === 'secondario') {
+    await supabase.from('event_log').insert({
+      type: 'lancio_benvenuto_secondario',
+      payload: { ...base, sid: res.sid ?? null } as never,
+      message: `[lancio] benvenuto inviato dal numero secondario a ${args.phone}`,
+      level: 'info',
+    });
+  }
+```
+Nell'evento `lancio_intake` finale si aggiunge `mittente: invio.mittente`. Il resto di `enrollLancio` (guardie, differite, timbro `lancio_benvenuto_at`) non cambia di una riga.
+
+In `lib/fenice-enroll.test.ts` basta un caso nuovo: con `lancio_sender='principale'` (cioè sempre, oggi) il benvenuto parte da `TWILIO_WHATSAPP_NUMBER_FENICE` con `LANCIO_WELCOME_TEMPLATE_SID` e **non** si scrive nessun `lancio_benvenuto_secondario`.
+
+- [ ] **Step 10: Il benvenuto differito (`app/api/cron/lancio-aperture/route.ts`)**
+
+Stessa decisione, presa **una volta per run** e ricontrollata a ogni invio, così la quota si esaurisce dentro il run e il resto del lotto continua dal principale senza accodare niente:
+```ts
+  // prima del giro, accanto a `tettoOrario`
+  const envMittente = leggiMittenteEnv();
+  const capSecondario = leggiCapSecondario(process.env.LANCIO_WELCOME_MAX_PER_DAY_SECONDARIO);
+  const inGioco = settings.sender === 'secondario' && envMittente.secondarioCompleto && capSecondario > 0;
+  const benvenutiOggiSecondario = inGioco ? await contaBenvenutiOggiSecondario(supabase) : null;
+  let dalSecondario = 0;        // quelli aggiunti da QUESTO run
+  let fallbackDetto = false;    // il warn del SID mancante si scrive una volta per run
+
+  // dentro il giro, al posto di `contentSid: templateSid, from`
+  const invio = risolviInvio('welcome', decidiMittente({
+    setting: settings.sender,
+    envPresenti: envMittente.secondarioCompleto,
+    benvenutiOggiSecondario: benvenutiOggiSecondario === null ? null : benvenutiOggiSecondario + dalSecondario,
+    cap: capSecondario,
+  }), envMittente) ?? { mittente: 'principale' as const, from, contentSid: templateSid, fallback: false };
+  if (invio.fallback && !fallbackDetto) {
+    fallbackDetto = true;
+    await logEvento(supabase, 'lancio_sender_fallback', { chiave: 'welcome' },
+      '[lancio] benvenuto differito: SID del template assente sul secondo account, si manda dal principale', 'warn');
+  }
+  const res = await sendTemplate({ to: phone, contentSid: invio.contentSid, variables: { '1': templateName(nome) }, from: invio.from });
+```
+Nella riga `messages` si scrive `template_sid: invio.contentSid` (è quello che Twilio ha davvero spedito, ed è ciò su cui si appoggia l'idempotenza). Subito dopo l'insert, se `invio.mittente === 'secondario'`: `dalSecondario++` e `logEvento(supabase, 'lancio_benvenuto_secondario', { conversationId: c.id, sid: res.sid }, `[lancio] benvenuto differito inviato dal numero secondario a ${phone}`)`. Nient'altro del run cambia (timbro, tetto orario, gestione errori).
+
+In `app/api/cron/lancio-aperture/route.test.ts` si aggiunge il caso "con `lancio_sender='secondario'` e le `TWILIO2_*` assenti si manda tutto dal principale e non si scrive nessun `lancio_benvenuto_secondario`" — cioè esattamente lo stato di produzione di oggi.
+
+- [ ] **Step 11: Inbound sul secondo numero (`app/api/webhooks/twilio/route.ts`) e risposta dallo stesso numero (`lib/fenice-autoreply.ts`)**
+
+Nel webhook la firma si valida col token dell'account su cui il messaggio è arrivato: il `To` si legge dal corpo già parsato, prima della validazione.
+```ts
+import { leggiMittenteEnv, mittenteDaNumero } from '@/lib/wa-mittente';
+
+  const envMittente = leggiMittenteEnv();
+  const mittente = mittenteDaNumero(params.To, envMittente);   // 'principale' | 'secondario' | null
+  const ok = await validateTwilioSignature({
+    url: publicUrl(req),
+    signature,
+    params,
+    ...(mittente ? { account: mittente } : {}),
+  });
+  if (!ok) {
+    // Inbound sul secondo numero senza il suo auth token: non e' verificabile, quindi non
+    // si accetta. E' lo stato in cui l'Account fenice 2 e' oggi, e va visto nei log.
+    if (mittente === 'secondario' && !process.env.TWILIO2_AUTH_TOKEN) {
+      await getSupabaseAdmin().from('event_log').insert({
+        type: 'lancio_firma_secondario_senza_token',
+        payload: { to: params.To ?? null } as never,
+        message: '[lancio] inbound sul secondo numero rifiutato: TWILIO2_AUTH_TOKEN non configurato',
+        level: 'error',
+      });
+    }
+    return new NextResponse('forbidden', { status: 403 });
+  }
+```
+La guardia dell'auto-risposta diventa "uno dei nostri numeri" invece di "il numero Fenice":
+```ts
+    // Auto-risposta Mario: vale su TUTTI i numeri del bot. Un lead che risponde al
+    // benvenuto partito dal secondo numero deve trovare il bot, non il vuoto.
+    const toMatchesFenice = mittente !== null;
+```
+(la riga `const feniceNumber = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;` sparisce; tutto il blocco sotto resta identico, compreso l'update di `wa_number` con `params.To`, che è già quello che serve.)
+
+In `lib/fenice-autoreply.ts` il drain risponde dal numero della chat:
+```ts
+  // (in testa) il principale resta la guardia di configurazione
+  const envMittente = leggiMittenteEnv();
+  const fromPrincipale = envMittente.numeroPrincipale;
+  if (!fromPrincipale) { /* evento `fenice_ai_error` invariato */ return; }
+
+  // (dopo `if (!claimed) return;`) si risponde dal numero su cui il lead ha scritto: la
+  // finestra 24h vale per coppia (numero azienda, numero lead), quindi una risposta dal
+  // numero sbagliato o non parte o spezza la chat in due. Un `wa_number` che non e' dei
+  // nostri (chat vecchie, altri numeri aziendali) torna al principale.
+  const waChat = (claimed as { wa_number: string | null }).wa_number;
+  const from = mittenteDaNumero(waChat, envMittente) ? (waChat as string) : fromPrincipale;
+```
+e nella `select` del claim si aggiunge `wa_number`. Nient'altro cambia: `from` continua a viaggiare come prima verso `sendFreeText` e `eseguiTurnoLancio`, e `lib/twilio.ts` ne deduce il client. In `lib/fenice-autoreply.test.ts` si estende il finto `claimed` con `wa_number: 'whatsapp:+393520413199'` e si aggiunge un caso: con `wa_number` del secondo numero, `sendFreeText` viene chiamato con quel `from`.
+
+- [ ] **Step 12: `.env.example`**
+
+In coda al blocco del lancio (dopo `LANCIO_BATCH_MAX=200`):
+```
+# ── Mittente secondario del lancio: "Account fenice 2" (account Twilio e Business
+# Manager SEPARATI). SPENTO: il numero non ha ancora le verifiche legali Twilio, quindi
+# app_settings.lancio_sender resta 'principale' e tutto parte dal numero storico.
+# I valori NON stanno nel repo: si mettono nel .env.local / nelle env di Vercel quando
+# Bruno da' il via. Finche' anche una sola manca, il secondario non viene mai scelto.
+# TWILIO2_ACCOUNT_SID=
+# TWILIO2_API_KEY_SID=
+# TWILIO2_API_KEY_SECRET=
+# TWILIO2_WHATSAPP_NUMBER=whatsapp:+39...
+# Auth token dell'account 2: serve SOLO a validare la firma dei webhook in ingresso
+# (la API key non firma). Senza, l'inbound sul secondo numero viene rifiutato con 403.
+# TWILIO2_AUTH_TOKEN=
+# Content SID degli stessi template replicati sull'account 2 (il 15/09 ne sono stati
+# replicati 38, tutti pending): i SID sono per account. Se manca quello che serve, il
+# messaggio parte dal principale e si scrive l'evento lancio_sender_fallback.
+# LANCIO2_WELCOME_TEMPLATE_SID=
+# LANCIO2_ZOOM_TEMPLATE_SID=
+# LANCIO2_FOLLOWUP_TEMPLATE_SID=
+# Quota giornaliera (giorno di Roma) di BENVENUTI dal numero secondario: riscaldamento a
+# 50/g (delibera 16/09). Oltre la quota lo stesso run continua dal principale, senza code.
+# 0 = secondario spento anche se lancio_sender dicesse 'secondario'. Valore sporco -> 50.
+LANCIO_WELCOME_MAX_PER_DAY_SECONDARIO=50
+```
+
+- [ ] **Step 13: Suite, typecheck, lint**
+
+Run: `bunx vitest run lib/wa-mittente.test.ts lib/twilio.test.ts lib/lancio-db.test.ts lib/fenice-enroll.test.ts lib/fenice-autoreply.test.ts app/api/cron/lancio-aperture/route.test.ts && bun run typecheck && bun run lint && bun run test`
+Expected: tutto verde. In produzione non cambia un messaggio: `lancio_sender` vale `principale`, le `TWILIO2_*` non ci sono, e ogni decisione cade sul ramo "principale" già coperto dai test esistenti.
+
+- [ ] **Step 14: Commit e push**
+
+```bash
+git add lib/wa-mittente.ts lib/wa-mittente.test.ts lib/twilio.ts lib/twilio.test.ts lib/lancio-db.ts lib/lancio-db.test.ts lib/fenice-enroll.ts lib/fenice-enroll.test.ts lib/fenice-autoreply.ts lib/fenice-autoreply.test.ts app/api/cron/lancio-aperture/route.ts app/api/cron/lancio-aperture/route.test.ts app/api/webhooks/twilio/route.ts .env.example
+git commit -m "feat(lancio): impianto del mittente secondario (account Twilio 2), spento di default"
+git push origin main
+```
+Il deploy che ne esce **non cambia niente**: nessuna env `TWILIO2_*` in produzione e `lancio_sender='principale'`. Per accendere il secondario, quando Bruno lo dirà, servono nell'ordine: (1) le verifiche legali Twilio sull'Account fenice 2; (2) i template `fenice_lancio_*` approvati UTILITY su quell'account, con i SID in `LANCIO2_*`; (3) le `TWILIO2_*` più `TWILIO2_AUTH_TOKEN` nelle env di Vercel; (4) il webhook in ingresso del secondo numero puntato su `/api/webhooks/twilio`; (5) `update app_settings set value='secondario' where key='lancio_sender'`. Spegnere è il passo (5) al contrario, senza deploy.
 
 ---
 
@@ -3439,6 +4208,7 @@ Nel report di chiusura del blocco: esito dei punti 1-9 dello Step 8 (con i testi
 | §9 | Interruttori: cron a data fissa + `lancio_attivo` | Task 2, 3 |
 | §9 (B6) | Orologio forzato via parametri dei cron / env | Task 3 (`?now=`, `?forza=1&solo=`), Task 7 (`adessoLancio`, `LANCIO_FAKE_NOW`), Task 10 |
 | §10 | Numero a qualità LOW: lotti da 400, stop sul 63049 | Task 2, 3; nessun messaggio spontaneo nei turni (solo risposte a inbound) |
+| §11, §11.1 (agg. 16/09) | Mittente per fase senza deploy (`lancio_sender`), secondo client Twilio, template `LANCIO2_*` per account, inbound per `To`, riscaldamento 50 benvenuti/g sul secondario — ma tutto **spento** finché l'Account fenice 2 non ha le verifiche legali | Task 3 (il blast legge `settings.sender` e resta sul principale), **Task 11** (impianto completo, `decidiMittente` fail-closed, quota giornaliera, firma col token dell'account, `.env.example` coi soli nomi) |
 
 **Buchi di spec chiusi qui (decisioni da confermare con Bruno, scritte nel report):**
 1. §5.3 non dice cosa fare con un "no" in `link_inviato`: qui è un congedo (`chiuso` + `DA_SCARTARE` "non interessato"), così il follow-up del 6 (B5, che cerca `link_inviato` con inbound) non raggiunge chi si è appena tirato fuori. Task 7.
