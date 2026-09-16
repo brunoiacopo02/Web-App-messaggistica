@@ -63,7 +63,10 @@ function congedato(c: ConvFinta): boolean {
 
 /** Applica alla fixture i filtri che il route ha davvero messo nella query. */
 function filtraCandidati(rec: Chiamata): ConvFinta[] {
-  let out = stato.convs.filter((c) => !stato.timbrate.has(c.id));
+  // `not('lancio_link_inviato_at', 'is', null)` = la query degli incerti: chi il timbro
+  // ce l'ha ma è rimasto in una fase da servire.
+  const soloTimbrate = Boolean(arg(rec, 'not', 'lancio_link_inviato_at'));
+  let out = stato.convs.filter((c) => stato.timbrate.has(c.id) === soloTimbrate);
   if (arg(rec, 'is', 'lancio_info->>congedo_at')) out = out.filter((c) => !congedato(c));
   const fasi = arg(rec, 'in', 'lancio_fase')?.args[1] as string[] | undefined;
   if (fasi) out = out.filter((c) => c.lancio_fase !== null && fasi.includes(c.lancio_fase));
@@ -152,8 +155,13 @@ vi.mock('@/lib/twilio', () => ({
 }));
 
 // `impostaFaseLancio` ha i suoi test (B1): qui interessa CHE venga chiamata, con quale
-// fase e con quale timbro — non come scrive.
-const impostaFaseLancio = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
+// fase e con quale timbro — non come scrive. La fase però la sposta davvero nella
+// fixture: una chat servita esce dalle fasi bersaglio, ed è quello che distingue un invio
+// riuscito da uno dall'esito incerto quando a fine serata si contano i conti.
+const impostaFaseLancio = vi.fn<(...a: unknown[]) => Promise<void>>(async (...a) => {
+  const conversazione = stato.convs.find((c) => c.id === a[1]);
+  if (conversazione) conversazione.lancio_fase = a[2] as string;
+});
 vi.mock('@/lib/lancio-db', () => ({
   impostaFaseLancio: (...a: unknown[]) => impostaFaseLancio(...a),
 }));
@@ -257,11 +265,24 @@ describe('GET /api/cron/lancio-zoom — cancelli', () => {
   });
 
   it('a serata finita il run conta chi è rimasto senza link', async () => {
-    await expect((await richiesta(DOPO)).json()).resolves.toMatchObject({ skipped: 'fuori_finestra', residui: 2 });
+    await expect((await richiesta(DOPO)).json()).resolves.toMatchObject({
+      skipped: 'fuori_finestra', residui: 2, incerti: 0,
+    });
     const p = eventoRun()?.payload as Record<string, unknown>;
     expect(p.residui).toBe(2);
     expect(p.finestraChiusa).toBe(true);
     expect(eventoRun()?.level).toBe('warn');
+  });
+
+  it('a serata finita gli incerti si contano a parte: non sono residui, ma nemmeno serviti', async () => {
+    // Prima la serata vera: la conv 1 resta col timbro e senza certezza.
+    sendTemplate.mockRejectedValueOnce(new Error('socket hang up'));
+    await richiesta();
+    chiamate.length = 0;
+    // Poi il run a finestra chiusa.
+    const res = await (await richiesta(DOPO)).json();
+    expect(res).toMatchObject({ residui: 0, incerti: 1 });
+    expect(String(eventoRun()?.message)).toContain('senza link certo');
   });
 
   it('prima della finestra i residui non si contano: la serata deve ancora cominciare', async () => {
@@ -482,7 +503,9 @@ describe('GET /api/cron/lancio-zoom — invio', () => {
     stato.convs = [conv(1)];
     sendTemplate.mockRejectedValueOnce(new Error('socket hang up'));
     const res = await (await richiesta()).json();
-    expect(res).toMatchObject({ sent: 0, failed: 0, capped: 0, errori: 1 });
+    // `incerti` è un contatore suo: gli `errori` sono invii RIUSCITI che non siamo
+    // riusciti a registrare, questi sono invii di cui non sappiamo niente.
+    expect(res).toMatchObject({ sent: 0, failed: 0, capped: 0, incerti: 1, errori: 0 });
     expect(timbriTolti()).toHaveLength(0);
     expect(stato.timbrate.has(1)).toBe(true);
     expect(tipiEvento()).toContain('lancio_zoom_esito_incerto');
@@ -532,6 +555,27 @@ describe('GET /api/cron/lancio-zoom — freno automatico', () => {
     expect(res.failed).toBe(25); // un solo blocco da PASSO_FRENO, poi stop
     expect(res.residui).toBe(35);
     expect(upserts()).toContainEqual(expect.objectContaining({ key: 'lancio_attivo', value: false }));
+  });
+
+  it('valanga di esiti incerti (rete giù): il freno scatta lo stesso', async () => {
+    // Nessun codice Twilio, quindi `codici` resta vuoto e `falliti` pure: senza contare
+    // gli incerti il freno guarderebbe un lotto di zeri e direbbe che va tutto bene,
+    // mentre il blast sta bruciando 3.000 lead senza consegnarne uno.
+    stato.convs = tanti(60);
+    sendTemplate.mockImplementation(async () => {
+      throw new Error('socket hang up');
+    });
+    const res = await (await richiesta()).json();
+    expect(res).toMatchObject({ sent: 0, failed: 0, fermo: 'freno' });
+    expect(res.incerti).toBe(25); // un solo blocco da PASSO_FRENO, poi stop
+    expect(res.residui).toBe(35);
+    expect(upserts()).toContainEqual(expect.objectContaining({ key: 'lancio_attivo', value: false }));
+    // I timbri restano: quei lead NON si ritentano, il messaggio può essere partito.
+    expect(timbriTolti()).toHaveLength(0);
+    expect(stato.timbrate.size).toBe(25);
+    expect(insertIn('messages')).toHaveLength(0);
+    const freno = eventi().find((e) => e.type === 'lancio_zoom_freno');
+    expect((freno?.payload as Record<string, unknown>).incerti).toBe(25);
   });
 
   it('la sveglia dei 4 minuti: il run si ferma e scrive il riepilogo invece di morire in timeout', async () => {
@@ -594,7 +638,9 @@ describe('GET /api/cron/lancio-zoom — il run scritto', () => {
     const res = await (await richiesta()).json();
     const p = eventoRun()?.payload as Record<string, number>;
     expect(p.candidati).toBe(4);
-    expect(p.inviati + p.riparati + p.falliti + p.capped + p.saltati + p.errori + p.residui).toBe(4);
+    expect(
+      p.inviati + p.riparati + p.capped + p.falliti + p.incerti + p.saltati + p.errori + p.residui,
+    ).toBe(4);
     expect(res.candidati).toBe(4);
   });
 

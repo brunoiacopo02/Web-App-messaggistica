@@ -57,7 +57,7 @@ const MAX_PAGINE = 20;
 const PAGINA = 1000;
 const FASI_BERSAGLIO = ['attesa', 'posto_bloccato'];
 
-type Esito = 'sent' | 'riparato' | 'capped' | 'failed' | 'skip' | 'errore' | 'bloccato';
+type Esito = 'sent' | 'riparato' | 'capped' | 'failed' | 'incerto' | 'skip' | 'errore' | 'bloccato';
 
 type Candidata = {
   id: number;
@@ -165,13 +165,18 @@ export async function GET(req: NextRequest) {
 
   // Query dei candidati, uguale per il conteggio e per la lettura: chat del lancio non
   // ancora servite, in una fase che il link non l'ha ancora avuto, mai congedate.
-  const bersaglio = (select: string, opzioni?: { head: true; count: 'exact' }) => {
+  const bersaglio = (select: string, opzioni?: { head: true; count: 'exact' }, timbrati = false) => {
     let q = supabase
       .from('conversations')
       .select(select, opzioni)
       .not('lancio_slug', 'is', null)
-      .in('lancio_fase', FASI_BERSAGLIO)
-      .is('lancio_link_inviato_at', null)
+      .in('lancio_fase', FASI_BERSAGLIO);
+    // Col timbro ma ancora in una fase da servire: sono gli invii dall'esito incerto —
+    // il timbro c'e' (l'abbiamo tenuto apposta), la fase no perche' non sappiamo se il
+    // messaggio e' arrivato. Sono invisibili ai residui, e a fine serata sono proprio
+    // quelli da guardare a mano.
+    q = timbrati ? q.not('lancio_link_inviato_at', 'is', null) : q.is('lancio_link_inviato_at', null);
+    q = q
       // Chi si e' tirato indietro non riceve il link, in qualunque fase sia rimasto: il
       // congedo vince sulla fase (la fase puo' essere ferma ad 'attesa' perche' il CRM ha
       // rifiutato lo scarto).
@@ -196,18 +201,21 @@ export async function GET(req: NextRequest) {
     // iscritti non hanno mai ricevuto il link" e' un numero e non una fotografia.
     const chiusa = finestraBlastChiusa(now, evento);
     let residui: number | null = null;
+    let incerti: number | null = null;
     if (chiusa) {
       const { count, error } = await bersaglio('id', { head: true, count: 'exact' });
       residui = error ? null : (count ?? 0);
+      const { count: cIncerti, error: erroreIncerti } = await bersaglio('id', { head: true, count: 'exact' }, true);
+      incerti = erroreIncerti ? null : (cIncerti ?? 0);
     }
     await scriviRun(
-      { motivo: 'fuori_finestra', finestraChiusa: chiusa, candidati: 0, inviati: 0, falliti: 0, saltati: 0, residui, fermo: null },
+      { motivo: 'fuori_finestra', finestraChiusa: chiusa, candidati: 0, inviati: 0, falliti: 0, saltati: 0, residui, incerti, fermo: null },
       chiusa
-        ? `[lancio] blast Zoom: finestra chiusa, ${residui ?? '?'} iscritti senza link`
+        ? `[lancio] blast Zoom: finestra chiusa, ${residui ?? '?'} iscritti senza link e ${incerti ?? '?'} senza link certo`
         : '[lancio] blast Zoom: fuori dalla finestra, nessun invio',
       chiusa ? 'warn' : 'info',
     );
-    return NextResponse.json({ ok: true, skipped: 'fuori_finestra', finestraChiusa: chiusa, residui });
+    return NextResponse.json({ ok: true, skipped: 'fuori_finestra', finestraChiusa: chiusa, residui, incerti });
   }
 
   // Mittente (spec §11.1): il secondo client Twilio arriva col task "Mittente
@@ -229,6 +237,10 @@ export async function GET(req: NextRequest) {
   // lotto si sceglie sull'intera coda. Tagliando nella query si riordinerebbero 200
   // candidati presi a caso per id.
   const tutti: Candidata[] = [];
+  // Il budget dei 240s parte da qui, non dal primo invio: con venti pagine da leggere e
+  // un DB lento la coda si legge in minuti, e quel tempo lo toglie a Vercel esattamente
+  // come gli invii.
+  const t0 = Date.now();
   // Una coda letta a meta' e una coda vuota danno lo stesso numero: il run deve dire
   // quale delle due e' successa, o "0 inviati" a serata finita non si sa interpretare.
   let queryKo = false;
@@ -283,6 +295,12 @@ export async function GET(req: NextRequest) {
   let falliti = 0;
   let saltati = 0;
   let errori = 0;
+  // Invii dall'esito incerto: Twilio non ha risposto, il timbro e' rimasto e NESSUNO li
+  // ritentera'. Contati a parte dagli `errori` (quelli sono invii RIUSCITI che non siamo
+  // riusciti a registrare) perche' nel freno pesano come un fallimento: una caduta di
+  // rete che fa sbagliare ogni invio non porta nessun codice Twilio, e senza questi il
+  // freno guarderebbe un lotto di zeri e direbbe che va tutto bene.
+  let incerti = 0;
   // Il freno guarda i TENTATIVI, non gli invii riusciti: un run che sbatte su trenta
   // numeri morti ha comunque fatto trenta chiamate a Twilio, e Meta le ha viste tutte.
   let tentati = 0;
@@ -413,7 +431,7 @@ export async function GET(req: NextRequest) {
             `[lancio] conv ${c.id}: Twilio non ha risposto, esito dell'invio incerto — timbro tenuto, nessun ritentativo`,
             'warn',
           );
-          return 'errore';
+          return 'incerto';
         }
 
         // Twilio ha risposto con un codice: l'invio non e' partito davvero. Solo qui il
@@ -470,7 +488,6 @@ export async function GET(req: NextRequest) {
   };
 
   const report: Esito[] = [];
-  const t0 = Date.now();
   for (let i = 0; i < lotto.length && !fermo; i += PASSO_FRENO) {
     // Sveglia prima del taglio di Vercel (`maxDuration = 300`): una tempesta su Twilio
     // (retry, timeout) allunga ogni invio, e una funzione uccisa a meta' non scrive il
@@ -487,17 +504,18 @@ export async function GET(req: NextRequest) {
       else if (e === 'riparato') riparati++;
       else if (e === 'capped') capped++;
       else if (e === 'failed') falliti++;
+      else if (e === 'incerto') incerti++;
       else if (e === 'errore') errori++;
       else saltati++;
     }
     if (fermo) break;
-    if (decideFreno({ tentati, falliti, codici }) === 'ferma') {
+    if (decideFreno({ tentati, falliti: falliti + incerti, codici }) === 'ferma') {
       fermo = 'freno';
       await logEvento(
         supabase,
         'lancio_zoom_freno',
-        { tentati, inviati, falliti, capped, codici, candidati: candidati.length, lotto: lotto.length },
-        `[lancio] FRENO sul blast Zoom: ${falliti} falliti su ${tentati} tentativi (codici: ${codici.join(', ') || 'nessuno'}). Lancio spento, riaccendere a mano dal pannello.`,
+        { tentati, inviati, falliti, incerti, capped, codici, candidati: candidati.length, lotto: lotto.length },
+        `[lancio] FRENO sul blast Zoom: ${falliti + incerti} non arrivati su ${tentati} tentativi (${falliti} falliti, ${incerti} incerti; codici: ${codici.join(', ') || 'nessuno'}). Lancio spento, riaccendere a mano dal pannello.`,
         'error',
       );
       // Il freno spegne il lancio: senza, il run dopo (fra 5 minuti) ricomincerebbe da
@@ -510,12 +528,12 @@ export async function GET(req: NextRequest) {
   // lotto quando il run si e' fermato. Il run dopo li riprende — se il lancio e' ancora
   // acceso.
   const residui = candidati.length - report.length;
-  const riepilogo = { candidati: candidati.length, inviati, riparati, capped, falliti, saltati, errori, residui, fermo };
+  const riepilogo = { candidati: candidati.length, inviati, riparati, capped, falliti, incerti, saltati, errori, residui, fermo };
 
   await scriviRun(
     { ...riepilogo, tentati, codici, max, perimetro, sender: settings.sender, queryKo },
-    `[lancio] blast Zoom: ${inviati} inviati, ${riparati} riparati, ${capped} cap, ${falliti} falliti, ${saltati} saltati, ${errori} errori, ${residui} residui (su ${candidati.length} candidati)${fermo ? ` — FERMO: ${fermo}` : ''}`,
-    fermo || falliti > 0 || errori > 0 ? 'warn' : 'info',
+    `[lancio] blast Zoom: ${inviati} inviati, ${riparati} riparati, ${capped} cap, ${falliti} falliti, ${incerti} incerti, ${saltati} saltati, ${errori} errori, ${residui} residui (su ${candidati.length} candidati)${fermo ? ` — FERMO: ${fermo}` : ''}`,
+    fermo || falliti > 0 || incerti > 0 || errori > 0 ? 'warn' : 'info',
   );
 
   return NextResponse.json({
@@ -526,6 +544,7 @@ export async function GET(req: NextRequest) {
     riparati,
     capped,
     failed: falliti,
+    incerti,
     skip: saltati,
     errori,
     residui,
