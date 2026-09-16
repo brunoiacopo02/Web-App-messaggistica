@@ -3,7 +3,7 @@ import {
   LANCIO_SLUG, LANCIO_FASI, LANCIO_FASI_TERMINALI, FILTRO_FUORI_LANCIO, MAX_SCAMBI_DOMANDE,
   TESTO_POSTO_BLOCCATO, TESTO_CONGEDO, TESTO_CHIUSURA_DOMANDE, TESTO_PASSAGGIO_UMANO,
   isLancioFase, lancioInCorso, decideLancioTurno, contaScambiDomande, lancioFaseLabel, lancioBenvenutoText,
-  inboundDelLotto, ultimoTestoDelLotto, haCongedo, pulsanteRiportaInPostPitch,
+  inboundDelLotto, ultimoTestoDelLotto, haCongedo, pulsanteRiportaInPostPitch, pulsanteScriveFase,
 } from './lancio-fase';
 
 describe('costanti della spec §3.2 / §5.2', () => {
@@ -205,5 +205,62 @@ describe('pulsanteRiportaInPostPitch — elenco chiuso di fasi che il pulsante r
 
   it('una fase che non riconosce non si tocca: l elenco è chiuso', () => {
     expect(pulsanteRiportaInPostPitch('boh')).toBe(false);
+  });
+});
+
+describe('pulsanteScriveFase — la finestra orfana non si apre', () => {
+  // Chat governata da Mario e libera, tutto spento: e' il caso (a), gli interruttori
+  // non c'entrano perche' nessuno sta adottando niente.
+  const base = { aiOwner: 'mario', aiPausedAt: null, handedOffAt: null, adottaOra: false, autoReplyOn: false, adozioneAttiva: false };
+
+  it('(a) chat di Mario e libera: scrive, anche a bot spento', () => {
+    expect(pulsanteScriveFase(base)).toEqual({ scrive: true });
+  });
+
+  it('(b) chat che questa richiesta sta adottando: scrive', () => {
+    expect(pulsanteScriveFase({
+      aiOwner: null, aiPausedAt: null, handedOffAt: null,
+      adottaOra: true, autoReplyOn: true, adozioneAttiva: true,
+    })).toEqual({ scrive: true });
+  });
+
+  it('bot spento e nessun padrone: orfano, bot_spento', () => {
+    expect(pulsanteScriveFase({
+      aiOwner: null, aiPausedAt: null, handedOffAt: null,
+      adottaOra: false, autoReplyOn: false, adozioneAttiva: true,
+    })).toEqual({ scrive: false, motivo: 'bot_spento' });
+  });
+
+  it('adozione spenta e nessun padrone: orfano, adozione_spenta', () => {
+    expect(pulsanteScriveFase({
+      aiOwner: null, aiPausedAt: null, handedOffAt: null,
+      adottaOra: false, autoReplyOn: true, adozioneAttiva: false,
+    })).toEqual({ scrive: false, motivo: 'adozione_spenta' });
+  });
+
+  it('fermo manuale, anche su una chat di Mario: orfano, in_pausa', () => {
+    expect(pulsanteScriveFase({ ...base, aiPausedAt: '2026-10-05T21:00:00Z', autoReplyOn: true, adozioneAttiva: true }))
+      .toEqual({ scrive: false, motivo: 'in_pausa' });
+  });
+
+  it('chat passata a una persona: orfano, passata_umano — e vince sul fermo manuale', () => {
+    expect(pulsanteScriveFase({ ...base, handedOffAt: '2026-10-05T21:00:00Z' }))
+      .toEqual({ scrive: false, motivo: 'passata_umano' });
+    expect(pulsanteScriveFase({ ...base, handedOffAt: '2026-10-05T21:00:00Z', aiPausedAt: '2026-10-05T20:00:00Z' }))
+      .toEqual({ scrive: false, motivo: 'passata_umano' });
+  });
+
+  it('la chat e di qualcun altro: orfano, altro_owner', () => {
+    expect(pulsanteScriveFase({ ...base, aiOwner: 'marta', autoReplyOn: true, adozioneAttiva: true }))
+      .toEqual({ scrive: false, motivo: 'altro_owner' });
+  });
+
+  it('adottaOra vince sul resto solo dove serve: chat in pausa che nessuno adotta resta orfana', () => {
+    // `shouldAdoptInbound` non adotta mai una chat in pausa, quindi adottaOra falso: qui
+    // si verifica che la decisione non inventi un permesso che il gate non ha dato.
+    expect(pulsanteScriveFase({
+      aiOwner: null, aiPausedAt: '2026-10-05T21:00:00Z', handedOffAt: null,
+      adottaOra: false, autoReplyOn: true, adozioneAttiva: true,
+    })).toEqual({ scrive: false, motivo: 'in_pausa' });
   });
 });

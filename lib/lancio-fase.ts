@@ -51,6 +51,58 @@ export function pulsanteRiportaInPostPitch(fase: string | null | undefined): boo
   return FASI_CHE_IL_PULSANTE_RIPORTA.has(fase ?? '');
 }
 
+/** Perché il pulsante non ha potuto scrivere: chi ha in mano quella chat, o cosa è spento. */
+export type MotivoPulsanteOrfano =
+  | 'bot_spento' | 'adozione_spenta' | 'in_pausa' | 'passata_umano' | 'altro_owner';
+
+export type DecisionePulsante =
+  | { scrive: true }
+  | { scrive: false; motivo: MotivoPulsanteOrfano };
+
+/**
+ * Il pulsante del webinar può scrivere lo stato del lancio su questa chat?
+ *
+ * Il rischio che chiude è la **finestra orfana**: scrivere `lancio_slug` e `post_pitch`
+ * su una chat che nessuno guida. Con lo slug addosso quella riga sparisce da
+ * `adotta-mai-risposti` (che esclude `lancio_slug` non nullo) e dalle altre reti di
+ * recupero, ma nessuno le risponde — a bot spento, ad adozione spenta, in pausa, o se la
+ * chat è in mano a una persona. Sarebbe il silenzio che l'adozione esiste per chiudere,
+ * con in più l'illusione che qualcuno se ne stia occupando.
+ *
+ * Si scrive quindi in due soli casi:
+ *  (a) la chat è di Mario ed è libera (nessun fermo manuale, nessun passaggio a umano);
+ *  (b) la sta adottando QUESTA richiesta (`shouldAdoptInbound` con `lancioPulsante`).
+ *
+ * Negli altri casi l'evento `lancio_pulsante` si scrive lo stesso, con `orfano` e il
+ * `motivo`: la chat resta visibile alle reti di recupero, e `adotta-mai-risposti`
+ * riclassifica quel pulsante e la porta in `post_pitch` quando l'adozione si accende.
+ */
+export function pulsanteScriveFase(i: {
+  aiOwner: string | null;
+  aiPausedAt?: string | null;
+  handedOffAt?: string | null;
+  /** L'adozione di questa richiesta prende in carico la chat (`shouldAdoptInbound`). */
+  adottaOra: boolean;
+  /** L'interruttore generale dell'auto-risposta, dal pannello. */
+  autoReplyOn: boolean;
+  /** `INBOUND_ADOPTION_ENABLED === '1'`. */
+  adozioneAttiva: boolean;
+}): DecisionePulsante {
+  if (i.aiOwner === 'mario' && !i.aiPausedAt && !i.handedOffAt) return { scrive: true };
+  if (i.adottaOra) return { scrive: true };
+  // L'ordine dice CHI ha in mano la chat prima di dire cosa è spento: un passaggio a
+  // umano o un fermo manuale restano la spiegazione giusta anche a bot spento.
+  if (i.handedOffAt) return { scrive: false, motivo: 'passata_umano' };
+  if (i.aiPausedAt) return { scrive: false, motivo: 'in_pausa' };
+  if (i.aiOwner !== null) return { scrive: false, motivo: 'altro_owner' };
+  if (!i.autoReplyOn) return { scrive: false, motivo: 'bot_spento' };
+  // Resta: nessun padrone, tutto acceso, e l'adozione non scatta. Dal webhook vuol dire
+  // `adozioneAttiva` falso (col pulsante il gate non guarda altro), e con l'adozione
+  // accesa è un caso che non si produce: `adozione_spenta` è la lettura giusta in
+  // entrambi i sensi — nessuno ha preso in carico questa chat.
+  return { scrive: false, motivo: 'adozione_spenta' };
+}
+
 /** Le fasi che questo blocco (B1) sa gestire nel turno. Le altre arrivano con B4/B5. */
 export const LANCIO_FASI_B1: readonly LancioFase[] = ['attesa', 'posto_bloccato'];
 export const FASI_GESTITE_B1: ReadonlySet<string> = new Set<string>(LANCIO_FASI_B1);
