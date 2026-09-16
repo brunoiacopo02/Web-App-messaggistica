@@ -10,12 +10,22 @@ vi.mock('./bot-outcome', () => ({
   registraEsitoSenzaLeadId: vi.fn(async () => ({ decisione: 'registrato', chiudi: true })),
 }));
 vi.mock('./lancio-turno', () => ({ eseguiTurnoLancio: vi.fn(async () => 'active') }));
+// Il link della live sta in `app_settings`: qui vale il valore di default, i test che
+// servono il caso "link assente" lo sovrascrivono con `mockResolvedValueOnce`.
+vi.mock('./lancio-settings', () => ({
+  getLancioSettings: vi.fn(async () => ({
+    attivo: true, pulsanteAttivo: false, zoomLink: null,
+    videoLiveLink: 'https://corso.feniceacademy.it/live-webdev-2026', offertaDelMeseLink: null,
+    eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti', sender: 'principale',
+  })),
+}));
 
 import { generateMarioReply, GDO_CONTEXT_NOTE } from './mario';
 import { sendOutcome, inviaNotaAlCrm, registraEsitoSenzaLeadId } from './bot-outcome';
 import { NOTA_VIDEO, NOTA_NOEMI } from './gdo-context-note';
 import { OPENING_ENV_KEYS, personaForConversation } from './persona';
 import { eseguiTurnoLancio } from './lancio-turno';
+import { getLancioSettings } from './lancio-settings';
 import { TESTO_POSTO_BLOCCATO } from './lancio-fase';
 
 describe('shouldAutoReply', () => {
@@ -2236,5 +2246,73 @@ describe('drainMarioReplies — esito di un lead che il CRM non conosce', () => 
     await drainMarioReplies(supabase, 7249, '+391234567890', () => 0);
 
     expect(registraEsitoSenzaLeadId).not.toHaveBeenCalled();
+  });
+});
+
+describe('drainMarioReplies — dopo il follow-up la chat passa a Mario nello STESSO drain (B5)', () => {
+  const LIVE = 'https://corso.feniceacademy.it/live-webdev-2026';
+  const FU: FakeMsgRow = { direction: 'out', body: 'Ciao Anna, ieri sera alla live...', template_sid: 'HX_FU', created_at: '2026-10-06T10:10:00Z' };
+  const RISPOSTA: FakeMsgRow = { direction: 'in', body: 'si mi interessa, mandami il video', template_sid: null, created_at: '2026-10-06T10:20:00Z' };
+  const riga = (): ClaimedRow => ({
+    id: 7, ai_started_at: null, crm_lead_id: 'crm7', bot_outcome: null,
+    lancio_slug: 'webdev-2026-10', lancio_fase: 'followup_inviato', lancio_info: null,
+  });
+  const rispostaMario = (testo: string) => ({
+    visibleReply: testo, appointmentFixed: false, passToHuman: false, videoWatched: false, outcome: undefined, scheduledAt: undefined,
+  });
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(eseguiTurnoLancio).mockReset();
+    vi.mocked(getLancioSettings).mockClear();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('handed_to_mario: Mario risponde subito, con il link della live nel contesto, e ai_status resta active', async () => {
+    vi.mocked(eseguiTurnoLancio).mockResolvedValueOnce('handed_to_mario');
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(rispostaMario(`Perfetto! Ecco il video della live: ${LIVE}`));
+    const { supabase, calls } = makeDrainSupabase(riga(), [FU, RISPOSTA]);
+
+    await drainMarioReplies(supabase, 7, '+391234567890', () => 0);
+
+    expect(eseguiTurnoLancio).toHaveBeenCalledTimes(1);
+    expect(generateMarioReply).toHaveBeenCalledTimes(1);
+    const opts = vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string };
+    expect(opts.contextNote).toContain(LIVE);
+    expect(opts.contextNote).toContain('conferenza-*');
+    expect(calls.messageInserts.map((m) => m.body)).toEqual([`Perfetto! Ecco il video della live: ${LIVE}`]);
+    // Il link della live e' ufficiale: nessun "link inventato" a log.
+    expect(calls.events.map((e) => e.type)).not.toContain('unknown_fenice_link');
+    // Il quarto stato del turno non arriva MAI a conversations.ai_status.
+    expect(calls.finalStatusWrites).toEqual(['active']);
+    expect(calls.finalStatusWrites).not.toContain('handed_to_mario');
+  });
+
+  it('senza lancio_video_live_link: Mario risponde coi video classici (nessuna contextNote) e resta un warn', async () => {
+    vi.mocked(getLancioSettings).mockResolvedValueOnce({
+      attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null,
+      eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti', sender: 'principale',
+    });
+    vi.mocked(eseguiTurnoLancio).mockResolvedValueOnce('handed_to_mario');
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(rispostaMario('Ciao! Raccontami: lavori al momento?'));
+    const { supabase, calls } = makeDrainSupabase(riga(), [FU, RISPOSTA]);
+
+    await drainMarioReplies(supabase, 7, '+391234567890', () => 0);
+
+    const opts = vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string };
+    expect(opts.contextNote).toBeUndefined();
+    expect(calls.events.map((e) => e.type)).toContain('lancio_video_live_link_missing');
+    expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+
+  it('un turno che chiude il lancio in altro modo (closed) non passa a Mario e scrive closed', async () => {
+    vi.mocked(eseguiTurnoLancio).mockResolvedValueOnce('closed');
+    const { supabase, calls } = makeDrainSupabase({ ...riga(), lancio_fase: 'attesa' }, [FU, RISPOSTA]);
+
+    await drainMarioReplies(supabase, 7, '+391234567890', () => 0);
+
+    expect(generateMarioReply).not.toHaveBeenCalled();
+    expect(calls.finalStatusWrites).toEqual(['closed']);
   });
 });

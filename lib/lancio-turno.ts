@@ -53,8 +53,28 @@ export type TurnoLancioInput = {
  * `fenice_ai_reply` — anche nel silenzio — perche' il re-drive di bot-followups non
  * rimetta in coda lo stesso inbound ogni ora.
  */
-export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Promise<'active' | 'closed' | 'handed_off'> {
+export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Promise<'active' | 'closed' | 'handed_off' | 'handed_to_mario'> {
   const genera = i.genera ?? generateLancioReply;
+
+  // Ha risposto al follow-up del giorno dopo (spec §5.5): da qui la chat e' di Mario
+  // standard. Si chiude il lancio e si torna 'handed_to_mario': il drain lo intercetta
+  // nel ciclo dei giri, esce dal ramo lancio e prosegue NELLO STESSO drain col flusso
+  // classico (prompt Mario, slot, form, Conferme), con la sola differenza del video (la
+  // live editata, via contextNote). 'handed_to_mario' NON e' uno stato di ai_status.
+  // Niente bolla qui, niente traccia `fenice_ai_reply`: a questo inbound risponde Mario
+  // fra un istante, e la traccia la scrive lui. Il taglio delle righe non serve: non si
+  // interpella nessuno. Nessun `soloDaFasi`: dentro un turno il lucchetto del drain
+  // serializza gia'.
+  if (i.fase === 'followup_inviato') {
+    await impostaFaseLancio(supabase, i.conversationId, 'chiuso');
+    await supabase.from('event_log').insert({
+      type: 'lancio_followup_risposta',
+      payload: { conversationId: i.conversationId, crmLeadId: i.crmLeadId, testo: i.inboundBody.slice(0, 300) } as never,
+      message: `[lancio] conv ${i.conversationId}: ha risposto al follow-up, la chat passa a Mario`,
+      level: 'info',
+    });
+    return 'handed_to_mario';
+  }
 
   // Solo quello che il lead ha scritto DENTRO il lancio: su una chat riusata il drain
   // carica anche il giro precedente di Mario (vedi `tagliaRigheDalLancio`).

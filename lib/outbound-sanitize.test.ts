@@ -89,3 +89,14 @@ describe('link Black Summer (offerta del mese, invii per conto GDO)', () => {
     expect(sanitizeOutbound(`Eccolo 👉 https://corso.feniceacademy.it/conferenza-black-\nsummer`)).toContain(BS);
   });
 });
+
+describe('unknownFeniceLinks con link extra (video della live, offerta del mese)', () => {
+  const live = 'https://corso.feniceacademy.it/live-webdev-2026';
+  it('un link extra noto non e piu inventato; senza extra lo e', () => {
+    expect(unknownFeniceLinks(`ecco il video ${live}`, [live])).toEqual([]);
+    expect(unknownFeniceLinks(`ecco il video ${live}`)).toEqual([live]);
+  });
+  it('gli altri link ignoti restano segnalati', () => {
+    expect(unknownFeniceLinks(`${live} e https://corso.feniceacademy.it/conferenza-zx`, [live])).toEqual(['https://corso.feniceacademy.it/conferenza-zx']);
+  });
+});

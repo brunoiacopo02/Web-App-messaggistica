@@ -14,11 +14,12 @@ export const VIDEO_PITCH_TEXT =
 
 const VIDEO_LINKS = (KNOWN_LINKS as readonly string[]).filter((l) => l.includes('conferenza-'));
 
-/** Vero se il testo contiene uno dei link video ufficiali. Esportata perché il drain
- * la usa sulla cronologia per capire se il video è già uscito in un turno precedente. */
-export const containsVideoLink = (p: string) => VIDEO_LINKS.some((l) => p.includes(l));
+/** Vero se il testo contiene uno dei link video ufficiali, o uno dei link video extra
+ * passati dal chiamante (la live editata del lancio). Esportata perché il drain la usa
+ * sulla cronologia per capire se il video è già uscito in un turno precedente. */
+export const containsVideoLink = (p: string, extraVideoLinks: readonly string[] = []) =>
+  VIDEO_LINKS.some((l) => p.includes(l)) || extraVideoLinks.some((l) => l !== '' && p.includes(l));
 
-const hasVideoLink = containsVideoLink;
 const isStep4 = (p: string) => /\bFATTO\b/.test(p);
 
 /**
@@ -59,7 +60,10 @@ const pitchPresent = (parts: string[]) => {
  */
 export function ensureConfirmationBlock(
   parts: string[],
+  opts: { extraVideoLinks?: readonly string[] } = {},
 ): { parts: string[]; added: string[]; missingVideoLink: boolean } {
+  const extra = opts.extraVideoLinks ?? [];
+  const hasVideoLink = (p: string) => containsVideoLink(p, extra);
   const out = [...parts];
   const added: string[] = [];
 

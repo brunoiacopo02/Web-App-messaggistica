@@ -38,9 +38,11 @@ const FENICE_LINK_RE = /https:\/\/corso\.feniceacademy\.it\/\S+/g;
 const TRAILING_PUNCT_RE = /[.,;:!?)\]}'"]+$/;
 
 /** URL del dominio dei video che non sono nella lista ufficiale: vanno loggati,
- * significa che il modello si e inventato un link. */
-export function unknownFeniceLinks(text: string): string[] {
+ * significa che il modello si e inventato un link. `extraKnown` sono i link che
+ * arrivano da `app_settings` a runtime (live editata, offerta del mese): per quella
+ * conversazione sono ufficiali quanto gli altri. */
+export function unknownFeniceLinks(text: string, extraKnown: readonly string[] = []): string[] {
   const found = text.match(FENICE_LINK_RE) ?? [];
   const cleaned = found.map((u) => u.replace(TRAILING_PUNCT_RE, ''));
-  return cleaned.filter((u) => !(KNOWN_LINKS as readonly string[]).includes(u));
+  return cleaned.filter((u) => !(KNOWN_LINKS as readonly string[]).includes(u) && !extraKnown.includes(u));
 }
