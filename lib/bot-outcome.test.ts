@@ -1381,3 +1381,20 @@ describe('registraEsitoSenzaLeadId', () => {
     expect(calls.updates[0].bot_scheduled_at).toBeNull();
   });
 });
+
+describe('sendOutcome — il corpo della risposta 2xx viene esposto (restituzioni del lancio)', () => {
+  it('con un JSON leggibile torna corpo; senza, corpo e undefined e sent resta true', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, status: 200, text: async () => '',
+      json: async () => ({ ok: true, returnedToPool: false, skipped: 'locked_appointment' }),
+    })));
+    const { supabase } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null });
+    const res = await sendOutcome(supabase, 1, { outcome: 'NON_RISPOSTO', note: 'Lancio: mai risposto' });
+    expect(res).toMatchObject({ sent: true, status: 200, corpo: { returnedToPool: false, skipped: 'locked_appointment' } });
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, text: async () => '' })));
+    const senza = await sendOutcome(makeSupabase({ crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null }).supabase, 1, { outcome: 'NON_RISPOSTO' });
+    expect(senza.sent).toBe(true);
+    expect(senza.corpo).toBeUndefined();
+  });
+});
