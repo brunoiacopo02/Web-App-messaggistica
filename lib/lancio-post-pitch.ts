@@ -7,8 +7,8 @@ import { RISPOSTE_RISCALDAMENTO } from './lancio-prompt';
 import { impostaFaseLancio } from './lancio-db';
 import { sendCrmNota } from './bot-outcome';
 import { pushLeadEntrante } from './lead-entrante';
-import { PROVENIENZA_LANCIO_WEBDEV } from './primo-messaggio';
-import { haCongedo, paroleDelCongedo } from './lancio-fase';
+import { PROVENIENZA_LANCIO_WEBDEV, isMarkerPulsanteWebinar } from './primo-messaggio';
+import { haCongedo, paroleDelCongedo, inboundDelLotto, ultimoTestoDelLotto, type RigaLancio } from './lancio-fase';
 import { lancioSlots, lancioBook, lancioCallNow, type LancioInfo, type LancioKind } from './lancio-crm';
 import { romeDayKey, romeHour } from './rome-time';
 import {
@@ -35,6 +35,10 @@ const MAX_PAROLE_NOTA = 300;
 /** `gia_prenotato` senza `appointmentAt`: il CRM dice che l'ora c'è ma non qual è. */
 const TESTO_GIA_PRENOTATO_SENZA_ORA =
   'Risulta che hai già un appuntamento fissato con noi: ti richiamiamo noi, non serve fissarne un altro.';
+
+/** I testi (non vuoti) del lotto, nell'ordine in cui il lead li ha scritti. */
+const testiDelLotto = (lotto: RigaLancio[]): string[] =>
+  lotto.map((m) => (m.body ?? '').trim()).filter((t) => t !== '');
 
 /**
  * 409 `gia_prenotato` (contratto §6.2): il lead ha già la sua ora sul CRM — l'ha presa
@@ -90,8 +94,19 @@ export async function turnoPostPitch(
   // il re-drive di bot-followups delle 08:30 rifà il turno e risponde.
   if (!puoRispondere(now, eventoAt, 'post_pitch')) return silenzioLancio(supabase, c, 'fuori_orario', false);
 
-  // Le parole del lead, accumulate (il marker del pulsante no): sono le "info" per chi chiama.
-  const info: LancioInfo = raccogliRisposte(i.lancioInfo ?? null, [i.inboundBody]);
+  // Si lavora sul LOTTO, non sull'inbound che il drain ha scelto (il primo rimasto senza
+  // risposta): è la stessa lezione del turno del B1 e dell'assistenza. Con uno sticker o
+  // un "ok" davanti, il messaggio vero — "no, toglimi dalla lista", "alle 9 non posso
+  // più" — finiva nell'ombra, e la traccia `fenice_ai_reply` toglieva pure il re-drive.
+  const lotto = inboundDelLotto(i.rows);
+  const testi = testiDelLotto(lotto);
+  /** L'ultima posizione leggibile del lead: chi ha scritto "ok" e poi "no" ha detto no. */
+  const testoLead = ultimoTestoDelLotto(lotto);
+
+  // Le parole del lead, accumulate (il marker del pulsante no): sono le "info" per chi
+  // chiama. Tutto il lotto, non solo l'ultimo: se ha risposto in due messaggi, al
+  // venditore devono arrivare entrambi.
+  const info: LancioInfo = raccogliRisposte(i.lancioInfo ?? null, testi);
   const faseScelta = info.risposte.length >= RISPOSTE_RISCALDAMENTO || !!info.slotsMostratiAt;
 
   // Update diretto: la fase non cambia, e `impostaFaseLancio` è l'unico scrittore di
@@ -118,11 +133,16 @@ export async function turnoPostPitch(
     await inviaBollaLancio(supabase, c, componi(o, giorni, modo));
     await salvaInfo({ ...info, slotsMostratiAt: now.toISOString() });
     if (o.mattina.length === 0 && o.pomeriggio.length === 0 && o.dopodomani.length === 0) {
-      // Il testo promette "lascio nota": la nota parte davvero, altrimenti nessuno lo richiama.
-      if (c.crmLeadId) await sendCrmNota(supabase, c.conversationId, NOTA_SENZA_ORE);
-      await eventoLancio(supabase, c, 'lancio_slots_vuoti', {}, `[lancio] conv ${c.conversationId}: nessuna ora libera nei due giorni, nota al CRM`, 'warn');
+      // Nessuna ora proposta: `lancio_slots_mostrati` direbbe il falso, e chi conta le
+      // ore mostrate la sera del lancio conterebbe un turno in cui non ce n'era nessuna.
+      // Il testo promette "lascio nota": la nota parte davvero, altrimenti nessuno lo
+      // richiama. `sendCrmNota` rilegge da sé `crm_lead_id`, quindi non si filtra qui:
+      // un lead adottato dentro questo turno la nota la deve avere lo stesso.
+      const nota = await sendCrmNota(supabase, c.conversationId, NOTA_SENZA_ORE);
+      await eventoLancio(supabase, c, 'lancio_slots_vuoti', { notaInviata: nota.sent, errore: nota.error ?? null }, `[lancio] conv ${c.conversationId}: nessuna ora libera nei due giorni, nota al CRM`, 'warn');
+    } else {
+      await eventoLancio(supabase, c, 'lancio_slots_mostrati', { mattina: o.mattina, pomeriggio: o.pomeriggio, dopodomani: o.dopodomani, modo }, `[lancio] conv ${c.conversationId}: ore proposte`);
     }
-    await eventoLancio(supabase, c, 'lancio_slots_mostrati', { mattina: o.mattina, pomeriggio: o.pomeriggio, dopodomani: o.dopodomani, modo }, `[lancio] conv ${c.conversationId}: ore proposte`);
     await tracciaTurnoLancio(supabase, c, 'slots');
     return 'active';
   };
@@ -142,7 +162,15 @@ export async function turnoPostPitch(
     if (attuale) return attuale;
     // Numero sconosciuto che ha premuto il pulsante: il push del webhook (B2) è
     // fire-and-forget e può non essere arrivato. Il CRM deduplica per numero: si rispinge.
-    const primo = i.rows.find((m) => m.direction === 'in');
+    //
+    // Il "primo messaggio" è il primo DI QUESTO LANCIO, non il primo della chat: su una
+    // chat riusata la cronologia comincia con un giro di Mario di settimane prima, e
+    // mandare quello al CRM come primo messaggio del lead scriverebbe sulla scheda una
+    // frase che col webinar non c'entra niente. L'ancora è il testo del pulsante; se non
+    // è in cronologia (marker cambiato, riga potata) si ripiega sul lotto di adesso.
+    const iPulsante = i.rows.findIndex((m) => m.direction === 'in' && isMarkerPulsanteWebinar(m.body));
+    const dalLancio = iPulsante >= 0 ? i.rows.slice(iPulsante) : lotto;
+    const primo = dalLancio.find((m) => m.direction === 'in' && (m.body ?? '').trim() !== '');
     const res = await pushLeadEntrante(supabase, {
       conversationId: c.conversationId, telefono: c.phone, nome: i.nome, provenienza: PROVENIENZA_LANCIO,
       primoMessaggio: primo?.body ?? null, scrittoIl: primo?.created_at ?? now.toISOString(),
@@ -179,7 +207,7 @@ export async function turnoPostPitch(
 
   if (r.passToHuman) {
     await salvaInfo(info);
-    return passaggioUmanoLancio(supabase, c, r.visibleReply, i.inboundBody);
+    return passaggioUmanoLancio(supabase, c, r.visibleReply, testoLead);
   }
 
   const tag = r.lancioTag;
@@ -236,7 +264,7 @@ export async function turnoPostPitch(
       // cancellerebbe il marcatore del congedo appena messo, che è quello che tiene il
       // blast del link e il follow-up del B5 lontani da chi si è appena tirato indietro.
       await salvaInfo(info);
-      return congedoLancio(supabase, c, i.inboundBody, NOTA_CONGEDO, { testo: TESTO_CONGEDO_POST_PITCH });
+      return congedoLancio(supabase, c, testoLead, NOTA_CONGEDO, { testo: TESTO_CONGEDO_POST_PITCH });
     }
     default: {
       // Riscaldamento o risposta a una domanda: la bolla del modello, una sola.
@@ -256,11 +284,27 @@ export async function turnoPostPitch(
  * Si ringrazia una volta sola (`TESTO_DOPO_SCELTA`), poi silenzio definitivo; le parole
  * del lead vanno sempre al CRM come nota, perché "alle 9 non posso più" lo deve leggere
  * chi lo chiama, non il bot. Stato `closed`: la chat resta ferma finché non riscrive.
+ *
+ * La finestra vale anche qui: alle 04:00 non si scrive a nessuno e non si lascia la
+ * traccia, così il re-drive delle 08:30 rifà il turno — e la nota al CRM parte allora,
+ * una volta sola, invece di due (per questo la guardia sta PRIMA della nota).
  */
-export async function turnoDopoScelta(supabase: Supa, i: TurnoLancioInput): Promise<StatoTurno> {
+export async function turnoDopoScelta(
+  supabase: Supa,
+  i: TurnoLancioInput,
+  ctx: { settings: LancioSettings; now: Date },
+): Promise<StatoTurno> {
   const c: ContestoTurno = contestoDi(i);
-  const parole = i.inboundBody.trim();
-  if (c.crmLeadId && parole) {
+  if (!puoRispondere(ctx.now, eventoAtDa(ctx.settings), 'post_pitch')) {
+    return silenzioLancio(supabase, c, 'fuori_orario', false);
+  }
+  // Tutto quello che ha scritto dopo la nostra ultima bolla, non solo il primo messaggio
+  // rimasto senza risposta: "ok" seguito da "alle 9 non posso più" deve arrivare intero
+  // a chi lo chiama.
+  const parole = testiDelLotto(inboundDelLotto(i.rows)).join(' / ').trim();
+  if (parole) {
+    // `sendCrmNota` rilegge `crm_lead_id` da sé: nessuna guardia qui, o un lead adottato
+    // mentre questo turno girava resterebbe senza le sue parole.
     const nota = await sendCrmNota(supabase, c.conversationId, `Lancio Web Dev AI, dopo la scelta il lead scrive: "${parole.slice(0, MAX_PAROLE_NOTA)}"`);
     if (!nota.sent) {
       await eventoLancio(supabase, c, 'lancio_nota_dopo_scelta_non_inviata', { error: nota.error ?? null, status: nota.status ?? null }, `[lancio] conv ${c.conversationId}: nota dopo la scelta non inviata al CRM`, 'warn');

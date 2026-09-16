@@ -193,6 +193,20 @@ describe('turnoPostPitch — [LANCIO:CHIAMA_ORA]', () => {
     expect(impostaFaseLancio).not.toHaveBeenCalled();
   });
 
+  it.each(['info_non_valida', 'forbidden', 'not_found', 'not_configured'] as const)(
+    '%s dal CRM: testo di errore, evento error, active, niente fase',
+    async (motivo) => {
+      genera.mockResolvedValueOnce(modello({ lancioTag: { tag: 'CHIAMA_ORA' } }));
+      vi.mocked(lancioCallNow).mockResolvedValueOnce({ ok: false, motivo });
+      const { supabase, calls } = makeSupabase();
+      expect(await turnoPostPitch(supabase, scelta('adesso'), ctx())).toBe('active');
+      expect(bolle()).toEqual([TESTO_ERRORE_CRM]);
+      expect(eventi(calls, 'lancio_crm_errore')[0].level).toBe('error');
+      expect(eventi(calls, 'lancio_crm_errore')[0].payload).toMatchObject({ motivo });
+      expect(impostaFaseLancio).not.toHaveBeenCalled();
+    },
+  );
+
   it('409 conflitto (gia ritentato dal client): errore, nessun terzo tentativo', async () => {
     genera.mockResolvedValueOnce(modello({ lancioTag: { tag: 'CHIAMA_ORA' } }));
     vi.mocked(lancioCallNow).mockResolvedValueOnce({ ok: false, motivo: 'conflitto' });
@@ -327,6 +341,8 @@ describe('turnoPostPitch — [LANCIO:SLOTS], [LANCIO:NO], finestra', () => {
     expect(bolle()[1]).toMatch(/^Per questi due giorni non ho più ore libere/);
     expect(sendCrmNota).toHaveBeenCalledTimes(1);
     expect(eventi(calls, 'lancio_slots_vuoti')).toHaveLength(1);
+    // Nessuna ora proposta non e' "ore mostrate": l'evento resta quello del primo turno.
+    expect(eventi(calls, 'lancio_slots_mostrati')).toHaveLength(1);
   });
 
   it('NO: congedo post-pitch, fase chiuso, risposte salvate, DA_SCARTARE "non interessato", closed', async () => {
@@ -341,6 +357,30 @@ describe('turnoPostPitch — [LANCIO:SLOTS], [LANCIO:NO], finestra', () => {
     expect(impostaFaseLancio).toHaveBeenCalledWith(expect.anything(), 42, 'chiuso');
     expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'DA_SCARTARE', discardReason: 'non interessato', leadWords: 'no, non mi interessa' });
     expect(eventi(calls, 'lancio_congedo')).toHaveLength(1);
+  });
+
+  it('lotto: "ok" e poi "no, toglimi dalla lista" ⇒ congedo con le parole VERE, e tutte e due nelle risposte', async () => {
+    genera.mockResolvedValueOnce(modello({ classe: 'no', lancioTag: { tag: 'NO' } }));
+    const { supabase, calls } = makeSupabase();
+    const conLotto = base({
+      rows: [LINK, PULSANTE, out('Cosa fai oggi?'), inb('ok'), inb('no, toglimi dalla lista')],
+      inboundBody: 'ok', lancioInfo: { risposte: [] },
+    });
+    expect(await turnoPostPitch(supabase, conLotto, ctx())).toBe('closed');
+    expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'DA_SCARTARE', leadWords: 'no, toglimi dalla lista' });
+    expect(infoSalvata(calls)).toEqual({ risposte: ['ok', 'no, toglimi dalla lista'] });
+  });
+
+  it('lotto: due messaggi di riscaldamento in fila contano due risposte e vanno al CRM interi', async () => {
+    genera.mockResolvedValueOnce(modello({ lancioTag: { tag: 'CHIAMA_ORA' } }));
+    vi.mocked(lancioCallNow).mockResolvedValueOnce({ ok: true, venditore: { id: 'u7', nome: 'Luca' } });
+    const { supabase } = makeSupabase();
+    const conLotto = base({
+      rows: [LINK, PULSANTE, out('Cosa fai oggi?'), inb('studio informatica'), inb('e mi chiami adesso?')],
+      inboundBody: 'studio informatica', lancioInfo: { risposte: [] },
+    });
+    await turnoPostPitch(supabase, conLotto, ctx());
+    expect(lancioCallNow).toHaveBeenCalledWith(expect.objectContaining({ info: { risposte: ['studio informatica', 'e mi chiami adesso?'] } }));
   });
 
   it('congedo gia uscito (il CRM aveva rifiutato lo scarto): si ritenta solo l esito, niente modello e niente seconda bolla', async () => {
@@ -406,6 +446,25 @@ describe('turnoPostPitch — numero sconosciuto senza crm_lead_id', () => {
     expect(bolle()).toEqual(['Perfetto, ti chiama Sara tra pochissimo.']);
   });
 
+  it('chat riusata: il primo messaggio spinto al CRM e quello del PULSANTE, non il vecchio giro di Mario', async () => {
+    genera.mockResolvedValueOnce(modello({ lancioTag: { tag: 'CHIAMA_ORA' } }));
+    vi.mocked(lancioCallNow).mockResolvedValueOnce({ ok: true, venditore: { id: 'u1', nome: 'Sara' } });
+    const { supabase } = makeSupabase(null);
+    const riusata = base({
+      crmLeadId: null,
+      rows: [
+        out('Ciao, sono Mario di Fenice'),
+        inb('vorrei informazioni sul corso', '2026-09-01T10:00:00+02:00'),
+        LINK, PULSANTE, out('Preferisci adesso o domani?'), inb('adesso'),
+      ],
+      inboundBody: 'adesso', lancioInfo: { risposte: ['studio informatica', 'il progetto finale'] },
+    });
+    await turnoPostPitch(supabase, riusata, ctx());
+    expect(vi.mocked(pushLeadEntrante).mock.calls[0][1]).toMatchObject({
+      primoMessaggio: MARKER, scrittoIl: '2026-10-05T22:38:00+02:00',
+    });
+  });
+
   it('se il push del webhook e arrivato nel frattempo (crm_lead_id a DB) non si rispinge', async () => {
     genera.mockResolvedValueOnce(modello({ lancioTag: { tag: 'CHIAMA_ORA' } }));
     vi.mocked(lancioCallNow).mockResolvedValueOnce({ ok: true, venditore: { id: 'u1', nome: 'Sara' } });
@@ -429,7 +488,7 @@ describe('turnoPostPitch — numero sconosciuto senza crm_lead_id', () => {
 describe('turnoDopoScelta — fase scelta_fatta', () => {
   it('primo messaggio dopo la scelta: "Ricevuto" una volta, le parole al CRM come nota, closed', async () => {
     const { supabase, calls } = makeSupabase();
-    const stato = await turnoDopoScelta(supabase, base({ fase: 'scelta_fatta', rows: [LINK, PULSANTE, out('Perfetto, ti chiama Luca tra pochissimo.'), inb('grazie, aspetto')], inboundBody: 'grazie, aspetto' }));
+    const stato = await turnoDopoScelta(supabase, base({ fase: 'scelta_fatta', rows: [LINK, PULSANTE, out('Perfetto, ti chiama Luca tra pochissimo.'), inb('grazie, aspetto')], inboundBody: 'grazie, aspetto' }), ctx());
     expect(stato).toBe('closed');
     expect(bolle()).toEqual([TESTO_DOPO_SCELTA]);
     expect(vi.mocked(sendCrmNota).mock.calls[0].slice(1)).toEqual([42, expect.stringContaining('"grazie, aspetto"')]);
@@ -439,16 +498,36 @@ describe('turnoDopoScelta — fase scelta_fatta', () => {
 
   it('dal secondo in poi: silenzio definitivo, ma la nota al CRM parte comunque', async () => {
     const { supabase, calls } = makeSupabase();
-    await turnoDopoScelta(supabase, base({ fase: 'scelta_fatta', rows: [LINK, PULSANTE, out('Perfetto...'), inb('grazie'), out(TESTO_DOPO_SCELTA), inb('alle 9 non posso più')], inboundBody: 'alle 9 non posso più' }));
+    await turnoDopoScelta(supabase, base({ fase: 'scelta_fatta', rows: [LINK, PULSANTE, out('Perfetto...'), inb('grazie'), out(TESTO_DOPO_SCELTA), inb('alle 9 non posso più')], inboundBody: 'alle 9 non posso più' }), ctx());
     expect(sendFreeText).not.toHaveBeenCalled();
     expect(sendCrmNota).toHaveBeenCalledTimes(1);
     expect(eventi(calls, 'lancio_silenzio')[0].payload).toMatchObject({ motivo: 'dopo_scelta', definitivo: true });
   });
 
-  it('senza crm_lead_id niente nota, ma il "Ricevuto" sì', async () => {
-    const { supabase } = makeSupabase(null);
-    await turnoDopoScelta(supabase, base({ fase: 'scelta_fatta', crmLeadId: null, rows: [LINK, PULSANTE, out('Perfetto...'), inb('ok')], inboundBody: 'ok' }));
-    expect(sendCrmNota).not.toHaveBeenCalled();
+  it('senza crm_lead_id la nota si tenta lo stesso (la rilettura la fa sendCrmNota): warn se non parte, "Ricevuto" comunque', async () => {
+    vi.mocked(sendCrmNota).mockResolvedValueOnce({ sent: false, error: 'not_crm_lead' });
+    const { supabase, calls } = makeSupabase(null);
+    await turnoDopoScelta(supabase, base({ fase: 'scelta_fatta', crmLeadId: null, rows: [LINK, PULSANTE, out('Perfetto...'), inb('ok')], inboundBody: 'ok' }), ctx());
+    expect(sendCrmNota).toHaveBeenCalledTimes(1);
+    expect(eventi(calls, 'lancio_nota_dopo_scelta_non_inviata')[0].level).toBe('warn');
     expect(bolle()).toEqual([TESTO_DOPO_SCELTA]);
+  });
+
+  it('il lotto intero nella nota: "ok" + "alle 9 non posso più" arrivano tutti e due al CRM', async () => {
+    const { supabase } = makeSupabase();
+    await turnoDopoScelta(supabase, base({ fase: 'scelta_fatta', rows: [LINK, PULSANTE, out('Perfetto...'), inb('ok'), inb('alle 9 non posso più')], inboundBody: 'ok' }), ctx());
+    const nota = vi.mocked(sendCrmNota).mock.calls[0][2];
+    expect(nota).toContain('alle 9 non posso più');
+    expect(nota).toContain('ok');
+  });
+
+  it('alle 04:00 non si risponde e non si annota: silenzio temporaneo, la nota parte al re-drive', async () => {
+    const { supabase, calls } = makeSupabase();
+    const stato = await turnoDopoScelta(supabase, base({ fase: 'scelta_fatta', rows: [LINK, PULSANTE, out('Perfetto...'), inb('ci sei?')], inboundBody: 'ci sei?' }), ctx(new Date('2026-10-06T04:00:00+02:00')));
+    expect(stato).toBe('active');
+    expect(sendCrmNota).not.toHaveBeenCalled();
+    expect(sendFreeText).not.toHaveBeenCalled();
+    expect(eventi(calls, 'lancio_silenzio')[0].payload).toMatchObject({ motivo: 'fuori_orario', definitivo: false });
+    expect(eventi(calls, 'fenice_ai_reply')).toHaveLength(0);
   });
 });
