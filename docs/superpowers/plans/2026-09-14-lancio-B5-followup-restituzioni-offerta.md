@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Riscritto il 16/09 notte** contro il codice reale di `feat/lancio-webdev` @ `4b5f1ef` (B1+B2+B4 completi) e contro i rulings del controller (`.superpowers/sdd/2026-09-14-lancio-B5-followup-restituzioni-offerta/progress.md`, sezione "Rulings del 16/09 notte"). La versione precedente di questo file (24 disallineamenti, 14 conflitti, 9 consegne scoperte: `preflight-proposto.md`) è superata. La parte CRM del B5 è **già in produzione** (vedi la sezione "Già in produzione") e qui non si esegue.
+> **Riscritto il 16/09 notte e ribasato il 17/09** contro il codice reale di `feat/lancio-webdev` @ **`f5c8ad6`** (= `main`; B1+B2+B4 completi, compresi i fix finali del B4: `impostaFaseLancio` con `soloDaFasi`, il ramo lancio del drain a giri `MAX_GIRI_LANCIO` con `rileggiRigaLancio`, `congedoEsplicito`, `modoEtichette`, e l'invio dall'account che possiede il numero `lib/twilio-account.ts`) e contro i rulings del controller (`.superpowers/sdd/2026-09-14-lancio-B5-followup-restituzioni-offerta/progress.md`, "Rulings del 16/09 notte" + i 5 rulings della seconda passata del 17/09). Le due versioni precedenti (`preflight-proposto.md`, `preflight-piano-nuovo.md`) sono superate. La parte CRM del B5 è **già in produzione** (vedi la sezione "Già in produzione") e qui non si esegue. Ogni `file:riga` citato sotto è di `f5c8ad6`.
 
 **Goal:** Il 6 e il 7 ottobre il bot manda il follow-up (template `LANCIO_FOLLOWUP_TEMPLATE_SID`) a chi ha interagito dopo il benvenuto ma non ha scelto la sera del 5, escludendo chi si è congedato e chi ha appena detto "no"; chi risponde entra nel flusso Mario standard con il video della live editata al posto dei quattro video classici; dall'8/10 chi non ha mai risposto, chi tace 48 ore dopo il follow-up e chi il follow-up non l'ha mai ricevuto torna al CRM come `NON_RISPOSTO` con la nota che il CRM già riconosce; un lead restituito che riscrive non torna al bot; le otto impostazioni del lancio si cambiano da `/fenice/impostazioni`; il video "offerta del mese" dell'agenda GDO viene da `offerta_del_mese_link`.
 
-**Architecture:** Due cron a data fissa (`/api/cron/lancio-followup`, `/api/cron/lancio-restituzioni`) costruiti sullo **stesso motore del blast Zoom**, estratto dal cron `lancio-zoom` in `lib/lancio-blast-motore.ts` (lotti da `LANCIO_BATCH_MAX`, timbro compare-and-set PRIMA di Twilio, 63049 per destinatario = `capped`, esito incerto = timbro tenuto, freno `decideFreno` sui tentativi, `logCronQueryError`, `forza` e `now` solo con `solo=<id>`, mittente da `settings.sender`). Le decisioni stanno in moduli puri testati (`lib/lancio-followup.ts`, `lib/lancio-restituzioni.ts`) e riusano i mattoni del B1/B4 (`haCongedo`, `classificaLancio`, `marcaCongedo`, `congedoLancio`, `impostaFaseLancio`, `sendOutcome`, `giorniLancio`). Il ramo `followup_inviato` entra nello `switch` di `eseguiTurnoLancio` e restituisce un quarto stato, `'mario'`, con cui il drain prosegue nel flusso standard **nello stesso giro**, con una `contextNote` che porta il link della live. Le impostazioni restano l'oggetto camelCase a 8 chiavi di `lib/lancio-settings.ts` (ruling R1): si aggiungono solo validazione, pagina e API.
+**Architecture:** Due cron a data fissa (`/api/cron/lancio-followup`, `/api/cron/lancio-restituzioni`) costruiti sullo **stesso motore del blast Zoom**, estratto dal cron `lancio-zoom` in `lib/lancio-blast-motore.ts` (lotti da `LANCIO_BATCH_MAX`, timbro compare-and-set PRIMA di Twilio, 63049 per destinatario = `capped`, esito incerto = timbro tenuto, freno `decideFreno` sui tentativi, `logCronQueryError`, `forza` e `now` solo con `solo=<id>`, mittente da `settings.sender`). Le decisioni stanno in moduli puri testati (`lib/lancio-followup.ts`, `lib/lancio-restituzioni.ts`) e riusano i mattoni del B1/B4 (`haCongedo`, `congedoEsplicito`, `marcaCongedo`, `congedoLancio`, `impostaFaseLancio` con `soloDaFasi`, `sendOutcome`, `giorniLancio`). Il ramo `followup_inviato` entra nello `switch` di `eseguiTurnoLancio` e restituisce un quarto stato, `'handed_to_mario'`, che **non è uno stato di `ai_status`**: il drain lo intercetta nel ciclo dei giri del lancio, esce dal ramo lancio e prosegue nel flusso standard di Mario **nello stesso drain**, con una `contextNote` che porta il link della live. Le restituzioni si segnano `restituito` solo quando il CRM **conferma** il ritorno nel pool (`returnedToPool: true` o `skipped: 'already_returned'` nel corpo della risposta, che `sendOutcome` ora espone). Le impostazioni restano l'oggetto camelCase a 8 chiavi di `lib/lancio-settings.ts` (ruling R1): si aggiungono solo validazione, pagina e API.
 
 **Tech Stack:** TypeScript, Next.js 16 App Router, Supabase (postgrest-js), Twilio WhatsApp (Content API), Vitest (`bunx vitest run <file>`), `bun run typecheck`, cron in `vercel.json`.
 
@@ -27,8 +27,12 @@
   `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`
   `Claude-Session: https://claude.ai/code/session_01TqdFfxeDbRPq6iBmWYWSFD`
   Push su `origin/main` (= deploy prod) solo a blocco finito, dopo la review e la checklist del Task 9.
-- **Nessuna migrazione.** Le colonne usate esistono già in `lib/supabase/types.ts` (verificato a `4b5f1ef`): `conversations.lancio_slug / lancio_fase / lancio_ingresso / lancio_link_inviato_at / lancio_followup_inviato_at / lancio_info / lancio_benvenuto_at / ai_paused_at / handed_off_at / last_inbound_at / bot_outcome / crm_lead_id`. Le 8 chiavi `app_settings` sono seedate dalla migrazione `20260914000001_lancio_webdev.sql` (applicata in prod il 16/09).
-- **Test dei cron:** stessa forma di `app/api/cron/lancio-zoom/route.test.ts` (finto Supabase che registra ogni chiamata e simula il compare-and-set del timbro; `vi.mock('@/lib/supabase/admin')`, `vi.mock('@/lib/twilio')`, `vi.mock('@/lib/lancio-db')`; orologio con `vi.useFakeTimers()` + `vi.setSystemTime`). I test del cron Zoom **non si toccano** e devono restare verdi dopo il Task 1: sono il contratto del refactor.
+- **Nessuna migrazione.** Le colonne usate esistono già in `lib/supabase/types.ts` (verificato a `f5c8ad6`): `conversations.lancio_slug / lancio_fase / lancio_ingresso / lancio_link_inviato_at / lancio_followup_inviato_at / lancio_info / lancio_benvenuto_at / ai_paused_at / handed_off_at / last_inbound_at / bot_outcome / crm_lead_id`. Le 8 chiavi `app_settings` sono seedate dalla migrazione `20260914000001_lancio_webdev.sql` (applicata in prod il 16/09).
+- **Test dei cron:** stessa forma di `app/api/cron/lancio-zoom/route.test.ts` (finto Supabase che registra ogni chiamata e simula il compare-and-set del timbro e la guardia `soloDaFasi` di `impostaFaseLancio`; `vi.mock('@/lib/supabase/admin')`, `vi.mock('@/lib/twilio')`, `vi.mock('@/lib/lancio-db')`; orologio con `vi.useFakeTimers()` + `vi.setSystemTime`). I **42** test del cron Zoom **non si toccano** e devono restare verdi dopo il Task 1: sono il contratto del refactor (tre di essi asseriscono il quinto argomento `{ soloDaFasi: ['attesa', 'posto_bloccato'] }`).
+- **Scrittura della fase dai cron:** sempre `impostaFaseLancio(supabase, id, fase, campi, { soloDaFasi })` — compare-and-set sulla fase di partenza (`lib/lancio-db.ts:14-29`, commit `746492e`): un cron scrive in parallelo a un turno che può aver portato la chat avanti (`post_pitch` dal pulsante, `posto_bloccato` dal turno dell'attesa); senza guardia la fase tornerebbe indietro col template ormai partito. Dentro un turno (già serializzato dal lucchetto del drain) la guardia non serve.
+- **`ai_status` ammette solo `active | replying | closed | booked | handed_off`.** Nessun valore nuovo: il quarto stato del turno lancio (`'handed_to_mario'`) è un segnale interno al drain e non deve MAI finire in `finalStatus` (che a `lib/fenice-autoreply.ts:1046` viene scritto grezzo in `conversations.ai_status`).
+- **Mittente:** `sendTemplate`/`sendFreeText` scelgono da soli l'account Twilio dal numero `from` (`lib/twilio-account.ts`, `credenzialiPerMittente`): i cron passano `from = TWILIO_WHATSAPP_NUMBER_FENICE` come oggi e non toccano `lib/twilio.ts`.
+- **Baseline della suite:** il Task 0 annota `bun run test` PRIMA di ogni modifica (numero di file e di test a `f5c8ad6`); il Task 9 richiede un numero **maggiore** di test e mai un file in meno.
 
 ## Già in produzione (lato CRM — non si esegue)
 
@@ -54,15 +58,15 @@ CRM GDO `main` @ `2c60668` (merge `feat/lancio-webdev`): `src/lib/bot-fissatore/
 | Pagina | Tutte le 8 chiavi, validazione, ruolo admin | T7 |
 | Offerta | Payload agenda invariato; il bot manda il video da `settings.offertaDelMeseLink`; link vuoto → non manda + evento warn | T8 |
 
-Ordine: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9. T2 non tocca file di T1 e può correre in parallelo a T1; T7 e T8 dipendono da T4 (parametro `extra` dei link) e possono correre in parallelo fra loro. `vercel.json` lo scrivono T3 e T5: serializzarli.
+Ordine: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9. T2 non tocca file di T1 e può correre in parallelo a T1. **In serie, mai in parallelo:** T3 e T5 (entrambi scrivono `vercel.json`); T4 → T6 → T8 (tutti e tre scrivono `lib/fenice-autoreply.ts`: T4 il drain, T6 `shouldReopen`, T8 `linkExtra`); T2 → T4 (`lib/lancio-followup.ts`). T7 tocca solo `lancio-settings.ts`, `access.ts`, l'API e la pagina: può correre in parallelo a T5-T8 (T8 importa da `lancio-settings.ts` solo un tipo che esiste già).
 
 ---
 
 ### Task 0 (BOT): pulizia — il marker del pulsante vive solo in `primo-messaggio.ts` (ruling C5)
 
 **Files:**
-- Modify: `lib/lancio-scelta.ts` (riga 221 `export const MARKER_PULSANTE_RE`, riga 228 `raccogliRisposte`)
-- Modify: `lib/lancio-scelta.test.ts` (riga 5 import, riga 155 uso)
+- Modify: `lib/lancio-scelta.ts` (riga 299 `export const MARKER_PULSANTE_RE`, riga 307 il `.filter(...)` di `raccogliRisposte`)
+- Modify: `lib/lancio-scelta.test.ts` (riga 5 import, riga 222 uso)
 
 **Interfaces:**
 - Consumes: `isMarkerPulsanteWebinar(body)` e `MARKER_PULSANTE_WEBINAR` da `lib/primo-messaggio.ts` (B2, già usati da `lancio-fase.ts` e `lancio-post-pitch.ts`).
@@ -70,19 +74,28 @@ Ordine: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9. T2 no
 
 Altri duplicati trovati nella ricognizione, e cosa se ne fa: `eRifiutoDiPolicy`, `authorized`, `logEvento` sono copiati in `app/api/cron/lancio-zoom/route.ts` e `app/api/cron/lancio-aperture/route.ts` → il Task 1 li mette nel motore e li importa nei due cron del lancio (gli altri 14 cron con `authorized` copiato sono preesistenti e fuori perimetro); `PROVENIENZA_LANCIO = PROVENIENZA_LANCIO_WEBDEV` in `lancio-post-pitch.ts` è un alias, non un duplicato; `CODICE_FREQUENCY_CAP = 63049` (`lib/lancio-aperture.ts`) è l'unica definizione e il motore la importa.
 
-- [ ] **Step 1: Aggiorna il test perché fallisca**
+- [ ] **Step 0: Baseline della suite (una volta sola, prima di qualunque modifica)**
 
-In `lib/lancio-scelta.test.ts` togli `MARKER_PULSANTE_RE` dall'import di `./lancio-scelta` (riga 5) e aggiungi sotto:
+Run: `bun run test 2>&1 | tail -5 && bun run typecheck`
+Expected: tutto verde a `f5c8ad6`. Annota nel messaggio di chiusura del task le due cifre `Test Files N passed` e `Tests M passed`: sono la baseline che il Task 9 confronta.
+
+- [ ] **Step 1: Scrivi il test che fallisce**
+
+In `lib/lancio-scelta.test.ts` togli `MARKER_PULSANTE_RE` dall'import di `./lancio-scelta` (riga 5) e aggiungi sotto gli import:
 
 ```ts
+import * as scelta from './lancio-scelta';
 import { MARKER_PULSANTE_WEBINAR } from './primo-messaggio';
 ```
 
-Alla riga 155 sostituisci `MARKER_PULSANTE_RE.test(` con `MARKER_PULSANTE_WEBINAR.test(`. Aggiungi in coda al file:
+Alla riga 222 sostituisci `MARKER_PULSANTE_RE.test(` con `MARKER_PULSANTE_WEBINAR.test(`. Aggiungi in coda al file:
 
 ```ts
-describe('raccogliRisposte — il marker del pulsante è quello di primo-messaggio', () => {
-  it('scarta il testo del pulsante anche se scritto con altre maiuscole o senza emoji', () => {
+describe('il marker del pulsante vive solo in primo-messaggio (ruling C5)', () => {
+  it('lancio-scelta non esporta piu una copia della regex', () => {
+    expect('MARKER_PULSANTE_RE' in scelta).toBe(false);
+  });
+  it('raccogliRisposte scarta il testo del pulsante anche con altre maiuscole o senza emoji', () => {
     const info = raccogliRisposte(null, ['Ho seguito la LIVE Web Developer AI e voglio saperne di più', 'faccio il barista']);
     expect(info.risposte).toEqual(['faccio il barista']);
   });
@@ -90,7 +103,7 @@ describe('raccogliRisposte — il marker del pulsante è quello di primo-messagg
 ```
 
 Run: `bunx vitest run lib/lancio-scelta.test.ts`
-Expected: PASS (il test nuovo passa già: la regex era identica). Il passo serve a fissare il comportamento prima di togliere la copia.
+Expected: FAIL sul primo caso nuovo (`'MARKER_PULSANTE_RE' in scelta` è ancora `true`); il secondo passa già (la regex era identica) e fissa il comportamento che deve sopravvivere.
 
 - [ ] **Step 2: Togli la copia**
 
@@ -127,8 +140,8 @@ Claude-Session: https://claude.ai/code/session_01TqdFfxeDbRPq6iBmWYWSFD"
 **Files:**
 - Create: `lib/lancio-blast-motore.ts`
 - Create: `lib/lancio-blast-motore.test.ts`
-- Modify: `app/api/cron/lancio-zoom/route.ts` (righe 1-22 import; 43-58 costanti e `Esito`; 64-101 `authorized`/`orologio`/`eRifiutoDiPolicy`/`logEvento`; 152-160 orologio+forza; 224-245 paginazione; 264-463 `inviaUno`; 465-503 ciclo a blocchi)
-- Modify: `app/api/cron/lancio-aperture/route.ts` (solo l'import di `eRifiutoDiPolicy`, righe 56-66)
+- Modify: `app/api/cron/lancio-zoom/route.ts` (righe 1-23 import; 49-63 costanti, `FASI_BERSAGLIO` e `Esito`; 74-110 `authorized`/`orologio`/`eRifiutoDiPolicy`/`logEvento`; 152-162 orologio+forza; 244-267 paginazione; 297-507 contatori e `inviaUno`; 509-544 ciclo a blocchi)
+- Modify: `app/api/cron/lancio-aperture/route.ts` (solo la funzione locale `eRifiutoDiPolicy`, righe 55-65 docblock compreso)
 - Non toccare: `app/api/cron/lancio-zoom/route.test.ts`, `lib/lancio-zoom-blast.ts`
 
 **Interfaces:**
@@ -141,11 +154,11 @@ Claude-Session: https://claude.ai/code/session_01TqdFfxeDbRPq6iBmWYWSFD"
   - `autorizzatoCron(req)`, `leggiParametriCron(req, { nowRichiedeSolo })`, `eRifiutoDiPolicy(e)`, `logEvento(supabase, type, payload, message, level?)`
   - `leggiCoda<T>(supabase, tipoErrore, leggiPagina) → { righe: T[]; queryKo: boolean }`
   - `timbroUpdate(colonna, valore: string | null)` (l'oggetto per l'update postgrest) e `timbroCampi(colonna, valore: string)` (l'oggetto per `impostaFaseLancio`)
-  - `inviaTemplateTimbrato(supabase, stato, p: InvioTimbrato) → Promise<EsitoInvio>`
+  - `inviaTemplateTimbrato(supabase, stato, p: InvioTimbrato) → Promise<EsitoInvio>` — `InvioTimbrato.soloDaFasi: readonly LancioFase[]` è **obbligatorio** e viene passato a `impostaFaseLancio` sia nella riparazione sia dopo l'invio (ruling R3 della seconda passata: la guardia contro il turno concorrente vale per il blast e per il follow-up)
   - `eseguiLotti<T>(lotto, stato, { concorrenza, t0, inviaUno, suFreno }) → Promise<ContiLotti>`
   - `frenaLancio(supabase, stato, conti, { prefisso, etichetta, candidati, lotto })`
 
-Cosa resta nel cron Zoom (non è del motore): la finestra `inFinestraBlast`/`finestraBlastChiusa` dall'evento, la query `bersaglio` (fasi, perimetro, congedo), `ordinaCandidatiBlast`, il conteggio dei residui a serata finita, il run event `lancio_zoom_run`, le variabili del template (`{{1}}` nome, `{{2}}` link).
+Cosa resta nel cron Zoom (non è del motore): la finestra `inFinestraBlast`/`finestraBlastChiusa` dall'evento, la query `bersaglio` (fasi, perimetro, congedo) e la costante `FASI_BERSAGLIO` (riga 61, tipata `readonly LancioFase[]`: **resta**, la usano la query e `soloDaFasi`), `ordinaCandidatiBlast`, il conteggio dei residui a serata finita, il run event `lancio_zoom_run`, le variabili del template (`{{1}}` nome, `{{2}}` link).
 
 - [ ] **Step 1: Test del motore (le parti pure e il ciclo a blocchi)**
 
@@ -290,7 +303,10 @@ type Supa = ReturnType<typeof getSupabaseAdmin>;
  * stesse cose nello stesso modo. Quello che sta qui NON sa che cosa manda ne' a chi:
  * riceve un lotto gia' scelto e un worker che gli dice come costruire il messaggio.
  *
- * Le tre difese, nell'ordine in cui contano:
+ * Le quattro difese, nell'ordine in cui contano:
+ *  0. FASE. La fase dopo l'invio si scrive con `impostaFaseLancio(..., { soloDaFasi })`,
+ *     un compare-and-set sulla fase di partenza: mai riportare indietro una chat che un
+ *     turno concorrente ha gia' portato avanti (commit 746492e).
  *  1. IDEMPOTENZA. Il timbro (`colonna`) e' insieme il filtro dei candidati e il
  *     lucchetto: si scrive PRIMA di chiamare Twilio con un compare-and-set, e si libera
  *     SOLO se a Twilio non e' partito niente (codice Twilio presente). Un errore senza
@@ -426,6 +442,14 @@ export type InvioTimbrato = {
   body: string;
   /** Una riga `messages` col SID (non failed) esiste gia': si ripara la fase, non si rimanda. */
   giaSpedito: boolean;
+  /**
+   * Le fasi DA CUI la fase puo' avanzare a `faseDopo`: compare-and-set di
+   * `impostaFaseLancio` (`soloDaFasi`). Un cron scrive in parallelo a un turno che puo'
+   * aver portato la chat avanti (pulsante → `post_pitch`, attesa → `posto_bloccato`):
+   * senza guardia la fase tornerebbe indietro col template ormai partito. Il timbro
+   * resta comunque (e' del claim di sopra): la chat esce da sola dai candidati.
+   */
+  soloDaFasi: readonly LancioFase[];
   /** Prefisso dei tipi di evento: `lancio_zoom` | `lancio_followup`. */
   prefisso: string;
   /** Come si chiama il messaggio nei log: 'link Zoom' | 'follow-up'. */
@@ -445,7 +469,7 @@ export async function inviaTemplateTimbrato(supabase: Supa, stato: StatoRun, p: 
     if (stato.fermo) return 'skip';
 
     if (p.giaSpedito) {
-      await impostaFaseLancio(supabase, id, p.faseDopo, timbroCampi(p.colonna, new Date().toISOString()));
+      await impostaFaseLancio(supabase, id, p.faseDopo, timbroCampi(p.colonna, new Date().toISOString()), { soloDaFasi: p.soloDaFasi });
       return 'riparato';
     }
 
@@ -487,7 +511,7 @@ export async function inviaTemplateTimbrato(supabase: Supa, stato: StatoRun, p: 
         sender: 'automazione',
       });
       await supabase.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', id);
-      await impostaFaseLancio(supabase, id, p.faseDopo, timbroCampi(p.colonna, timbro));
+      await impostaFaseLancio(supabase, id, p.faseDopo, timbroCampi(p.colonna, timbro), { soloDaFasi: p.soloDaFasi });
       if (p.eventoInvio) {
         await logEvento(supabase, p.eventoInvio, { conversationId: id, crmLeadId, phone, sid: res.sid },
           `[lancio] ${p.etichetta} inviato a ${phone}`);
@@ -622,7 +646,7 @@ Expected: PASS.
 
 In `app/api/cron/lancio-zoom/route.ts`:
 
-(a) Import: togli `runPool`, `setLancioSetting` (resta `getLancioSettings`), `impostaFaseLancio`, `logCronQueryError`, `sendTemplate` (resta `getTemplateBody`) e `decideFreno` dall'import di `lancio-zoom-blast`; aggiungi
+(a) Import (righe 1-23): togli `runPool`, `setLancioSetting` (resta `getLancioSettings`), `impostaFaseLancio`, `logCronQueryError`, `sendTemplate` (resta `getTemplateBody`) e `decideFreno` dall'import di `lancio-zoom-blast`; **resta** `import type { LancioFase }` (serve a `FASI_BERSAGLIO`); aggiungi
 
 ```ts
 import {
@@ -631,9 +655,9 @@ import {
 } from '@/lib/lancio-blast-motore';
 ```
 
-(b) Cancella le definizioni locali di `PASSO_FRENO`, `TEMPO_MASSIMO_MS`, `MAX_PAGINE`, `PAGINA`, `type Esito`, `authorized`, `orologio`, `eRifiutoDiPolicy`, `logEvento` (quella importata dal motore ha la stessa firma: le chiamate `logEvento(supabase, …)` e `scriviRun` restano come sono). Sostituisci `authorized(req)` con `autorizzatoCron(req)` e `Esito` con `EsitoInvio`. `eRifiutoDiPolicy` non serve più nel route: la usa il motore.
+(b) Cancella le definizioni locali di `PASSO_FRENO`, `TEMPO_MASSIMO_MS`, `MAX_PAGINE`, `PAGINA` (righe 49-58), `type Esito` (63), `authorized`, `orologio`, `eRifiutoDiPolicy`, `logEvento` (74-110). **Non** cancellare `FASI_BERSAGLIO` (riga 61). `logEvento` importata dal motore ha la stessa firma: le chiamate `logEvento(supabase, …)` e `scriviRun` restano come sono. Sostituisci `authorized(req)` con `autorizzatoCron(req)` e `Esito` con `EsitoInvio`. `eRifiutoDiPolicy` non serve più nel route: la usa il motore.
 
-(c) Orologio e `forza` (righe 152-160): sostituisci il blocco `const now = orologio(req); … if (forza && solo === null) { return 400 }` con
+(c) Orologio e `forza` (righe 152-162): sostituisci il blocco da `const now = orologio(req);` alla chiusura dell'`if (forza && solo === null) { … }` con
 
 ```ts
   const parametri = leggiParametriCron(req, { nowRichiedeSolo: false });
@@ -643,7 +667,7 @@ import {
 
 e più sotto `req.nextUrl.searchParams.get('dry') === '1'` con `parametri.dry`. L'ORDINE dei controlli resta quello di oggi (attivo → evento → parametri → config → finestra): i test lo fissano.
 
-(d) Paginazione (righe 224-245): sostituisci il ciclo `for (let pagina = 0; …)` e le variabili `tutti`/`queryKo` con
+(d) Paginazione (righe 244-267): sostituisci le dichiarazioni `const tutti: Candidata[] = []`, `const t0 = Date.now()`, `let queryKo = false` e il ciclo `for (let pagina = 0; pagina < MAX_PAGINE; pagina++) { … }` con
 
 ```ts
   const t0 = Date.now();
@@ -654,7 +678,7 @@ e più sotto `req.nextUrl.searchParams.get('dry') === '1'` con `parametri.dry`. 
   );
 ```
 
-(e) Il worker e il ciclo (righe 264-503): sostituisci tutto il blocco da `let inviati = 0;` fino alla chiusura del `for` dei blocchi con
+(e) Il worker e il ciclo (righe 297-544): sostituisci tutto il blocco da `let inviati = 0;` (riga 297) fino alla chiusura del `for` dei blocchi (riga 544, prima di `const residui = candidati.length - report.length;`) con
 
 ```ts
   const stato = nuovoStatoRun();
@@ -669,6 +693,7 @@ e più sotto `req.nextUrl.searchParams.get('dry') === '1'` con `parametri.dry`. 
       sid, from, vars,
       body: renderBodyTemplate(bodyRaw, vars),
       giaSpedito: giaSpediti.has(c.id),
+      soloDaFasi: FASI_BERSAGLIO,
       prefisso: 'lancio_zoom',
       etichetta: 'link Zoom',
     });
@@ -686,12 +711,12 @@ e più sotto `req.nextUrl.searchParams.get('dry') === '1'` con `parametri.dry`. 
 
 Il riepilogo, `scriviRun` e la risposta JSON sotto restano invariati (usano `inviati`, `riparati`, `capped`, `falliti`, `incerti`, `saltati`, `errori`, `residui`, `fermo`, `tentati`, `codici`, `report`, `queryKo`, `max`, `perimetro`).
 
-(f) In `app/api/cron/lancio-aperture/route.ts` cancella la funzione locale `eRifiutoDiPolicy` (righe 56-66) e importala: `import { eRifiutoDiPolicy } from '@/lib/lancio-blast-motore';`.
+(f) In `app/api/cron/lancio-aperture/route.ts` cancella la funzione locale `eRifiutoDiPolicy` col suo docblock (righe 55-65: identica byte per byte a quella del motore) e importala: `import { eRifiutoDiPolicy } from '@/lib/lancio-blast-motore';`.
 
 - [ ] **Step 4: Verifica che il cron Zoom sia rimasto lo stesso**
 
 Run: `bunx vitest run app/api/cron/lancio-zoom/route.test.ts app/api/cron/lancio-aperture/route.test.ts lib/lancio-blast-motore.test.ts lib/lancio-zoom-blast.test.ts && bun run typecheck`
-Expected: PASS su tutti (i 40 casi del cron Zoom invariati), nessun errore di tipo. Se un test del cron Zoom fallisce, si corregge il **motore** o il ricablaggio, mai il test.
+Expected: PASS su tutti (i **42** casi del cron Zoom invariati, compresi i tre che asseriscono `{ soloDaFasi: ['attesa', 'posto_bloccato'] }` come quinto argomento di `impostaFaseLancio`: righe 428-431, 446 e 479 del test), nessun errore di tipo. Se un test del cron Zoom fallisce, si corregge il **motore** o il ricablaggio, mai il test.
 
 - [ ] **Step 5: Commit**
 
@@ -712,7 +737,7 @@ Claude-Session: https://claude.ai/code/session_01TqdFfxeDbRPq6iBmWYWSFD"
 - Create: `lib/lancio-followup.test.ts`
 
 **Interfaces:**
-- Consumes: `romeDayKey`, `romeHour`, `romeMinute` (`lib/rome-time.ts`); `giorniLancio(eventoAt) → { evento, giornoDopo, dopodomani }` (`lib/lancio-scelta.ts`); `haCongedo(lancioInfo)`, `type RigaLancio` (`lib/lancio-fase.ts`); `classificaLancio(body) → 'si' | 'no' | 'domanda' | 'incerto'` (`lib/lancio-classifica.ts`); `templateName` (`lib/name.ts`).
+- Consumes: `romeDayKey`, `romeHour`, `romeMinute` (`lib/rome-time.ts`); `giorniLancio(eventoAt) → { evento, giornoDopo, dopodomani }` (`lib/lancio-scelta.ts:50-53`); `haCongedo(lancioInfo)`, `type RigaLancio` (`lib/lancio-fase.ts`); `congedoEsplicito(body) → boolean` (`lib/lancio-classifica.ts:84-89`, commit `9d17b88`: solo `NO_FRASI`, mai il "no" secco); `templateName` (`lib/name.ts:45`, `'Anna Verdi' → 'Anna'`).
 - Produces:
   - `FASI_FOLLOWUP = ['attesa', 'posto_bloccato', 'link_inviato'] as const`
   - `FASCE_FOLLOWUP` (minuti di Roma, estremi `[da, a)`): `12:00–14:00`, `17:30–19:30`
@@ -720,15 +745,15 @@ Claude-Session: https://claude.ai/code/session_01TqdFfxeDbRPq6iBmWYWSFD"
   - `finestraFollowupChiusa(now: Date, eventoAt: Date): boolean` — dopo le 19:30 di dopodomani (per contare i residui una volta sola)
   - `ancoraLancio(i: { rows, welcomeSid, benvenutoAt, ingressoAt }): string | null` — l'istante da cui un inbound "conta"
   - `inboundDopo(rows: RigaLancio[], ancoraIso: string): RigaLancio[]`, `haInteragito(rows, ancoraIso: string | null): boolean`, `ultimoTestoInbound(rows, ancoraIso): string`
-  - `haDettoNo(testo: string): boolean`
+  - `haDettoNo(testo: string): boolean` — alias di `congedoEsplicito` (ruling C1 aggiornato)
   - `type DecisioneFollowup = { kind: 'invia' } | { kind: 'congeda'; leadWords: string } | { kind: 'salta'; motivo: MotivoSalto }`, `type MotivoSalto = 'fase' | 'gia_inviato' | 'congedato' | 'ancora_ignota' | 'mai_scritto'`
   - `decideFollowup(c: CandidataFollowup): DecisioneFollowup`
   - `lancioFollowupText(name): string` (testo §7.3) e `NOTA_CONGEDO_FOLLOWUP`
-  - `lancioStandardContextNote(videoLiveLink: string | null): string | null` (usata dal Task 4)
+  - `lancioStandardContextNote(videoLiveLink: string | null): string | null` e `lancioStandardDrain(c: { lancio_slug?, lancio_fase? }): boolean` (usate dal Task 4, definite qui perché il file è di questo task)
 
 **"Ha interagito" — definizione precisa (dalle righe, non da `last_inbound_at`).** Un inbound conta se `created_at >= ancora`, dove l'ancora è, nell'ordine: (1) `conversations.lancio_benvenuto_at` (timbrato dall'enroll e dal cron `lancio-aperture` quando il benvenuto parte); (2) altrimenti il `created_at` dell'ultima riga `messages` con `template_sid = LANCIO_WELCOME_TEMPLATE_SID`; (3) altrimenti l'istante dell'evento `lancio_intake` (`leggiIngressoLancioAt`, letto dal cron solo per queste righe: sono le chat riusate senza benvenuto, `duplicato:true`); (4) altrimenti `null` = ancora ignota → **non si manda** (si sbaglia dalla parte del silenzio: è un template su un numero a qualità LOW). `last_inbound_at` resta solo un pre-filtro in query (`not null`): su una chat riusata è vecchio di settimane e non dice nulla del lancio.
 
-**Il "no" (ruling C1).** Si guarda l'ULTIMO inbound con testo dopo l'ancora, non l'ultimo lotto: `classificaLancio(testo) === 'no'` (NO_SECCO, NO_FRASI, "certo che no"). Chi ha detto no dopo mezzanotte del 5 (quando l'assistenza taceva per design) non riceve "ti va di parlarne?": il cron lo congeda senza bolla (Task 3).
+**Il "no" (ruling C1, aggiornato il 17/09).** Si guarda l'ULTIMO inbound con testo dopo l'ancora, non l'ultimo lotto, e conta **solo il rifiuto esplicito**: `congedoEsplicito(testo)` (`NO_FRASI`: "no grazie", "non mi interessa", "toglimi dalla lista", "non scrivermi più"…), MAI il "no" secco né "certo che no" — in assistenza il bot fa domande ("hai l'app Zoom?") e quel "no" è una risposta, non un congedo (è la regressione chiusa da `9d17b88`). Chi ha rifiutato esplicitamente dopo mezzanotte del 5 (quando l'assistenza taceva per design) non riceve "ti va di parlarne?": il cron lo congeda senza bolla (Task 3). Chi ha scritto un "no" secco riceve il follow-up: se davvero non vuole, lo dirà a Mario e sarà lui a scartarlo.
 
 - [ ] **Step 1: Scrivi il test che fallisce**
 
@@ -738,7 +763,7 @@ import { describe, it, expect } from 'vitest';
 import {
   FASI_FOLLOWUP, inFinestraFollowup, finestraFollowupChiusa, ancoraLancio, inboundDopo, haInteragito,
   ultimoTestoInbound, haDettoNo, decideFollowup, lancioFollowupText, lancioStandardContextNote,
-  NOTA_CONGEDO_FOLLOWUP, type CandidataFollowup,
+  lancioStandardDrain, NOTA_CONGEDO_FOLLOWUP, type CandidataFollowup,
 } from './lancio-followup';
 import type { RigaLancio } from './lancio-fase';
 
@@ -803,10 +828,12 @@ describe('haInteragito / ultimoTestoInbound', () => {
   });
 });
 
-describe('haDettoNo', () => {
-  it('no secco, frasi di rifiuto e "certo che no" sono un no; il resto no', () => {
-    for (const s of ['no', 'No grazie', 'non mi interessa', 'toglimi dalla lista', 'certo che no']) expect(haDettoNo(s), s).toBe(true);
-    for (const s of ['si', 'ok', 'quanto costa?', 'no ma sono interessato', 'nessun problema, ci sono', '']) expect(haDettoNo(s), s).toBe(false);
+describe('haDettoNo — solo il rifiuto esplicito (congedoEsplicito), mai il no secco', () => {
+  it('le frasi di rifiuto sono un no', () => {
+    for (const s of ['No grazie', 'non mi interessa', 'toglimi dalla lista', 'non scrivetemi più', 'basta messaggi', 'numero sbagliato']) expect(haDettoNo(s), s).toBe(true);
+  });
+  it('un no secco, "certo che no" e tutto il resto NON sono un congedo: in assistenza il no risponde a una domanda del bot', () => {
+    for (const s of ['no', 'certo che no', 'si', 'ok', 'quanto costa?', 'no ma sono interessato', 'nessun problema, ci sono', '']) expect(haDettoNo(s), s).toBe(false);
   });
 });
 
@@ -842,9 +869,24 @@ describe('decideFollowup', () => {
     const rows = [out('benvenuto', ancora, WELCOME), inb('si', '2026-09-20T10:30:00Z'), out('link', '2026-10-05T19:40:00Z', 'HX_ZOOM'), inb('No grazie, non mi interessa', '2026-10-06T00:30:00Z')];
     expect(decideFollowup(c({ lancio_fase: 'link_inviato', rows }))).toEqual({ kind: 'congeda', leadWords: 'No grazie, non mi interessa' });
   });
-  it('un no seguito da un si non e un no: conta l ultimo', () => {
-    const rows = [out('benvenuto', ancora, WELCOME), inb('no', '2026-09-20T10:30:00Z'), inb('anzi si, mi interessa', '2026-09-20T10:35:00Z')];
+  it('un rifiuto seguito da un si non e un no: conta l ultimo', () => {
+    const rows = [out('benvenuto', ancora, WELCOME), inb('non mi interessa', '2026-09-20T10:30:00Z'), inb('anzi si, mi interessa', '2026-09-20T10:35:00Z')];
     expect(decideFollowup(c({ rows }))).toEqual({ kind: 'invia' });
+  });
+  it('un no secco come ultimo inbound NON congeda: si manda (il no era la risposta a una domanda)', () => {
+    const rows = [out('benvenuto', ancora, WELCOME), inb('si', '2026-09-20T10:30:00Z'), out('hai gia l app Zoom?', '2026-10-05T20:00:00Z'), inb('no', '2026-10-05T20:05:00Z')];
+    expect(decideFollowup(c({ lancio_fase: 'link_inviato', rows }))).toEqual({ kind: 'invia' });
+  });
+});
+
+describe('lancioStandardDrain — quando il drain deve usare il contesto della live', () => {
+  it('vero solo per una chat del lancio in fase chiuso', () => {
+    expect(lancioStandardDrain({ lancio_slug: 'webdev-2026-10', lancio_fase: 'chiuso' })).toBe(true);
+    for (const f of ['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch', 'scelta_fatta', 'followup_inviato', 'restituito', null]) {
+      expect(lancioStandardDrain({ lancio_slug: 'webdev-2026-10', lancio_fase: f })).toBe(false);
+    }
+    expect(lancioStandardDrain({ lancio_slug: null, lancio_fase: 'chiuso' })).toBe(false);
+    expect(lancioStandardDrain({})).toBe(false);
   });
 });
 
@@ -877,7 +919,7 @@ Expected: FAIL (modulo mancante).
 import { romeDayKey, romeHour, romeMinute } from './rome-time';
 import { giorniLancio } from './lancio-scelta';
 import { haCongedo, type RigaLancio } from './lancio-fase';
-import { classificaLancio } from './lancio-classifica';
+import { congedoEsplicito } from './lancio-classifica';
 import { templateName } from './name';
 
 /**
@@ -961,9 +1003,15 @@ export function ultimoTestoInbound(rows: RigaLancio[], ancoraIso: string): strin
   return '';
 }
 
-/** Il "no" netto delle regex del B1 (NO_SECCO, NO_FRASI, "certo che no"): ruling C1. */
+/**
+ * Il rifiuto ESPLICITO (ruling C1 aggiornato il 17/09): solo le frasi di `NO_FRASI`
+ * ("non mi interessa", "toglimi dalla lista", "no grazie"…), mai il "no" secco — in
+ * assistenza il bot fa domande e quel "no" e' una risposta (commit 9d17b88). Un lead
+ * freddo che riceve il follow-up costa un template; un lead scartato per un "no" detto
+ * a "hai l'app Zoom?" e' irreversibile.
+ */
 export function haDettoNo(testo: string): boolean {
-  return classificaLancio(testo) === 'no';
+  return congedoEsplicito(testo);
 }
 
 export type MotivoSalto = 'fase' | 'gia_inviato' | 'congedato' | 'ancora_ignota' | 'mai_scritto';
@@ -1028,16 +1076,25 @@ export function lancioStandardContextNote(videoLiveLink: string | null): string 
     'Nel messaggio gli abbiamo scritto che gli mandiamo il video riassuntivo della live: se lo chiede, mandaglielo subito, anche prima di fissare la call.',
   ].join('\n');
 }
+
+/**
+ * La chat e' del lancio ed e' in mano a Mario standard: fase `chiuso` (dopo il
+ * follow-up, o dopo il congedo — ma un congedato non arriva al drain: `shouldReopen`
+ * lo tiene chiuso). `restituito` NO: quel lead e' del GDO (ruling C8).
+ */
+export function lancioStandardDrain(c: { lancio_slug?: string | null; lancio_fase?: string | null }): boolean {
+  return !!c.lancio_slug && c.lancio_fase === 'chiuso';
+}
 ```
 
 Run: `bunx vitest run lib/lancio-followup.test.ts lib/lancio-classifica.test.ts`
-Expected: PASS. Se `templateName('Anna Verdi')` non dà `Anna`, si adegua il test al comportamento reale di `lib/name.ts`, non il contrario.
+Expected: PASS (`templateName('Anna Verdi')` dà `'Anna'`: `firstNameOf` in `lib/name.ts:34-42` prende la prima parola in title case).
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add lib/lancio-followup.ts lib/lancio-followup.test.ts
-git commit -m "feat(lancio): regole pure del follow-up del giorno dopo (finestre, ancora del lancio, chi ha detto no)
+git commit -m "feat(lancio): regole pure del follow-up del giorno dopo (finestre, ancora del lancio, rifiuto esplicito)
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01TqdFfxeDbRPq6iBmWYWSFD"
@@ -1053,12 +1110,14 @@ Claude-Session: https://claude.ai/code/session_01TqdFfxeDbRPq6iBmWYWSFD"
 - Modify: `vercel.json` (una voce in coda a `crons`)
 
 **Interfaces:**
-- Consumes: Task 1 (motore), Task 2 (regole), `getLancioSettings` (`lib/lancio-settings.ts`), `giorniLancio` (`lib/lancio-scelta.ts`), `marcaCongedo`, `leggiIngressoLancioAt` (`lib/lancio-db.ts`), `congedoLancio(supabase, contesto, leadWords, nota, { giaInviato: true })` (`lib/lancio-effetti.ts`: con `giaInviato` non manda nessuna bolla e non scrive il marcatore; manda `DA_SCARTARE` "non interessato", accetta 200/403/`note_duplicate`, porta a `chiuso` e scrive `lancio_congedo` + traccia), `getTemplateBody` (`lib/twilio.ts`), `renderBodyTemplate` (`lib/campaigns.ts`), `templateName`, `batchMax`, `LANCIO_BLAST_CONCURRENCY` (`lib/lancio-zoom-blast.ts`).
-- Produces: `GET /api/cron/lancio-followup` (auth `CRON_SECRET`; `?dry=1`; `?forza=1&solo=<id>`; `?now=<iso>&solo=<id>`) → JSON `{ ok, skipped? | candidati, valutati, nonValutati, targets, sent, riparati, capped, failed, incerti, skip, errori, congedati, saltati: { fase, gia_inviato, congedato, ancora_ignota, mai_scritto }, residui, fermo, queryKo }`. Eventi: `lancio_followup_run` (sempre), `lancio_followup_fermo` (C7), `lancio_followup_config_error`, `lancio_followup_query_error`, `lancio_followup_messages_query_error`, `lancio_followup_inviato` (per invio riuscito), `lancio_followup_congedo_da_cron`, e quelli del motore col prefisso `lancio_followup` (`_claim_error`, `_freq_capped`, `_esito_incerto`, `_meta_incompleta`, `_freno`, `_error`). Colonna: `lancio_followup_inviato_at` (timbro), fase `followup_inviato` via `impostaFaseLancio`.
+- Consumes: Task 1 (motore, che chiama `impostaFaseLancio(..., { soloDaFasi })`), Task 2 (regole), `getLancioSettings` (`lib/lancio-settings.ts`), `giorniLancio` (`lib/lancio-scelta.ts`), `marcaCongedo`, `leggiIngressoLancioAt` (`lib/lancio-db.ts:118-130`), `congedoLancio(supabase, contesto, leadWords, nota, { giaInviato: true })` (`lib/lancio-effetti.ts`: con `giaInviato` non manda nessuna bolla e non scrive il marcatore; manda `DA_SCARTARE` "non interessato", accetta 200/403/`note_duplicate`, porta a `chiuso` e scrive `lancio_congedo` + traccia), `getTemplateBody` (`lib/twilio.ts`), `renderBodyTemplate` (`lib/campaigns.ts`), `templateName`, `batchMax`, `LANCIO_BLAST_CONCURRENCY` (`lib/lancio-zoom-blast.ts`).
+- Produces: `GET /api/cron/lancio-followup` (auth `CRON_SECRET`; `?dry=1`; `?forza=1&solo=<id>`; `?now=<iso>&solo=<id>`) → JSON `{ ok, skipped? | candidati, valutati, nonValutati, targets, sent, riparati, capped, failed, incerti, skip, errori, congedati, saltati: { fase, gia_inviato, congedato, ancora_ignota, mai_scritto }, residui, fermo, max, queryKo, report }`. La fase `followup_inviato` si scrive con `soloDaFasi: FASI_FOLLOWUP` (compare-and-set: se intanto il pulsante ha portato la chat a `post_pitch`, la fase non torna indietro; il timbro resta). `gia_inviato` è raggiungibile solo se il filtro `.is('lancio_followup_inviato_at', null)` della query cambiasse: la colonna viene comunque letta e passata a `decideFollowup`, che è l'unica fonte della decisione. Eventi: `lancio_followup_run` (sempre), `lancio_followup_fermo` (C7), `lancio_followup_config_error`, `lancio_followup_query_error`, `lancio_followup_messages_query_error`, `lancio_followup_inviato` (per invio riuscito), `lancio_followup_congedo_da_cron`, e quelli del motore col prefisso `lancio_followup` (`_claim_error`, `_freq_capped`, `_esito_incerto`, `_meta_incompleta`, `_freno`, `_error`). Colonna: `lancio_followup_inviato_at` (timbro), fase `followup_inviato` via `impostaFaseLancio`.
 
-**Schedule.** Roma è UTC+2 il 6-7/10: 12:00–14:00 = 10:00–12:00 UTC, 17:30–19:30 = 15:30–17:30 UTC. Voce: `*/5 10-11,15-17 6-7 10 *` (copre 10:00–11:55 e 15:00–17:55 UTC; il route filtra con `inFinestraFollowup`). A 200 per run ogni 5 minuti una fascia di due ore serve fino a 4.800 conversazioni: il bersaglio è ~3.000 lead di cui una parte ha interagito.
+**Schedule.** Roma è UTC+2 il 6-7/10: 12:00–14:00 = 10:00–12:00 UTC, 17:30–19:30 = 15:30–17:30 UTC. Voce: `*/5 10-11,15-17 6-7 10 *` (copre 10:00–11:55 e 15:00–17:55 UTC; il route filtra con `inFinestraFollowup`; i 12 run al giorno fuori fascia — 17:00-17:25 e 19:30-19:55 di Roma — scrivono solo `lancio_followup_run` `fuori_finestra`, e quelli delle 19:30-19:55 del 7/10 sono proprio quelli che contano i residui a finestra chiusa). **Deviazione dichiarata dalla spec §5.5** (`*/10`, 250 per run): qui `*/5` con `LANCIO_BATCH_MAX` = 200, cioè il ritmo del blast (§11.5, delibera 16/09, ledger B4 "default 200 ovunque"): stessa cadenza, stesso motore, stesso tetto per run. A 200 per run ogni 5 minuti una fascia di due ore serve fino a 4.800 conversazioni: il bersaglio è ~3.000 lead di cui una parte ha interagito.
 
 **Perché la coda si legge tutta e non solo i primi 200.** Chi viene saltato (`mai_scritto`, `ancora_ignota`) resta candidato in query a ogni run: prendendo i primi 200 per id, un centinaio di righe saltate in testa affamerebbe la coda per tutta la finestra. Si legge tutta la coda (paginata come il blast), si valutano a blocchi di 200 con UNA query `messages` per blocco, e ci si ferma quando i bersagli sono `max`.
+
+**Costo di `leggiIngressoLancioAt`.** È una `maybeSingle` su `event_log` filtrata per `payload->>conversationId` (`lib/lancio-db.ts:118-130`), una per chat senza benvenuto in cronologia né `lancio_benvenuto_at` (le chat riusate con `duplicato: true`: decine, non migliaia). Per non pagarla in sequenza su un blocco patologico, il run ne fa al massimo `MAX_LETTURE_INTAKE` (50): oltre, quelle chat contano `ancora_ignota` in questo run e si rivalutano al run dopo (ogni 5 minuti). Il tempo delle letture entra nel budget dei 240 s come tutto il resto.
 
 - [ ] **Step 1: Scrivi il test del route che fallisce**
 
@@ -1079,6 +1138,7 @@ type ConvFinta = {
   lancio_fase: string | null;
   lancio_info: Record<string, unknown> | null;
   lancio_benvenuto_at: string | null;
+  lancio_followup_inviato_at: string | null;
   last_inbound_at: string | null;
   ai_paused_at: string | null;
   handed_off_at: string | null;
@@ -1177,7 +1237,12 @@ vi.mock('@/lib/twilio', () => ({
 
 const impostaFaseLancio = vi.fn<(...a: unknown[]) => Promise<void>>(async (...a) => {
   const c = stato.convs.find((x) => x.id === a[1]);
-  if (c) c.lancio_fase = a[2] as string;
+  if (!c) return;
+  // `soloDaFasi` e' il compare-and-set sulla fase di partenza: finto come nel test del
+  // cron Zoom, perche' e' esattamente quello che questo test deve vedere.
+  const soloDaFasi = (a[4] as { soloDaFasi?: readonly string[] } | undefined)?.soloDaFasi;
+  if (soloDaFasi && !soloDaFasi.includes(c.lancio_fase ?? '')) return;
+  c.lancio_fase = a[2] as string;
 });
 const marcaCongedo = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
 const leggiIngressoLancioAt = vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => null);
@@ -1210,7 +1275,7 @@ const richiesta = (extra = '', secret: string | null = SEGRETO) =>
 const tel = (id: number) => `+39333000${String(id).padStart(4, '0')}`;
 const conv = (id: number, extra: Partial<ConvFinta> = {}): ConvFinta => ({
   id, crm_lead_id: `crm-${id}`, lancio_fase: 'attesa', lancio_info: null, lancio_benvenuto_at: ANCORA,
-  last_inbound_at: '2026-09-20T10:30:00Z', ai_paused_at: null, handed_off_at: null,
+  lancio_followup_inviato_at: null, last_inbound_at: '2026-09-20T10:30:00Z', ai_paused_at: null, handed_off_at: null,
   leads: { phone_e164: tel(id), first_name: 'mario rossi' }, ...extra,
 });
 const righe = (id: number, ...testi: [string, string][]): Riga[] => [
@@ -1353,7 +1418,12 @@ describe('GET /api/cron/lancio-followup — perimetro (C4) e decisione', () => {
     chiamate.length = 0;
     await expect((await richiesta()).json()).resolves.toMatchObject({ sent: 1 });
   });
-  it('l ultimo inbound e un no netto: marcaCongedo + congedoLancio senza bolla, nessun template (C1)', async () => {
+  it('un no secco come ultimo inbound non congeda: riceve il follow-up (C1 aggiornato)', async () => {
+    stato.messaggi.set(1, righe(1, ['si', '2026-09-20T10:30:00Z'], ['no', '2026-10-05T20:05:00Z']));
+    await expect((await richiesta()).json()).resolves.toMatchObject({ sent: 2, congedati: 0 });
+    expect(congedoLancio).not.toHaveBeenCalled();
+  });
+  it('l ultimo inbound e un rifiuto esplicito: marcaCongedo + congedoLancio senza bolla, nessun template (C1)', async () => {
     stato.messaggi.set(1, righe(1, ['si', '2026-09-20T10:30:00Z'], ['no grazie non mi interessa', '2026-10-06T00:30:00Z']));
     const res = await (await richiesta()).json();
     expect(res).toMatchObject({ sent: 1, congedati: 1 });
@@ -1369,6 +1439,14 @@ describe('GET /api/cron/lancio-followup — perimetro (C4) e decisione', () => {
     expect(sendTemplate).toHaveBeenCalledWith(expect.objectContaining({ to: tel(2) }));
     expect(tipiEvento()).toContain('lancio_followup_congedo_da_cron');
     expect(stato.timbrate.has(1)).toBe(false);
+  });
+  it('le letture dell intake sono al massimo MAX_LETTURE_INTAKE per run: il resto conta ancora_ignota e si rivaluta al run dopo', async () => {
+    stato.convs = Array.from({ length: 60 }, (_, i) => conv(i + 1, { lancio_benvenuto_at: null }));
+    for (const c of stato.convs) stato.messaggi.set(c.id, [{ conversation_id: c.id, direction: 'in', body: 'si', template_sid: null, created_at: '2026-09-20T10:30:00Z' }]);
+    const res = await (await richiesta()).json();
+    expect(leggiIngressoLancioAt).toHaveBeenCalledTimes(50);
+    expect(res.saltati.ancora_ignota).toBe(60);
+    expect(sendTemplate).not.toHaveBeenCalled();
   });
   it('il tetto del lotto vale sui bersagli, non sui candidati: chi si salta non ruba posti', async () => {
     vi.stubEnv('LANCIO_BATCH_MAX', '1');
@@ -1395,9 +1473,19 @@ describe('GET /api/cron/lancio-followup — invio col motore', () => {
     expect(msg).toHaveLength(2);
     expect(msg[0]).toMatchObject({ template_sid: SID, is_template: true, direction: 'out', sender: 'automazione' });
     expect(String(msg[0].body)).toContain('Ciao Mario, ieri sera');
-    expect(impostaFaseLancio).toHaveBeenCalledWith(expect.anything(), 1, 'followup_inviato', { lancio_followup_inviato_at: expect.any(String) });
+    expect(impostaFaseLancio).toHaveBeenCalledWith(expect.anything(), 1, 'followup_inviato', { lancio_followup_inviato_at: expect.any(String) }, { soloDaFasi: ['attesa', 'posto_bloccato', 'link_inviato'] });
     expect(tipiEvento()).toContain('lancio_followup_inviato');
     expect(stato.timbrateAllInvio[0]).toContain(1);
+  });
+  it('una fase avanzata durante l invio (pulsante → post_pitch) non torna indietro; il timbro resta', async () => {
+    stato.convs = [conv(1)];
+    sendTemplate.mockImplementationOnce(async () => {
+      stato.convs[0].lancio_fase = 'post_pitch';
+      return { sid: 'SMtest', status: 'queued' };
+    });
+    await expect((await richiesta()).json()).resolves.toMatchObject({ sent: 1, failed: 0 });
+    expect(stato.convs[0].lancio_fase).toBe('post_pitch');
+    expect(stato.timbrate).toEqual(new Set([1]));
   });
   it('un run gemello non rimanda: le chat timbrate escono dalla coda', async () => {
     await richiesta();
@@ -1409,7 +1497,7 @@ describe('GET /api/cron/lancio-followup — invio col motore', () => {
   it('gia spedito secondo messages.template_sid: si ripara la fase, non si rimanda', async () => {
     stato.spediti = [{ conversation_id: 1 }];
     await expect((await richiesta()).json()).resolves.toMatchObject({ sent: 1, riparati: 1 });
-    expect(impostaFaseLancio).toHaveBeenCalledWith(expect.anything(), 1, 'followup_inviato', expect.anything());
+    expect(impostaFaseLancio).toHaveBeenCalledWith(expect.anything(), 1, 'followup_inviato', expect.anything(), { soloDaFasi: ['attesa', 'posto_bloccato', 'link_inviato'] });
   });
   it('63049: capped, timbro liberato, il run tira dritto e non spegne il lancio', async () => {
     sendTemplate.mockRejectedValueOnce(Object.assign(new Error('cap'), { code: 63049 }));
@@ -1500,6 +1588,7 @@ type Candidata = {
   lancio_fase: string | null;
   lancio_info: unknown;
   lancio_benvenuto_at: string | null;
+  lancio_followup_inviato_at: string | null;
   last_inbound_at: string | null;
   leads: { phone_e164: string | null; first_name: string | null } | null;
 };
@@ -1508,6 +1597,9 @@ type RigaMessaggio = RigaLancio & { conversation_id: number };
 /** Quante candidate si valutano per giro: una query `messages` per blocco. */
 const BLOCCO_VALUTAZIONE = 200;
 const MAX_RIGHE_BLOCCO = BLOCCO_VALUTAZIONE * 40;
+/** Letture dell'evento `lancio_intake` per run (chat riusate senza benvenuto): oltre,
+ *  quelle chat contano `ancora_ignota` adesso e si rivalutano al run dopo. */
+export const MAX_LETTURE_INTAKE = 50;
 
 const contatoreSalti = (): Record<MotivoSalto, number> => ({ fase: 0, gia_inviato: 0, congedato: 0, ancora_ignota: 0, mai_scritto: 0 });
 
@@ -1591,7 +1683,7 @@ export async function GET(req: NextRequest) {
 
   const t0 = Date.now();
   const { righe: coda, queryKo } = await leggiCoda<Candidata>(supabase, 'lancio_followup_query_error', (da, a) =>
-    bersaglio('id, crm_lead_id, lancio_fase, lancio_info, lancio_benvenuto_at, last_inbound_at, leads(phone_e164, first_name)')
+    bersaglio('id, crm_lead_id, lancio_fase, lancio_info, lancio_benvenuto_at, lancio_followup_inviato_at, last_inbound_at, leads(phone_e164, first_name)')
       .order('id', { ascending: true })
       .range(da, a),
   );
@@ -1602,6 +1694,7 @@ export async function GET(req: NextRequest) {
   const targets: Candidata[] = [];
   const daCongedare: { c: Candidata; leadWords: string }[] = [];
   let valutati = 0;
+  let lettureIntake = 0;
   for (let i = 0; i < coda.length && targets.length < max; i += BLOCCO_VALUTAZIONE) {
     if (Date.now() - t0 > TEMPO_MASSIMO_MS) break;
     const blocco = coda.slice(i, i + BLOCCO_VALUTAZIONE);
@@ -1627,8 +1720,14 @@ export async function GET(req: NextRequest) {
       // `decideFollowup` rifa' in memoria il filtro del congedo (C4) e quello della fase:
       // se il filtro JSON della query cambiasse forma, il congedato esce comunque qui.
       const ancoraNota = ancoraLancio({ rows, welcomeSid, benvenutoAt: c.lancio_benvenuto_at, ingressoAt: null });
-      const ancora = ancoraNota ?? (await leggiIngressoLancioAt(supabase, c.id));
-      const decisione = decideFollowup({ lancio_fase: c.lancio_fase, lancio_followup_inviato_at: null, lancio_info: c.lancio_info, rows, ancora });
+      let ancora = ancoraNota;
+      if (!ancora && lettureIntake < MAX_LETTURE_INTAKE) {
+        lettureIntake++;
+        ancora = await leggiIngressoLancioAt(supabase, c.id);
+      }
+      const decisione = decideFollowup({
+        lancio_fase: c.lancio_fase, lancio_followup_inviato_at: c.lancio_followup_inviato_at, lancio_info: c.lancio_info, rows, ancora,
+      });
       if (decisione.kind === 'salta') { saltati[decisione.motivo]++; continue; }
       if (decisione.kind === 'congeda') { daCongedare.push({ c, leadWords: decisione.leadWords }); continue; }
       targets.push(c);
@@ -1686,6 +1785,9 @@ export async function GET(req: NextRequest) {
       sid, from, vars,
       body: bodyRaw ? renderBodyTemplate(bodyRaw, vars) : lancioFollowupText(nome),
       giaSpedito: giaSpediti.has(c.id),
+      // Mentre il template e' in volo il pulsante puo' aver portato la chat a
+      // `post_pitch`: la fase non torna indietro, il timbro resta.
+      soloDaFasi: FASI_FOLLOWUP,
       prefisso: 'lancio_followup',
       etichetta: 'follow-up',
       eventoInvio: 'lancio_followup_inviato',
@@ -1707,7 +1809,7 @@ export async function GET(req: NextRequest) {
     candidati: coda.length, valutati, nonValutati, targets: targets.length, congedati,
     inviati: conti.inviati, riparati: conti.riparati, capped: conti.capped, falliti: conti.falliti,
     incerti: conti.incerti, saltatiInvio: conti.saltati, errori: conti.errori, residui,
-    saltati, tentati: stato.tentati, codici: stato.codici, fermo: stato.fermo, max, sender: settings.sender, queryKo,
+    saltati, lettureIntake, tentati: stato.tentati, codici: stato.codici, fermo: stato.fermo, max, sender: settings.sender, queryKo,
   };
   await scriviRun(
     riepilogo,
@@ -1753,40 +1855,40 @@ Claude-Session: https://claude.ai/code/session_01TqdFfxeDbRPq6iBmWYWSFD"
 
 ---
 
-### Task 4 (BOT): il ramo `followup_inviato` nello switch di `eseguiTurnoLancio`, e il drain prosegue con Mario e il video della live (ruling "flusso standard", C9)
+### Task 4 (BOT): il ramo `followup_inviato` nello switch di `eseguiTurnoLancio` passa la mano a Mario nello stesso drain, col video della live (ruling "flusso standard" e ruling 3 della seconda passata, C9)
 
 **Files:**
-- Modify: `lib/lancio-turno.ts` (tipo di ritorno di `eseguiTurnoLancio`; nuovo ramo PRIMA dello `switch` del B4, riga ~73)
-- Modify: `lib/lancio-turno.test.ts` (un caso nuovo)
-- Modify: `lib/fenice-autoreply.ts` (`drainMarioReplies`: blocco `if (lancioInCorso(lancio))` riga 472; `videoGiaInviato` riga 470; opzioni di `generateMarioReply` righe 543-565; `unknownFeniceLinks` riga 643; `ensureConfirmationBlock` riga 660)
+- Modify: `lib/lancio-turno.ts` (tipo di ritorno di `eseguiTurnoLancio`, riga 51; nuovo ramo PRIMA dello `switch` del B4, riga 74; `welcomeSid`/`righe` righe 61-68)
+- Modify: `lib/lancio-turno.test.ts` (un `describe` nuovo)
+- Modify: `lib/fenice-autoreply.ts` (`drainMarioReplies`: import riga 20; ramo lancio righe 541-595 — il ciclo `for (let giro = 0; giro < MAX_GIRI_LANCIO; giro++)` a 561-594; `videoGiaInviato` riga 539; opzioni di `generateMarioReply` righe 661-685; `unknownFeniceLinks` riga 755; `ensureConfirmationBlock` righe 771-772)
+- Modify: `lib/fenice-autoreply.test.ts` (un `describe` nuovo con `makeDrainSupabase`, righe 283-359, e un `vi.mock('./lancio-settings')`)
 - Modify: `lib/outbound-sanitize.ts` (`unknownFeniceLinks`, riga 45) + `lib/outbound-sanitize.test.ts`
 - Modify: `lib/confirmation-block.ts` (`containsVideoLink` riga 19, `hasVideoLink` riga 21, `ensureConfirmationBlock` riga 60) + `lib/confirmation-block.test.ts`
-- Modify: `lib/lancio-followup.ts` + test (aggiunge `lancioStandardDrain`)
 
 **Interfaces:**
-- Consumes: `impostaFaseLancio`, `getLancioSettings`, `lancioStandardContextNote` (Task 2), `lancioInCorso` (`lib/lancio-fase.ts`: falso per `chiuso`/`restituito`), `generateMarioReply(history, { personaName, giorniPieni, contextNote? })` (`lib/mario.ts`).
+- Consumes: `impostaFaseLancio` (dentro un turno: senza `soloDaFasi`, il lucchetto del drain serializza), `getLancioSettings`, `lancioStandardContextNote` e `lancioStandardDrain` (Task 2), `lancioInCorso` (`lib/lancio-fase.ts`: falso per `chiuso`/`restituito`), `generateMarioReply(history, { personaName, giorniPieni, contextNote? })` (`lib/mario.ts`), `MAX_GIRI_LANCIO`, `ultimoInboundAt`, `indiceInboundDopo`, `rileggiRigaLancio` (già nel drain).
 - Produces:
-  - `eseguiTurnoLancio(...) → Promise<'active' | 'closed' | 'handed_off' | 'mario'>` — `'mario'` = "fase portata a `chiuso`, prosegui in questo stesso giro col flusso standard"
-  - `lancioStandardDrain(c: { lancio_slug?: string | null; lancio_fase?: string | null }): boolean` — vero se la chat è del lancio ed è in mano a Mario standard (`chiuso`)
+  - `eseguiTurnoLancio(...) → Promise<'active' | 'closed' | 'handed_off' | 'handed_to_mario'>` — `'handed_to_mario'` = "ho portato la fase a `chiuso`; il drain prosegua ORA col flusso standard". **Non è uno stato di `ai_status`** e non deve mai finire in `finalStatus`.
   - `unknownFeniceLinks(text, extraKnown?: readonly string[])`, `containsVideoLink(p, extraVideoLinks?: readonly string[])`, `ensureConfirmationBlock(parts, opts?: { extraVideoLinks?: readonly string[] })` — parametri opzionali, retro-compatibili
-  - Evento `lancio_followup_risposta` (info) al passaggio `followup_inviato → chiuso`; evento `lancio_video_live_link_missing` (warn, una volta per drain) se `settings.videoLiveLink` è vuoto
+  - nel drain: `linkExtra` (link ufficiali in più per `unknownFeniceLinks`) e `videoExtra` (link video in più per `containsVideoLink`/`ensureConfirmationBlock`); in questo task entrambi valgono `[videoLive]`; il Task 8 aggiunge il video del GDO SOLO a `linkExtra`
+  - eventi `lancio_followup_risposta` (info, dal turno) e `lancio_video_live_link_missing` (warn, una volta per drain)
 
-**Come si "apre" il flusso standard.** Non esiste una funzione separata che "faccia Mario": il flusso standard è il corpo di `drainMarioReplies` dopo il ramo lancio (`generateMarioReply` → `splitMarioMessages` → `sendFreeText`, con esiti, blocco di conferma, note al CRM). Quindi il turno `followup_inviato` fa una cosa sola — `impostaFaseLancio(chiuso)` + evento — e restituisce `'mario'`; il drain, invece di `break`, **prosegue nello stesso giro** dentro il codice di Mario con `lancioStandard = true`. Da quel giro in poi la chat ha `lancio_fase='chiuso'`: `lancioInCorso` è falso, il claim la tratta come una chat normale, e `FILTRO_FUORI_LANCIO` la lascia passare ai cron di Mario (C9). L'unica differenza dal flusso standard è la `contextNote` col link della live, e il fatto che quel link è "ufficiale" per `unknownFeniceLinks`, `containsVideoLink` e `ensureConfirmationBlock`. Link vuoto: nessuna nota (Mario usa i quattro video classici) + evento warn.
+**Come si "apre" il flusso standard, contro il codice reale.** Il ramo lancio del drain (`fenice-autoreply.ts:541-595`) è un ciclo di al massimo `MAX_GIRI_LANCIO` turni: ogni giro chiama `eseguiTurnoLancio`, assegna il risultato a `finalStatus` (riga 564), esce se non è `'active'` (576), rilegge la riga con `rileggiRigaLancio` (582) e alla fine fa `break` (594) verso la chiusura del round. `finalStatus` finisce grezzo in `conversations.ai_status` (riga 1046). Quindi: il turno `followup_inviato` chiude il lancio (`impostaFaseLancio(chiuso)`) e torna `'handed_to_mario'`; il ciclo lo intercetta PRIMA di assegnare `finalStatus`, alza `passaggioAMario` ed esce dal ciclo; al posto del `break` finale, se `passaggioAMario` è vero, si aggiorna la copia in memoria (`lancio.lancio_fase = 'chiuso'`) e si prosegue nel corpo di Mario dello stesso round (prompt, `splitMarioMessages`, `sendFreeText`, esiti, blocco di conferma). Da quel momento `lancioInCorso` è falso: al round successivo e ai drain successivi la chat è una chat normale, e `FILTRO_FUORI_LANCIO` la lascia ai cron di Mario (C9). L'unica differenza dal flusso standard è la `contextNote` col link della live e il fatto che quel link è "ufficiale" per `unknownFeniceLinks`, `containsVideoLink`, `ensureConfirmationBlock`. Link vuoto: nessuna nota (Mario usa i quattro video classici) + evento warn.
 
-- [ ] **Step 1: Test del turno e delle funzioni pure che falliscono**
+- [ ] **Step 1: Test che falliscono**
 
-In `lib/lancio-turno.test.ts` aggiungi in coda (usa `makeSupabase`, `base`, `WELCOME`, `inb` già definiti nel file):
+In `lib/lancio-turno.test.ts` aggiungi in coda (usa `makeSupabase`, `base`, `WELCOME`, `inb`, `genera`, `sendFreeText`, `turnoAssistenza`, `turnoPostPitch` già importati nel file):
 
 ```ts
 describe('followup_inviato — il lead ha risposto al follow-up: la chat passa a Mario', () => {
-  it('porta la fase a chiuso, scrive l evento e restituisce mario senza mandare bolle ne chiamare il modello', async () => {
+  it('porta la fase a chiuso, scrive l evento e torna handed_to_mario senza bolle, senza modello, senza traccia', async () => {
     const { supabase, calls } = makeSupabase();
     const esito = await eseguiTurnoLancio(supabase, base({
       fase: 'followup_inviato',
       rows: [WELCOME, inb('si'), { direction: 'out', body: 'Ciao Anna, ieri sera alla live...', template_sid: 'HX_FU' }, inb('si mi interessa, dimmi')],
       inboundBody: 'si mi interessa, dimmi',
     }));
-    expect(esito).toBe('mario');
+    expect(esito).toBe('handed_to_mario');
     expect(calls.convUpdates).toContainEqual(expect.objectContaining({ lancio_fase: 'chiuso' }));
     expect(calls.events.map((e) => e.type)).toContain('lancio_followup_risposta');
     expect(sendFreeText).not.toHaveBeenCalled();
@@ -1799,17 +1901,85 @@ describe('followup_inviato — il lead ha risposto al follow-up: la chat passa a
 });
 ```
 
-In `lib/lancio-followup.test.ts` aggiungi `lancioStandardDrain` all'import e:
+In `lib/fenice-autoreply.test.ts` aggiungi, accanto agli altri `vi.mock` in testa al file:
 
 ```ts
-describe('lancioStandardDrain — quando il drain deve usare il contesto della live', () => {
-  it('vero solo per una chat del lancio in fase chiuso', () => {
-    expect(lancioStandardDrain({ lancio_slug: 'webdev-2026-10', lancio_fase: 'chiuso' })).toBe(true);
-    for (const f of ['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch', 'scelta_fatta', 'followup_inviato', 'restituito', null]) {
-      expect(lancioStandardDrain({ lancio_slug: 'webdev-2026-10', lancio_fase: f })).toBe(false);
-    }
-    expect(lancioStandardDrain({ lancio_slug: null, lancio_fase: 'chiuso' })).toBe(false);
-    expect(lancioStandardDrain({})).toBe(false);
+const LIVE = 'https://corso.feniceacademy.it/live-webdev-2026';
+vi.mock('./lancio-settings', () => ({
+  getLancioSettings: vi.fn(async () => ({
+    attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: LIVE, offertaDelMeseLink: null,
+    eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti', sender: 'principale',
+  })),
+}));
+```
+
+poi `import { getLancioSettings } from './lancio-settings';` e `import { eseguiTurnoLancio } from './lancio-turno';` fra gli import (se `eseguiTurnoLancio` è già importato per i test dei giri, non duplicarlo), e in coda al file (usa `makeDrainSupabase`, `ClaimedRow`, `FakeMsgRow` già definiti a righe 261-359):
+
+```ts
+describe('drainMarioReplies — dopo il follow-up la chat passa a Mario nello STESSO drain (B5)', () => {
+  const FU: FakeMsgRow = { direction: 'out', body: 'Ciao Anna, ieri sera alla live...', template_sid: 'HX_FU', created_at: '2026-10-06T10:10:00Z' };
+  const RISPOSTA: FakeMsgRow = { direction: 'in', body: 'si mi interessa, mandami il video', template_sid: null, created_at: '2026-10-06T10:20:00Z' };
+  const riga = (): ClaimedRow => ({
+    id: 7, ai_started_at: null, crm_lead_id: 'crm7', bot_outcome: null,
+    lancio_slug: 'webdev-2026-10', lancio_fase: 'followup_inviato', lancio_info: null,
+  });
+  const rispostaMario = (testo: string) => ({
+    visibleReply: testo, appointmentFixed: false, passToHuman: false, videoWatched: false, outcome: null, scheduledAt: null,
+  });
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(eseguiTurnoLancio).mockReset();
+    vi.mocked(getLancioSettings).mockClear();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('handed_to_mario: Mario risponde subito, con il link della live nel contesto, e ai_status resta active', async () => {
+    vi.mocked(eseguiTurnoLancio).mockResolvedValueOnce('handed_to_mario');
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(rispostaMario(`Perfetto! Ecco il video della live: ${LIVE}`));
+    const { supabase, calls } = makeDrainSupabase(riga(), [FU, RISPOSTA]);
+
+    await drainMarioReplies(supabase, 7, '+391234567890', () => 0);
+
+    expect(eseguiTurnoLancio).toHaveBeenCalledTimes(1);
+    expect(generateMarioReply).toHaveBeenCalledTimes(1);
+    const opts = vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string };
+    expect(opts.contextNote).toContain(LIVE);
+    expect(opts.contextNote).toContain('conferenza-*');
+    expect(calls.messageInserts.map((m) => m.body)).toEqual([`Perfetto! Ecco il video della live: ${LIVE}`]);
+    // Il link della live e' ufficiale: nessun "link inventato" a log.
+    expect(calls.events.map((e) => e.type)).not.toContain('unknown_fenice_link');
+    // Il quarto stato del turno non arriva MAI a conversations.ai_status.
+    expect(calls.finalStatusWrites).toEqual(['active']);
+    expect(calls.finalStatusWrites).not.toContain('handed_to_mario');
+  });
+
+  it('senza lancio_video_live_link: Mario risponde coi video classici (nessuna contextNote) e resta un warn', async () => {
+    vi.mocked(getLancioSettings).mockResolvedValueOnce({
+      attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null,
+      eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti', sender: 'principale',
+    });
+    vi.mocked(eseguiTurnoLancio).mockResolvedValueOnce('handed_to_mario');
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(rispostaMario('Ciao! Raccontami: lavori al momento?'));
+    const { supabase, calls } = makeDrainSupabase(riga(), [FU, RISPOSTA]);
+
+    await drainMarioReplies(supabase, 7, '+391234567890', () => 0);
+
+    const opts = vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string };
+    expect(opts.contextNote).toBeUndefined();
+    expect(calls.events.map((e) => e.type)).toContain('lancio_video_live_link_missing');
+    expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+
+  it('un turno che chiude il lancio in altro modo (closed) non passa a Mario e scrive closed', async () => {
+    vi.mocked(eseguiTurnoLancio).mockResolvedValueOnce('closed');
+    const { supabase, calls } = makeDrainSupabase({ ...riga(), lancio_fase: 'attesa' }, [FU, RISPOSTA]);
+
+    await drainMarioReplies(supabase, 7, '+391234567890', () => 0);
+
+    expect(generateMarioReply).not.toHaveBeenCalled();
+    expect(calls.finalStatusWrites).toEqual(['closed']);
   });
 });
 ```
@@ -1829,7 +1999,7 @@ describe('unknownFeniceLinks con link extra (video della live, offerta del mese)
 });
 ```
 
-In `lib/confirmation-block.test.ts` aggiungi in coda (l'import di `containsVideoLink` e `ensureConfirmationBlock` c'è già; se manca `containsVideoLink`, aggiungilo):
+In `lib/confirmation-block.test.ts` aggiungi in coda (l'import di `ensureConfirmationBlock` c'è già; aggiungi `containsVideoLink` all'import da `./confirmation-block`):
 
 ```ts
 describe('blocco di conferma con un video extra', () => {
@@ -1847,12 +2017,12 @@ describe('blocco di conferma con un video extra', () => {
 });
 ```
 
-Run: `bunx vitest run lib/lancio-turno.test.ts lib/lancio-followup.test.ts lib/outbound-sanitize.test.ts lib/confirmation-block.test.ts`
-Expected: FAIL sui quattro casi nuovi.
+Run: `bunx vitest run lib/lancio-turno.test.ts lib/fenice-autoreply.test.ts lib/outbound-sanitize.test.ts lib/confirmation-block.test.ts`
+Expected: FAIL sui casi nuovi (il turno torna `'active'` con silenzio `fase_non_gestita`; il drain fa `break`; gli argomenti in più sono ignorati).
 
 - [ ] **Step 2: Le due funzioni pure sui link**
 
-`lib/outbound-sanitize.ts`, sostituisci `unknownFeniceLinks`:
+`lib/outbound-sanitize.ts`, sostituisci `unknownFeniceLinks` (riga 45):
 
 ```ts
 /** URL del dominio dei video che non sono nella lista ufficiale: vanno loggati,
@@ -1870,12 +2040,12 @@ export function unknownFeniceLinks(text: string, extraKnown: readonly string[] =
 
 ```ts
 /** Vero se il testo contiene uno dei link video ufficiali, o uno dei link video extra
- * passati dal chiamante (live editata del lancio, offerta del mese da impostazione). */
+ * passati dal chiamante (live editata del lancio). */
 export const containsVideoLink = (p: string, extraVideoLinks: readonly string[] = []) =>
   VIDEO_LINKS.some((l) => p.includes(l)) || extraVideoLinks.some((l) => l !== '' && p.includes(l));
 ```
 
-(cancella `const hasVideoLink = containsVideoLink;`) e la firma di `ensureConfirmationBlock` con
+(cancella `const hasVideoLink = containsVideoLink;`, riga 21: non è usata fuori dal file) e la firma di `ensureConfirmationBlock` (riga 60) con
 
 ```ts
 export function ensureConfirmationBlock(
@@ -1892,36 +2062,26 @@ export function ensureConfirmationBlock(
 
 Il resto della funzione (pitch, `isStep4`, ritorno) resta identico.
 
-- [ ] **Step 3: `lancioStandardDrain` in `lib/lancio-followup.ts`**
+- [ ] **Step 3: Il ramo nello switch di `lib/lancio-turno.ts`**
+
+Cambia la firma (riga 51):
 
 ```ts
-/**
- * La chat e' del lancio ed e' in mano a Mario standard: fase `chiuso` (dopo il
- * follow-up, o dopo il congedo — ma un congedato non arriva al drain: `shouldReopen`
- * lo tiene chiuso). `restituito` NO: quel lead e' del GDO (ruling C8).
- */
-export function lancioStandardDrain(c: { lancio_slug?: string | null; lancio_fase?: string | null }): boolean {
-  return !!c.lancio_slug && c.lancio_fase === 'chiuso';
-}
+export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Promise<'active' | 'closed' | 'handed_off' | 'handed_to_mario'> {
 ```
 
-- [ ] **Step 4: Il ramo nello switch di `lib/lancio-turno.ts`**
-
-Cambia la firma:
-
-```ts
-export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Promise<'active' | 'closed' | 'handed_off' | 'mario'> {
-```
-
-e SUBITO PRIMA del blocco `if (i.fase === 'link_inviato' || i.fase === 'post_pitch' || i.fase === 'scelta_fatta') {` inserisci:
+Sposta il blocco `const welcomeSid = … ; const conBenvenuto = … ; const righe = tagliaRigheDalLancio(…);` (righe 61-68) DOPO il ramo nuovo, che va inserito subito dopo `const genera = i.genera ?? generateLancioReply;`:
 
 ```ts
   // Ha risposto al follow-up del giorno dopo (spec §5.5): da qui la chat e' di Mario
-  // standard. Si chiude il lancio e si restituisce 'mario': il drain prosegue nello
-  // STESSO giro col flusso classico (prompt Mario, slot, form, Conferme), con la sola
-  // differenza del video (la live editata, via contextNote). Niente bolla qui, niente
-  // traccia `fenice_ai_reply`: a questo inbound risponde Mario fra un istante, e la
-  // traccia la scrive lui. Il taglio delle righe non serve: non si interpella nessuno.
+  // standard. Si chiude il lancio e si torna 'handed_to_mario': il drain lo intercetta
+  // nel ciclo dei giri, esce dal ramo lancio e prosegue NELLO STESSO drain col flusso
+  // classico (prompt Mario, slot, form, Conferme), con la sola differenza del video (la
+  // live editata, via contextNote). 'handed_to_mario' NON e' uno stato di ai_status.
+  // Niente bolla qui, niente traccia `fenice_ai_reply`: a questo inbound risponde Mario
+  // fra un istante, e la traccia la scrive lui. Il taglio delle righe non serve: non si
+  // interpella nessuno. Nessun `soloDaFasi`: dentro un turno il lucchetto del drain
+  // serializza gia'.
   if (i.fase === 'followup_inviato') {
     await impostaFaseLancio(supabase, i.conversationId, 'chiuso');
     await supabase.from('event_log').insert({
@@ -1930,17 +2090,15 @@ e SUBITO PRIMA del blocco `if (i.fase === 'link_inviato' || i.fase === 'post_pit
       message: `[lancio] conv ${i.conversationId}: ha risposto al follow-up, la chat passa a Mario`,
       level: 'info',
     });
-    return 'mario';
+    return 'handed_to_mario';
   }
 ```
 
-Sposta la lettura di `welcomeSid`/`righe` (le righe `const welcomeSid = …` fino a `);` di `tagliaRigheDalLancio`) DOPO questo ramo, così un turno che passa a Mario non paga la query dell'istante di ingresso.
+- [ ] **Step 4: Il drain (`lib/fenice-autoreply.ts`)**
 
-- [ ] **Step 5: Il drain (`lib/fenice-autoreply.ts`)**
+Import (riga 20, accanto a `eseguiTurnoLancio`): `import { lancioStandardDrain, lancioStandardContextNote } from './lancio-followup';` e `import { getLancioSettings } from './lancio-settings';`.
 
-Import in testa: `import { lancioStandardDrain, lancioStandardContextNote } from './lancio-followup';` e `import { getLancioSettings } from './lancio-settings';`.
-
-Dentro `drainMarioReplies`, prima del `try` del ciclo dei round (dopo `const giorniPieni = …`), aggiungi lo stato del link della live, letto al massimo una volta per drain:
+(a) Dopo `let finalStatus = 'active';` (riga 520) e la lettura di `giorniPieni` (523), prima del `try`:
 
 ```ts
   // Lancio Web Developer AI, dopo il follow-up (spec §5.5): la chat e' di Mario standard e
@@ -1962,55 +2120,66 @@ Dentro `drainMarioReplies`, prima del `try` del ciclo dei round (dopo `const gio
   };
 ```
 
-Sostituisci il blocco
+(b) Cancella la riga 539 (`const videoGiaInviato = rows.some((m) => m.direction === 'out' && containsVideoLink(m.body));`) e il commento sopra: si ricalcola dopo il ramo lancio, coi link extra.
+
+(c) Nel ramo lancio (541-595) cambia SOLO queste righe; i commenti e il resto del ciclo (`ultimoVisto`, `dopoIlTurno`, `iNuovo`, `rileggiRigaLancio`, gli aggiornamenti di `faseTurno`/`infoTurno`/`leadIdTurno`/`righeTurno`/`inboundTurno`) restano come sono:
 
 ```ts
-      const videoGiaInviato = rows.some((m) => m.direction === 'out' && containsVideoLink(m.body));
-
-      if (lancioInCorso(lancio)) {
-        finalStatus = await eseguiTurnoLancio(supabase, {
-          conversationId, phone, from, crmLeadId,
-          fase: lancio.lancio_fase ?? null,
-          nome: gdo.leads?.first_name ?? null,
-          rows, inboundBody,
-          // Le risposte del riscaldamento (e il marcatore del congedo): senza, il turno
-          // post-pitch ricomincerebbe da capo a ogni messaggio del lead.
-          lancioInfo: lancio.lancio_info ?? null,
-        });
-        break;
-      }
+        let leadIdTurno = crmLeadId;
+        // B5: ha risposto al follow-up. Il turno chiude il lancio e passa la mano a Mario
+        // in QUESTO drain: 'handed_to_mario' non e' uno stato di ai_status e non deve mai
+        // entrare in finalStatus (che il finally scrive grezzo in conversations).
+        let passaggioAMario = false;
+        for (let giro = 0; giro < MAX_GIRI_LANCIO; giro++) {
+          // La soglia si prende PRIMA del turno: dopo, la cronologia e' gia' cambiata.
+          const ultimoVisto = ultimoInboundAt(righeTurno);
+          const esitoTurno = await eseguiTurnoLancio(supabase, {
+            conversationId, phone, from,
+            crmLeadId: leadIdTurno,
+            fase: faseTurno,
+            nome: gdo.leads?.first_name ?? null,
+            rows: righeTurno, inboundBody: inboundTurno,
+            // Le risposte del riscaldamento (e il marcatore del congedo): senza, il turno
+            // post-pitch ricomincerebbe da capo a ogni messaggio del lead.
+            lancioInfo: infoTurno,
+          });
+          if (esitoTurno === 'handed_to_mario') {
+            passaggioAMario = true;
+            break;
+          }
+          finalStatus = esitoTurno;
+          // Solo mentre il lancio resta 'active': un congedo o un passaggio umano hanno
+          // chiuso la partita.
+          if (finalStatus !== 'active') break;
 ```
 
-con
+e in fondo al ramo, al posto dell'ultimo `break;` (riga 594, quello subito dopo la chiusura del `for`):
 
 ```ts
-      if (lancioInCorso(lancio)) {
-        const esitoLancio = await eseguiTurnoLancio(supabase, {
-          conversationId, phone, from, crmLeadId,
-          fase: lancio.lancio_fase ?? null,
-          nome: gdo.leads?.first_name ?? null,
-          rows, inboundBody,
-          lancioInfo: lancio.lancio_info ?? null,
-        });
-        if (esitoLancio !== 'mario') {
-          finalStatus = esitoLancio;
-          break;
         }
+        if (!passaggioAMario) break;
         // Ha risposto al follow-up: il turno ha chiuso il lancio, da qui in poi e' Mario
-        // standard NELLO STESSO giro. La copia in memoria segue il DB.
+        // standard NELLO STESSO round. La copia in memoria segue il DB, e finalStatus
+        // resta 'active' come per qualunque chat che Mario sta servendo.
         lancio.lancio_fase = 'chiuso';
+        finalStatus = 'active';
       }
 
       // Link ufficiali "in piu'" per questa conversazione: il video della live (lancio).
+      // `linkExtra` = link che non sono "inventati"; `videoExtra` = link che valgono
+      // come "video gia' uscito" per il blocco di conferma. Qui coincidono; il Task 8
+      // aggiunge il video del GDO SOLO a `linkExtra`, per non cambiare il blocco di
+      // conferma dei lead postino.
       const lancioStandard = lancioStandardDrain(lancio);
       const videoLive = lancioStandard ? await leggiVideoLive() : null;
-      const linkExtra: string[] = videoLive ? [videoLive] : [];
+      const videoExtra: string[] = videoLive ? [videoLive] : [];
+      const linkExtra: string[] = [...videoExtra];
       // Un link del video gia' uscito in questa chat: serve sia alla patch del blocco
       // conferma, sia alla rete di sicurezza sul FATTO qui sotto.
-      const videoGiaInviato = rows.some((m) => m.direction === 'out' && containsVideoLink(m.body, linkExtra));
+      const videoGiaInviato = rows.some((m) => m.direction === 'out' && containsVideoLink(m.body, videoExtra));
 ```
 
-Nelle opzioni di `generateMarioReply` sostituisci
+(d) Nelle opzioni di `generateMarioReply` (righe 661-685) sostituisci
 
 ```ts
           : notaPrimo
@@ -2028,24 +2197,24 @@ con
               : {}),
 ```
 
-Poi: `const linkInventati = parts.flatMap((p) => unknownFeniceLinks(p));` → `unknownFeniceLinks(p, linkExtra)`; `const block = ensureConfirmationBlock(parts);` → `ensureConfirmationBlock(parts, { extraVideoLinks: linkExtra })`.
+(e) Riga 755: `const linkInventati = parts.flatMap((p) => unknownFeniceLinks(p));` → `unknownFeniceLinks(p, linkExtra)`. Riga 772: `const block = ensureConfirmationBlock(parts);` → `ensureConfirmationBlock(parts, { extraVideoLinks: videoExtra })`.
 
-`finalStatus` è tipizzato come stringa (`let finalStatus = 'active'`): assegnare `esitoLancio` (che ora esclude `'mario'` nel ramo) compila senza cast.
+`finalStatus` è tipizzato come stringa (`let finalStatus = 'active'`): dopo il confronto con `'handed_to_mario'`, `esitoTurno` è narrowato a `'active' | 'closed' | 'handed_off'` e l'assegnazione compila; il test sul drain dimostra che il quarto stato non arriva a `ai_status`.
 
-- [ ] **Step 6: Verifica, compresa la C9**
+- [ ] **Step 5: Verifica, compresa la C9**
 
-Run: `bunx vitest run lib/lancio-turno.test.ts lib/lancio-followup.test.ts lib/outbound-sanitize.test.ts lib/confirmation-block.test.ts lib/fenice-autoreply.test.ts lib/lancio-fase.test.ts && bun run typecheck`
+Run: `bunx vitest run lib/lancio-turno.test.ts lib/fenice-autoreply.test.ts lib/lancio-followup.test.ts lib/outbound-sanitize.test.ts lib/confirmation-block.test.ts && bun run typecheck`
 Expected: PASS, nessun errore di tipo.
 
-C9 (solo verifica, nessun codice): `lib/lancio-fase.test.ts` ha già `'chiuso e restituito rendono la chat di nuovo di Mario (o del GDO)'` e fissa `FILTRO_FUORI_LANCIO = 'lancio_slug.is.null,lancio_fase.in.(chiuso,restituito)'`; `grep -rn "FILTRO_FUORI_LANCIO\|lancioInCorso" app lib --include=*.ts | grep -v test` deve elencare `sequence-touches`, `bot-followups` (`lib/bot-followups.ts:81` + route), `precall-reminders`, `gdo-video-followups`, `riapri-mute`, `agenda-followup`: tutti lasciano passare `chiuso`, quindi una chat chiusa dal follow-up senza esito rientra nella sequenza e nel re-drive di Mario come una chat normale. Scrivere nel messaggio di chiusura del task l'elenco trovato.
+C9 (solo verifica, cancello automatico già esistente): `bunx vitest run lib/lancio-fase.test.ts -t "chiuso e restituito"` → PASS: `lancioInCorso` è falso su `chiuso` e `FILTRO_FUORI_LANCIO = 'lancio_slug.is.null,lancio_fase.in.(chiuso,restituito)'` (`lib/lancio-fase.ts:23,124-134`), quindi una chat chiusa dal follow-up senza esito rientra in `sequence-touches`, `bot-followups`, `precall-reminders`, `gdo-video-followups`, `riapri-mute`, `agenda-followup` come una chat normale. Nessun codice da scrivere.
 
-Prova manuale (B6, con un numero di test): conversazione con `lancio_slug='webdev-2026-10'`, `lancio_fase='followup_inviato'`, `lancio_video_live_link` impostato → il lead risponde "sì mi interessa" → su `conversations` `lancio_fase='chiuso'`; in `event_log` `lancio_followup_risposta` poi `fenice_ai_reply`; quando Mario manda il video, il messaggio contiene il link della live e non un `conferenza-*`; nessun `unknown_fenice_link`.
+Prova manuale (B6, con un numero di test): conversazione con `lancio_slug='webdev-2026-10'`, `lancio_fase='followup_inviato'`, `lancio_video_live_link` impostato → il lead risponde "sì mi interessa" → su `conversations` `lancio_fase='chiuso'` e `ai_status='active'`; in `event_log` `lancio_followup_risposta` poi `fenice_ai_reply` nello stesso minuto; quando Mario manda il video, il messaggio contiene il link della live e non un `conferenza-*`; nessun `unknown_fenice_link`.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add lib/lancio-turno.ts lib/lancio-turno.test.ts lib/lancio-followup.ts lib/lancio-followup.test.ts lib/fenice-autoreply.ts lib/outbound-sanitize.ts lib/outbound-sanitize.test.ts lib/confirmation-block.ts lib/confirmation-block.test.ts
-git commit -m "feat(lancio): chi risponde al follow-up passa a Mario nello stesso giro, col video della live al posto dei quattro classici
+git add lib/lancio-turno.ts lib/lancio-turno.test.ts lib/fenice-autoreply.ts lib/fenice-autoreply.test.ts lib/outbound-sanitize.ts lib/outbound-sanitize.test.ts lib/confirmation-block.ts lib/confirmation-block.test.ts
+git commit -m "feat(lancio): chi risponde al follow-up passa a Mario nello stesso drain, col video della live al posto dei quattro classici
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01TqdFfxeDbRPq6iBmWYWSFD"
@@ -2056,6 +2225,7 @@ Claude-Session: https://claude.ai/code/session_01TqdFfxeDbRPq6iBmWYWSFD"
 ### Task 5 (BOT): restituzioni al pool — regole pure + cron `/api/cron/lancio-restituzioni` con lo sweeper del congedo (rulings R2, C2)
 
 **Files:**
+- Modify: `lib/bot-outcome.ts` (`sendOutcome`: tipo di ritorno riga 617, ramo `if (res.ok)` righe 829-884) + `lib/bot-outcome.test.ts`
 - Create: `lib/lancio-restituzioni.ts`
 - Create: `lib/lancio-restituzioni.test.ts`
 - Create: `app/api/cron/lancio-restituzioni/route.ts`
@@ -2063,18 +2233,21 @@ Claude-Session: https://claude.ai/code/session_01TqdFfxeDbRPq6iBmWYWSFD"
 - Modify: `vercel.json` (due voci in coda a `crons`)
 
 **Interfaces:**
-- Consumes: `haCongedo`, `type RigaLancio` (`lib/lancio-fase.ts`); `giorniLancio` (`lib/lancio-scelta.ts`); `romeDayKey`, `formatRomeDateTime` (`lib/rome-time.ts`); `ancoraLancio`, `haInteragito` (Task 2); `sendOutcome(supabase, conversationId, { outcome: 'NON_RISPOSTO', note }) → { sent, status?, error? }` (`lib/bot-outcome.ts`: su 2xx scrive `bot_outcome`/`bot_outcome_at`/`ai_status='closed'` da sé; su 403 chiude localmente; `validateOutcomeBody` accetta `NON_RISPOSTO` senza data); `congedoLancio(..., { giaInviato: true })` e `impostaFaseLancio`; `leggiIngressoLancioAt`; motore (Task 1: `autorizzatoCron`, `leggiParametriCron`, `logEvento`, `leggiCoda`, `TEMPO_MASSIMO_MS`), `runPool`, `batchMax`, `LANCIO_BLAST_CONCURRENCY`.
+- Consumes: `haCongedo`, `paroleDelCongedo(rows) → string | null` (`lib/lancio-fase.ts:264`), `type RigaLancio` (`lib/lancio-fase.ts`); `giorniLancio` (`lib/lancio-scelta.ts`); `romeDayKey`, `formatRomeDateTime` (`lib/rome-time.ts`); `ancoraLancio`, `haInteragito` (Task 2); `sendOutcome(supabase, conversationId, { outcome: 'NON_RISPOSTO', note }) → { sent, status?, error?, corpo? }` (`lib/bot-outcome.ts:612-617`: su 2xx scrive `bot_outcome`/`bot_outcome_at`/`ai_status='closed'` da sé; su 403 chiude localmente; `validateOutcomeBody` accetta `NON_RISPOSTO` senza data; **`corpo` è il campo nuovo di questo task**); `congedoLancio(..., { giaInviato: true })` e `impostaFaseLancio` (senza `soloDaFasi`: `restituito` e `chiuso` sono terminali e la riga è già `closed`); `leggiIngressoLancioAt`; motore (Task 1: `autorizzatoCron`, `leggiParametriCron`, `logEvento`, `leggiCoda`, `TEMPO_MASSIMO_MS`), `runPool`, `batchMax`, `LANCIO_BLAST_CONCURRENCY`.
 - Produces:
   - `RESTITUZIONE_ATTESA_MS = 48h`, `type MotivoRestituzione = 'mai_risposto' | 'silenzio_dopo_followup' | 'followup_non_inviato'`, `NOTA_RESTITUZIONE`, `FASI_RESTITUIBILI = ['attesa', 'posto_bloccato', 'link_inviato', 'followup_inviato']`
   - `restituzioniAttive(now: Date, eventoAt: Date): boolean` — dal giorno DOPO dopodomani (8/10 per l'evento del 5)
   - `type DecisioneRestituzione = { kind: 'restituisci'; motivo } | { kind: 'ritenta_scarto' } | { kind: 'niente'; motivo: MotivoNiente }`
   - `decideRestituzione(c: CandidataRestituzione, nowMs: number): DecisioneRestituzione`
   - `notaInboundDopoRestituzione(testo: string, quandoIso: string): string` (usata dal Task 6)
-  - route `GET /api/cron/lancio-restituzioni` (auth; `?dry=1`; `?forza=1&solo=<id>`; `?now=<iso>&solo=<id>`) → `{ ok, skipped? | candidati, valutati, scartiRitentati, scartiChiusi, restituiti, rifiutati, errori, niente: {...}, queryKo }`. Eventi: `lancio_restituzioni_run` (sempre), `lancio_restituzioni_config_error`, `lancio_restituzioni_query_error`, `lancio_restituzioni_messages_query_error`, `lancio_restituito` (per lead), `lancio_restituzione_error`, `lancio_scarto_ritentato_da_cron`. Fase `restituito` via `impostaFaseLancio` + `ai_status='closed'`.
+  - `type EsitoCrmRestituzione = 'restituito' | 'gia_restituito' | 'rifiutato_dal_crm' | 'non_confermato' | 'terminale' | 'ritenta'` e `esitoRestituzioneDalCrm(res: { sent: boolean; status?: number; corpo?: Record<string, unknown> }): { esito: EsitoCrmRestituzione; skipped: string | null }` — legge il corpo della risposta del CRM (ruling 4 della seconda passata)
+  - `sendOutcome(...)` torna anche `corpo?: Record<string, unknown>` (il JSON della risposta 2xx del CRM, se leggibile) — ~10 righe in `lib/bot-outcome.ts`, nessun altro cambio di comportamento
+  - `NOTA_SCARTO_RITENTATO` (costante del route, nota del `DA_SCARTARE` ritentato dallo sweeper)
+  - route `GET /api/cron/lancio-restituzioni` (auth; `?dry=1`; `?forza=1&solo=<id>`; `?now=<iso>&solo=<id>`) → `{ ok, skipped? | candidati, valutati, nonValutati, daRestituire, restituiti, giaRestituiti, rifiutati, rifiutateDalCrm, nonConfermate, errori, residui, scartiRitentati, scartiChiusi, niente: {...}, max, queryKo }`. Eventi: `lancio_restituzioni_run` (sempre), `lancio_restituzioni_config_error`, `lancio_restituzioni_query_error`, `lancio_restituzioni_messages_query_error`, `lancio_restituito` (per lead), `lancio_restituzione_rifiutata` (warn: il CRM ha risposto 200 ma `returnedToPool: false` con uno `skipped` diverso da `already_returned`, o un corpo illeggibile), `lancio_restituzione_error`, `lancio_scarto_ritentato_da_cron`. Fase `restituito` via `impostaFaseLancio` + `ai_status='closed'` **solo** su `restituito`/`gia_restituito`/`terminale`.
 
-**Regole (in quest'ordine).** `crm_lead_id` nullo → niente (`senza_crm`). `congedo_at` presente e fase ≠ `chiuso` → **`ritenta_scarto`** (C2: il congedo era uscito e il CRM aveva rifiutato lo scarto; con `bot_outcome` già scritto — 403 registrato localmente — si porta solo la fase a `chiuso`, senza richiamare il CRM). `bot_outcome` non nullo → niente (`esito_presente`: il CRM ha già questo lead in uno stato). Fase fuori da `FASI_RESTITUIBILI` → niente (`fase`: `post_pitch`, `scelta_fatta`, `chiuso`, `restituito` non si toccano — chi ha scelto è del venditore; il CRM lo ribadisce con `scelta_fatta`). Ancora ignota → niente (`ancora_ignota`: non si può dire se ha interagito, si lascia a una persona). Fasi `attesa`/`posto_bloccato`/`link_inviato`: non ha interagito → `mai_risposto`; ha interagito e `lancio_followup_inviato_at` nullo → `followup_non_inviato` (R2: cap 63049 per tutta la finestra, SID mancante, freno, o `lancio_attivo` spento); ha interagito e timbro presente con fase indietro (esito incerto del follow-up) → stesse regole di `followup_inviato`. Fase `followup_inviato`: timbro nullo → niente (`incoerente`); prima di 48 h dal timbro → niente (`attesa_48h`); un inbound dopo il timbro → niente (`ha_risposto`: la chiude il drain); altrimenti `silenzio_dopo_followup`. Esito al CRM sempre `NON_RISPOSTO` (spec §5.8): il CRM legge il motivo dalla nota.
+**Regole (in quest'ordine, lo stesso del codice).** `crm_lead_id` nullo → niente (`senza_crm`). `congedo_at` presente e fase ∉ {`chiuso`, `restituito`} → **`ritenta_scarto`** (C2: il congedo era uscito e il CRM aveva rifiutato lo scarto; con `bot_outcome` già scritto — 403 registrato localmente — si porta solo la fase a `chiuso`, senza richiamare il CRM). Fase fuori da `FASI_RESTITUIBILI` → niente (`fase`: `post_pitch`, `scelta_fatta`, `chiuso`, `restituito` non si toccano — chi ha scelto è del venditore; il CRM lo ribadisce con `scelta_fatta`; su una chat `post_pitch` con un esito già dato il motivo contato è `fase`, non `esito_presente`). `bot_outcome` non nullo → niente (`esito_presente`: il CRM ha già questo lead in uno stato). Ancora ignota → niente (`ancora_ignota`: non si può dire se ha interagito, si lascia a una persona). Fasi `attesa`/`posto_bloccato`/`link_inviato`: non ha interagito → `mai_risposto`; ha interagito e `lancio_followup_inviato_at` nullo → `followup_non_inviato` (R2: cap 63049 per tutta la finestra, SID mancante, freno, o `lancio_attivo` spento); ha interagito e timbro presente con fase indietro (esito incerto del follow-up) → stesse regole di `followup_inviato`. Fase `followup_inviato`: timbro nullo → niente (`incoerente`); prima di 48 h dal timbro → niente (`attesa_48h`); un inbound dopo il timbro → niente (`ha_risposto`: la chiude il drain); altrimenti `silenzio_dopo_followup`. Esito al CRM sempre `NON_RISPOSTO` (spec §5.8): il CRM legge il motivo dalla nota.
 
-**Idempotenza.** `sent` (2xx, compreso il 200 `already_returned` del CRM) e 403/404 sono terminali → `restituito`; rete/5xx/409 → ritento al run dopo. Su 2xx `sendOutcome` scrive `bot_outcome='NON_RISPOSTO'`: se `impostaFaseLancio` fallisse, al run dopo la riga esce con `esito_presente` e non si rispedisce.
+**Cosa risponde il CRM e cosa se ne fa (ruling 4 della seconda passata).** Il ramo lancio di `/api/bot/outcome` (CRM `route.ts:556-562`) risponde `200 { ok: true, returnedToPool: true, motivo }` quando il lead è tornato nel pool; `200 { ok: true, returnedToPool: false, skipped: <reason> }` quando `checkLancioReturnToPool` lo ha fermato (`reason ∈ not_lancio | not_bot | already_rejected | locked_appointment | scelta_fatta | lead_not_found`, `lancioReturn.ts:38-41`); `200 { ok: true, returnedToPool: false, skipped: 'already_returned' }` su un doppione (`route.ts:190`). Finora `sendOutcome` buttava il corpo del 2xx: il cron lo legge (`res.corpo`) e segna `restituito` **solo** su `returnedToPool: true` o `skipped: 'already_returned'`; su ogni altro `skipped`, o su un corpo illeggibile, scrive `lancio_restituzione_rifiutata` (warn) e **non tocca la fase** — è un lead che un GDO ha già fissato (`locked_appointment`) o che ha scelto (`scelta_fatta`): lo guarda una persona. Effetto collaterale dichiarato: su un 2xx `sendOutcome` ha già scritto `bot_outcome='NON_RISPOSTO'` e `ai_status='closed'` localmente (`bot-outcome.ts:859-866`), quindi al run dopo quella riga esce con `esito_presente` e non si ritenta: nessun loop, ma il rifiuto resta visibile solo nell'evento. 403/404 (lead non più del bot / inesistente) restano terminali → `restituito` (contati in `rifiutati`); rete/5xx/409 → `ritenta` al run dopo.
 
 - [ ] **Step 1: Test delle regole pure che fallisce**
 
@@ -2083,7 +2256,7 @@ Claude-Session: https://claude.ai/code/session_01TqdFfxeDbRPq6iBmWYWSFD"
 import { describe, it, expect } from 'vitest';
 import {
   RESTITUZIONE_ATTESA_MS, NOTA_RESTITUZIONE, FASI_RESTITUIBILI, restituzioniAttive, decideRestituzione,
-  notaInboundDopoRestituzione, type CandidataRestituzione,
+  esitoRestituzioneDalCrm, notaInboundDopoRestituzione, type CandidataRestituzione,
 } from './lancio-restituzioni';
 
 const H = 3600_000;
@@ -2120,8 +2293,9 @@ describe('decideRestituzione', () => {
     }
     expect(decideRestituzione(c({ lancio_fase: 'chiuso', lancio_info: { congedo_at: '2026-10-05T23:00:00Z' } }), NOW)).toEqual({ kind: 'niente', motivo: 'fase' });
   });
-  it('un esito gia dato non si sovrascrive', () => {
+  it('un esito gia dato non si sovrascrive; su una fase fuori perimetro conta prima la fase', () => {
     expect(decideRestituzione(c({ bot_outcome: 'APPUNTAMENTO' }), NOW)).toEqual({ kind: 'niente', motivo: 'esito_presente' });
+    expect(decideRestituzione(c({ lancio_fase: 'post_pitch', bot_outcome: 'APPUNTAMENTO' }), NOW)).toEqual({ kind: 'niente', motivo: 'fase' });
   });
   it('post_pitch, scelta_fatta, chiuso, restituito, null: mai', () => {
     for (const f of ['post_pitch', 'scelta_fatta', 'chiuso', 'restituito', null]) {
@@ -2159,6 +2333,28 @@ describe('decideRestituzione', () => {
       followup_non_inviato: 'Lancio: follow-up non inviato',
     });
     expect([...FASI_RESTITUIBILI]).toEqual(['attesa', 'posto_bloccato', 'link_inviato', 'followup_inviato']);
+  });
+});
+
+describe('esitoRestituzioneDalCrm — si legge il corpo, non solo lo status', () => {
+  it('returnedToPool true → restituito; already_returned → gia_restituito', () => {
+    expect(esitoRestituzioneDalCrm({ sent: true, status: 200, corpo: { ok: true, returnedToPool: true, motivo: 'mai_risposto' } })).toEqual({ esito: 'restituito', skipped: null });
+    expect(esitoRestituzioneDalCrm({ sent: true, status: 200, corpo: { ok: true, returnedToPool: false, skipped: 'already_returned' } })).toEqual({ esito: 'gia_restituito', skipped: 'already_returned' });
+  });
+  it('un 200 che dice "non l ho restituito" e un rifiuto, con il suo motivo', () => {
+    for (const skipped of ['locked_appointment', 'scelta_fatta', 'already_rejected', 'not_bot', 'lead_not_found']) {
+      expect(esitoRestituzioneDalCrm({ sent: true, status: 200, corpo: { ok: true, returnedToPool: false, skipped } })).toEqual({ esito: 'rifiutato_dal_crm', skipped });
+    }
+  });
+  it('un 2xx senza corpo leggibile non e una conferma', () => {
+    expect(esitoRestituzioneDalCrm({ sent: true, status: 200 })).toEqual({ esito: 'non_confermato', skipped: null });
+    expect(esitoRestituzioneDalCrm({ sent: true, status: 200, corpo: { ok: true } })).toEqual({ esito: 'non_confermato', skipped: null });
+  });
+  it('403 e 404 sono terminali; rete e 5xx si ritentano', () => {
+    expect(esitoRestituzioneDalCrm({ sent: false, status: 403 })).toEqual({ esito: 'terminale', skipped: null });
+    expect(esitoRestituzioneDalCrm({ sent: false, status: 404 })).toEqual({ esito: 'terminale', skipped: null });
+    expect(esitoRestituzioneDalCrm({ sent: false, status: 500 })).toEqual({ esito: 'ritenta', skipped: null });
+    expect(esitoRestituzioneDalCrm({ sent: false })).toEqual({ esito: 'ritenta', skipped: null });
   });
 });
 
@@ -2256,6 +2452,36 @@ export function decideRestituzione(c: CandidataRestituzione, nowMs: number): Dec
   return { kind: 'restituisci', motivo: 'silenzio_dopo_followup' };
 }
 
+export type EsitoCrmRestituzione = 'restituito' | 'gia_restituito' | 'rifiutato_dal_crm' | 'non_confermato' | 'terminale' | 'ritenta';
+
+/** Un rifiuto del CRM (lead non piu' del bot / inesistente) e' una decisione presa: si
+ *  segna `restituito` per non ritentare ogni ora. */
+const STATUS_TERMINALI: readonly number[] = [403, 404];
+
+/**
+ * Cosa ha detto davvero il CRM (ruling 4 della seconda passata). Il ramo lancio di
+ * `/api/bot/outcome` risponde SEMPRE 200 sui lead del lancio, anche quando NON li ha
+ * rimessi nel pool (`returnedToPool: false, skipped: <motivo>`): un lead con una call in
+ * agenda (`locked_appointment`) o che ha scelto (`scelta_fatta`). Leggere solo lo status
+ * lo marcherebbe `restituito` per sempre. Conferma = `returnedToPool: true` o il
+ * doppione `already_returned`; un corpo illeggibile non e' una conferma.
+ */
+export function esitoRestituzioneDalCrm(res: {
+  sent: boolean;
+  status?: number;
+  corpo?: Record<string, unknown>;
+}): { esito: EsitoCrmRestituzione; skipped: string | null } {
+  if (res.sent) {
+    const skipped = typeof res.corpo?.skipped === 'string' ? res.corpo.skipped : null;
+    if (res.corpo?.returnedToPool === true) return { esito: 'restituito', skipped: null };
+    if (skipped === 'already_returned') return { esito: 'gia_restituito', skipped };
+    if (res.corpo?.returnedToPool === false) return { esito: 'rifiutato_dal_crm', skipped };
+    return { esito: 'non_confermato', skipped: null };
+  }
+  if (res.status !== undefined && STATUS_TERMINALI.includes(res.status)) return { esito: 'terminale', skipped: null };
+  return { esito: 'ritenta', skipped: null };
+}
+
 /** Nota al CRM quando un lead gia' restituito riscrive (ruling C8): chi lo ha in mano
  *  deve sapere che ha scritto e che il bot non gli risponde. */
 export function notaInboundDopoRestituzione(testo: string, quandoIso: string): string {
@@ -2266,6 +2492,56 @@ export function notaInboundDopoRestituzione(testo: string, quandoIso: string): s
 
 Run: `bunx vitest run lib/lancio-restituzioni.test.ts`
 Expected: PASS.
+
+- [ ] **Step 2b: `sendOutcome` espone il corpo della risposta 2xx (`lib/bot-outcome.ts`)**
+
+Test prima, in `lib/bot-outcome.test.ts` (usa `makeSupabase` del file, righe 44-87; il mock di `fetch` di `beforeEach` non ha `json`, quindi il caso "corpo illeggibile" è quello di default):
+
+```ts
+describe('sendOutcome — il corpo della risposta 2xx viene esposto (restituzioni del lancio)', () => {
+  it('con un JSON leggibile torna corpo; senza, corpo e undefined e sent resta true', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, status: 200, text: async () => '',
+      json: async () => ({ ok: true, returnedToPool: false, skipped: 'locked_appointment' }),
+    })));
+    const { supabase } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null });
+    const res = await sendOutcome(supabase, 1, { outcome: 'NON_RISPOSTO', note: 'Lancio: mai risposto' });
+    expect(res).toMatchObject({ sent: true, status: 200, corpo: { returnedToPool: false, skipped: 'locked_appointment' } });
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, text: async () => '' })));
+    const senza = await sendOutcome(makeSupabase({ crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null }).supabase, 1, { outcome: 'NON_RISPOSTO' });
+    expect(senza.sent).toBe(true);
+    expect(senza.corpo).toBeUndefined();
+  });
+});
+```
+
+Run: `bunx vitest run lib/bot-outcome.test.ts` → Expected: FAIL (`corpo` assente).
+
+Poi in `lib/bot-outcome.ts`: il tipo di ritorno di `sendOutcome` (riga 617) diventa
+
+```ts
+): Promise<{ sent: boolean; status?: number; error?: string; keepOpen?: true; notifySuppressed?: true; corpo?: Record<string, unknown> }> {
+```
+
+sopra `sendOutcome` aggiungi
+
+```ts
+/** Il JSON di una risposta 2xx del CRM, se c'e' e se e' un oggetto; altrimenti undefined.
+ *  Non lancia mai: un corpo che non si legge non rende meno vero l'esito appena inviato. */
+async function leggiCorpoJson(res: Response): Promise<Record<string, unknown> | undefined> {
+  try {
+    const j: unknown = await res.json();
+    return j && typeof j === 'object' && !Array.isArray(j) ? (j as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+```
+
+e nel ramo `if (res.ok) {` (riga 829) la prima istruzione diventa `const corpo = await leggiCorpoJson(res);`, mentre i due `return { sent: true, status: res.status };` di quel ramo (quello dell'`interim`, riga 839, e quello finale, riga 884) diventano `return { sent: true, status: res.status, corpo };`. Nient'altro cambia: chi ignora `corpo` (turni, cron, webhook) si comporta come prima.
+
+Run: `bunx vitest run lib/bot-outcome.test.ts lib/lancio-turno.test.ts lib/lancio-effetti.test.ts 2>/dev/null; bunx vitest run lib/bot-outcome.test.ts` → Expected: PASS.
 
 - [ ] **Step 3: Test del route che fallisce**
 
@@ -2327,8 +2603,9 @@ vi.mock('@/lib/supabase/admin', () => ({
     }),
   }),
 }));
-type EsitoOutcome = { sent: boolean; status?: number; error?: string };
-const sendOutcome = vi.fn<(...a: unknown[]) => Promise<EsitoOutcome>>(async () => ({ sent: true, status: 200 }));
+type EsitoOutcome = { sent: boolean; status?: number; error?: string; corpo?: Record<string, unknown> };
+const RESTITUITO: EsitoOutcome = { sent: true, status: 200, corpo: { ok: true, returnedToPool: true, motivo: 'mai_risposto' } };
+const sendOutcome = vi.fn<(...a: unknown[]) => Promise<EsitoOutcome>>(async () => RESTITUITO);
 vi.mock('@/lib/bot-outcome', () => ({ sendOutcome: (...a: unknown[]) => sendOutcome(...a) }));
 const impostaFaseLancio = vi.fn(async (...a: unknown[]) => { const c = stato.convs.find((x) => x.id === a[1]); if (c) c.lancio_fase = a[2] as string; });
 const leggiIngressoLancioAt = vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => null);
@@ -2365,7 +2642,7 @@ beforeEach(() => {
   stato.messaggi = new Map([[1, [welcome(1)]], [2, [welcome(2)]]]);
   stato.settings = { lancio_attivo: true, lancio_evento_at: EVENTO };
   stato.convSelectError = null;
-  sendOutcome.mockReset().mockResolvedValue({ sent: true, status: 200 });
+  sendOutcome.mockReset().mockResolvedValue(RESTITUITO);
   impostaFaseLancio.mockClear();
   congedoLancio.mockClear();
   leggiIngressoLancioAt.mockClear().mockResolvedValue(null);
@@ -2468,6 +2745,31 @@ describe('GET /api/cron/lancio-restituzioni — decisioni e CRM', () => {
     expect(sendOutcome).not.toHaveBeenCalled();
     expect(tipi()).toContain('lancio_scarto_ritentato_da_cron');
   });
+  it('200 con returnedToPool:false e skipped (locked_appointment, scelta_fatta): warn, fase INTATTA, nessun restituito', async () => {
+    stato.convs = [conv(1), conv(2)];
+    sendOutcome
+      .mockResolvedValueOnce({ sent: true, status: 200, corpo: { ok: true, returnedToPool: false, skipped: 'locked_appointment' } })
+      .mockResolvedValueOnce({ sent: true, status: 200, corpo: { ok: true, returnedToPool: false, skipped: 'scelta_fatta' } });
+    await expect((await richiesta()).json()).resolves.toMatchObject({ restituiti: 0, rifiutateDalCrm: 2, errori: 0 });
+    expect(impostaFaseLancio).not.toHaveBeenCalled();
+    const rifiuti = eventi().filter((e) => e.type === 'lancio_restituzione_rifiutata');
+    expect(rifiuti).toHaveLength(2);
+    expect(rifiuti[0]?.level).toBe('warn');
+    expect(rifiuti.map((e) => (e.payload as Record<string, unknown>).skipped).sort()).toEqual(['locked_appointment', 'scelta_fatta']);
+  });
+  it('200 already_returned: e un doppione, si segna restituito e non si ritenta', async () => {
+    stato.convs = [conv(1)];
+    sendOutcome.mockResolvedValueOnce({ sent: true, status: 200, corpo: { ok: true, returnedToPool: false, skipped: 'already_returned' } });
+    await expect((await richiesta()).json()).resolves.toMatchObject({ restituiti: 0, giaRestituiti: 1 });
+    expect(impostaFaseLancio).toHaveBeenCalledWith(expect.anything(), 1, 'restituito');
+  });
+  it('200 senza corpo leggibile non e una conferma: warn e fase intatta', async () => {
+    stato.convs = [conv(1)];
+    sendOutcome.mockResolvedValueOnce({ sent: true, status: 200 });
+    await expect((await richiesta()).json()).resolves.toMatchObject({ restituiti: 0, nonConfermate: 1 });
+    expect(impostaFaseLancio).not.toHaveBeenCalled();
+    expect(tipi()).toContain('lancio_restituzione_rifiutata');
+  });
   it('403/404 del CRM sono terminali: restituito lo stesso, contato fra i rifiutati', async () => {
     stato.convs = [conv(1), conv(2)];
     sendOutcome.mockResolvedValueOnce({ sent: false, status: 403, error: 'http_403' }).mockResolvedValueOnce({ sent: false, status: 404, error: 'http_404' });
@@ -2513,7 +2815,8 @@ import { runPool } from '@/lib/run-pool';
 import { batchMax, LANCIO_BLAST_CONCURRENCY } from '@/lib/lancio-zoom-blast';
 import { ancoraLancio, haInteragito } from '@/lib/lancio-followup';
 import {
-  restituzioniAttive, decideRestituzione, NOTA_RESTITUZIONE, type MotivoNiente, type MotivoRestituzione,
+  restituzioniAttive, decideRestituzione, esitoRestituzioneDalCrm, NOTA_RESTITUZIONE,
+  type MotivoNiente, type MotivoRestituzione,
 } from '@/lib/lancio-restituzioni';
 import { autorizzatoCron, leggiParametriCron, logEvento, leggiCoda, TEMPO_MASSIMO_MS } from '@/lib/lancio-blast-motore';
 
@@ -2542,9 +2845,8 @@ type RigaMessaggio = RigaLancio & { conversation_id: number };
 
 const BLOCCO_VALUTAZIONE = 200;
 const MAX_RIGHE_BLOCCO = BLOCCO_VALUTAZIONE * 40;
-/** Un rifiuto del CRM e' una decisione presa: non si ritenta ogni ora. */
-const STATUS_TERMINALI = new Set([403, 404]);
-const NOTA_SCARTO_RITENTATO = 'Lancio Web Dev AI: aveva detto di no e il congedo era gia\' uscito; esito ritentato dal cron.';
+/** Nota del `DA_SCARTARE` ritentato dallo sweeper (C2): il lead aveva gia' detto no. */
+export const NOTA_SCARTO_RITENTATO = 'Lancio Web Dev AI: aveva detto di no e il congedo era gia\' uscito; esito ritentato dal cron.';
 
 const contatoreNiente = (): Record<MotivoNiente, number> =>
   ({ senza_crm: 0, esito_presente: 0, fase: 0, ancora_ignota: 0, incoerente: 0, attesa_48h: 0, ha_risposto: 0 });
@@ -2664,7 +2966,10 @@ export async function GET(req: NextRequest) {
 
   // ─────────────── restituzioni ───────────────
   let restituiti = 0;
+  let giaRestituiti = 0;
   let rifiutati = 0;
+  let rifiutateDalCrm = 0;
+  let nonConfermate = 0;
   let errori = 0;
   const lotto = daRestituire;
   let serviti = 0;
@@ -2673,22 +2978,36 @@ export async function GET(req: NextRequest) {
     serviti++;
     try {
       const res = await sendOutcome(supabase, c.id, { outcome: 'NON_RISPOSTO', note: NOTA_RESTITUZIONE[motivo] });
-      const terminale = res.sent || (res.status !== undefined && STATUS_TERMINALI.has(res.status));
-      if (!terminale) {
+      // Si legge il CORPO della risposta, non solo lo status: il CRM risponde 200 anche
+      // quando NON ha rimesso il lead nel pool (`returnedToPool: false, skipped`).
+      const { esito, skipped } = esitoRestituzioneDalCrm(res);
+      if (esito === 'ritenta') {
         errori++;
         await logEvento(supabase, 'lancio_restituzione_error', { conversationId: c.id, crmLeadId: c.crm_lead_id, motivo, status: res.status ?? null, error: res.error ?? null },
           `[lancio] conv ${c.id}: restituzione non riuscita (${res.error ?? res.status ?? 'errore'}), riprovo al prossimo run`, 'error');
         return;
       }
+      if (esito === 'rifiutato_dal_crm' || esito === 'non_confermato') {
+        // Il CRM ha detto di no (call in agenda, scelta gia' fatta, lead non del bot) o
+        // non si e' capito: la fase NON si tocca e lo guarda una persona. `sendOutcome`
+        // ha gia' scritto bot_outcome localmente, quindi al run dopo questa riga esce
+        // con `esito_presente`: nessun loop, ma il rifiuto resta solo qui.
+        if (esito === 'rifiutato_dal_crm') rifiutateDalCrm++; else nonConfermate++;
+        await logEvento(supabase, 'lancio_restituzione_rifiutata', { conversationId: c.id, crmLeadId: c.crm_lead_id, motivo, esito, skipped, status: res.status ?? null },
+          `[lancio] conv ${c.id}: il CRM non ha rimesso il lead nel pool (${skipped ?? 'corpo illeggibile'}): fase intatta, da guardare a mano`, 'warn');
+        return;
+      }
       await impostaFaseLancio(supabase, c.id, 'restituito');
       // `sendOutcome` chiude gia' su 2xx e 403; sul 404 no. Idempotente.
       await supabase.from('conversations').update({ ai_status: 'closed' }).eq('id', c.id);
-      await logEvento(supabase, 'lancio_restituito', { conversationId: c.id, crmLeadId: c.crm_lead_id, motivo, status: res.status ?? null, sent: res.sent },
-        res.sent
-          ? `[lancio] conv ${c.id} restituita al pool: ${NOTA_RESTITUZIONE[motivo]}`
-          : `[lancio] conv ${c.id}: il CRM ha rifiutato (${res.status}), segnata restituita per non ritentare`,
-        res.sent ? 'info' : 'warn');
-      if (res.sent) restituiti++; else rifiutati++;
+      await logEvento(supabase, 'lancio_restituito', { conversationId: c.id, crmLeadId: c.crm_lead_id, motivo, esito, status: res.status ?? null, sent: res.sent },
+        esito === 'terminale'
+          ? `[lancio] conv ${c.id}: il CRM ha rifiutato (${res.status}), segnata restituita per non ritentare`
+          : `[lancio] conv ${c.id} restituita al pool (${esito}): ${NOTA_RESTITUZIONE[motivo]}`,
+        esito === 'terminale' ? 'warn' : 'info');
+      if (esito === 'restituito') restituiti++;
+      else if (esito === 'gia_restituito') giaRestituiti++;
+      else rifiutati++;
     } catch (err) {
       errori++;
       await logEvento(supabase, 'lancio_restituzione_error', { conversationId: c.id, motivo, error: err instanceof Error ? err.message : 'errore' },
@@ -2698,11 +3017,15 @@ export async function GET(req: NextRequest) {
 
   const residui = lotto.length - serviti;
   const nonValutati = coda.length - valutati;
-  const riepilogo = { candidati: coda.length, valutati, nonValutati, daRestituire: lotto.length, restituiti, rifiutati, errori, residui, scartiRitentati, scartiChiusi, niente, max, queryKo };
+  const riepilogo = {
+    candidati: coda.length, valutati, nonValutati, daRestituire: lotto.length,
+    restituiti, giaRestituiti, rifiutati, rifiutateDalCrm, nonConfermate, errori, residui,
+    scartiRitentati, scartiChiusi, niente, max, queryKo,
+  };
   await scriviRun(
     riepilogo,
-    `[lancio] restituzioni: ${restituiti} restituiti, ${rifiutati} rifiutati dal CRM, ${errori} errori, ${scartiRitentati} scarti ritentati, ${scartiChiusi} scarti chiusi, ${residui} residui (su ${lotto.length} da restituire, ${coda.length} candidati)`,
-    errori > 0 || queryKo ? 'warn' : 'info',
+    `[lancio] restituzioni: ${restituiti} restituiti, ${giaRestituiti} gia' restituiti, ${rifiutati} rifiutati (403/404), ${rifiutateDalCrm} non rimessi nel pool dal CRM, ${nonConfermate} non confermati, ${errori} errori, ${scartiRitentati} scarti ritentati, ${scartiChiusi} scarti chiusi, ${residui} residui (su ${lotto.length} da restituire, ${coda.length} candidati)`,
+    errori > 0 || rifiutateDalCrm > 0 || nonConfermate > 0 || queryKo ? 'warn' : 'info',
   );
   return NextResponse.json({ ok: true, ...riepilogo });
 }
@@ -2725,14 +3048,14 @@ Aggiungi in coda a `crons` (dopo `lancio-followup`): ogni ora dall'8/10 a fine o
 
 - [ ] **Step 6: Verifica**
 
-Run: `bunx vitest run lib/lancio-restituzioni.test.ts app/api/cron/lancio-restituzioni/route.test.ts && bun run typecheck && node -e "JSON.parse(require('fs').readFileSync('vercel.json','utf8')); console.log('ok')"`
+Run: `bunx vitest run lib/lancio-restituzioni.test.ts lib/bot-outcome.test.ts app/api/cron/lancio-restituzioni/route.test.ts && bun run typecheck && node -e "JSON.parse(require('fs').readFileSync('vercel.json','utf8')); console.log('ok')"`
 Expected: PASS, nessun errore di tipo, `ok`.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add lib/lancio-restituzioni.ts lib/lancio-restituzioni.test.ts app/api/cron/lancio-restituzioni/route.ts app/api/cron/lancio-restituzioni/route.test.ts vercel.json
-git commit -m "feat(lancio): restituzioni al pool dall'8/10 (mai risposto, silenzio dopo il follow-up, follow-up non inviato) e sweeper degli scarti rifiutati
+git add lib/bot-outcome.ts lib/bot-outcome.test.ts lib/lancio-restituzioni.ts lib/lancio-restituzioni.test.ts app/api/cron/lancio-restituzioni/route.ts app/api/cron/lancio-restituzioni/route.test.ts vercel.json
+git commit -m "feat(lancio): restituzioni al pool dall'8/10 (mai risposto, silenzio dopo il follow-up, follow-up non inviato), sweeper degli scarti e lettura della risposta del CRM
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01TqdFfxeDbRPq6iBmWYWSFD"
@@ -2743,9 +3066,9 @@ Claude-Session: https://claude.ai/code/session_01TqdFfxeDbRPq6iBmWYWSFD"
 ### Task 6 (BOT): veto alla riapertura di una chat `restituito` (ruling C8)
 
 **Files:**
-- Modify: `lib/fenice-autoreply.ts` (`shouldReopen`, righe 86-97)
+- Modify: `lib/fenice-autoreply.ts` (`shouldReopen`, righe 77-88; la riga `if (g.lancioSlug && haCongedo(g.lancioInfo)) return false;` è la 86)
 - Modify: `lib/fenice-autoreply.test.ts` (nuovo `describe`)
-- Modify: `app/api/webhooks/twilio/route.ts` (blocco della riapertura, righe 437-461, e il gate `shouldAutoReply`, riga 463)
+- Modify: `app/api/webhooks/twilio/route.ts` (blocco della riapertura, righe 437-461, e il gate `shouldAutoReply`, riga 463 — verificati a `f5c8ad6`)
 - Modify: `app/api/webhooks/twilio/route.test.ts` (nuovo `describe`)
 
 **Interfaces:**
@@ -2910,7 +3233,7 @@ Claude-Session: https://claude.ai/code/session_01TqdFfxeDbRPq6iBmWYWSFD"
 - Modify: `components/FeniceSidebar.tsx` (array `NAV`)
 
 **Interfaces:**
-- Consumes: `LANCIO_SETTING_KEYS`, `getLancioSettings`, `setLancioSetting(supabase, key, value: string | boolean)`, `parseSender`, `parsePerimetroBlast` (già esportate), `isoWithOffset` (`lib/bot-contract.ts`), `areaForEmail` (`lib/access.ts`), `getSupabaseServer`/`getSupabaseAdmin`, `PageHeader`, `Button`, `Input`, `Switch`, `Label`.
+- Consumes: `LANCIO_SETTING_KEYS`, `getLancioSettings`, `setLancioSetting(supabase, key, value: string | boolean)` (`lib/lancio-settings.ts:24-34, 108-121`; `normalizza`/`stringaOrNull` sono funzioni private dello stesso file, righe 81-89, e si usano da dentro), `isoWithOffset` (`lib/bot-contract.ts:145`; il modulo è puro — unico import `LANCIO_SLUG` da `lancio-fase` — quindi importarlo in `lancio-settings.ts` non trascina Supabase né Twilio), `areaForEmail` (`lib/access.ts:9`), `getSupabaseServer`/`getSupabaseAdmin`, `PageHeader({ icon, kicker, title, description, actions? })` (`components/fenice/PageHeader.tsx`), `Button`, `Input`, `Label`, `Switch` (`components/ui/switch.tsx`: wrapper di Radix `SwitchPrimitives.Root`, quindi accetta `checked`, `onCheckedChange(checked: boolean)`, `disabled`, `id`).
 - Produces:
   - `LANCIO_EDITABLE_KEYS = LANCIO_SETTING_KEYS` (tutte e 8: ruling "Pagina"), `type SettingValidation = { ok: true; value: string | boolean } | { ok: false; reason: 'chiave_non_modificabile' | 'link_non_https' | 'data_non_valida' | 'valore_non_valido' }`, `validateLancioSettingInput(key: string, raw: unknown): SettingValidation`
   - `puoModificareLancio(email): boolean` — vero per gli account con area `'all'` (gli account confinati a una sola area — `fenicebot@fenice.com` — vedono la pagina in sola lettura). Nel repo non esiste un ruolo nel DB (`lib/access.ts`: "Nessun ruolo nel DB, scelta: dati condivisi"): "admin" qui è l'area `all`.
@@ -3290,7 +3613,7 @@ function EsitoRiga({ e }: { e: Esito }) {
 - [ ] **Step 6: Verifica**
 
 Run: `bunx vitest run lib/lancio-settings.test.ts lib/access.test.ts && bun run typecheck`
-Expected: PASS, nessun errore di tipo (in particolare su `Switch`/`Input`/`Label`/`Button`: se una prop non esiste nel componente del repo, si adegua il pannello al componente, non il contrario).
+Expected: PASS, nessun errore di tipo. Le prop usate esistono: `Switch` inoltra tutte le prop di Radix `Switch.Root` (`checked`, `onCheckedChange`, `disabled`, `id`); `Input` e `Label` inoltrano le prop native di `<input>`/`<label>`; `Button` accetta `type`, `disabled`, `onClick`.
 
 Prova manuale con `bun run dev` (serve `.env.local` con Supabase): `http://localhost:3000/fenice/impostazioni` → con un account `all` si salva `lancio_video_live_link` e in `app_settings` la riga cambia (`select key, value from app_settings where key like 'lancio%'`); con `fenicebot@fenice.com` i controlli sono disabilitati e un `POST` diretto risponde 403.
 
@@ -3314,7 +3637,7 @@ Claude-Session: https://claude.ai/code/session_01TqdFfxeDbRPq6iBmWYWSFD"
 - Modify: `lib/fenice-enroll.ts` (`GdoEnrollArgs` riga 287; `gdo_video_url` riga 352)
 - Modify: `lib/send-agenda-gdo.ts` (`runSendAgenda`: dopo il controllo del telefono riga ~66; `videoCorretto` riga 104; chiamata a `enrollGdoLeadAsPostino` riga ~140) + `lib/send-agenda-gdo.test.ts` (fake `makeSupabase`)
 - Modify: `app/api/cron/gdo-video-followups/route.ts` (import riga 14; ramo `video-template` riga 216)
-- Modify: `lib/fenice-autoreply.ts` (`linkExtra` del Task 4: aggiunge il video del GDO)
+- Modify: `lib/fenice-autoreply.ts` (la riga `const linkExtra: string[] = [...videoExtra];` scritta dal Task 4: aggiunge il video del GDO SOLO lì)
 
 **Interfaces:**
 - Consumes: `getLancioSettings` e `type LancioSettings` (`lib/lancio-settings.ts`), `GdoVariant` (`lib/bot-contract.ts`: `{ lavora, haFamiglia, offertaDelMese }`, invariato — il CRM v1.6 manda già `offertaDelMese: true` dal pulsante "Offerta del mese"), `unknownFeniceLinks(text, extra)` / `containsVideoLink(p, extra)` (Task 4).
@@ -3324,6 +3647,7 @@ Claude-Session: https://claude.ai/code/session_01TqdFfxeDbRPq6iBmWYWSFD"
   - `videoTemplateEnvForLink(link: string | null, offertaDelMeseLink: string | null): string | undefined` — il link dinamico dell'offerta mappa su `VIDEO_GDO_OFFERTA_SID`; il resto come `VIDEO_TEMPLATE_ENV_BY_LINK`
   - `GdoEnrollArgs.gdoVideoUrl?: string | null` — se presente (anche `null`) vince sul calcolo dalla variante
   - evento `offerta_del_mese_link_mancante` (warn) in `runSendAgenda` quando la variante chiede l'offerta e il link non c'è: l'agenda parte lo stesso, `gdo_video_url` resta `null`, il drain — già oggi — scrive `gdo_video_missing` e risponde senza video
+  - nel drain, il video del GDO entra in `linkExtra` (così un `offerta_del_mese_link` nuovo non è "inventato" per `unknownFeniceLinks`) ma **NON** in `videoExtra`: `videoGiaInviato` e `ensureConfirmationBlock` dei lead postino restano quelli di oggi (oggi `containsVideoLink` riconosce solo i `conferenza-*` della whitelist, `confirmation-block.ts:15-19`; allargarlo cambierebbe il ramo `result.appointmentFixed && !videoGiaInviato` a `fenice-autoreply.ts:771` per i lead GDO, e questo task non lo vuole)
 
 `BLACK_SUMMER_LINK` resta esportato (è in `KNOWN_LINKS` e nella mappa dei template: le chat vecchie ce l'hanno in cronologia) ma non è più il valore di nessuna variante.
 
@@ -3398,7 +3722,8 @@ poi aggiungi i casi (dentro il `describe` di `runSendAgenda`):
   });
   it('correzione della variante entro la finestra: il video corretto viene dalle impostazioni', async () => {
     const { supabase, calls } = makeSupabase({
-      convPrecedente: { id: 7, gdo_agenda_at: new Date(Date.now() - 60_000).toISOString(), gdo_agenda_esito: 'consegnato', gdo_video_url: 'https://corso.feniceacademy.it/conferenza-bx', gdo_video_sent_at: null },
+      // Stessa forma del caso 'stessa variante → deduplica secca' (riga 214 del test).
+      convPrecedente: { id: 42, gdo_agenda_at: new Date(Date.now() - 3 * 60_000).toISOString(), gdo_agenda_esito: 'consegnato', gdo_video_url: 'https://corso.feniceacademy.it/conferenza-bx', gdo_video_sent_at: null },
       settingsRows: [{ key: 'offerta_del_mese_link', value: 'https://corso.feniceacademy.it/webdev-offerta' }],
     });
     const res = await runSendAgenda(supabase, { ...PAYLOAD, variant: { lavora: true, haFamiglia: false, offertaDelMese: true } });
@@ -3413,8 +3738,6 @@ poi aggiungi i casi (dentro il `describe` di `runSendAgenda`):
     expect(args.gdoVideoUrl).toBe('https://corso.feniceacademy.it/conferenza-dx');
   });
 ```
-
-(se il test esistente sulla deduplica passa un `convPrecedente` con campi diversi, copia la forma di quello).
 
 Run: `bunx vitest run lib/gdo-agenda.test.ts lib/gdo-video-followup.test.ts lib/send-agenda-gdo.test.ts`
 Expected: FAIL.
@@ -3453,7 +3776,7 @@ export function videoLinkForVariant(v: GdoVariant, settings?: OffertaDelMeseSett
 }
 ```
 
-(l'`import type` va in testa al file insieme agli altri: `lancio-settings.ts` importa solo tipi da `supabase/admin` e `lancio-zoom-blast`, quindi il modulo resta client-safe con `import type`).
+(l'`import type` va in testa al file insieme agli altri. `lancio-settings.ts` ha un import di VALORE — `parsePerimetroBlast` da `lancio-zoom-blast`, riga 2 — e un `import type` da `supabase/admin`: `gdo-agenda.ts` resta client-safe **solo perché** usa `import type`, che il compilatore cancella. Non trasformarlo mai in un import di valore.)
 
 - [ ] **Step 3: `lib/gdo-video-followup.ts`**
 
@@ -3497,10 +3820,10 @@ Nel ramo della deduplica cancella la riga `const videoCorretto = videoLinkForVar
 
 `app/api/cron/gdo-video-followups/route.ts`: importa `videoTemplateEnvForLink` da `@/lib/gdo-video-followup` (al posto di `VIDEO_TEMPLATE_ENV_BY_LINK`) e `getLancioSettings` da `@/lib/lancio-settings`. Dopo `const supabase = getSupabaseAdmin();` aggiungi `const offertaLink = (await getLancioSettings(supabase)).offertaDelMeseLink;` e nel ramo `video-template` sostituisci `const envName = link ? VIDEO_TEMPLATE_ENV_BY_LINK[link] : undefined;` con `const envName = videoTemplateEnvForLink(link, offertaLink);`.
 
-`lib/fenice-autoreply.ts`: nel punto del Task 4 dove nasce `linkExtra`, aggiungi il video del GDO (che ora può essere un link non in whitelist):
+`lib/fenice-autoreply.ts`: nel punto del Task 4 dove nasce `linkExtra`, aggiungi il video del GDO (che ora può essere un link non in whitelist) SOLO a `linkExtra`; `videoExtra` non cambia:
 
 ```ts
-      const linkExtra: string[] = [...(videoLive ? [videoLive] : []), ...(gdoVideoUrl ? [gdoVideoUrl] : [])];
+      const linkExtra: string[] = [...videoExtra, ...(gdoVideoUrl ? [gdoVideoUrl] : [])];
 ```
 
 - [ ] **Step 5: Verifica**
@@ -3523,7 +3846,7 @@ Claude-Session: https://claude.ai/code/session_01TqdFfxeDbRPq6iBmWYWSFD"
 ### Task 9 (BOT): env, suite completa, checklist di deploy, runbook B6
 
 **Files:**
-- Modify: `.env.example` (blocco lancio, righe 55-76)
+- Modify: `.env.example` (blocco lancio, righe 54-79)
 - Create: `docs/lancio-webdev-runbook-b6.md`
 - Nessun altro file: **nessuna migrazione** (vedi Global Constraints: tutte le colonne e le chiavi esistono già).
 
@@ -3544,8 +3867,8 @@ Nel blocco del lancio (dopo `LANCIO_FOLLOWUP_TEMPLATE_SID=`) aggiungi i commenti
 
 - [ ] **Step 2: Suite completa e typecheck**
 
-Run: `bun run test && bun run typecheck`
-Expected: tutti i file verdi (a `4b5f1ef` erano 84 file / 1938 test: qui devono essere di più, mai di meno), nessun errore di tipo. Se un test non toccato da questo blocco fallisce, si ferma e si segnala: non si "aggiusta" un test altrui.
+Run: `bun run test 2>&1 | tail -5 && bun run typecheck`
+Expected: tutti i file verdi, nessun errore di tipo; `Tests M passed` con M **maggiore** della baseline annotata nel Task 0 Step 0, e `Test Files` non inferiore a quella baseline più i 6 file di test nuovi (`lancio-blast-motore`, `lancio-followup`, `lancio-restituzioni`, `cron/lancio-followup`, `cron/lancio-restituzioni`, più i test aggiunti ai file esistenti). Se un test non toccato da questo blocco fallisce, si ferma e si segnala: non si "aggiusta" un test altrui.
 
 - [ ] **Step 3: Runbook `docs/lancio-webdev-runbook-b6.md`**
 
@@ -3641,7 +3964,7 @@ Claude-Session: https://claude.ai/code/session_01TqdFfxeDbRPq6iBmWYWSFD"
 | Requisito | Dove |
 |---|---|
 | §5.5 cron 6-7/10, fasce 12-14 e 17:30-19:30 Roma, bersaglio `attesa/posto_bloccato/link_inviato` con interazione, `LANCIO_BATCH_MAX`, template, `followup_inviato` | T2 (`inFinestraFollowup`, `decideFollowup`), T3 (route + schedule `*/5 10-11,15-17 6-7 10 *`) |
-| §5.5 alla risposta → Mario standard, `chiuso`, video = `lancio_video_live_link` via `contextNote` | T4 (`'mario'` + `lancioStandardContextNote` + link extra) |
+| §5.5 alla risposta → Mario standard, `chiuso`, video = `lancio_video_live_link` via `contextNote` | T4 (`'handed_to_mario'` intercettato nel ciclo dei giri + `lancioStandardContextNote` + `videoExtra`/`linkExtra`) |
 | §5.7 `videoLinkForVariant(v, settings)` + mappa template dinamica; pagina con i link e `lancio_attivo` | T8, T7 (tutte le 8 chiavi per ruling) |
 | §5.8 restituzioni dall'8/10, `mai_risposto`, `silenzio_dopo_followup` (48 h), `restituito` + `closed`, fasi intoccabili | T5 |
 | §6.2 `NON_RISPOSTO` sui lead lancio = pool; 200 `already_returned` | T5 (`res.sent` copre il 200 con `skipped`) |
@@ -3649,13 +3972,19 @@ Claude-Session: https://claude.ai/code/session_01TqdFfxeDbRPq6iBmWYWSFD"
 | §11.5-6 lotti 200/5', freno, 63049 per destinatario; §11.1 mittente | T1 (motore), T3 (`frenaLancio`, warn mittente) |
 | §3.2 eventi `lancio_followup_inviato`, `lancio_restituito` | T3 (`eventoInvio`), T5 |
 | R1, R2, R3, C1, C2, C4, C5, C6, C7, C8, C9, Finestre, Flusso standard, Pagina, Offerta | tabella "Rulings vincolanti → task"; ogni task cita i suoi |
+| Seconda passata 1 — `haDettoNo` = `congedoEsplicito` | T2 (codice + test riscritti; test del route in T3 per il "no" secco che NON congeda) |
+| Seconda passata 2 — `soloDaFasi` nel motore | T1 (`InvioTimbrato.soloDaFasi`, entrambe le chiamate a `impostaFaseLancio`), T3 (`FASI_FOLLOWUP`, test sulla fase avanzata) |
+| Seconda passata 3 — stesso drain, `'handed_to_mario'` mai in `ai_status` | T4 (turno + ciclo `MAX_GIRI_LANCIO` + 3 test sul drain) |
+| Seconda passata 4 — il cron legge `returnedToPool`/`skipped` | T5 (`sendOutcome.corpo`, `esitoRestituzioneDalCrm`, evento `lancio_restituzione_rifiutata`, 3 test di rotta + 4 puri + 1 su `sendOutcome`) |
+| Seconda passata 5 — ribasato su `f5c8ad6` | tutte le citazioni `file:riga` |
+| Avvertenze cron — `*/5` vs `*/10` dichiarato; run a vuoto accettati | T3 (paragrafo Schedule) |
 | Riconciliazione: `impostaFaseLancio` unico scrittore, `runPool` da `lib/run-pool.ts`, `LANCIO_SLUG`, nessuna migrazione di riserva, marker congedo, `followup_non_inviato` | Global Constraints, T3, T5 |
 
-**Segnaposto.** Nessun "TBD", "simile al task N", "aggiungi validazione": ogni funzione nominata nelle Interfaces è definita in uno step (`leggiParametriCron`, `inviaTemplateTimbrato`, `eseguiLotti`, `frenaLancio`, `leggiCoda`, `timbroUpdate`/`timbroCampi` in T1; `ancoraLancio`, `haInteragito`, `decideFollowup`, `lancioStandardContextNote`, `lancioStandardDrain` in T2/T4; `decideRestituzione`, `notaInboundDopoRestituzione` in T5; `validateLancioSettingInput`, `puoModificareLancio` in T7; `videoTemplateEnvForLink` in T8). Le uniche istruzioni "sostituisci X con Y" sono su righe citate col numero e col testo esatto del file reale.
+**Segnaposto.** Nessun "TBD", "simile al task N", "aggiungi validazione", nessuna uscita condizionale ("se non passa si adegua il test/il pannello"): ogni funzione nominata nelle Interfaces è definita in uno step (`leggiParametriCron`, `inviaTemplateTimbrato`, `eseguiLotti`, `frenaLancio`, `leggiCoda`, `timbroUpdate`/`timbroCampi` in T1; `ancoraLancio`, `haInteragito`, `haDettoNo`, `decideFollowup`, `lancioStandardContextNote`, `lancioStandardDrain` in T2; `decideRestituzione`, `esitoRestituzioneDalCrm`, `notaInboundDopoRestituzione`, `leggiCorpoJson` in T5; `validateLancioSettingInput`, `puoModificareLancio` in T7; `videoTemplateEnvForLink` in T8). Ogni passo TDD ha un test che fallisce prima (T0 compreso: `'MARKER_PULSANTE_RE' in scelta`). Le istruzioni "sostituisci X con Y" sono su righe citate col numero e col testo esatto del file a `f5c8ad6`; la verifica C9 è un test esistente (`lib/lancio-fase.test.ts -t "chiuso e restituito"`), non un grep in prosa.
 
-**Coerenza con le firme reali (verificate a `4b5f1ef`).** `impostaFaseLancio(supabase, id, fase: LancioFase, campi?: { lancio_link_inviato_at?, lancio_followup_inviato_at?, lancio_info? })` → `timbroCampi` produce esattamente quell'oggetto; `setLancioSetting(supabase, key, value: string | boolean)` → la pagina scrive `''` per azzerare e booleani per gli interruttori; `congedoLancio(supabase, c: ContestoTurno, leadWords, nota, { giaInviato?, testo? })` → T3/T5 lo chiamano con `giaInviato: true`; `sendOutcome(supabase, id, { outcome, note })` → `{ sent, status?, error? }`; `sendCrmNota(supabase, id, note)`; `shouldReopen(g)` allargata con un campo opzionale (i chiamanti esistenti compilano); `eseguiTurnoLancio` allarga il tipo di ritorno e il drain è l'unico chiamante (test compresi: `lancio-turno.test.ts` confronta con stringhe); `videoLinkForVariant` torna `string | null` e i tre chiamanti (`fenice-enroll`, `send-agenda-gdo`, il test) sono aggiornati nello stesso task; `getLancioSettings` → oggetto camelCase (`settings.videoLiveLink`, `settings.offertaDelMeseLink`, `settings.sender`, `settings.attivo`, `settings.eventoAt`), mai `settings.lancio_*`.
+**Coerenza con le firme reali (verificate a `f5c8ad6`).** `impostaFaseLancio(supabase, id, fase: LancioFase, campi?: { lancio_link_inviato_at?, lancio_followup_inviato_at?, lancio_info? }, opzioni?: { soloDaFasi?: readonly LancioFase[] })` → `timbroCampi` produce esattamente il quarto argomento e il motore passa sempre il quinto (i tre test del cron Zoom lo asseriscono); `setLancioSetting(supabase, key, value: string | boolean)` → la pagina scrive `''` per azzerare e booleani per gli interruttori; `congedoLancio(supabase, c: ContestoTurno, leadWords, nota, { giaInviato?, testo? })` → T3/T5 lo chiamano con `giaInviato: true`; `sendOutcome(supabase, id, { outcome, note })` → `{ sent, status?, error? }`; `sendCrmNota(supabase, id, note)`; `shouldReopen(g)` allargata con un campo opzionale (i chiamanti esistenti compilano); `eseguiTurnoLancio` allarga il tipo di ritorno a `'handed_to_mario'` e il drain è l'unico chiamante: lo intercetta nel ciclo `MAX_GIRI_LANCIO` prima di `finalStatus = …` (i test `lancio-turno.test.ts` confrontano con stringhe; il test nuovo sul drain asserisce `finalStatusWrites === ['active']`); `sendOutcome` torna `{ sent, status?, error?, keepOpen?, notifySuppressed?, corpo? }` e tutti i chiamanti esistenti ignorano `corpo`; `congedoEsplicito(body)` (`lancio-classifica.ts:84-89`) è la base di `haDettoNo`; `videoLinkForVariant` torna `string | null` e i tre chiamanti (`fenice-enroll`, `send-agenda-gdo`, il test) sono aggiornati nello stesso task; `getLancioSettings` → oggetto camelCase (`settings.videoLiveLink`, `settings.offertaDelMeseLink`, `settings.sender`, `settings.attivo`, `settings.eventoAt`), mai `settings.lancio_*`.
 
 **Rischi lasciati esplicitamente aperti (da decidere in review, non bloccano il dispatch).**
-1. C1 conta anche il "no" secco come ultimo inbound: se l'ultima domanda del bot in assistenza era "hai l'app Zoom?", un "no" di risposta congeda il lead (l'assistenza del B4 evita proprio questo con `congedoEsplicito`). Il ruling dice NO_SECCO: si applica; l'alternativa (solo `congedoEsplicito`) è un cambio di una riga in `haDettoNo`.
-2. `?now=` nel cron Zoom resta libero (i suoi test lo passano senza `solo`): il ruling R3 sul `now` vale per i cron nuovi via `nowRichiedeSolo: true`; portarlo anche sul blast vorrebbe dire toccare i suoi test, che il ruling vieta.
-3. Le restituzioni non guardano `lancio_attivo` (scelta esplicita, come nel piano vecchio): un lancio spento dall'8/10 restituisce lo stesso. Se il PO volesse tenere i lead al bot durante un fermo, serve un'impostazione in più.
+1. Su un 200 `returnedToPool: false` il cron lascia la fase intatta (ruling 4) ma `sendOutcome` ha già scritto `bot_outcome='NON_RISPOSTO'` e `ai_status='closed'` localmente: la riga non rientra più nelle restituzioni (`esito_presente`) e il rifiuto vive solo nell'evento `lancio_restituzione_rifiutata` (warn). Annullare quella scrittura vorrebbe dire insegnare a `sendOutcome` la semantica del ramo lancio del CRM: fuori dalle "~10 righe" del ruling.
+2. `?now=` nel cron Zoom resta libero (i suoi 42 test lo passano senza `solo`): il ruling R3 sul `now` vale per i cron nuovi via `nowRichiedeSolo: true`; portarlo anche sul blast vorrebbe dire toccare i suoi test, che il ruling vieta.
+3. Le restituzioni non guardano `lancio_attivo` (scelta esplicita, come nel piano vecchio): un lancio spento dall'8/10 restituisce lo stesso. Se il PO volesse tenere i lead al bot durante un fermo, serve un'impostazione in più. Inoltre 403/404 restano terminali → `restituito` (il lead non è più del bot): non è una "conferma" del CRM in senso stretto, ma l'alternativa è ritentare ogni ora per sempre.
