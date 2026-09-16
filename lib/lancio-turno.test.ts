@@ -16,6 +16,7 @@ import { sendFreeText } from './twilio';
 import { sendOutcome } from './bot-outcome';
 import { turnoAssistenza } from './lancio-assistenza';
 import { turnoPostPitch, turnoDopoScelta } from './lancio-post-pitch';
+import { getLancioSettings } from './lancio-settings';
 import { TESTO_POSTO_BLOCCATO, TESTO_CONGEDO, TESTO_CHIUSURA_DOMANDE, TESTO_PASSAGGIO_UMANO } from './lancio-fase';
 
 type Row = { direction: string; body: string | null; template_sid: string | null };
@@ -321,6 +322,8 @@ describe('eseguiTurnoLancio — le fasi del B4 delegano ai loro turni', () => {
     const [, input, ctx] = vi.mocked(turnoAssistenza).mock.calls[0];
     expect(input).toMatchObject({ conversationId: 42, fase: 'link_inviato', inboundBody: 'codice?' });
     expect(ctx).toMatchObject({ now: NOW, settings: expect.objectContaining({ eventoAt: '2026-10-05T21:00:00+02:00' }) });
+    // Le impostazioni si leggono una volta sola per turno, non una per ramo.
+    expect(getLancioSettings).toHaveBeenCalledTimes(1);
     expect(genera).not.toHaveBeenCalled();
     expect(sendFreeText).not.toHaveBeenCalled();
     expect(calls.events.some((e) => e.type === 'lancio_silenzio')).toBe(false);
@@ -357,6 +360,57 @@ describe('eseguiTurnoLancio — le fasi del B4 delegano ai loro turni', () => {
     await eseguiTurnoLancio(supabase, base({ fase: 'link_inviato', rows, inboundBody: 'codice?' }));
     const righe = vi.mocked(turnoAssistenza).mock.calls[0][1].rows;
     expect(righe.map((m) => m.body)).toEqual([WELCOME.body, 'codice?']);
+  });
+
+  // Chi entra dal pulsante la sera della live (B2, spec §6.3) non ha nessun benvenuto in
+  // cronologia, e l'evento `lancio_intake` viene scritto DOPO la riga del pulsante (il
+  // webhook salva il messaggio e poi arruola): l'ancora del taglio è il pulsante stesso.
+  describe('ingresso dal pulsante del webinar', () => {
+    const MARKER = 'Ho seguito la live Web Developer AI e voglio saperne di più 🚀';
+    const pulsante = (at: string): Row & { created_at: string } => ({ direction: 'in', body: MARKER, template_sid: null, created_at: at });
+    const vecchieDiMario = [
+      { direction: 'out', body: 'Ciao, sono Mario', template_sid: 'HX_MARIO', created_at: '2026-08-01T09:00:00Z' },
+      { direction: 'in', body: 'ok', template_sid: null, created_at: '2026-08-01T09:09:00Z' },
+      { direction: 'out', body: 'Perfetto, a domani', template_sid: null, created_at: '2026-08-01T09:10:00Z' },
+    ];
+
+    it("il taglio parte dalla pressione, che l'evento di ingresso butterebbe via", async () => {
+      // `lancio_intake` è di 5 secondi DOPO il pulsante: col vecchio taglio la riga del
+      // lead spariva, il lotto restava vuoto e il post-pitch spendeva una bolla al buio.
+      const { supabase } = makeSupabase('2026-10-05T20:38:05Z');
+      const rows = [...vecchieDiMario, pulsante('2026-10-05T20:38:00Z')];
+      await eseguiTurnoLancio(supabase, base({ fase: 'post_pitch', rows, inboundBody: MARKER }));
+      const righe = vi.mocked(turnoPostPitch).mock.calls[0][1].rows;
+      expect(righe.map((m) => m.body)).toEqual([MARKER]);
+    });
+
+    it('se il pulsante è stato premuto due volte vale l ultima pressione', async () => {
+      const { supabase } = makeSupabase();
+      const rows = [
+        ...vecchieDiMario,
+        pulsante('2026-10-05T20:38:00Z'),
+        outLibero('Ciao Anna! Cosa fai oggi?'),
+        pulsante('2026-10-06T09:00:00Z'),
+      ];
+      await eseguiTurnoLancio(supabase, base({ fase: 'post_pitch', rows, inboundBody: MARKER }));
+      const righe = vi.mocked(turnoPostPitch).mock.calls[0][1].rows;
+      expect(righe).toHaveLength(1);
+      expect(righe[0].created_at).toBe('2026-10-06T09:00:00Z');
+    });
+
+    it('chi è entrato dalla lista non cambia: il taglio resta il benvenuto', async () => {
+      const { supabase } = makeSupabase();
+      const rows = [
+        ...vecchieDiMario,
+        { ...WELCOME, created_at: '2026-09-20T10:00:00Z' },
+        inb('a che ora?'),
+        outLibero('Alle 21.'),
+        { ...pulsante('2026-10-05T20:38:00Z') },
+      ];
+      await eseguiTurnoLancio(supabase, base({ fase: 'post_pitch', rows, inboundBody: MARKER }));
+      const righe = vi.mocked(turnoPostPitch).mock.calls[0][1].rows;
+      expect(righe.map((m) => m.body)).toEqual([WELCOME.body, 'a che ora?', 'Alle 21.', MARKER]);
+    });
   });
 
   it('followup_inviato resta del B5: silenzio fase_non_gestita, mai il pitch', async () => {

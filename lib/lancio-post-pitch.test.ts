@@ -412,6 +412,32 @@ describe('turnoPostPitch — [LANCIO:SLOTS], [LANCIO:NO], finestra', () => {
     expect(eventi(calls, 'fenice_ai_reply')).toHaveLength(0);
   });
 
+  // Come nell'assistenza: senza niente da leggere il turno tace, ma lascia la traccia o
+  // il re-drive di bot-followups ci ritorna sopra ogni ora.
+  it('solo media nel lotto: silenzio tracciato, niente modello, niente bolla, niente CRM', async () => {
+    const { supabase, calls } = makeSupabase();
+    const stato = await turnoPostPitch(supabase, base({ rows: [LINK, PULSANTE, out('Ciao Anna! Cosa fai oggi?'), inb('')], inboundBody: '' }), ctx());
+    expect(stato).toBe('active');
+    expect(genera).not.toHaveBeenCalled();
+    expect(sendFreeText).not.toHaveBeenCalled();
+    expect(pushLeadEntrante).not.toHaveBeenCalled();
+    expect(lancioSlots).not.toHaveBeenCalled();
+    expect(infoSalvata(calls)).toBeUndefined();
+    expect(eventi(calls, 'lancio_silenzio')[0].payload).toMatchObject({ motivo: 'inbound_senza_testo', definitivo: true });
+    expect(eventi(calls, 'fenice_ai_reply')).toHaveLength(1);
+  });
+
+  // Il lotto vuoto e' il caso del taglio: se dopo l'ultima nostra bolla non c'e' nessun
+  // inbound, il turno non ha una cronologia da mandare al modello ne' un primo messaggio
+  // da spingere al CRM. Prima spendeva comunque una bolla.
+  it('lotto vuoto: stessa strada, il turno non parte', async () => {
+    const { supabase, calls } = makeSupabase();
+    const stato = await turnoPostPitch(supabase, base({ rows: [LINK, PULSANTE, out('Ciao Anna! Cosa fai oggi?')], inboundBody: '' }), ctx());
+    expect(stato).toBe('active');
+    expect(sendFreeText).not.toHaveBeenCalled();
+    expect(eventi(calls, 'lancio_silenzio')[0].payload).toMatchObject({ motivo: 'inbound_senza_testo', definitivo: true });
+  });
+
   it('alle 02:59 del 6 si risponde ancora (notte); alle 09:00 anche (giorno)', async () => {
     genera.mockResolvedValue(modello({ visibleReply: 'Ok' }));
     const { supabase } = makeSupabase();

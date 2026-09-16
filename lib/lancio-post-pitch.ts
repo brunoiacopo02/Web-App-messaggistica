@@ -102,6 +102,11 @@ export async function turnoPostPitch(
   const testi = testiDelLotto(lotto);
   /** L'ultima posizione leggibile del lead: chi ha scritto "ok" e poi "no" ha detto no. */
   const testoLead = ultimoTestoDelLotto(lotto);
+  // Niente da leggere (solo media, o un lotto vuoto perche' il taglio non ha lasciato
+  // nessun inbound): come nell'assistenza si tace, con la traccia perche' il re-drive non
+  // ci torni ogni ora. Senza questa guardia il turno pagava il modello, spendeva una
+  // bolla su una cronologia vuota e poteva spingere al CRM un lead senza primo messaggio.
+  if (testoLead === '') return silenzioLancio(supabase, c, 'inbound_senza_testo', true);
 
   // Le parole del lead, accumulate (il marker del pulsante no): sono le "info" per chi
   // chiama. Tutto il lotto, non solo l'ultimo: se ha risposto in due messaggi, al

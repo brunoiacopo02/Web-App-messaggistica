@@ -71,17 +71,16 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
   // chat riusata il giro precedente di Mario finirebbe nella cronologia che assistenza e
   // post-pitch mandano al modello. L'orologio e' uno solo per il turno: da li' passano le
   // regole di finestra e le ore proponibili.
-  const ctxB4 = async () => ({
-    settings: i.settings ?? (await getLancioSettings(supabase)),
-    now: i.now ?? adessoLancio(),
-  });
-  const iB4 = { ...i, rows: righe };
-  switch (i.fase) {
-    case 'link_inviato': return turnoAssistenza(supabase, iB4, await ctxB4());
-    case 'post_pitch': return turnoPostPitch(supabase, iB4, await ctxB4());
-    case 'scelta_fatta': return turnoDopoScelta(supabase, iB4, await ctxB4());
-    default: break; // attesa / posto_bloccato: il turno qui sotto; followup_inviato: B5
+  if (i.fase === 'link_inviato' || i.fase === 'post_pitch' || i.fase === 'scelta_fatta') {
+    const ctx = { settings: i.settings ?? (await getLancioSettings(supabase)), now: i.now ?? adessoLancio() };
+    const iB4 = { ...i, rows: righe };
+    switch (i.fase) {
+      case 'link_inviato': return turnoAssistenza(supabase, iB4, ctx);
+      case 'post_pitch': return turnoPostPitch(supabase, iB4, ctx);
+      case 'scelta_fatta': return turnoDopoScelta(supabase, iB4, ctx);
+    }
   }
+  // attesa / posto_bloccato: il turno del B1 qui sotto; followup_inviato: B5.
 
   const scambi = contaScambiDomande(righe);
   const faseGestita = faseGestitaB1(i.fase);

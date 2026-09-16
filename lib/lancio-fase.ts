@@ -1,4 +1,5 @@
 import { templateName } from './name';
+import { isMarkerPulsanteWebinar } from './primo-messaggio';
 
 /**
  * Lancio "Web Developer AI" (webinar 5/10/2026): stato, fasi e decisioni del turno.
@@ -188,7 +189,14 @@ export function paroleDelCongedo(rows: RigaLancio[]): string | null {
  * anche il giro precedente di Mario: senza questo taglio la prima domanda del lead
  * risulterebbe la quarta (silenzio) e il modello del lancio si leggerebbe un fissaggio
  * del GDO come contesto. Si taglia dal benvenuto del lancio se c'e' (nessuna query), se
- * no dall'istante dell'evento `lancio_intake`.
+ * no dal pulsante del webinar, se no dall'istante dell'evento `lancio_intake`.
+ *
+ * Il pulsante (B2, spec §6.3) e' l'ancora di chi entra la sera della live senza essere
+ * mai stato in lista: li' il benvenuto non c'e'. Sull'evento non ci si puo' appoggiare —
+ * il webhook salva PRIMA il messaggio e POI arruola, quindi `lancio_intake.created_at` e'
+ * successivo alla riga del pulsante e il taglio la butterebbe via: il lotto resterebbe
+ * vuoto e il turno post-pitch spenderebbe una bolla senza cronologia. Si taglia
+ * dall'ULTIMA pressione (INCLUSA): chi ripreme dopo giorni sta ricominciando da li'.
  */
 export function tagliaRigheDalLancio(
   rows: RigaLancio[],
@@ -199,6 +207,9 @@ export function tagliaRigheDalLancio(
     for (let i = rows.length - 1; i >= 0; i--) {
       if (rows[i].template_sid === welcomeSid) return rows.slice(i);
     }
+  }
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (rows[i].direction === 'in' && isMarkerPulsanteWebinar(rows[i].body)) return rows.slice(i);
   }
   if (ingressoAt) return rows.filter((m) => !m.created_at || m.created_at >= ingressoAt);
   return rows;
