@@ -4,6 +4,7 @@ import {
   TESTO_POSTO_BLOCCATO, TESTO_CONGEDO, TESTO_CHIUSURA_DOMANDE, TESTO_PASSAGGIO_UMANO,
   isLancioFase, lancioInCorso, decideLancioTurno, contaScambiDomande, lancioFaseLabel, lancioBenvenutoText,
   inboundDelLotto, ultimoTestoDelLotto, haCongedo, pulsanteRiportaInPostPitch, pulsanteScriveFase,
+  tagliaRigheDalLancio,
 } from './lancio-fase';
 
 describe('costanti della spec §3.2 / §5.2', () => {
@@ -273,5 +274,30 @@ describe('pulsanteScriveFase — la finestra orfana non si apre', () => {
       pulsanteAttivo: true, aiOwner: null, aiPausedAt: '2026-10-05T21:00:00Z', handedOffAt: null,
       adottaOra: false, autoReplyOn: true, adozioneAttiva: true,
     })).toEqual({ scrive: false, motivo: 'in_pausa' });
+  });
+});
+
+describe('tagliaRigheDalLancio: il taglio sull ancora confronta ISTANTI, non stringhe', () => {
+  // Le righe e l'ancora arrivano da colonne diverse: `...Z` contro `...+00:00`,
+  // microsecondi contro millisecondi. Confrontate come testo, `2026-10-05T19:59:59+00:00`
+  // risulta DOPO `2026-10-05T20:00:00Z` (il '+' viene prima delle cifre) e il taglio si
+  // tirerebbe dietro il giro precedente di Mario.
+  const riga = (created_at: string, body: string) => ({ direction: 'in', body, template_sid: null, created_at });
+
+  it('formati misti: si taglia dove dice l orologio, e l ancora resta inclusa', () => {
+    const rows = [
+      riga('2026-10-05T19:59:59+00:00', 'vecchio giro di Mario'),
+      riga('2026-10-05T20:00:00.000000Z', 'esattamente sull ancora'),
+      riga('2026-10-05T22:30:00+02:00', 'dopo (20:30 UTC)'),
+    ];
+    expect(tagliaRigheDalLancio(rows, null, '2026-10-05T20:00:00Z').map((r) => r.body)).toEqual([
+      'esattamente sull ancora',
+      'dopo (20:30 UTC)',
+    ]);
+  });
+
+  it('una data illeggibile non fa sparire la riga: si torna al confronto di prima', () => {
+    const rows = [riga('data-strana', 'illeggibile'), riga('2026-10-05T21:00:00Z', 'dopo')];
+    expect(tagliaRigheDalLancio(rows, null, '2026-10-05T20:00:00Z').map((r) => r.body)).toEqual(['illeggibile', 'dopo']);
   });
 });

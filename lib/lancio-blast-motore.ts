@@ -146,15 +146,28 @@ export function timbroCampi(
   return colonna === 'lancio_link_inviato_at' ? { lancio_link_inviato_at: valore } : { lancio_followup_inviato_at: valore };
 }
 
+export type ConvInvio = { id: number; crm_lead_id: string | null; phone: string; nome: string | null };
+
+/** Le variabili del template e il corpo gia' reso: cambiano a ogni destinatario. */
+export type MessaggioCostruito = { vars: Record<string, string>; body: string };
+
 export type InvioTimbrato = {
-  conv: { id: number; crm_lead_id: string | null; phone: string; nome: string | null };
+  conv: ConvInvio;
   colonna: ColonnaTimbro;
   /** La fase scritta con `impostaFaseLancio` a invio riuscito (e nella riparazione). */
   faseDopo: LancioFase;
   sid: string;
   from: string;
-  vars: Record<string, string>;
-  body: string;
+  /**
+   * Le variabili e il corpo del messaggio per QUESTO destinatario. E' una callback e non
+   * due campi gia' pronti perche' il motore la chiama DENTRO il suo try/catch totale: se
+   * il nome del lead o il render del body facessero saltare una riga, un'eccezione nel
+   * chiamante rifiuterebbe il `Promise.all` di `runPool` e porterebbe via l'intero blocco
+   * di 25 — compresi gli invii gia' partiti su WhatsApp, che nessuno registrerebbe piu'.
+   * Qui invece un errore e' di un destinatario solo (`skip`, timbro mai preso, si riprova
+   * al run dopo) e gli altri 24 partono lo stesso.
+   */
+  costruisci: (conv: ConvInvio) => MessaggioCostruito;
   /** Una riga `messages` col SID (non failed) esiste gia': si ripara la fase, non si rimanda. */
   giaSpedito: boolean;
   /**
@@ -190,6 +203,21 @@ export async function inviaTemplateTimbrato(supabase: Supa, stato: StatoRun, p: 
       return 'riparato';
     }
 
+    // Il messaggio si costruisce PRIMA del timbro, e dentro il try/catch totale: cosi' una
+    // riga che non si riesce a rendere non lascia dietro un timbro da liberare, e
+    // soprattutto non fa cadere il blocco di invii in corso.
+    let messaggio: MessaggioCostruito;
+    try {
+      messaggio = p.costruisci(p.conv);
+    } catch (err) {
+      await logEvento(supabase, `${p.prefisso}_messaggio_non_costruito`,
+        { conversationId: id, crmLeadId, error: err instanceof Error ? err.message : 'errore' },
+        `[lancio] conv ${id}: ${p.etichetta} non costruito, nessun invio — ${err instanceof Error ? err.message : 'errore'}`,
+        'error');
+      return 'skip';
+    }
+    const { vars, body } = messaggio;
+
     // Il timbro PRIMA dell'invio: se due run si accavallano, il secondo trova la riga gia'
     // presa e passa oltre. `is(colonna, null)` rende l'update un compare-and-set.
     const timbro = new Date().toISOString();
@@ -217,18 +245,18 @@ export async function inviaTemplateTimbrato(supabase: Supa, stato: StatoRun, p: 
     stato.tentati++;
     let spedito = false;
     try {
-      const res = await sendTemplate({ to: phone, contentSid: p.sid, variables: p.vars, from: p.from });
+      const res = await sendTemplate({ to: phone, contentSid: p.sid, variables: vars, from: p.from });
       // Il messaggio e' su WhatsApp: da qui in poi il timbro non si tocca piu'. Liberarlo
       // rimetterebbe la chat fra i candidati, e al run dopo il lead lo riceverebbe due volte.
       spedito = true;
       await supabase.from('messages').insert({
         conversation_id: id,
         direction: 'out',
-        body: p.body,
+        body,
         twilio_sid: res.sid,
         twilio_status: res.status,
         template_sid: p.sid,
-        template_vars: p.vars as never,
+        template_vars: vars as never,
         is_template: true,
         sender: 'automazione',
       });
@@ -286,11 +314,11 @@ export async function inviaTemplateTimbrato(supabase: Supa, stato: StatoRun, p: 
       await supabase.from('messages').insert({
         conversation_id: id,
         direction: 'out',
-        body: p.body,
+        body,
         twilio_status: 'failed',
         twilio_error_code: e.code,
         template_sid: p.sid,
-        template_vars: p.vars as never,
+        template_vars: vars as never,
         is_template: true,
         sender: 'automazione',
       });

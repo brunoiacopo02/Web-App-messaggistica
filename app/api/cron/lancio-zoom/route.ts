@@ -47,8 +47,10 @@ export const maxDuration = 300;
 //     solo se a Twilio non e' partito niente. La seconda guardia sono le righe `messages`
 //     col SID del blast: coprono un run morto fra l'invio e la scrittura della fase.
 //  2. FRENO. Ogni blocco di invii passa da `decideFreno`: sopra il 10% di fallimenti (o
-//     al primo 63018/63049/63051) il run si ferma E spegne `lancio_attivo`, cosi' anche i
-//     run successivi restano fermi finche' un admin non riaccende dal pannello.
+//     al primo 63018/63051) il run si ferma E spegne `lancio_attivo`, cosi' anche i run
+//     successivi restano fermi finche' un admin non riaccende dal pannello. Il 63049 NON
+//     e' un codice del freno: e' il cap del destinatario, si conta come mancato invio e
+//     il blast tira dritto.
 //  3. PERIMETRO. `lancio_blast_perimetro` restringe il bersaglio a chi ha risposto almeno
 //     una volta (piano B della spec §11), senza deploy.
 
@@ -239,15 +241,19 @@ export async function GET(req: NextRequest) {
   const inviaUno = (c: Candidata): Promise<EsitoInvio> => {
     const phone = c.leads?.phone_e164 ?? null;
     if (stato.fermo || !phone) return Promise.resolve('skip');
-    const vars = { '1': templateName(c.leads?.first_name), '2': link };
     return inviaTemplateTimbrato(supabase, stato, {
       conv: { id: c.id, crm_lead_id: c.crm_lead_id, phone, nome: c.leads?.first_name ?? null },
       colonna: 'lancio_link_inviato_at',
       faseDopo: 'link_inviato',
       sid,
       from,
-      vars,
-      body: renderBodyTemplate(bodyRaw, vars),
+      // Le due variabili del template ({{1}} nome, {{2}} link) e il corpo reso. Le
+      // costruisce il motore, dentro il suo try/catch: un nome che facesse saltare il
+      // render sarebbe un destinatario saltato, non il blocco di 25 perso.
+      costruisci: (conv) => {
+        const vars = { '1': templateName(conv.nome), '2': link };
+        return { vars, body: renderBodyTemplate(bodyRaw, vars) };
+      },
       giaSpedito: giaSpediti.has(c.id),
       // La guardia contro il turno concorrente (B1, il pulsante del webinar): la fase
       // avanza a `link_inviato` solo da una fase che il link non l'ha ancora avuto.

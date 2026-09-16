@@ -299,8 +299,23 @@ export function tagliaRigheDalLancio(
   for (let i = rows.length - 1; i >= 0; i--) {
     if (rows[i].direction === 'in' && isMarkerPulsanteWebinar(rows[i].body)) return rows.slice(i);
   }
-  if (ingressoAt) return rows.filter((m) => !m.created_at || m.created_at >= ingressoAt);
+  if (ingressoAt) return rows.filter((m) => !m.created_at || nonPrimaDi(m.created_at, ingressoAt));
   return rows;
+}
+
+/**
+ * `a` non viene prima di `b`, confrontati come ISTANTI e non come stringhe. Le righe
+ * arrivano da `messages.created_at` e l'ancora da un'altra colonna (l'evento
+ * `lancio_intake`): Postgres e i client le serializzano in modi che l'ordine alfabetico
+ * sbaglia — `...Z` contro `...+00:00`, microsecondi contro millisecondi — e un taglio
+ * sbagliato butta via la cronologia del lancio o si tira dietro il giro precedente di
+ * Mario. Se una delle due non e' leggibile si torna al confronto lessicografico di prima:
+ * meglio il comportamento storico che una riga persa. Il confine resta INCLUSIVO.
+ */
+function nonPrimaDi(a: string, b: string): boolean {
+  const ta = Date.parse(a);
+  const tb = Date.parse(b);
+  return Number.isNaN(ta) || Number.isNaN(tb) ? a >= b : ta >= tb;
 }
 
 const FASE_LABEL: Record<LancioFase, string> = {
