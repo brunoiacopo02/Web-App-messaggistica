@@ -1,4 +1,5 @@
 import type { getSupabaseAdmin } from './supabase/admin';
+import { parsePerimetroBlast, type PerimetroBlast } from './lancio-zoom-blast';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -17,8 +18,23 @@ export const LANCIO_SETTING_KEYS = [
   'lancio_video_live_link',
   'offerta_del_mese_link',
   'lancio_evento_at',
+  // §11 (delibera 16/09): le due manopole della sera del 5, da girare senza deploy.
+  'lancio_blast_perimetro',
+  'lancio_sender',
 ] as const;
 export type LancioSettingKey = (typeof LANCIO_SETTING_KEYS)[number];
+
+/**
+ * Da quale numero WhatsApp parte l'outbound del lancio (spec §11.1). Il client del
+ * secondario arriva col task "Mittente secondario": fino ad allora `secondario` e' una
+ * scelta dichiarata ma non eseguibile, e chi legge questa impostazione deve accorgersene
+ * invece di mandare 3.000 messaggi dal numero sbagliato in silenzio.
+ */
+export type LancioSender = 'principale' | 'secondario';
+
+export function parseSender(raw: unknown): LancioSender {
+  return normalizza(raw) === 'secondario' ? 'secondario' : 'principale';
+}
 
 export type LancioSettings = {
   attivo: boolean;
@@ -26,6 +42,8 @@ export type LancioSettings = {
   videoLiveLink: string | null;
   offertaDelMeseLink: string | null;
   eventoAt: string | null;
+  blastPerimetro: PerimetroBlast;
+  sender: LancioSender;
 };
 
 export const LANCIO_SETTINGS_DEFAULT: LancioSettings = {
@@ -34,6 +52,8 @@ export const LANCIO_SETTINGS_DEFAULT: LancioSettings = {
   videoLiveLink: null,
   offertaDelMeseLink: null,
   eventoAt: null,
+  blastPerimetro: 'tutti',
+  sender: 'principale',
 };
 
 /** La spec dice `0/1`; il pannello scrivera' un booleano. Si accettano entrambi. */
@@ -41,6 +61,12 @@ export function isAttivo(value: unknown): boolean {
   if (value === true || value === 1) return true;
   if (typeof value === 'string') return ['1', 'true', 'on'].includes(value.trim().toLowerCase());
   return false;
+}
+
+/** Le manopole del pannello si scrivono a mano: spazi e maiuscole non devono cambiarne
+ *  il significato. Quello che non e' una stringa resta `null` e cade sul default. */
+function normalizza(value: unknown): string | null {
+  return typeof value === 'string' ? value.trim().toLowerCase() || null : null;
 }
 
 function stringaOrNull(value: unknown): string | null {
@@ -57,6 +83,8 @@ export function parseLancioSettings(rows: { key: string; value: unknown }[]): La
     videoLiveLink: stringaOrNull(byKey.get('lancio_video_live_link')),
     offertaDelMeseLink: stringaOrNull(byKey.get('offerta_del_mese_link')),
     eventoAt: stringaOrNull(byKey.get('lancio_evento_at')),
+    blastPerimetro: parsePerimetroBlast(normalizza(byKey.get('lancio_blast_perimetro'))),
+    sender: parseSender(byKey.get('lancio_sender')),
   };
 }
 

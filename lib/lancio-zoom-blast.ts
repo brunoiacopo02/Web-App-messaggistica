@@ -28,6 +28,18 @@ export function inFinestraBlast(now: Date, eventoAt: Date): boolean {
   return m >= evento - DA_MINUTI_PRIMA && m <= evento - A_MINUTI_PRIMA;
 }
 
+/**
+ * La finestra del blast e' passata: stesso giorno italiano dell'evento e oltre il minuto
+ * di chiusura (evento meno 15'). Non e' il contrario di `inFinestraBlast` — prima delle
+ * 19:30 la finestra non e' chiusa, deve ancora aprirsi — e serve al cron per scrivere, a
+ * serata finita, quanti iscritti sono rimasti senza link: l'unico momento in cui quel
+ * numero e' definitivo.
+ */
+export function finestraBlastChiusa(now: Date, eventoAt: Date): boolean {
+  if (romeDayKey(now) !== romeDayKey(eventoAt)) return false;
+  return minutiDelGiorno(now) > minutiDelGiorno(eventoAt) - A_MINUTI_PRIMA;
+}
+
 /** L'ID riunione come lo legge il lead ("898 4522 3337"): sono le cifre dopo `/j/`. */
 export function zoomMeetingId(link: string): string | null {
   const m = /\/j\/(\d{9,11})(?:[/?#]|$)/.exec(link);
@@ -101,20 +113,29 @@ export function ordinaCandidatiBlast<T extends CandidatoBlast>(candidati: readon
 export const CODICI_FRENO_TWILIO: readonly number[] = [63018, 63049, 63051];
 
 export type EsitoFreno = {
-  inviati: number;
+  /**
+   * Invii TENTATI finora nel run: riusciti + falliti + fermati dal frequency cap. E' il
+   * denominatore del tasso, e sono i tentativi, non i successi. Un run che sbatte su 30
+   * numeri morti ha fatto 30 chiamate a Twilio e Meta le ha viste tutte e 30: contando
+   * solo i riusciti il tasso di fallimento sarebbe 30/0, cioe' nessun freno proprio nel
+   * caso peggiore.
+   */
+  tentati: number;
+  /** Quanti di quei tentativi non sono arrivati (falliti + cap). */
   falliti: number;
+  /** I codici Twilio visti nel run, nell'ordine in cui sono arrivati. */
   codici: readonly (number | string)[];
 };
 
 /**
  * Freno automatico del blast (usato dal cron del Task 3): si ferma se il tasso di
- * fallimento supera il 10% (con almeno 20 invii, altrimenti un run piccolo fermerebbe
+ * fallimento supera il 10% (con almeno 20 tentativi, altrimenti un run piccolo fermerebbe
  * tutto per due sfortune) oppure se compare uno dei codici Twilio che segnalano un
  * problema sul mittente stesso.
  */
 export function decideFreno(e: EsitoFreno): 'continua' | 'ferma' {
   const codiceGrave = e.codici.some((cod) => CODICI_FRENO_TWILIO.includes(Number(cod)));
   if (codiceGrave) return 'ferma';
-  if (e.inviati >= 20 && e.falliti / e.inviati > 0.1) return 'ferma';
+  if (e.tentati >= 20 && e.falliti / e.tentati > 0.1) return 'ferma';
   return 'continua';
 }

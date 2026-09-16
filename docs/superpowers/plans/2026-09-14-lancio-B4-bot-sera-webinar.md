@@ -23,7 +23,7 @@
 - **Cron:** schedule in `vercel.json` a data fissa in UTC (`*/5 17-18 5 10 *`); il route filtra sul minuto di Roma (19:30-20:45 del giorno dell'evento). Auth con `CRON_SECRET` (header `Authorization: Bearer` o `?secret=`) come tutti i cron. `maxDuration = 300`.
 - **Tag del lancio:** `[LANCIO:CHIAMA_ORA]`, `[LANCIO:PRENOTA|<ISO con offset>]`, `[LANCIO:SLOTS]`, `[LANCIO:NO]`; resta `[PASSAGGIO_UMANO]`. I tag non arrivano MAI al lead: si tolgono dal testo visibile.
 - **Chiamate al CRM** firmate con `signPayload(rawBody, BOT_WEBHOOK_SECRET)` in `x-bot-signature` (come `sendOutcome`). URL base `CRM_LANCIO_URL ?? 'https://crm-sales-fenice.vercel.app/api/bot/lancio'`. Timeout 8 s. Il CRM risponde < 3 s per contratto.
-- **Env nuove:** `LANCIO_ZOOM_TEMPLATE_SID` (Content SID del template "Link Zoom", `{{1}}`=nome `{{2}}`=link), `LANCIO_BATCH_MAX` (default `400`), `CRM_LANCIO_URL` (opzionale), `LANCIO_FAKE_NOW` + `LANCIO_FAKE_NOW_ARMED` (orologio forzato del turno per la prova generale, Task 7: letto fuori produzione, o in produzione solo se `LANCIO_FAKE_NOW_ARMED` è uguale a `CRON_SECRET`). Esistenti riusate: `BOT_WEBHOOK_SECRET`, `CRON_SECRET`, `TWILIO_WHATSAPP_NUMBER_FENICE`, `UTILITY_ONLY`/`UTILITY_ONLY_ALLOW`.
+- **Env nuove:** `LANCIO_ZOOM_TEMPLATE_SID` (Content SID del template "Link Zoom", `{{1}}`=nome `{{2}}`=link), `LANCIO_BATCH_MAX` (default `200` — delibera §11 del 16/09, non 400), `CRM_LANCIO_URL` (opzionale), `LANCIO_FAKE_NOW` + `LANCIO_FAKE_NOW_ARMED` (orologio forzato del turno per la prova generale, Task 7: letto fuori produzione, o in produzione solo se `LANCIO_FAKE_NOW_ARMED` è uguale a `CRON_SECRET`). Esistenti riusate: `BOT_WEBHOOK_SECRET`, `CRON_SECRET`, `TWILIO_WHATSAPP_NUMBER_FENICE`, `UTILITY_ONLY`/`UTILITY_ONLY_ALLOW`.
 - **Date reali:** 5/10/2026 è lunedì, 6/10 martedì, 7/10 mercoledì; fuso `+02:00` (l'ora legale finisce il 25/10). Le fixture dei test usano queste date con offset esplicito.
 - **Comandi:** test `bunx vitest run <file>` (tutti: `bun run test`), typecheck `bun run typecheck`. Commit su `main` solo a task verde; il deploy parte al push, che si fa a fine Task 10 dopo la verifica dal vivo sul numero di test. È sicuro anche prima del 5/10: le fasi del B4 si raggiungono solo col blast (cron a data fissa + `attivo`; `forza` solo con `solo=<id>`) o col marker del pulsante (testo non pubblico prima della live); i lead veri restano in `attesa`/`posto_bloccato`, cioè nel turno del B1.
 - Stile del repo: commenti in italiano che spiegano il PERCHÉ, `event_log` per ogni decisione non ovvia, mai lanciare da un ramo che ha già scritto al lead.
@@ -3313,8 +3313,8 @@ git commit -m "feat(lancio): switch per fase nel turno lancio (assistenza, post-
 Dopo le righe del B1 (`LANCIO_WELCOME_TEMPLATE_SID=`, `LANCIO_ZOOM_TEMPLATE_SID=`, `LANCIO_FOLLOWUP_TEMPLATE_SID=`, `LANCIO_APERTURE_MAX_PER_RUN=100`) aggiungi:
 ```
 # B4 — blast del link Zoom (cron /api/cron/lancio-zoom, 19:30-20:45 del giorno dell'evento)
-# Conversazioni per run (400 ogni 5' ≈ 3.000 in 40'). Il template va in LANCIO_ZOOM_TEMPLATE_SID.
-LANCIO_BATCH_MAX=400
+# Conversazioni per run (200 ogni 5' ≈ 3.000 in 80'). Il template va in LANCIO_ZOOM_TEMPLATE_SID.
+LANCIO_BATCH_MAX=200
 # Base delle rotte del lancio sul CRM (/slots, /book, /call-now). Vuota = produzione.
 CRM_LANCIO_URL=
 # Orologio forzato dei turni del lancio (assistenza, post-pitch), SOLO per la prova generale:
@@ -3347,7 +3347,7 @@ git commit -m "docs(lancio): env del blast Zoom, del client CRM e dell'orologio 
 - [ ] **Step 5: Env di produzione**
 
 ```bash
-npx vercel env add LANCIO_BATCH_MAX production      # 400
+npx vercel env add LANCIO_BATCH_MAX production      # 200
 npx vercel env add CRM_LANCIO_URL production        # vuoto ⇒ default; oppure l'URL canonico
 npx vercel env ls production | grep -i "LANCIO\|CRON_SECRET\|BOT_WEBHOOK"
 ```

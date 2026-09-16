@@ -9,6 +9,7 @@ import {
   idoneoAlBlast,
   ordinaCandidatiBlast,
   decideFreno,
+  finestraBlastChiusa,
   LANCIO_BATCH_MAX_DEFAULT,
   LANCIO_BLAST_CONCURRENCY,
   LANCIO_BLAST_PERIMETRO_DEFAULT,
@@ -34,6 +35,19 @@ describe('inFinestraBlast: 19:30-20:45 di Roma del giorno dell evento', () => {
     const prova = new Date('2026-10-05T20:00:00+02:00');
     expect(inFinestraBlast(rome('18:30'), prova)).toBe(true);
     expect(inFinestraBlast(rome('19:50'), prova)).toBe(false);
+  });
+});
+
+describe('finestraBlastChiusa: la serata e finita, i residui sono definitivi', () => {
+  it('prima e dentro la finestra non e chiusa, dopo le 20:45 si', () => {
+    expect(finestraBlastChiusa(rome('19:00'), EVENTO)).toBe(false);
+    expect(finestraBlastChiusa(rome('20:45'), EVENTO)).toBe(false);
+    expect(finestraBlastChiusa(rome('20:46'), EVENTO)).toBe(true);
+    expect(finestraBlastChiusa(rome('23:30'), EVENTO)).toBe(true);
+  });
+  it('un altro giorno non e la serata dell evento: mai chiusa', () => {
+    expect(finestraBlastChiusa(rome('23:30', '2026-10-04'), EVENTO)).toBe(false);
+    expect(finestraBlastChiusa(rome('10:00', '2026-10-06'), EVENTO)).toBe(false);
   });
 });
 
@@ -141,22 +155,25 @@ describe('ordinaCandidatiBlast', () => {
   });
 });
 
-describe('decideFreno', () => {
+describe('decideFreno: il denominatore sono i TENTATIVI, non gli invii riusciti', () => {
   it('continua sotto soglia', () => {
-    expect(decideFreno({ inviati: 20, falliti: 2, codici: [] })).toBe('continua');
+    expect(decideFreno({ tentati: 20, falliti: 2, codici: [] })).toBe('continua');
   });
-  it('ferma se falliti/inviati > 10% con almeno 20 inviati', () => {
-    expect(decideFreno({ inviati: 20, falliti: 3, codici: [] })).toBe('ferma');
+  it('ferma se falliti/tentati > 10% con almeno 20 tentativi', () => {
+    expect(decideFreno({ tentati: 20, falliti: 3, codici: [] })).toBe('ferma');
   });
-  it('sotto i 20 inviati non si ferma per il solo tasso di fallimento', () => {
-    expect(decideFreno({ inviati: 5, falliti: 4, codici: [] })).toBe('continua');
+  it('sotto i 20 tentativi non si ferma per il solo tasso di fallimento', () => {
+    expect(decideFreno({ tentati: 5, falliti: 4, codici: [] })).toBe('continua');
+  });
+  it('un run tutto fallito si ferma: col vecchio denominatore (i riusciti) sarebbe 0/0', () => {
+    expect(decideFreno({ tentati: 20, falliti: 20, codici: [] })).toBe('ferma');
   });
   it('ferma su qualunque codice Twilio 63018/63049/63051, anche con pochi invii', () => {
-    expect(decideFreno({ inviati: 1, falliti: 1, codici: [63018] })).toBe('ferma');
-    expect(decideFreno({ inviati: 1, falliti: 0, codici: [63049] })).toBe('ferma');
-    expect(decideFreno({ inviati: 1, falliti: 0, codici: [63051] })).toBe('ferma');
+    expect(decideFreno({ tentati: 1, falliti: 1, codici: [63018] })).toBe('ferma');
+    expect(decideFreno({ tentati: 1, falliti: 0, codici: [63049] })).toBe('ferma');
+    expect(decideFreno({ tentati: 1, falliti: 0, codici: [63051] })).toBe('ferma');
   });
   it('altri codici Twilio non fermano da soli', () => {
-    expect(decideFreno({ inviati: 20, falliti: 1, codici: [21211] })).toBe('continua');
+    expect(decideFreno({ tentati: 20, falliti: 1, codici: [21211] })).toBe('continua');
   });
 });

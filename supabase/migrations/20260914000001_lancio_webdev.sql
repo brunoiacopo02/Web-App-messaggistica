@@ -43,5 +43,11 @@ insert into public.app_settings (key, value) values
   ('lancio_zoom_link', '"https://us06web.zoom.us/j/89845223337"'::jsonb),
   ('lancio_video_live_link', '""'::jsonb),
   ('offerta_del_mese_link', '""'::jsonb),
-  ('lancio_evento_at', '"2026-10-05T21:00:00+02:00"'::jsonb)
+  ('lancio_evento_at', '"2026-10-05T21:00:00+02:00"'::jsonb),
+  -- Manopole della sera del 5 (spec §11, delibera 16/09), da girare dal pannello senza
+  -- deploy. Nascono sui valori di default: link a TUTTI gli iscritti dal numero
+  -- principale. `risposto` e' il piano B da accendere al primo segnale di problemi;
+  -- `secondario` richiede il secondo client Twilio (task "Mittente secondario").
+  ('lancio_blast_perimetro', '"tutti"'::jsonb),
+  ('lancio_sender', '"principale"'::jsonb)
 on conflict (key) do nothing;
