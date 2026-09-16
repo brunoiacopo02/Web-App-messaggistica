@@ -12,6 +12,7 @@ import {
   type ClasseLancio, type LancioAzione, type RigaLancio,
 } from './lancio-fase';
 import { impostaFaseLancio, leggiIngressoLancioAt, marcaCongedo } from './lancio-db';
+import type { LancioInfo } from './lancio-crm';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -30,6 +31,10 @@ export type TurnoLancioInput = {
   /** Iniettabile nei test: di default il modello col prompt lancio. */
   genera?: typeof generateLancioReply;
   settings?: LancioSettings;
+  /** `conversations.lancio_info` letto dal claim: le risposte del post-pitch (B4). */
+  lancioInfo?: LancioInfo | null;
+  /** L'orologio del turno (B4): di default `adessoLancio()`. Iniettabile nei test. */
+  now?: Date;
 };
 
 /**
