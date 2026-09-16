@@ -1,5 +1,6 @@
 import type { getSupabaseAdmin } from './supabase/admin';
 import { signPayload } from './bot-hmac';
+import type { ProvenienzaLeadEntrante } from './primo-messaggio';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -13,8 +14,9 @@ export type PushLeadEntranteArgs = {
   /** E.164. */
   telefono: string;
   nome: string | null;
-  /** 'TELEGRAM' o 'INBOUND'. */
-  provenienza: string;
+  /** 'TELEGRAM' | 'INBOUND' | 'Lancio Web Dev AI' (lib/primo-messaggio.ts). Il CRM la
+   *  normalizza (trim/uppercase) e riconosce il lancio a prescindere dal caso. */
+  provenienza: ProvenienzaLeadEntrante;
   primoMessaggio: string | null;
   /** ISO 8601 con offset esplicito: il `created_at` del primo inbound. */
   scrittoIl: string;

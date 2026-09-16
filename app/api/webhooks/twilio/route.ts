@@ -10,7 +10,10 @@ import { handleGdoDeliveryUpdate } from '@/lib/send-agenda-gdo';
 import { sendCrmNota } from '@/lib/bot-outcome';
 import { buildBotRipresoNote } from '@/lib/bot-outcome-rules';
 import { segnalaRispostaDopoTerzoNr } from '@/lib/risposta-post-nr';
-import { funnelDaPrimoMessaggio } from '@/lib/persona';
+import { classificaPrimoMessaggio, isMarkerPulsanteWebinar } from '@/lib/primo-messaggio';
+import { LANCIO_SLUG, pulsanteRiportaInPostPitch, pulsanteScriveFase } from '@/lib/lancio-fase';
+import { impostaFaseLancio } from '@/lib/lancio-db';
+import { getLancioSettings } from '@/lib/lancio-settings';
 import { pushLeadEntrante } from '@/lib/lead-entrante';
 
 export const runtime = 'nodejs';
@@ -181,7 +184,7 @@ export async function POST(req: NextRequest) {
     if (toMatchesFenice) {
       const { data: conv } = await supabase
         .from('conversations')
-        .select('ai_owner, ai_status, ai_paused_at, handed_off_at, crm_lead_id, bot_outcome, lancio_slug, lancio_info')
+        .select('ai_owner, ai_status, ai_paused_at, handed_off_at, crm_lead_id, bot_outcome, lancio_slug, lancio_fase, lancio_ingresso, lancio_info')
         .eq('id', conversationId)
         .single();
 
@@ -192,12 +195,128 @@ export async function POST(req: NextRequest) {
       // Non costa una query in piu': serviva comunque a `shouldAutoReply` qui sotto.
       const autoReplyOn = await getAutoReply(supabase);
 
+      // Il gate dell'interruttore va valutato PRIMA del conteggio degli outbound: a bot
+      // spento (come in produzione) non deve costare nessuna query in piu' al webhook,
+      // che deve restare veloce perche' Twilio ritenta. Sta qui sopra perche' serve anche
+      // alla decisione del pulsante, subito sotto.
+      const adozioneAttiva = process.env.INBOUND_ADOPTION_ENABLED === '1';
+
+      // Pulsante del webinar (spec lancio §5.4, §6.3): scatta sull'inbound CORRENTE e
+      // vince su chi possiede la chat e su quello che il lead aveva detto prima — anche
+      // su una chat gia' di Mario, anche su una gia' dentro il lancio. Il lead della
+      // lista d'attesa ha la chat aperta da settimane e preme il pulsante la sera del 5:
+      // e' quel messaggio che conta, non il primo. Un inbound SENZA marker invece non
+      // tocca mai `lancio_fase`: le fasi le muove il turno del lancio dentro il drain.
+      const markerPulsante = isMarkerPulsanteWebinar(messageBody);
+      // L'interruttore `lancio_pulsante_attivo` si legge SOLO quando il marker c'e'
+      // davvero: sull'inbound normale — cioe' su tutti — il gate non costa nessuna query
+      // in piu', e sulla frase del pulsante ne costa una sola (`app_settings`, la stessa
+      // riga che legge il resto del lancio). Spento, il marker vale come assente: non
+      // arriva a `shouldAdoptInbound`, non arriva a `classificaPrimoMessaggio`, e
+      // `pulsanteScriveFase` lo dice con `pulsante_spento`.
+      const pulsanteAttivo = markerPulsante ? (await getLancioSettings(supabase)).pulsanteAttivo : false;
+      const lancioPulsante = markerPulsante && pulsanteAttivo;
+      if (conv && markerPulsante) {
+        // Il gate dell'adozione, valutato qui perche' e' la seconda delle due sole
+        // condizioni che autorizzano a scrivere lo stato del lancio (vedi
+        // `pulsanteScriveFase`). Col pulsante `shouldAdoptInbound` non guarda
+        // `hasOutbound` — la richiesta e' esplicita e fatta adesso — quindi qui il
+        // conteggio degli outbound non serve, e resta dentro il ramo dell'adozione dove
+        // si paga solo quando serve davvero. `hasOutbound: true` e' il valore prudente:
+        // se un domani quella regola cambiasse, di qui si uscirebbe con un evento orfano
+        // e nessuna scrittura, non col contrario.
+        const adottaOra = shouldAdoptInbound({
+          toMatchesFenice,
+          adoptionOn: adozioneAttiva,
+          autoReplyOn,
+          aiOwner: conv.ai_owner,
+          aiPausedAt: conv.ai_paused_at,
+          handedOffAt: conv.handed_off_at,
+          hasOutbound: true,
+          lancioPulsante,
+        });
+        const decisione = pulsanteScriveFase({
+          pulsanteAttivo,
+          aiOwner: conv.ai_owner,
+          aiPausedAt: conv.ai_paused_at,
+          handedOffAt: conv.handed_off_at,
+          adottaOra,
+          autoReplyOn,
+          adozioneAttiva,
+        });
+
+        if (!decisione.scrive) {
+          // Finestra orfana: scrivere `lancio_slug` qui toglierebbe questa chat da
+          // `adotta-mai-risposti` (che esclude lo slug non nullo) e dalle altre reti di
+          // recupero, senza che nessuno le risponda. Si lascia intatta e si registra il
+          // pulsante: quando l'adozione si accende, il cron lo riclassifica e la porta
+          // lui in `post_pitch`.
+          await supabase.from('event_log').insert({
+            type: 'lancio_pulsante',
+            payload: {
+              conversationId,
+              giaDiMario: conv.ai_owner === 'mario',
+              orfano: true,
+              motivo: decisione.motivo,
+            } as never,
+            message: `[lancio] ${phone} ha premuto il pulsante del webinar ma la chat non e' governata (${decisione.motivo}): nessuna scrittura sul lancio (conv ${conversationId})`,
+            level: 'warn',
+          });
+        } else {
+          // Se la chat di Mario era 'closed' (un no di settimane fa, o il congedo del
+          // lancio) si riapre: sta scrivendo adesso, e col pulsante. Mai su una chat
+          // senza padrone, in pausa o passata a una persona: quelle non arrivano qui.
+          // Le colonne d'ingresso si scrivono solo se mancano: chi e' entrato dalla
+          // lista resta 'lista'.
+          const riapri = conv.ai_owner === 'mario' && conv.ai_status === 'closed';
+          const colonne = {
+            ...(conv.lancio_slug ? {} : { lancio_slug: LANCIO_SLUG }),
+            ...(conv.lancio_ingresso ? {} : { lancio_ingresso: 'pulsante_webinar' }),
+            ...(riapri ? { ai_status: 'active' } : {}),
+          };
+          if (Object.keys(colonne).length > 0) {
+            const { error: erroreColonne } = await supabase
+              .from('conversations').update(colonne).eq('id', conversationId);
+            if (erroreColonne) {
+              await supabase.from('event_log').insert({
+                type: 'lancio_pulsante_colonne_non_scritte',
+                payload: { conversationId, phone, colonne, errore: erroreColonne.message } as never,
+                message: `[lancio] conv ${conversationId}: colonne d'ingresso del pulsante NON scritte — ${erroreColonne.message}`,
+                level: 'warn',
+              });
+            } else if (riapri) {
+              // La copia in memoria serve subito dopo: e' quella che `shouldAutoReply` legge.
+              conv.ai_status = 'active';
+            }
+          }
+          // `impostaFaseLancio` (lib/lancio-db.ts) e' l'unico scrittore di `lancio_fase` e
+          // si scrive da solo l'evento `lancio_fase_cambiata`. Await e non `after()`: e' un
+          // update solo, e la fase deve essere sul posto prima che il drain parta qui sotto.
+          // L'elenco delle fasi da cui si rientra e' chiuso (vedi la funzione): da
+          // `followup_inviato` e `restituito` la fase NON si muove — dopo il follow-up la
+          // chat e' del flusso standard di B5, e un restituito e' tornato al GDO.
+          const cambiaFase = pulsanteRiportaInPostPitch(conv.lancio_fase);
+          if (cambiaFase) {
+            await impostaFaseLancio(supabase, conversationId, 'post_pitch');
+            conv.lancio_fase = 'post_pitch';
+          }
+          // L'evento si scrive SEMPRE, anche a fase invariata: che quella persona abbia
+          // premuto il pulsante si deve vedere nei pannelli comunque.
+          await supabase.from('event_log').insert({
+            type: 'lancio_pulsante',
+            payload: {
+              conversationId,
+              giaDiMario: conv.ai_owner === 'mario',
+              ...(cambiaFase ? {} : { faseInvariata: true }),
+            } as never,
+            message: `[lancio] ${phone} ha premuto il pulsante del webinar (conv ${conversationId})${cambiaFase ? '' : `, fase ${conv.lancio_fase} invariata`}`,
+            level: 'info',
+          });
+        }
+      }
+
       // Adozione: il lead ha scritto per primo e questa chat non e' di nessuno.
       //
-      // Il gate dell'interruttore va valutato PRIMA del conteggio: a bot spento (come in
-      // produzione) non deve costare nessuna query in piu' al webhook, che deve restare
-      // veloce perche' Twilio ritenta.
-      const adozioneAttiva = process.env.INBOUND_ADOPTION_ENABLED === '1';
       // Il conteggio degli outbound si fa SOLO quando `ai_owner` e' nullo: sulle chat
       // gia' arruolate (la stragrande maggioranza degli inbound) non si aggiunge nessuna
       // query al webhook.
@@ -221,6 +340,7 @@ export async function POST(req: NextRequest) {
           aiPausedAt: conv.ai_paused_at,
           handedOffAt: conv.handed_off_at,
           hasOutbound,
+          lancioPulsante,
         })) {
           // La provenienza si legge dal PRIMO messaggio della conversazione, non da
           // quello appena arrivato: chi e' in arretrato e riscrive "Scusa poi risponde"
@@ -228,6 +348,7 @@ export async function POST(req: NextRequest) {
           // statistiche del CRM sarebbe falsa. E' quello che fa gia'
           // `app/api/cron/adotta-mai-risposti/route.ts`. La query sta dentro il ramo
           // dell'adozione, che e' raro: il webhook normale non paga niente.
+          // Il pulsante del webinar fa eccezione e si legge dal messaggio corrente: vedi lib/primo-messaggio.ts.
           const { data: primiInbound } = await supabase
             .from('messages')
             .select('body, created_at')
@@ -239,7 +360,8 @@ export async function POST(req: NextRequest) {
           // Il messaggio corrente e' il fallback: se la lettura fallisce o la riga non si
           // vede ancora, e' comunque il primo inbound di questa conversazione.
           const primoMessaggioTesto = primoRigaInbound?.body ?? messageBody;
-          const provenienza = funnelDaPrimoMessaggio(primoMessaggioTesto);
+          const esito = classificaPrimoMessaggio({ primoInbound: primoMessaggioTesto, inboundCorrente: messageBody, pulsanteAttivo });
+          const provenienza = esito.provenienza;
           // Cinque minuti indietro, e non `now`: il messaggio che ha innescato questa
           // adozione e' stato inserito qui sopra col `created_at` di default, cioe'
           // l'orologio di Postgres, mentre `now` viene da quello di Node. Con
@@ -251,12 +373,17 @@ export async function POST(req: NextRequest) {
           // Effetto voluto: chi manda tre messaggi di fila in due minuti se li vede
           // leggere tutti, invece che solo l'ultimo.
           const startedAtAdozione = new Date(Date.now() - 5 * 60_000).toISOString();
-          const { error: erroreAdozione } = await supabase.from('conversations').update({
+          // Compare-and-set su `ai_owner`, come nel cron: due messaggi dello stesso numero
+          // nuovo arrivano insieme (succede: il lead manda "ciao" e poi il vero
+          // messaggio), Twilio apre due richieste e senza questa condizione entrambe
+          // adottano e entrambe spingono il lead al CRM. Nessuna riga tornata = l'ha
+          // presa l'altra richiesta: qui non si logga e non si spinge niente.
+          const { data: adottate, error: erroreAdozione } = await supabase.from('conversations').update({
             ai_owner: 'mario',
             ai_status: 'active',
             ai_started_at: startedAtAdozione,
             crm_funnel: provenienza,
-          }).eq('id', conversationId);
+          }).eq('id', conversationId).is('ai_owner', null).select('id');
           if (erroreAdozione) {
             // Sul database lo stato e' rimasto quello vecchio: NON si muta la copia in
             // memoria e NON si scrive il log di adozione, altrimenti mentirebbe (il claim
@@ -267,13 +394,18 @@ export async function POST(req: NextRequest) {
               message: `[bot-fissatore] adozione fallita per ${phone}: ${erroreAdozione.message}`,
               level: 'error',
             });
+          } else if (!adottate || adottate.length === 0) {
+            // Presa da un'altra richiesta in volo. Non si tocca la copia in memoria: e'
+            // quella richiesta a rispondere (il suo `drainMarioReplies` risponde anche a
+            // questo inbound, che a quel punto e' gia' in `messages`), e il suo push al
+            // CRM e' gia' partito. Un secondo giro qui vorrebbe dire due lead entranti.
           } else {
             // La copia in memoria serve subito dopo: e' quella che `shouldAutoReply` legge.
             conv.ai_owner = 'mario';
             conv.ai_status = 'active';
             await supabase.from('event_log').insert({
               type: 'inbound_adottato',
-              payload: { conversationId, phone, provenienza } as never,
+              payload: { conversationId, phone, provenienza, tipo: esito.tipo } as never,
               message: `[bot-fissatore] adottato ${phone}: ha scritto per primo (${provenienza})`,
               level: 'info',
             });

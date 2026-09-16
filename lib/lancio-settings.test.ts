@@ -19,6 +19,7 @@ describe('parseLancioSettings', () => {
   it('legge le chiavi della spec', () => {
     const s = parseLancioSettings([
       { key: 'lancio_attivo', value: true },
+      { key: 'lancio_pulsante_attivo', value: true },
       { key: 'lancio_zoom_link', value: 'https://us06web.zoom.us/j/89845223337' },
       { key: 'lancio_video_live_link', value: 'https://corso.feniceacademy.it/live-webdev' },
       { key: 'offerta_del_mese_link', value: 'https://corso.feniceacademy.it/offerta-webdev' },
@@ -28,6 +29,7 @@ describe('parseLancioSettings', () => {
     ]);
     expect(s).toEqual({
       attivo: true,
+      pulsanteAttivo: true,
       zoomLink: 'https://us06web.zoom.us/j/89845223337',
       videoLiveLink: 'https://corso.feniceacademy.it/live-webdev',
       offertaDelMeseLink: 'https://corso.feniceacademy.it/offerta-webdev',
@@ -72,10 +74,10 @@ describe('parseLancioSettings', () => {
     expect(parseLancioSettings([{ key: 'fenice_ai_autoreply', value: true }]).attivo).toBe(false);
   });
 
-  it('le chiavi sono esattamente quelle della spec §3.2 + §11', () => {
+  it('le chiavi sono esattamente quelle della spec §3.2 + §11 e del pulsante (B2)', () => {
     expect([...LANCIO_SETTING_KEYS].sort()).toEqual([
-      'lancio_attivo', 'lancio_blast_perimetro', 'lancio_evento_at', 'lancio_sender',
-      'lancio_video_live_link', 'lancio_zoom_link', 'offerta_del_mese_link',
+      'lancio_attivo', 'lancio_blast_perimetro', 'lancio_evento_at', 'lancio_pulsante_attivo',
+      'lancio_sender', 'lancio_video_live_link', 'lancio_zoom_link', 'offerta_del_mese_link',
     ]);
   });
 
@@ -84,5 +86,19 @@ describe('parseLancioSettings', () => {
     expect(sql).toContain("'lancio_blast_perimetro'");
     expect(sql).toContain("'lancio_sender'");
     expect(sql).toContain('on conflict (key) do nothing');
+  });
+
+  it('il pulsante e spento se la chiave manca o e scritta storta: si sbaglia verso il silenzio', () => {
+    expect(parseLancioSettings([]).pulsanteAttivo).toBe(false);
+    expect(parseLancioSettings([{ key: 'lancio_pulsante_attivo', value: 'forse' }]).pulsanteAttivo).toBe(false);
+    expect(parseLancioSettings([{ key: 'lancio_pulsante_attivo', value: null }]).pulsanteAttivo).toBe(false);
+    expect(parseLancioSettings([{ key: 'lancio_pulsante_attivo', value: true }]).pulsanteAttivo).toBe(true);
+    expect(parseLancioSettings([{ key: 'lancio_pulsante_attivo', value: '1' }]).pulsanteAttivo).toBe(true);
+  });
+
+  it('il pulsante e indipendente da lancio_attivo: sono due interruttori diversi', () => {
+    const s = parseLancioSettings([{ key: 'lancio_pulsante_attivo', value: true }]);
+    expect(s.attivo).toBe(false);
+    expect(s.pulsanteAttivo).toBe(true);
   });
 });

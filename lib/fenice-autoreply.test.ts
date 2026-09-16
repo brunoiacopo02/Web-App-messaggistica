@@ -1929,6 +1929,16 @@ describe('shouldAdoptInbound', () => {
   it('falso se un messaggio nostro è già partito (campagne, invii a mano)', () => {
     expect(shouldAdoptInbound({ ...ok, hasOutbound: true })).toBe(false);
   });
+  it('con il pulsante del webinar una chat con outbound in passato si adotta lo stesso', () => {
+    expect(shouldAdoptInbound({ ...ok, hasOutbound: true, lancioPulsante: true })).toBe(true);
+  });
+  it('il pulsante non scavalca gli altri veti: bot spento, pausa, passata a una persona, chat di Mario', () => {
+    expect(shouldAdoptInbound({ ...ok, lancioPulsante: true, autoReplyOn: false })).toBe(false);
+    expect(shouldAdoptInbound({ ...ok, lancioPulsante: true, adoptionOn: false })).toBe(false);
+    expect(shouldAdoptInbound({ ...ok, lancioPulsante: true, aiPausedAt: '2026-10-05T20:00:00Z' })).toBe(false);
+    expect(shouldAdoptInbound({ ...ok, lancioPulsante: true, handedOffAt: '2026-10-05T20:00:00Z' })).toBe(false);
+    expect(shouldAdoptInbound({ ...ok, lancioPulsante: true, aiOwner: 'mario' })).toBe(false);
+  });
 });
 
 // Un lead adottato dal webhook non ha `crm_lead_id`: il CRM non lo conosce ancora e

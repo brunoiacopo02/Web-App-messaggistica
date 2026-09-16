@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { fetchAllRows } from '@/lib/supabase/paginate';
 import { sendTemplateAndLog } from '@/lib/messaging';
-import { funnelDaPrimoMessaggio } from '@/lib/persona';
+import { classificaPrimoMessaggio, vaRiagganciato } from '@/lib/primo-messaggio';
+import { LANCIO_SLUG } from '@/lib/lancio-fase';
+import { impostaFaseLancio } from '@/lib/lancio-db';
+import { getLancioSettings } from '@/lib/lancio-settings';
 import { templateName } from '@/lib/name';
 import { inSendWindow } from '@/lib/sequence';
 import { assertTemplateSendable } from '@/lib/twilio';
@@ -29,6 +32,11 @@ export const maxDuration = 300;
  * Rotta manuale come `riapri-mute`, NON in vercel.json. Con l'adozione accesa la sua
  * lista deve restare vuota: ricontrollarla ogni tanto e' il modo per accorgersi se
  * l'adozione ha smesso di funzionare.
+ *
+ * Non guarda `INBOUND_ADOPTION_ENABLED`, ed e' voluto: e' il recupero a mano dell'
+ * arretrato, si lancia quando lo si vuole lanciare e deve poter adottare anche mentre
+ * l'adozione automatica del webhook e' spenta. Il pulsante del webinar invece ha il suo
+ * interruttore condiviso col webhook (`lancio_pulsante_attivo` in `app_settings`).
  *
  * POST { dal?: 'YYYY-MM-DD', esegui?: boolean, max?: number }
  */
@@ -57,15 +65,28 @@ export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin();
   const started = Date.now();
 
+  // Lo stesso interruttore del webhook, letto UNA volta per run e non per lead: spento,
+  // il marker del pulsante vale come assente e questi lead tornano a essere TELEGRAM o
+  // INBOUND, riaggancio di Marta compreso.
+  const { pulsanteAttivo } = await getLancioSettings(admin);
+
   // Candidati: nessun padrone, il lead ha scritto, sul numero Fenice, nessuno l'ha
   // presa in mano. Il filtro sugli outbound si fa dopo, in memoria: PostgREST non sa
   // fare "nessuna riga collegata" senza una vista.
+  //
+  // `lancio_slug` nullo: una chat del lancio e' gia' presa in carico da qualcun altro —
+  // il suo benvenuto, il suo turno, la sua restituzione di fine lancio — e non e' mai
+  // "mai risposta" in questo senso. Il riaggancio di Marta sopra una chat del lancio
+  // sarebbe una seconda voce sulla stessa persona. E' piu' stretto di
+  // `FILTRO_FUORI_LANCIO` (che lascia passare le fasi terminali) apposta: qui non
+  // interessa se il lancio e' finito, interessa che quella chat e' roba sua.
   const convs = await fetchAllRows<any>((from_, to) => admin
     .from('conversations')
     .select('id, lead_id, wa_number, ai_paused_at, handed_off_at, last_inbound_at')
     .is('ai_owner', null)
     .is('handed_off_at', null)
     .is('ai_paused_at', null)
+    .is('lancio_slug', null)
     .not('last_inbound_at', 'is', null)
     .eq('wa_number', from)
     .gte('last_inbound_at', dal)
@@ -104,6 +125,10 @@ export async function POST(req: NextRequest) {
   let inviati = 0, falliti = 0;
   // Prese dal webhook mentre il ciclo era in corso: non sono ne' invii ne' fallimenti.
   let giaPrese = 0;
+  // Entrate nel lancio dal pulsante del webinar: adottate e passate a post_pitch, ma
+  // senza riaggancio (vedi `vaRiagganciato`). Contate a parte perche' non sono ne'
+  // invii ne' fallimenti, e perche' la loro presenza qui e' una notizia.
+  let pulsante = 0;
   const errori: string[] = [];
   const esempi = muti.slice(0, 5).map((c: any) => ({ conv: c.id, scrittoIl: c.last_inbound_at }));
 
@@ -134,7 +159,9 @@ export async function POST(req: NextRequest) {
         .select('body, created_at').eq('conversation_id', c.id).eq('direction', 'in')
         .order('created_at', { ascending: true }).limit(1);
       const primoRiga = (primi ?? [])[0] as { body: string | null; created_at: string } | undefined;
-      const provenienza = funnelDaPrimoMessaggio(primoRiga?.body);
+      // Qui il primo inbound e' anche l'ultimo: la chat ha un solo messaggio, il suo.
+      const esito = classificaPrimoMessaggio({ primoInbound: primoRiga?.body, inboundCorrente: primoRiga?.body, pulsanteAttivo });
+      const provenienza = esito.provenienza;
 
       const now = new Date().toISOString();
       // Compare-and-set su `ai_owner`: la lista dei candidati si calcola all'inizio e
@@ -158,6 +185,25 @@ export async function POST(req: NextRequest) {
       }
       if (!adottate || adottate.length === 0) { giaPrese++; continue; }
 
+      // Ha premuto il pulsante del webinar e nessuno gli ha mai risposto: la chat entra
+      // nel lancio PRIMA del riaggancio, cosi' i cron del lancio (link, follow-up) la
+      // trovano al loro primo giro. I candidati hanno `lancio_slug` nullo per
+      // costruzione, quindi le colonne d'ingresso si scrivono sempre; la fase passa da
+      // `impostaFaseLancio`, unico scrittore di `lancio_fase`, e l'evento del pulsante
+      // si inserisce a parte come nel webhook.
+      if (esito.tipo === 'lancio_pulsante') {
+        await admin.from('conversations')
+          .update({ lancio_slug: LANCIO_SLUG, lancio_ingresso: 'pulsante_webinar' })
+          .eq('id', c.id);
+        await impostaFaseLancio(admin, c.id, 'post_pitch');
+        await admin.from('event_log').insert({
+          type: 'lancio_pulsante',
+          payload: { conversationId: c.id, giaDiMario: false, daCron: 'adotta-mai-risposti' } as never,
+          message: `[lancio] ${l.phone} aveva premuto il pulsante del webinar e non gli ha mai risposto nessuno (conv ${c.id})`,
+          level: 'info',
+        });
+      }
+
       // Qui, prima del riaggancio: non c'e' nessun Twilio da non far aspettare, e il
       // CRM ha bisogno del leadId per poter accettare l'esito quando arriva. Il loro
       // lock e' per numero, non globale: fino a 35 push ravvicinati in un run vanno bene.
@@ -169,6 +215,12 @@ export async function POST(req: NextRequest) {
         primoMessaggio: primoRiga?.body ?? null,
         scrittoIl: primoRiga?.created_at ?? now,
       });
+
+      // Chi e' arrivato dal pulsante del webinar si ferma qui: ha la fase, ha il lead sul
+      // CRM, e a rispondergli ci pensa il turno del lancio nel drain. Il riaggancio di
+      // Marta ("ci eravamo persi a meta' discorso") sarebbe una seconda voce sulla stessa
+      // persona, con un testo che col webinar non c'entra niente.
+      if (!vaRiagganciato(esito)) { pulsante++; continue; }
 
       const nome = templateName(l.first_name);
       const res = await sendTemplateAndLog(
@@ -182,13 +234,13 @@ export async function POST(req: NextRequest) {
 
     await admin.from('event_log').insert({
       type: 'adotta_mai_risposti',
-      payload: { candidate: muti.length, inviati, falliti, giaPrese, dal } as never,
-      message: `[bot-fissatore] recupero di chi ci ha scritto per primo: ${inviati} riaggancio partiti, ${falliti} falliti, ${giaPrese} gia' prese dal webhook`,
+      payload: { candidate: muti.length, inviati, falliti, giaPrese, pulsante, dal } as never,
+      message: `[bot-fissatore] recupero di chi ci ha scritto per primo: ${inviati} riaggancio partiti, ${falliti} falliti, ${giaPrese} gia' prese dal webhook, ${pulsante} entrate nel lancio dal pulsante`,
       level: falliti > 0 ? 'warn' : 'info',
     });
   }
 
   return NextResponse.json({
-    ok: true, dal, candidate: muti.length, esaminate: convs.length, inviati, falliti, giaPrese, esegui, errori, esempi,
+    ok: true, dal, candidate: muti.length, esaminate: convs.length, inviati, falliti, giaPrese, pulsante, pulsanteAttivo, esegui, errori, esempi,
   });
 }

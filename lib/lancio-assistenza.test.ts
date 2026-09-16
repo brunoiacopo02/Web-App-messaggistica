@@ -36,7 +36,7 @@ function makeSupabase() {
 }
 
 const SETTINGS: LancioSettings = {
-  attivo: true,
+  attivo: true, pulsanteAttivo: false,
   zoomLink: 'https://us06web.zoom.us/j/89845223337',
   videoLiveLink: null,
   offertaDelMeseLink: null,
