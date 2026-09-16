@@ -9,11 +9,13 @@ import { splitMarioMessages } from './mario-split';
 import { ensureConfirmationBlock, containsVideoLink } from './confirmation-block';
 import { unknownFeniceLinks } from './outbound-sanitize';
 import { generateBotReport } from './bot-report';
-import { sendOutcome, inviaNotaAlCrm } from './bot-outcome';
+import { registraEsitoSenzaLeadId, sendOutcome, inviaNotaAlCrm } from './bot-outcome';
 import { stopDalCrmPerLead, vuolePassaggioAUmano } from './stop-crm';
 import { buildScriveDopoLaCallNote } from './bot-outcome-rules';
+import type { BotOutcome } from './bot-contract';
 import { personaForConversation, PERSONA_NAME, OPENING_ENV_KEYS } from './persona';
 import { confermaVideoVisto } from './video-visto';
+import { notaPrimoContatto } from './primo-contatto-note';
 import { haCongedo, lancioInCorso } from './lancio-fase';
 import { eseguiTurnoLancio } from './lancio-turno';
 
@@ -82,6 +84,47 @@ export function shouldReopen(g: {
   if (g.aiOwner !== 'mario') return false;
   if (g.lancioSlug && haCongedo(g.lancioInfo)) return false;
   return g.aiStatus === 'closed';
+}
+
+export type AdoptGate = {
+  toMatchesFenice: boolean;
+  /** INBOUND_ADOPTION_ENABLED === '1' */
+  adoptionOn: boolean;
+  /** L'interruttore generale dell'auto-risposta, dal pannello (vedi `shouldAutoReply`). */
+  autoReplyOn: boolean;
+  aiOwner: string | null;
+  aiPausedAt?: string | null;
+  handedOffAt?: string | null;
+  /** Esiste una QUALUNQUE riga in uscita su questa conversazione, anche senza SID. */
+  hasOutbound: boolean;
+};
+
+/**
+ * Pure: il bot prende in carico una conversazione che nessuno possiede?
+ *
+ * Fino al 04/09/2026 rispondeva solo ai lead arruolati dall'intake del CRM: chi scriveva
+ * per primo non aveva padrone e restava zitto. 29 persone su 43 arrivate dal canale
+ * Telegram fra il 26/08 e il 04/09 non hanno mai ricevuto una risposta, con un silenzio
+ * mediano di 113 ore.
+ *
+ * `hasOutbound` conta QUALUNQUE riga in uscita, anche di un invio fallito: se qualcuno ha
+ * provato a scrivere a questa persona, la chat ha una storia che qui non conosciamo. È
+ * anche ciò che tiene fuori le campagne e la inbox, dove il primo messaggio è sempre
+ * nostro. È il criterio OPPOSTO a quello di `apreSopraChatViva` (in `fenice-enroll.ts`),
+ * la guardia sull'apertura dentro `enrollLeadIntoMario`, che guarda solo agli outbound
+ * partiti davvero: là serve sapere se il lead ha visto qualcosa, qui se qualcuno ha provato.
+ *
+ * `autoReplyOn` è l'interruttore generale del pannello, e qui è un veto come gli altri:
+ * non si adotta chi non si può servire. Lo si spegne durante un incidente, cioè proprio
+ * quando il bot non deve rispondere — e una conversazione adottata ma muta è fuori da
+ * tutte e tre le reti di recupero (`adotta-mai-risposti` cerca `ai_owner` nullo,
+ * `bot-followups` un `crm_lead_id` valorizzato, `riapri-mute` una riga in uscita).
+ */
+export function shouldAdoptInbound(g: AdoptGate): boolean {
+  if (!g.toMatchesFenice || !g.adoptionOn || !g.autoReplyOn) return false;
+  if (g.aiOwner !== null) return false;
+  if (g.aiPausedAt || g.handedOffAt) return false;
+  return !g.hasOutbound;
 }
 
 /**
@@ -277,7 +320,10 @@ export async function drainMarioReplies(
     .eq('ai_status', 'active')
     .is('ai_paused_at', null) // fermo manuale: la chat è di un umano, non si claima
     .or(`ai_lock_at.is.null,ai_lock_at.lt.${staleCutoff}`)
-    .select('id, ai_started_at, crm_lead_id, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, bot_scheduled_at, gdo_appuntamento_at, lancio_slug, lancio_fase, leads(first_name)')
+    // `bot_outcome` e `bot_scheduled_at` servono al ramo degli esiti senza leadId
+    // (`registraEsitoSenzaLeadId`): senza di loro non saprebbe che su questa
+    // conversazione c'e' gia' un appuntamento in piedi, e lo declasserebbe.
+    .select('id, ai_started_at, crm_lead_id, bot_outcome, bot_scheduled_at, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, gdo_appuntamento_at, lancio_slug, lancio_fase, leads(first_name)')
     .single();
   // PGRST116 = nessuna riga: e' il caso NORMALE (conversazione non claimabile, o
   // lucchetto di un altro drain) e non va segnalato. Qualunque altro errore invece qui
@@ -298,6 +344,8 @@ export async function drainMarioReplies(
   if (!claimed) return;
   const startedAt = (claimed as { ai_started_at: string | null }).ai_started_at;
   const crmLeadId = (claimed as { crm_lead_id: string | null }).crm_lead_id;
+  const esitoInPiedi = (claimed as { bot_outcome?: BotOutcome | null }).bot_outcome ?? null;
+  const dataInPiedi = (claimed as { bot_scheduled_at?: string | null }).bot_scheduled_at ?? null;
 
   // Lo stop che viene dal CRM, non dalla chat: chi si e' presentato alla call o ha
   // comprato non deve ricevere piu' niente, e nemmeno chi una persona ha scartato per un
@@ -486,12 +534,18 @@ export async function drainMarioReplies(
         : martaSids.size > 0
           ? personaForConversation(rows, martaSids)
           : 'mario';
+      // Sui lead adottati (non postino) la nota e' la dichiarazione IA: se sulla
+      // conversazione non e' mai uscito niente da parte nostra, il lead non sa mai
+      // con chi sta parlando senza questa nota.
+      const notaPrimo = notaPrimoContatto(rows);
       const result = await generateMarioReply(history, {
         personaName: PERSONA_NAME[persona],
         giorniPieni,
         // I promemoria pendenti (video non confermato, Noemi non ancora spiegata)
         // viaggiano dentro il contesto: il modello li integra nel discorso invece di
-        // farli arrivare come un messaggio programmato addosso.
+        // farli arrivare come un messaggio programmato addosso. Sui lead adottati la
+        // nota e' un'altra, la dichiarazione IA: un postino ha sempre ricevuto l'agenda,
+        // quindi i due casi non si incontrano mai.
         ...(postino
           ? {
               contextNote: gdoContextNote({
@@ -505,7 +559,9 @@ export async function drainMarioReplies(
                 gdoAppuntamentoAt: gdoAppuntamentoAt,
               }),
             }
-          : {}),
+          : notaPrimo
+            ? { contextNote: notaPrimo }
+            : {}),
       });
 
       // Il lead può confermare di aver visto il video PRIMA che gli sia mai arrivato
@@ -712,6 +768,39 @@ export async function drainMarioReplies(
           if (!postino && !sent.keepOpen && (sent.sent || sent.error === 'note_duplicate')) {
             finalStatus = 'closed';
           }
+          break;
+        }
+        if (!postino) {
+          // Lead adottato: il CRM non lo conosce, quindi `crm_lead_id` e' nullo e
+          // l'esito non ha dove andare. Senza questo ramo non veniva scritto NIENTE —
+          // `bot_outcome`, `bot_outcome_at` e `bot_scheduled_at` li tocca solo
+          // `sendOutcome` dopo un 2xx — e l'appuntamento appena fissato non esisteva
+          // da nessuna parte: ne' sulla riga, ne' negli eventi, ne' in
+          // `/api/bot/lead-entranti`, che quelle tre colonne le legge per dire al CRM
+          // che quella persona ha gia' una call in agenda.
+          //
+          // Le decisioni sono le STESSE del ramo normale (declassamento, guardia sulla
+          // data, richiamo senza data): vivono in `registraEsitoSenzaLeadId`, accanto a
+          // `sendOutcome`, e qui si salta solo la rete. Se `chiudi` e' falso la
+          // conversazione resta viva apposta: il bot deve poter ancora chiedere una
+          // data buona invece di sparire.
+          const locale = await registraEsitoSenzaLeadId(
+            supabase,
+            conversationId,
+            {
+              outcome: result.outcome,
+              date: result.scheduledAt,
+              discardReason: result.discardReason,
+              note: result.note,
+              leadWords: [...history].reverse().find((t) => t.role === 'user')?.content,
+              // Gli stessi due giorni che viaggiano verso `sendOutcome` qui sopra: la
+              // guardia sulla data li vuole anche sugli adottati, o alle 20:00 l'ancora
+              // ruota e la call appena promessa in chat risulta fuori finestra.
+              bookingDays: result.bookingDays,
+            },
+            { botOutcome: esitoInPiedi, botScheduledAt: dataInPiedi },
+          );
+          if (locale.chiudi) finalStatus = 'closed';
           break;
         }
       }

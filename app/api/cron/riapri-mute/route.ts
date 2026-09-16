@@ -75,20 +75,36 @@ export async function POST(req: NextRequest) {
   // Il caso nostro e' il terzo: abbiamo PROVATO a mandare e non e' mai partito.
   const partito = new Set<number>();
   const tentato = new Set<number>();
+  // Chi ha gia' un tentativo di RIAGGANCIO (route adotta-mai-risposti) non va qui:
+  // sarebbe l'apertura ("l'accesso al canale Telegram ti arriva via email a breve")
+  // mandata a chi nel canale c'e' gia' — il template vietato per quella lista.
+  const reengageSid = process.env.MARTA_REENGAGE_TEMPLATE_SID;
+  const giaRiagganciato = new Set<number>();
   const ids = convs.map((c: any) => c.id);
   for (let i = 0; i < ids.length; i += 100) {
-    const { data } = await admin.from('messages')
-      .select('conversation_id, twilio_sid').eq('direction', 'out')
-      .in('conversation_id', ids.slice(i, i + 100));
-    for (const m of (data ?? []) as Array<{ conversation_id: number; twilio_sid: string | null }>) {
+    // Paginata con fetchAllRows: PostgREST taglia ogni select a 1.000 righe in
+    // silenzio (il tetto documentato in lib/supabase/paginate.ts), e bastano una
+    // decina di messaggi in uscita per conversazione su un chunk da 100 per
+    // superarlo. Le righe oltre la millesima sparivano, e con loro la protezione
+    // di `giaRiagganciato`: a chi il riaggancio l'ha gia' ricevuto sarebbe partita
+    // proprio l'apertura vietata per quella lista. `id` fra le colonne e ordine
+    // stabile su `id` perche' la paginazione regga, come in `adotta-mai-risposti`.
+    const righe = await fetchAllRows<{ conversation_id: number; twilio_sid: string | null; template_sid: string | null }>((f, t) => admin
+      .from('messages')
+      .select('id, conversation_id, twilio_sid, template_sid').eq('direction', 'out')
+      .in('conversation_id', ids.slice(i, i + 100))
+      .order('id', { ascending: true })
+      .range(f, t));
+    for (const m of righe) {
       tentato.add(m.conversation_id);
       if (m.twilio_sid) partito.add(m.conversation_id);
+      if (reengageSid && m.template_sid === reengageSid) giaRiagganciato.add(m.conversation_id);
     }
   }
 
   // Un lead gia' esitato non si riapre: e' stato chiuso per una ragione.
   const mute = convs.filter((c: any) =>
-    tentato.has(c.id) && !partito.has(c.id) && !c.bot_outcome && c.lead_id);
+    tentato.has(c.id) && !partito.has(c.id) && !c.bot_outcome && c.lead_id && !giaRiagganciato.has(c.id));
 
   // Il numero del lead sta su `leads.phone_e164`, NON su `conversations.wa_number`:
   // quella colonna contiene il nostro mittente (whatsapp:+39352...), e usarla come

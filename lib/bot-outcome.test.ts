@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { sendOutcome, sendCrmNota, neutralizzaMarcatoreMotivo } from './bot-outcome';
+import { registraEsitoSenzaLeadId, sendOutcome, sendCrmNota, neutralizzaMarcatoreMotivo } from './bot-outcome';
 import { romeOffset, formatRomeDateTime } from './rome-time';
 import { computeBookingDays } from './booking-slots';
 import { crmDedupKey } from './note-dedup';
@@ -1146,5 +1146,238 @@ describe('neutralizzaMarcatoreMotivo — la guardia sulla chiave di dedup del CR
     // agenda, stabile, non il motivo dello scarto, che può cambiare da un tentativo
     // all'altro di rimandare la stessa disdetta.
     expect(chiaveCRM(n1)).toBe(chiaveCRM(n2));
+  });
+});
+
+/**
+ * `registraEsitoSenzaLeadId`: l'esito di un lead adottato, che il CRM non conosce.
+ * Deve prendere le STESSE decisioni di `sendOutcome` e saltare solo la rete — la prima
+ * versione del ramo copiava la sola scrittura e cosi' declassava un appuntamento gia'
+ * fissato e metteva in agenda le call di domenica.
+ */
+describe('registraEsitoSenzaLeadId', () => {
+  const nessunEsito = { botOutcome: null, botScheduledAt: null };
+
+  it('caso normale: persiste esito, data e istante, e dice di chiudere', async () => {
+    const { supabase, calls } = makeSupabase(null);
+    const quando = giornoUtile();
+
+    const res = await registraEsitoSenzaLeadId(
+      supabase, 7246, { outcome: 'APPUNTAMENTO', date: quando }, nessunEsito,
+    );
+
+    expect(res).toEqual({ decisione: 'registrato', chiudi: true });
+    expect(calls.updates).toHaveLength(1);
+    expect(calls.updates[0].bot_outcome).toBe('APPUNTAMENTO');
+    expect(calls.updates[0].bot_scheduled_at).toBe(quando);
+    expect(typeof calls.updates[0].bot_outcome_at).toBe('string');
+    const evt = calls.events.find((e: { type: string }) => e.type === 'bot_outcome_senza_leadid');
+    expect(evt.level).toBe('warn');
+    expect(evt.payload).toMatchObject({ conversationId: 7246, esito: 'APPUNTAMENTO', decisione: 'registrato' });
+    // Nessuna rete: il CRM non ha un leadId per questo lead.
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  // La regola dura del progetto: una volta fissato, resta Preso.
+  it('appuntamento gia\' in piedi: nessun declassamento, niente scritture, non si chiude', async () => {
+    const { supabase, calls } = makeSupabase(null);
+    const inAgenda = giornoUtile();
+
+    const res = await registraEsitoSenzaLeadId(
+      supabase, 7246,
+      { outcome: 'DA_SCARTARE', discardReason: 'ci ha ripensato' },
+      { botOutcome: 'APPUNTAMENTO', botScheduledAt: inAgenda },
+    );
+
+    expect(res).toEqual({ decisione: 'appuntamento_intatto', chiudi: false });
+    // L'unica scrittura ammessa e' il marcatore della disdetta: ne' l'esito ne' la
+    // data dell'appuntamento si toccano.
+    for (const u of calls.updates) {
+      expect(u).not.toHaveProperty('bot_outcome');
+      expect(u).not.toHaveProperty('bot_scheduled_at');
+    }
+    const evt = calls.events.find((e: { type: string }) => e.type === 'bot_outcome_senza_leadid');
+    expect(evt.payload).toMatchObject({ decisione: 'appuntamento_intatto', esitoMantenuto: 'APPUNTAMENTO' });
+  });
+
+  // `precall-reminders` seleziona su bot_outcome e cancel_requested_at, NON sul
+  // crm_lead_id: senza il marcatore, a chi ha appena scritto "annullate" arriverebbe
+  // "ti ricordo la call di domani". Sugli adottati il caso e' diventato raggiungibile
+  // da quando bot_outcome viene persistito anche senza leadId.
+  it('chi disdice un appuntamento in piedi si spegne i promemoria, anche senza leadId', async () => {
+    const { supabase, calls } = makeSupabase(null);
+
+    const res = await registraEsitoSenzaLeadId(
+      supabase, 7246,
+      { outcome: 'DA_SCARTARE', discardReason: 'non me la sento piu' },
+      { botOutcome: 'APPUNTAMENTO', botScheduledAt: giornoUtile() },
+    );
+
+    // L'esito resta comunque bloccato: il marcatore non e' un declassamento.
+    expect(res.decisione).toBe('appuntamento_intatto');
+    expect(calls.updates).toHaveLength(1);
+    expect(typeof calls.updates[0].cancel_requested_at).toBe('string');
+    expect(calls.updates[0]).not.toHaveProperty('bot_outcome');
+    const evt = calls.events.find((e: { type: string }) => e.type === 'cancel_requested');
+    expect(evt).toBeTruthy();
+    expect(evt.payload.crmLeadId).toBeNull();
+  });
+
+  it('lo stesso vale per un RICHIAMO su un appuntamento che era gia\' preso', async () => {
+    const { supabase, calls } = makeSupabase(null);
+
+    await registraEsitoSenzaLeadId(
+      supabase, 7246, { outcome: 'RICHIAMO', date: FRA_TRE_GIORNI },
+      { botOutcome: 'APPUNTAMENTO', botScheduledAt: giornoUtile() },
+    );
+
+    expect(calls.updates.some((u: { cancel_requested_at?: string }) => typeof u.cancel_requested_at === 'string')).toBe(true);
+  });
+
+  it('senza un appuntamento in piedi non si marca niente', async () => {
+    const { supabase, calls } = makeSupabase(null);
+
+    await registraEsitoSenzaLeadId(
+      supabase, 7246, { outcome: 'DA_SCARTARE', discardReason: 'non interessato' }, nessunEsito,
+    );
+
+    expect(calls.updates.every((u: { cancel_requested_at?: string }) => !('cancel_requested_at' in u))).toBe(true);
+    expect(calls.events.some((e: { type: string }) => e.type === 'cancel_requested')).toBe(false);
+  });
+
+  // Gli adottati sono proprio i lead che lo slot se lo propongono da soli.
+  it('appuntamento di domenica: niente in agenda e conversazione ancora aperta', async () => {
+    const { supabase, calls } = makeSupabase(null);
+    const domenica = new Date(Date.now() + 3 * 24 * 3600_000);
+    while (domenica.getUTCDay() !== 0) domenica.setUTCDate(domenica.getUTCDate() + 1);
+    domenica.setUTCHours(13, 0, 0, 0);
+
+    const res = await registraEsitoSenzaLeadId(
+      supabase, 7246, { outcome: 'APPUNTAMENTO', date: domenica.toISOString() }, nessunEsito,
+    );
+
+    expect(res).toEqual({ decisione: 'data_non_fissabile', chiudi: false });
+    expect(calls.updates).toHaveLength(0);
+    const evt = calls.events.find((e: { type: string }) => e.type === 'bot_outcome_senza_leadid');
+    expect(evt.payload).toMatchObject({ decisione: 'data_non_fissabile', motivo: 'domenica' });
+  });
+
+  it('appuntamento con una data gia\' passata: stessa sorte, niente agenda', async () => {
+    const { supabase, calls } = makeSupabase(null);
+    const ieri = new Date(Date.now() - 86_400_000).toISOString();
+
+    const res = await registraEsitoSenzaLeadId(
+      supabase, 7246, { outcome: 'APPUNTAMENTO', date: ieri }, nessunEsito,
+    );
+
+    expect(res.decisione).toBe('data_non_fissabile');
+    expect(res.chiudi).toBe(false);
+    expect(calls.updates).toHaveLength(0);
+  });
+
+  // Chiudere qui vorrebbe dire far ammutolire il bot davanti a chi ha appena chiesto
+  // di essere richiamato senza dire quando.
+  it('RICHIAMO senza data ne\' periodo: non e\' un esito, la conversazione resta aperta', async () => {
+    const { supabase, calls } = makeSupabase(null);
+
+    const res = await registraEsitoSenzaLeadId(
+      supabase, 7246, { outcome: 'RICHIAMO', note: 'non so, vediamo' }, nessunEsito,
+    );
+
+    expect(res).toEqual({ decisione: 'richiamo_senza_data', chiudi: false });
+    expect(calls.updates).toHaveLength(0);
+  });
+
+  it('RICHIAMO con un periodo detto a parole: si registra senza data, e si chiude', async () => {
+    const { supabase, calls } = makeSupabase(null);
+
+    const res = await registraEsitoSenzaLeadId(
+      supabase, 7246, { outcome: 'RICHIAMO', note: 'risentiamoci a settembre' }, nessunEsito,
+    );
+
+    expect(res).toEqual({ decisione: 'registrato', chiudi: true });
+    expect(calls.updates[0].bot_outcome).toBe('RICHIAMO');
+    expect(calls.updates[0].bot_scheduled_at).toBeNull();
+  });
+
+  it('RICHIAMO con una data buona: si registra con la data', async () => {
+    const { supabase, calls } = makeSupabase(null);
+
+    const res = await registraEsitoSenzaLeadId(
+      supabase, 7246, { outcome: 'RICHIAMO', date: FRA_TRE_GIORNI }, nessunEsito,
+    );
+
+    expect(res).toEqual({ decisione: 'registrato', chiudi: true });
+    expect(calls.updates[0].bot_scheduled_at).toBe(FRA_TRE_GIORNI);
+  });
+
+  it('spostamento: cambia la data, l\'esito non si tocca e i promemoria ripartono', async () => {
+    const { supabase, calls } = makeSupabase(null);
+    const nuova = giornoUtile(16, 2);
+
+    const res = await registraEsitoSenzaLeadId(
+      supabase, 7246, { outcome: 'APPUNTAMENTO', date: nuova },
+      { botOutcome: 'APPUNTAMENTO', botScheduledAt: giornoUtile(15, 1) },
+    );
+
+    expect(res).toEqual({ decisione: 'spostato', chiudi: true });
+    expect(calls.updates).toHaveLength(1);
+    expect(calls.updates[0]).toEqual({ bot_scheduled_at: nuova, cancel_requested_at: null });
+    expect(calls.updates[0]).not.toHaveProperty('bot_outcome');
+  });
+
+  // Il bug che ha reso necessario questo giro: un esito senza data non deve lasciare
+  // in piedi la data di un appuntamento precedente, o /api/bot/lead-entranti
+  // consegnerebbe al CRM un NON_INTERESSATO con una call in agenda accanto.
+  // Lo scenario delle 20:00, gemello di quello che `sendOutcome` ha gia': alle 19:45 il
+  // bot propone "domani alle 20", il lead accetta alle 20:10 e nel frattempo
+  // `computeBookingDays` ha ruotato l'ancora. Senza i giorni di QUEL turno la guardia
+  // ricalcola e scarta una call gia' promessa in chat — e sugli adottati e' peggio che
+  // altrove, perche' non c'e' nessun CRM dall'altra parte che se ne accorga.
+  it('accetta il giorno che il modello aveva davanti alle 19:45, anche se alle 20:10 la finestra e\' un\'altra', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      // Mercoledi' 15/07/2026, 19:45 di Roma: il turno in cui il bot propone il giorno.
+      vi.setSystemTime(Date.parse('2026-07-15T17:45:00Z'));
+      const { day1, day2 } = computeBookingDays(new Date());
+      const giorniDelTurno = [day1.date, day2.date];
+      const promessa = conOra(day1.date, 20);
+
+      // 20:10: l'ancora e' ruotata, il `day1` di prima non e' piu' in finestra.
+      vi.setSystemTime(Date.parse('2026-07-15T18:10:00Z'));
+      expect(computeBookingDays(new Date()).day1.date).not.toBe(day1.date);
+
+      const { supabase, calls } = makeSupabase(null);
+      const res = await registraEsitoSenzaLeadId(
+        supabase, 7246,
+        { outcome: 'APPUNTAMENTO', date: promessa, bookingDays: giorniDelTurno },
+        nessunEsito,
+      );
+
+      expect(res).toEqual({ decisione: 'registrato', chiudi: true });
+      expect(calls.updates[0].bot_outcome).toBe('APPUNTAMENTO');
+      expect(calls.updates[0].bot_scheduled_at).toBe(promessa);
+
+      // Lo stesso identico esito senza i giorni del turno: la guardia ricalcola e scarta.
+      const solo = makeSupabase(null);
+      const senza = await registraEsitoSenzaLeadId(
+        solo.supabase, 7246, { outcome: 'APPUNTAMENTO', date: promessa }, nessunEsito,
+      );
+      expect(senza).toEqual({ decisione: 'data_non_fissabile', chiudi: false });
+      expect(solo.calls.updates).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('un esito senza data azzera bot_scheduled_at invece di lasciarlo com\'era', async () => {
+    const { supabase, calls } = makeSupabase(null);
+
+    await registraEsitoSenzaLeadId(
+      supabase, 7246, { outcome: 'INTERROTTO' },
+      { botOutcome: null, botScheduledAt: giornoUtile() },
+    );
+
+    expect(calls.updates[0].bot_scheduled_at).toBeNull();
   });
 });

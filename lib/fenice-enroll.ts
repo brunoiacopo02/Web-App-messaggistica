@@ -26,7 +26,50 @@ export type EnrollArgs = {
 
 export type EnrollResult = {
   ok: boolean; conversationId: number; sid?: string; error?: string; deferred?: boolean; duplicato?: boolean;
+  /** L'apertura non e' partita perche' ricoprirebbe una chat gia' viva (`apreSopraChatViva`). */
+  aperturaSaltata?: boolean;
 };
+
+/**
+ * Pure: mandare l'apertura adesso vorrebbe dire ricoprire una conversazione viva?
+ *
+ * Vero se Mario sta gia' parlando con questa persona E il lead ha gia' visto almeno
+ * un nostro messaggio. Il caso e' quotidiano da quando il bot adotta chi scrive per primo:
+ * sui 14 lead Telegram lavorati ad agosto l'intake del CRM e' arrivato a chat gia'
+ * iniziata, con 0.0 ore di ritardo.
+ *
+ * `haOutboundPartito` conta solo i messaggi con `twilio_sid`, cioe' partiti davvero. E'
+ * il criterio di `app/api/cron/riapri-mute/route.ts`, e cambiarlo lo romperebbe: quel
+ * cron esiste per le conversazioni dove abbiamo PROVATO a mandare l'apertura e non e'
+ * mai partita, e con "esiste una riga in uscita" diventerebbero irrecuperabili.
+ *
+ * Su un **adottato** — `crmLeadId` nullo e un nostro messaggio gia' partito — la guardia
+ * scatta QUALUNQUE sia `aiStatus`. Il CRM legge la lista di `/api/bot/lead-entranti`
+ * giorni dopo, come gli abbiamo chiesto, e quella lista contiene anche chi il bot ha gia'
+ * portato a `booked`, `closed` o `handed_off`: con la sola condizione su 'active' partiva
+ * "Ciao, sono Marta... le tue 10 ore gratuite" a chi aveva gia' la call in agenda, e
+ * l'update dell'arruolamento riportava la conversazione ad 'active' facendole perdere il
+ * lucchetto sull'appuntamento.
+ *
+ * Il caso legittimo "il CRM ri-arruola un lead gia' suo che era stato chiuso" resta
+ * intatto: li' `crmLeadId` c'e' gia', e vale la regola di prima.
+ *
+ * `aiStatus` vale 'active' o 'replying': 'replying' e' il lock del drain, non uno stato
+ * a parte — una chat che sta rispondendo e' viva quanto una attiva (vedi
+ * `shouldAutoReply` in `lib/fenice-autoreply.ts`), e in produzione restano righe ferme
+ * su quel valore dal vecchio meccanismo.
+ */
+export function apreSopraChatViva(g: {
+  aiOwner: string | null;
+  aiStatus: string | null;
+  /** `crm_lead_id` della conversazione: nullo = il CRM non conosce questo lead. */
+  crmLeadId: string | null;
+  haOutboundPartito: boolean;
+}): boolean {
+  if (g.aiOwner !== 'mario' || !g.haOutboundPartito) return false;
+  if (g.crmLeadId === null) return true;
+  return g.aiStatus === 'active' || g.aiStatus === 'replying';
+}
 
 /**
  * Arruola un lead nel flusso di Mario: crea/aggiorna lead+conversazione, invia il
@@ -59,12 +102,61 @@ export async function enrollLeadIntoMario(
     email: args.email ?? undefined,
   });
 
+  // Non si lascia cadere un'apertura sopra una conversazione gia' avviata: il lead
+  // vedrebbe il bot ricominciare da capo. Si prende comunque in carico il lead per il
+  // CRM, cosi' da parte loro non risulta fermo.
+  {
+    // Se una delle due letture non si sa com'è andata, l'apertura PARTE: un lead che
+    // resta muto per sempre è peggio di un'apertura di troppo.
+    //
+    // Sul conteggio dei messaggi basta il valore vuoto (`partiti` a null ⇒ nessun
+    // outbound ⇒ la guardia non scatta). Sulla riga della conversazione NO, e da quando
+    // `crmLeadId` nullo fa scattare la guardia da solo è diventato pericoloso: una
+    // select fallita darebbe `convRow` undefined, quindi `crm_lead_id` letto come nullo,
+    // e con un outbound partito la guardia scatterebbe su un lead del CRM che non ha
+    // mai parlato col bot — apertura saltata e `ai_owner`/`ai_status`/`ai_started_at`
+    // mai scritti: preso in carico sulla carta, muto nei fatti. Per questo l'errore
+    // della select si controlla: "non lo so" non è "è nullo", e nel dubbio si apre.
+    const { data: convRow, error: erroreConv } = await supabase
+      .from('conversations').select('ai_owner, ai_status, crm_lead_id').eq('id', conversationId).single();
+    const { count: partiti } = await supabase
+      .from('messages').select('id', { count: 'exact', head: true })
+      .eq('conversation_id', conversationId).eq('direction', 'out').not('twilio_sid', 'is', null);
+    if (!erroreConv && apreSopraChatViva({
+      aiOwner: convRow?.ai_owner ?? null,
+      aiStatus: convRow?.ai_status ?? null,
+      crmLeadId: (convRow as { crm_lead_id?: string | null } | null)?.crm_lead_id ?? null,
+      haOutboundPartito: (partiti ?? 0) > 0,
+    })) {
+      // Solo i campi valorizzati: scrivere null cancellerebbe il `crm_funnel` che il
+      // webhook ha appena dedotto dal primo messaggio del lead.
+      const patch = {
+        ...(args.crmLeadId ? { crm_lead_id: args.crmLeadId } : {}),
+        ...(args.crmFunnel ? { crm_funnel: args.crmFunnel } : {}),
+      };
+      if (Object.keys(patch).length > 0) {
+        await supabase.from('conversations').update(patch).eq('id', conversationId);
+      }
+      await supabase.from('event_log').insert({
+        type: 'apertura_saltata_chat_in_corso',
+        payload: { phone: args.phone, conversationId, crmLeadId: args.crmLeadId ?? null } as never,
+        message: `[bot-fissatore] apertura saltata per ${args.phone}: la chat e' gia' avviata`,
+        level: 'info',
+      });
+      return { ok: true, conversationId, aperturaSaltata: true };
+    }
+  }
+
   const convUpdate = {
     ai_owner: 'mario',
     ai_status: 'active',
     ai_started_at: new Date().toISOString(),
     crm_lead_id: args.crmLeadId ?? null,
-    crm_funnel: args.crmFunnel ?? null,
+    // Il funnel si scrive solo se c'e': un intake che non lo manda cancellerebbe il
+    // `crm_funnel` (TELEGRAM) che il webhook ha dedotto dal primo messaggio del lead.
+    // Stessa regola del ramo guardia qui sopra. `crm_lead_id` invece resta come prima:
+    // e' proprio il campo che questo arruolamento porta.
+    ...(args.crmFunnel ? { crm_funnel: args.crmFunnel } : {}),
   };
 
   // Apertura differita: nel cuore della notte i template aprono peggio (-10pt
@@ -341,7 +433,10 @@ async function enrollLancio(
   const guardia = args.crmLeadId ? await apertutaDaFermare(supabase, conversationId) : null;
   if (guardia) {
     await supabase.from('conversations')
-      .update({ ...lancioFields, ai_owner: 'mario', crm_lead_id: args.crmLeadId ?? null, crm_funnel: args.crmFunnel ?? null })
+      // `crm_funnel` solo se c'e': un intake del lancio che non lo manda cancellerebbe
+      // il funnel che la chat si porta dietro (il TELEGRAM dedotto dal webhook su un
+      // adottato). Stessa regola del ramo normale di `enrollLeadIntoMario`.
+      .update({ ...lancioFields, ai_owner: 'mario', crm_lead_id: args.crmLeadId ?? null, ...(args.crmFunnel ? { crm_funnel: args.crmFunnel } : {}) })
       .eq('id', conversationId);
     // Una chat chiusa (o mai governata) torna attiva; una booked/handed_off resta a chi ce l'ha in mano.
     await supabase.from('conversations')
@@ -357,7 +452,8 @@ async function enrollLancio(
     ai_status: 'active',
     ai_started_at: new Date().toISOString(),
     crm_lead_id: args.crmLeadId ?? null,
-    crm_funnel: args.crmFunnel ?? null,
+    // Come sopra: il funnel si scrive solo se l'intake lo manda, mai a null.
+    ...(args.crmFunnel ? { crm_funnel: args.crmFunnel } : {}),
     ...lancioFields,
   };
 

@@ -4,12 +4,14 @@ import { validateTwilioSignature } from '@/lib/twilio';
 import { toE164 } from '@/lib/phone';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getAutoReply } from '@/lib/fenice-settings';
-import { shouldAutoReply, shouldReopen, drainMarioReplies } from '@/lib/fenice-autoreply';
+import { shouldAutoReply, shouldReopen, shouldAdoptInbound, drainMarioReplies } from '@/lib/fenice-autoreply';
 import { isAudioInbound, transcribeTwilioAudio } from '@/lib/transcribe';
 import { handleGdoDeliveryUpdate } from '@/lib/send-agenda-gdo';
 import { sendCrmNota } from '@/lib/bot-outcome';
 import { buildBotRipresoNote } from '@/lib/bot-outcome-rules';
 import { segnalaRispostaDopoTerzoNr } from '@/lib/risposta-post-nr';
+import { funnelDaPrimoMessaggio } from '@/lib/persona';
+import { pushLeadEntrante } from '@/lib/lead-entrante';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -179,9 +181,116 @@ export async function POST(req: NextRequest) {
     if (toMatchesFenice) {
       const { data: conv } = await supabase
         .from('conversations')
-        .select('ai_owner, ai_status, ai_paused_at, crm_lead_id, bot_outcome, lancio_slug, lancio_info')
+        .select('ai_owner, ai_status, ai_paused_at, handed_off_at, crm_lead_id, bot_outcome, lancio_slug, lancio_info')
         .eq('id', conversationId)
         .single();
+
+      // L'interruttore generale si legge PRIMA dell'adozione: e' anche un veto
+      // sull'adozione, non solo sulla risposta. A bot spento — cioe' durante un
+      // incidente, l'unico momento in cui lo si spegne — adottare senza rispondere
+      // lascerebbe quella conversazione fuori da tutte e tre le reti di recupero.
+      // Non costa una query in piu': serviva comunque a `shouldAutoReply` qui sotto.
+      const autoReplyOn = await getAutoReply(supabase);
+
+      // Adozione: il lead ha scritto per primo e questa chat non e' di nessuno.
+      //
+      // Il gate dell'interruttore va valutato PRIMA del conteggio: a bot spento (come in
+      // produzione) non deve costare nessuna query in piu' al webhook, che deve restare
+      // veloce perche' Twilio ritenta.
+      const adozioneAttiva = process.env.INBOUND_ADOPTION_ENABLED === '1';
+      // Il conteggio degli outbound si fa SOLO quando `ai_owner` e' nullo: sulle chat
+      // gia' arruolate (la stragrande maggioranza degli inbound) non si aggiunge nessuna
+      // query al webhook.
+      // `autoReplyOn` sta qui per la stessa ragione dell'interruttore: a bot spento
+      // il conteggio non serve, perche' `shouldAdoptInbound` direbbe no comunque.
+      if (adozioneAttiva && autoReplyOn && conv && conv.ai_owner === null) {
+        const { count, error: erroreCount } = await supabase
+          .from('messages')
+          .select('id', { count: 'exact', head: true })
+          .eq('conversation_id', conversationId)
+          .eq('direction', 'out');
+        // Se il conteggio fallisce non sappiamo se questa chat ha una storia (un lead GDO,
+        // una campagna, una chat lavorata a mano): senza la certezza che nessuno abbia mai
+        // scritto, non si adotta. L'incertezza chiude, non apre.
+        const hasOutbound = erroreCount ? true : (count ?? 0) > 0;
+        if (shouldAdoptInbound({
+          toMatchesFenice,
+          adoptionOn: adozioneAttiva,
+          autoReplyOn,
+          aiOwner: conv.ai_owner,
+          aiPausedAt: conv.ai_paused_at,
+          handedOffAt: conv.handed_off_at,
+          hasOutbound,
+        })) {
+          // La provenienza si legge dal PRIMO messaggio della conversazione, non da
+          // quello appena arrivato: chi e' in arretrato e riscrive "Scusa poi risponde"
+          // verrebbe classificato INBOUND invece di TELEGRAM, e la sua provenienza sulle
+          // statistiche del CRM sarebbe falsa. E' quello che fa gia'
+          // `app/api/cron/adotta-mai-risposti/route.ts`. La query sta dentro il ramo
+          // dell'adozione, che e' raro: il webhook normale non paga niente.
+          const { data: primiInbound } = await supabase
+            .from('messages')
+            .select('body, created_at')
+            .eq('conversation_id', conversationId)
+            .eq('direction', 'in')
+            .order('created_at', { ascending: true })
+            .limit(1);
+          const primoRigaInbound = (primiInbound ?? [])[0] as { body: string | null; created_at: string } | undefined;
+          // Il messaggio corrente e' il fallback: se la lettura fallisce o la riga non si
+          // vede ancora, e' comunque il primo inbound di questa conversazione.
+          const primoMessaggioTesto = primoRigaInbound?.body ?? messageBody;
+          const provenienza = funnelDaPrimoMessaggio(primoMessaggioTesto);
+          // Cinque minuti indietro, e non `now`: il messaggio che ha innescato questa
+          // adozione e' stato inserito qui sopra col `created_at` di default, cioe'
+          // l'orologio di Postgres, mentre `now` viene da quello di Node. Con
+          // `ai_started_at` anche solo un istante piu' recente, il filtro
+          // `.gte('created_at', startedAt)` di `loadHistory` (lib/fenice-autoreply.ts)
+          // lascia fuori proprio quel messaggio: la cronologia esce vuota e il drain
+          // non risponde a nessuno. E' lo stesso scarto fra i due orologi per cui
+          // `app/api/cron/sequence-touches/route.ts` usa un buffer di 5 minuti.
+          // Effetto voluto: chi manda tre messaggi di fila in due minuti se li vede
+          // leggere tutti, invece che solo l'ultimo.
+          const startedAtAdozione = new Date(Date.now() - 5 * 60_000).toISOString();
+          const { error: erroreAdozione } = await supabase.from('conversations').update({
+            ai_owner: 'mario',
+            ai_status: 'active',
+            ai_started_at: startedAtAdozione,
+            crm_funnel: provenienza,
+          }).eq('id', conversationId);
+          if (erroreAdozione) {
+            // Sul database lo stato e' rimasto quello vecchio: NON si muta la copia in
+            // memoria e NON si scrive il log di adozione, altrimenti mentirebbe (il claim
+            // di `drainMarioReplies` su ai_status='active' non passerebbe comunque).
+            await supabase.from('event_log').insert({
+              type: 'inbound_adozione_fallita',
+              payload: { conversationId, phone, provenienza, error: erroreAdozione.message } as never,
+              message: `[bot-fissatore] adozione fallita per ${phone}: ${erroreAdozione.message}`,
+              level: 'error',
+            });
+          } else {
+            // La copia in memoria serve subito dopo: e' quella che `shouldAutoReply` legge.
+            conv.ai_owner = 'mario';
+            conv.ai_status = 'active';
+            await supabase.from('event_log').insert({
+              type: 'inbound_adottato',
+              payload: { conversationId, phone, provenienza } as never,
+              message: `[bot-fissatore] adottato ${phone}: ha scritto per primo (${provenienza})`,
+              level: 'info',
+            });
+            // Spinge il lead al CRM cosi' l'esito ha dove tornare. Dopo la risposta a
+            // Twilio, come `drainMarioReplies` qui sotto: la rete del CRM non deve
+            // rallentare il webhook, che Twilio ritenta se e' lento.
+            after(pushLeadEntrante(supabase, {
+              conversationId,
+              telefono: phone,
+              nome: null,
+              provenienza,
+              primoMessaggio: primoMessaggioTesto,
+              scrittoIl: primoRigaInbound?.created_at ?? now,
+            }));
+          }
+        }
+      }
 
       // Il lead ha risposto dopo il messaggio del terzo tentativo di chiamata: da parte
       // del CRM è già stato scartato in automatico e solo le Conferme possono riaprirlo.
@@ -219,7 +328,6 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      const autoReplyOn = await getAutoReply(supabase);
       if (shouldAutoReply({
         toMatchesFenice,
         autoReplyOn,

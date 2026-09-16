@@ -203,14 +203,18 @@ export async function inviaNotaAlCrm(
 }
 
 /** Segna che il lead ha chiesto di annullare o spostare. Non tocca bot_outcome: è un
- *  marcatore, non un declassamento. Spegne promemoria pre-call e solleciti GDO. */
-async function marcaDisdetta(supabase: Supa, conversationId: number, crmLeadId: string, outcome: BotOutcome): Promise<void> {
+ *  marcatore, non un declassamento. Spegne promemoria pre-call e solleciti GDO.
+ *
+ *  `crmLeadId` può essere nullo: i lead adottati dal webhook non ne hanno uno, ma il
+ *  marcatore serve a loro esattamente come agli altri — `app/api/cron/precall-reminders`
+ *  seleziona su `bot_outcome` e `cancel_requested_at`, non sul `crm_lead_id`. */
+async function marcaDisdetta(supabase: Supa, conversationId: number, crmLeadId: string | null, outcome: BotOutcome): Promise<void> {
   const at = new Date().toISOString();
   await supabase.from('conversations').update({ cancel_requested_at: at }).eq('id', conversationId);
   await supabase.from('event_log').insert({
     type: 'cancel_requested',
     payload: { conversationId, crmLeadId, outcome, at } as never,
-    message: `[bot-fissatore] il lead ${crmLeadId} ha chiesto di annullare/spostare: automatismi spenti su questa chat`,
+    message: `[bot-fissatore] il lead ${crmLeadId ?? `della conv ${conversationId}`} ha chiesto di annullare/spostare: automatismi spenti su questa chat`,
     level: 'info',
   });
 }
@@ -456,6 +460,154 @@ export type SendOutcomeOpts = {
    * lo stato del lead, non tocca l'appuntamento, non chiude la conversazione. */
   noteOnly?: boolean;
 };
+
+/** Cosa si e' deciso di fare con un esito che al CRM non puo' partire. */
+export type DecisioneLocale =
+  /** Persistito e conversazione da chiudere. */
+  | 'registrato'
+  /** Solo la data e' cambiata: appuntamento spostato, esito intatto. */
+  | 'spostato'
+  /** Appuntamento gia' in piedi: nessun declassamento, resta tutto com'e'. */
+  | 'appuntamento_intatto'
+  /** Data non fissabile (domenica, giorno chiuso, fuori fascia): niente in agenda. */
+  | 'data_non_fissabile'
+  /** RICHIAMO senza una data ne' un periodo: non e' un esito, si continua a parlare. */
+  | 'richiamo_senza_data';
+
+/**
+ * L'esito di un lead che il CRM non conosce ancora: stesse decisioni di `sendOutcome`,
+ * senza la chiamata di rete.
+ *
+ * Su un lead adottato dal webhook `crm_lead_id` e' nullo, quindi non c'e' dove
+ * consegnare — ma l'esito va comunque registrato da noi, altrimenti l'appuntamento
+ * appena fissato non esiste da nessuna parte e `/api/bot/lead-entranti` lo consegna al
+ * CRM con `esito` e `appuntamento` nulli.
+ *
+ * Sta QUI e non dentro il drain apposta: quello che conta di un esito non e' la
+ * scrittura, sono le decisioni che la precedono — `resolveOutcomeAction`, la guardia
+ * sulla data dell'appuntamento, il richiamo senza data. Duplicarle in un secondo posto
+ * vorrebbe dire vederle divergere: la prima versione di questo ramo copiava la sola
+ * persistenza e cosi' declassava un appuntamento gia' fissato (contro la regola dura del
+ * progetto: una volta fissato resta Preso) e metteva in agenda le call di domenica che la
+ * guardia del 24/08 esiste per fermare.
+ *
+ * `stato` arriva dal claim del drain: e' l'esito che la conversazione ha gia' in piedi.
+ * Non chiude mai la conversazione da se': ritorna `chiudi` e decide il chiamante, che e'
+ * l'unico a sapere se il lucchetto del turno e' ancora suo.
+ */
+export async function registraEsitoSenzaLeadId(
+  supabase: Supa,
+  conversationId: number,
+  args: SendOutcomeArgs,
+  stato: { botOutcome: BotOutcome | null; botScheduledAt: string | null },
+): Promise<{ decisione: DecisioneLocale; chiudi: boolean }> {
+  const registra = async (decisione: DecisioneLocale, dettaglio: Record<string, unknown> = {}) => {
+    await supabase.from('event_log').insert({
+      type: 'bot_outcome_senza_leadid',
+      payload: {
+        conversationId,
+        esito: args.outcome,
+        appuntamento: args.date ?? null,
+        decisione,
+        ...dettaglio,
+      } as never,
+      message: `[bot-fissatore] conv ${conversationId}: esito ${args.outcome} senza leadId del CRM — ${decisione}`,
+      level: 'warn',
+    });
+    return decisione;
+  };
+
+  // Stesso ordine di `sendOutcome`, perche' l'ordine E' la decisione.
+
+  // 0. Chi ha l'appuntamento in piedi e chiede di annullare o spostare va marcato
+  //    SUBITO, prima di ogni ritorno anticipato: `cancel_requested_at` e' quello che
+  //    spegne i promemoria pre-call, e `app/api/cron/precall-reminders/route.ts`
+  //    seleziona su `bot_outcome` e `cancel_requested_at` — del `crm_lead_id` non sa
+  //    niente. Sugli adottati questo caso e' diventato raggiungibile solo adesso, da
+  //    quando `bot_outcome` viene persistito anche senza leadId: senza il marcatore, a
+  //    chi ha appena scritto "annullate" arriverebbe "ti ricordo la call di domani"
+  //    (10 casi su 23 misurati il 04/08/2026, prima che il marcatore esistesse).
+  if (stato.botOutcome === 'APPUNTAMENTO' && isRichiestaDisdetta(args.outcome)) {
+    await marcaDisdetta(supabase, conversationId, null, args.outcome);
+  }
+
+  // 1. Un RICHIAMO senza una data che regga non e' un richiamo. Col periodo detto a
+  //    parole si registra comunque (senza data); senza, non e' un esito e il bot deve
+  //    poter ancora chiedere al lead quando gli va bene.
+  const dataCheck = args.outcome === 'RICHIAMO' ? checkDataRichiamo(args.date, Date.now()) : { ok: true as const };
+  const periodo = !dataCheck.ok ? estraiPeriodo(args.note) : null;
+  if (!dataCheck.ok && !periodo) {
+    const decisione = await registra('richiamo_senza_data', {
+      motivo: dataCheck.motivo,
+      nota: buildRichiamoSenzaDataNote({ motivo: dataCheck.motivo, leadWords: args.note }),
+    });
+    return { decisione, chiudi: false };
+  }
+
+  const action = resolveOutcomeAction(stato.botOutcome, args, stato.botScheduledAt);
+
+  // 2. La guardia sulla data: un appuntamento di domenica, in un giorno chiuso o fuori
+  //    fascia non e' un appuntamento. Gli adottati sono proprio i lead che lo slot se lo
+  //    propongono da soli. Non si scrive niente e la conversazione resta aperta.
+  //    `args.bookingDays` sono i due giorni che il modello aveva davanti in QUESTO turno:
+  //    senza, la guardia li ricalcola, e alle 20:00 l'ancora ruota — la call promessa al
+  //    lead alle 19:45 e accettata alle 20:10 uscirebbe `fuori_finestra`. Stesso
+  //    argomento che il drain passa gia' a `sendOutcome`.
+  if (args.outcome === 'APPUNTAMENTO' && (action.kind === 'normal' || action.kind === 'reschedule')) {
+    const check = checkDataAppuntamento(
+      args.date,
+      Date.now(),
+      bookingBlackout(process.env.BOOKING_BLACKOUT),
+      args.bookingDays,
+    );
+    if (!check.ok) {
+      const decisione = await registra('data_non_fissabile', {
+        motivo: check.motivo,
+        nota: buildAppuntamentoNonFissabileNote({
+          motivo: check.motivo,
+          dataScartata: args.date,
+          leadWords: args.leadWords ?? args.note,
+        }),
+      });
+      return { decisione, chiudi: false };
+    }
+  }
+
+  // 3. Appuntamento gia' in piedi: l'esito non declassa mai. Niente `bot_outcome`,
+  //    niente data, e la conversazione resta aperta — non c'e' nessun cron che
+  //    rimanderebbe la nota, perche' quelli lavorano sui lead con un `crm_lead_id`.
+  if (action.kind === 'locked') {
+    const decisione = await registra('appuntamento_intatto', {
+      esitoMantenuto: stato.botOutcome,
+      appuntamentoInAgenda: stato.botScheduledAt,
+      nota: action.note,
+    });
+    return { decisione, chiudi: false };
+  }
+
+  // 4. Spostamento: cambia la DATA, non l'esito. `bot_outcome_at` resta quello del primo
+  //    fissaggio, come nel ramo normale.
+  if (action.kind === 'reschedule') {
+    await supabase.from('conversations')
+      .update({ bot_scheduled_at: action.date, cancel_requested_at: null })
+      .eq('id', conversationId);
+    const decisione = await registra('spostato', { da: stato.botScheduledAt, a: action.date });
+    return { decisione, chiudi: true };
+  }
+
+  // 5. Il caso normale. `bot_scheduled_at` si scrive sempre, null compreso: lasciarlo
+  //    fuori dalla patch terrebbe in piedi la data di un appuntamento precedente accanto
+  //    a un esito che appuntamento non e'.
+  await supabase.from('conversations')
+    .update({
+      bot_outcome: args.outcome,
+      bot_outcome_at: new Date().toISOString(),
+      bot_scheduled_at: periodo ? null : (args.date ?? null),
+    })
+    .eq('id', conversationId);
+  const decisione = await registra('registrato', periodo ? { periodo } : {});
+  return { decisione, chiudi: true };
+}
 
 export async function sendOutcome(
   supabase: Supa,

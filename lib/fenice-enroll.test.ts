@@ -9,16 +9,31 @@ vi.mock('./lancio-settings', () => ({
   getLancioSettings: vi.fn(async () => ({ attivo: true, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null, eventoAt: null, blastPerimetro: 'tutti', sender: 'principale' })),
 }));
 
-import { enrollGdoLeadAsPostino, enrollLeadIntoMario } from './fenice-enroll';
+import { apreSopraChatViva, enrollGdoLeadAsPostino, enrollLeadIntoMario } from './fenice-enroll';
 import { findOrCreateLeadConversation, sendTemplateAndLog } from './messaging';
 import { getLancioSettings } from './lancio-settings';
 import { lancioBenvenutoText } from './lancio-fase';
 import { openingBody } from './persona';
 
 /** Fake del client Supabase: traccia update su conversations ed insert su event_log.
- *  `benvenutiUltimaOra` è il numero che il tetto orario del lancio legge da `messages`. */
-function makeSupabase(benvenutiUltimaOra = 0, erroreConteggio = false) {
+ *  `benvenutiUltimaOra` è il numero che il tetto orario del lancio legge da `messages`.
+ *  `guardia` alimenta le due letture di `apreSopraChatViva` dentro `enrollLeadIntoMario`
+ *  (la select su conversations e il conteggio degli outbound già partiti). Default: chat
+ *  nuova, così la guardia non scatta e i test che non la riguardano restano invariati. */
+function makeSupabase(
+  benvenutiUltimaOra = 0,
+  erroreConteggio = false,
+  guardia: {
+    convRow?: { ai_owner: string | null; ai_status: string | null; crm_lead_id?: string | null };
+    outboundCount?: number;
+    /** La select su `conversations` va in errore: "non lo so", non "e' nullo". */
+    convErrore?: boolean;
+  } = {},
+) {
   const calls = { updates: [] as any[], events: [] as any[], conteggi: 0 };
+  const convRow = guardia.convRow ?? { ai_owner: null, ai_status: null, crm_lead_id: null };
+  const outboundCount = guardia.outboundCount ?? 0;
+  const convErrore = guardia.convErrore === true;
   const supabase: any = {
     from(table: string) {
       if (table === 'conversations') {
@@ -29,25 +44,46 @@ function makeSupabase(benvenutiUltimaOra = 0, erroreConteggio = false) {
             const chain: any = { eq: () => chain, or: () => chain, then: (r: any) => r({}) };
             return chain;
           },
-          // Chat senza un leadId già registrato: la guardia anti-doppione lascia passare.
-          select() { return { eq() { return { maybeSingle: async () => ({ data: null }) }; } }; },
+          // Due letture sulla stessa select: `single()` è quella della guardia
+          // `apreSopraChatViva`, `maybeSingle()` quella della guardia anti-doppione
+          // (chat senza un leadId già registrato: lascia passare).
+          select() {
+            return {
+              eq() {
+                return {
+                  single: async () => (convErrore
+                    ? { data: null, error: { message: 'connessione persa' } }
+                    : { data: convRow }),
+                  maybeSingle: async () => ({ data: null }),
+                };
+              },
+            };
+          },
         };
       }
       if (table === 'messages') {
-        // Due letture diverse sulla stessa tabella: la guardia anti-doppione (righe di
-        // questa chat) e il conteggio del tetto orario (`head: true`, nessuna riga, un
-        // numero su tutte le conversazioni).
+        // Tre letture diverse sulla stessa tabella: la guardia anti-doppione (righe di
+        // questa chat), il conteggio del tetto orario (`head: true` CON finestra `gte`,
+        // nessuna riga, un numero su tutte le conversazioni) e il conteggio degli
+        // outbound già partiti della guardia `apreSopraChatViva` (`head: true`, senza
+        // finestra). Le ultime due si distinguono proprio dal `gte`.
         const chain: any = { eq: () => chain, gte: () => chain, limit: async () => ({ data: [] }) };
         return {
           select: (_colonne: string, opzioni?: { head?: boolean }) => {
             if (!opzioni?.head) return chain;
-            calls.conteggi++;
+            let conFinestra = false;
             const conteggio: any = {
-              eq: () => conteggio, gte: () => conteggio, not: () => conteggio,
-              then: (r: any) => r({
-                count: erroreConteggio ? null : benvenutiUltimaOra,
-                error: erroreConteggio ? { message: 'timeout' } : null,
-              }),
+              eq: () => conteggio,
+              gte: () => { conFinestra = true; return conteggio; },
+              not: () => conteggio,
+              then: (r: any) => {
+                if (!conFinestra) return r({ count: outboundCount, error: null });
+                calls.conteggi++;
+                return r({
+                  count: erroreConteggio ? null : benvenutiUltimaOra,
+                  error: erroreConteggio ? { message: 'timeout' } : null,
+                });
+              },
             };
             return conteggio;
           },
@@ -462,7 +498,10 @@ function makeSupabaseLeggibile(opts: { crmLeadId?: string | null; outboundRecent
             return chain;
           },
           select() {
-            return { eq() { return { maybeSingle: async () => ({ data: { crm_lead_id: opts.crmLeadId ?? null, last_inbound_at: opts.lastInboundAt ?? null } }) }; } };
+            const riga = { ai_owner: null, ai_status: null, crm_lead_id: opts.crmLeadId ?? null, last_inbound_at: opts.lastInboundAt ?? null };
+            // `single()` è la lettura della guardia `apreSopraChatViva`: qui la chat non
+            // è di Mario, quindi quella guardia non scatta e resta in scena l'anti-doppione.
+            return { eq() { return { single: async () => ({ data: riga }), maybeSingle: async () => ({ data: riga }) }; } };
           },
         };
       }
@@ -580,6 +619,21 @@ describe('enrollLeadIntoMario — ramo lancio (B1)', () => {
     const evt = calls.events.find((e) => e.type === 'lancio_intake');
     expect(evt).toBeTruthy();
     expect(evt.payload).toMatchObject({ crmLeadId: 'crm-L1', conversationId: 42, slug: 'webdev-2026-10', ingresso: 'lista', ok: true });
+  });
+
+  // Una chat gia' adottata dal webhook porta il suo `crm_funnel` (il TELEGRAM dedotto
+  // dal primo messaggio del lead). L'intake del lancio che non manda il funnel non deve
+  // cancellarlo: stessa regola del ramo normale di `enrollLeadIntoMario`.
+  it('un intake del lancio senza funnel non cancella il TELEGRAM dedotto dal webhook', async () => {
+    const { supabase, calls } = makeSupabase();
+    const { crmFunnel: _ignorato, ...senzaFunnel } = ARGS;
+
+    await enrollLeadIntoMario(supabase, senzaFunnel);
+
+    // `crm_funnel` non compare in NESSUNA delle patch: il valore sulla riga resta quello.
+    expect(calls.updates.length).toBeGreaterThan(0);
+    for (const u of calls.updates) expect('crm_funnel' in u).toBe(false);
+    expect(calls.updates[0]).toMatchObject({ lancio_slug: 'webdev-2026-10' });
   });
 
   it('benvenuto partito: timbra lancio_benvenuto_at, il lucchetto letto dal cron', async () => {
@@ -751,5 +805,140 @@ describe('enrollLeadIntoMario — ramo lancio (B1)', () => {
     await enrollLeadIntoMario(supabase, { phone: '+393331234567', firstName: 'Anna', crmFunnel: 'CORSO 10 ORE' });
     expect(getLancioSettings).not.toHaveBeenCalled();
     expect(vi.mocked(sendTemplateAndLog).mock.calls[0][3]).not.toBe('HX_LANCIO_WELCOME');
+  });
+});
+
+
+// --- B2 "lead che scrivono per primi": la guardia che non ricopre una chat gia' avviata.
+// I test del branch usavano un mock su `./sequence`; qui si muove l'orologio come fa
+// tutto il resto del file (`inOpeningWindow` vero, scelta di main).
+describe("enrollLeadIntoMario — guardia chat gia' avviata (apreSopraChatViva)", () => {
+  it('chat viva (mario/active, outbound partito) → nessun invio, aperturaSaltata:true, patch solo campi valorizzati', async () => {
+    vi.setSystemTime(MEZZOGIORNO);
+    const { supabase, calls } = makeSupabase(0, false, {
+      convRow: { ai_owner: 'mario', ai_status: 'active', crm_lead_id: 'crm-1' }, outboundCount: 1,
+    });
+
+    const res = await enrollLeadIntoMario(supabase, {
+      phone: '+393331234567', firstName: 'Anna', crmLeadId: 'crm-1', crmFunnel: 'H',
+    });
+
+    expect(res).toMatchObject({ ok: true, conversationId: 42, aperturaSaltata: true });
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+    expect(calls.updates).toHaveLength(1);
+    // Solo i campi valorizzati: niente crm_lead_id/crm_funnel a null, niente ai_owner/ai_status/ai_started_at.
+    expect(calls.updates[0]).toEqual({ crm_lead_id: 'crm-1', crm_funnel: 'H' });
+    expect(calls.events.some((e) => e.type === 'apertura_saltata_chat_in_corso')).toBe(true);
+  });
+
+  it('chat viva fuori fascia → vince la guardia, non il ramo differito: aperturaSaltata:true, niente deferred', async () => {
+    vi.setSystemTime(NOTTE_FONDA);
+    const { supabase, calls } = makeSupabase(0, false, {
+      convRow: { ai_owner: 'mario', ai_status: 'active', crm_lead_id: 'crm-1' }, outboundCount: 1,
+    });
+
+    const res = await enrollLeadIntoMario(supabase, {
+      phone: '+393331234567', firstName: 'Anna', crmLeadId: 'crm-1', crmFunnel: 'H',
+    });
+
+    expect(res).toMatchObject({ ok: true, conversationId: 42, aperturaSaltata: true });
+    expect(res.deferred).toBeUndefined();
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+    expect(calls.events.some((e) => e.type === 'fenice_enroll_deferred')).toBe(false);
+  });
+
+  // Il caso vero: il bot adotta e fissa la call, il CRM legge la lista giorni dopo,
+  // crea il lead e manda l'intake. Senza la guardia l'apertura "le tue 10 ore
+  // gratuite" arrivava a chi ha gia' la call in agenda, e l'update la riportava ad
+  // 'active' facendole perdere il lucchetto sull'appuntamento.
+  it("adottato con l'appuntamento gia' preso (booked) → l'apertura non parte", async () => {
+    vi.setSystemTime(MEZZOGIORNO);
+    const { supabase, calls } = makeSupabase(0, false, {
+      convRow: { ai_owner: 'mario', ai_status: 'booked', crm_lead_id: null }, outboundCount: 1,
+    });
+
+    const res = await enrollLeadIntoMario(supabase, {
+      phone: '+393331234567', crmLeadId: 'crm-9', crmFunnel: 'TELEGRAM',
+    });
+
+    expect(res).toMatchObject({ ok: true, aperturaSaltata: true });
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+    // Nessun ai_status/ai_started_at riscritto: l'appuntamento tiene il suo lucchetto.
+    expect(calls.updates[0]).toEqual({ crm_lead_id: 'crm-9', crm_funnel: 'TELEGRAM' });
+  });
+
+  // Se la riga della conversazione non si riesce a leggere, `crm_lead_id` arriverebbe
+  // come nullo e la guardia scatterebbe su un lead del CRM che col bot non ha mai
+  // parlato: preso in carico sulla carta e muto nei fatti. Nel dubbio si apre.
+  it("select su conversations fallita: l'apertura parte lo stesso", async () => {
+    vi.setSystemTime(MEZZOGIORNO);
+    const { supabase, calls } = makeSupabase(0, false, { convErrore: true, outboundCount: 3 });
+
+    const res = await enrollLeadIntoMario(supabase, {
+      phone: '+393331234567', firstName: 'Anna', crmLeadId: 'crm-1', crmFunnel: 'H',
+    });
+
+    expect(res.aperturaSaltata).toBeUndefined();
+    expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+    expect(calls.updates[0]).toMatchObject({ ai_owner: 'mario', ai_status: 'active' });
+    expect(calls.events.some((e) => e.type === 'apertura_saltata_chat_in_corso')).toBe(false);
+  });
+
+  it('un intake senza funnel non cancella il TELEGRAM dedotto dal webhook', async () => {
+    vi.setSystemTime(MEZZOGIORNO);
+    const { supabase, calls } = makeSupabase();
+
+    await enrollLeadIntoMario(supabase, { phone: '+393331234567', crmLeadId: 'crm-9' });
+
+    // Ramo normale, non guardia: `crm_funnel` non compare affatto nella patch.
+    expect('crm_funnel' in calls.updates[0]).toBe(false);
+    expect(calls.updates[0]).toMatchObject({ crm_lead_id: 'crm-9' });
+  });
+});
+
+describe('apreSopraChatViva', () => {
+  const viva = { aiOwner: 'mario', aiStatus: 'active', crmLeadId: 'crm-1', haOutboundPartito: true };
+  it('vero: Mario sta già parlando con questa persona', () => {
+    expect(apreSopraChatViva(viva)).toBe(true);
+  });
+  // 'replying' è il lock del drain, non uno stato a parte: una chat che sta
+  // rispondendo è viva quanto una 'active' (vedi shouldAutoReply).
+  it("vero anche su 'replying': il drain sta rispondendo in questo momento", () => {
+    expect(apreSopraChatViva({ ...viva, aiStatus: 'replying' })).toBe(true);
+  });
+  it('falso su una chat nuova', () => {
+    expect(apreSopraChatViva({ aiOwner: null, aiStatus: null, crmLeadId: null, haOutboundPartito: false })).toBe(false);
+  });
+  // Il caso di riapri-mute: abbiamo PROVATO a mandare l'apertura e non è mai partita.
+  // Se la guardia scattasse qui, quelle conversazioni resterebbero mute per sempre.
+  it('falso se un invio è stato tentato ma non è mai partito', () => {
+    expect(apreSopraChatViva({ ...viva, haOutboundPartito: false })).toBe(false);
+  });
+  // Un lead del CRM chiuso e ri-arruolato: e' il caso legittimo, l'apertura parte.
+  it('falso su una chat del CRM chiusa o passata a una persona', () => {
+    expect(apreSopraChatViva({ ...viva, aiStatus: 'closed' })).toBe(false);
+    expect(apreSopraChatViva({ ...viva, aiStatus: 'handed_off' })).toBe(false);
+  });
+  it('falso se la chat non è di Mario', () => {
+    expect(apreSopraChatViva({ ...viva, aiOwner: null })).toBe(false);
+  });
+
+  // Adottato = nessun leadId del CRM e un nostro messaggio gia' partito. La lista di
+  // /api/bot/lead-entranti li manda al CRM anche da booked/closed/handed_off, e
+  // l'intake arriva giorni dopo: l'apertura non deve partire in nessuno di quegli stati.
+  const adottato = { aiOwner: 'mario', aiStatus: 'active', crmLeadId: null, haOutboundPartito: true };
+  it("vero su un adottato che ha gia' l'appuntamento in agenda (booked)", () => {
+    expect(apreSopraChatViva({ ...adottato, aiStatus: 'booked' })).toBe(true);
+  });
+  it('vero su un adottato passato a una persona (handed_off)', () => {
+    expect(apreSopraChatViva({ ...adottato, aiStatus: 'handed_off' })).toBe(true);
+  });
+  it('vero su un adottato chiuso con un esito (closed)', () => {
+    expect(apreSopraChatViva({ ...adottato, aiStatus: 'closed' })).toBe(true);
+  });
+  // La regola vale solo per chi ha gia' visto un nostro messaggio: senza outbound
+  // partito resta il caso di riapri-mute, dove l'apertura non e' mai uscita.
+  it("falso su un adottato a cui non e' mai partito niente", () => {
+    expect(apreSopraChatViva({ ...adottato, haOutboundPartito: false })).toBe(false);
   });
 });
