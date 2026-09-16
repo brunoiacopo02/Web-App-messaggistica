@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { areaForEmail, canAccess, landingPath } from './access';
+import { areaForEmail, canAccess, landingPath, puoModificareLancio } from './access';
 
 describe('access map', () => {
   it('fenicebot vede solo fenice', () => {
@@ -77,5 +77,19 @@ describe('area chat', () => {
     expect(canAccess('campagne@fenice.com', '/chat')).toBe(false);
     expect(canAccess('fenicebot@fenice.com', '/chat')).toBe(false);
     expect(canAccess('brunoiacopo02@gmail.com', '/chat')).toBe(true);
+  });
+});
+
+describe('puoModificareLancio — chi scrive le impostazioni del lancio', () => {
+  it('gli account con area all sì; fenicebot (solo /fenice) no; email sconosciuta = all', () => {
+    expect(puoModificareLancio('bruno@esempio.it')).toBe(true);
+    expect(puoModificareLancio('fenicebot@fenice.com')).toBe(false);
+    expect(puoModificareLancio('campagne@fenice.com')).toBe(false);
+    expect(puoModificareLancio('fenice@academy.com')).toBe(false);
+    expect(puoModificareLancio(null)).toBe(true);
+    expect(puoModificareLancio(undefined)).toBe(true);
+  });
+  it('il maiuscolo non apre una porta: FENICEBOT resta in sola lettura', () => {
+    expect(puoModificareLancio('FeniceBot@Fenice.com')).toBe(false);
   });
 });

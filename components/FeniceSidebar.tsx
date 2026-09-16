@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import { Flame, Bot, Radio, MessagesSquare, Users, LogOut } from 'lucide-react';
+import { Flame, Bot, Radio, MessagesSquare, Users, Settings, LogOut } from 'lucide-react';
 import { signOutAction } from '@/app/(auth)/login/actions';
 import { ThemeToggle } from '@/components/ThemeToggle';
 
@@ -11,6 +11,7 @@ const NAV = [
   { href: '/fenice/live', label: 'Live', desc: 'Auto-risposta e nuovi lead', icon: Radio },
   { href: '/fenice/conversazioni', label: 'Conversazioni', desc: 'Storico chat e riassunti', icon: MessagesSquare },
   { href: '/fenice/lead', label: 'Lead', desc: 'Pipeline, report e analisi', icon: Users },
+  { href: '/fenice/impostazioni', label: 'Impostazioni', desc: 'Lancio: interruttori, link, mittente', icon: Settings },
 ];
 
 function useActive() {
