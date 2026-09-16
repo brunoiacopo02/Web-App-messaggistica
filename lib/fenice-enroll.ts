@@ -290,9 +290,10 @@ export async function enrollGdoLeadAsPostino(
  *   un secondo benvenuto nemmeno differito, ma entra comunque nel flusso lancio
  *   (`lancio_*` valorizzati) e la cronologia non si azzera;
  * - fuori dalla fascia 07-23, o con `lancio_attivo` spento, il lead e' preso in carico
- *   senza outbound: lo riprende il cron `lancio-aperture`, NON `sequence-touches`
- *   (che queste chat le esclude dal Task 10, quando `FILTRO_FUORI_LANCIO` entra nelle
- *   sue query: fino ad allora l'esclusione non c'e' ancora).
+ *   senza outbound: lo riprende il cron `lancio-aperture`, NON `sequence-touches`.
+ *   Le esclusioni ci sono (Task 10): queste chat sono fuori dai cron di Mario
+ *   — sequenza, nudge, promemoria, solleciti — finche' la fase non e' terminale,
+ *   via `FILTRO_FUORI_LANCIO`.
  */
 async function enrollLancio(
   supabase: Supa,

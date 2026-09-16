@@ -1,3 +1,5 @@
+import { LANCIO_SLUG } from './lancio-fase';
+
 export interface BotIntakePayload {
   leadId: string;
   name: string | null;
@@ -42,6 +44,14 @@ export function parseLancioField(raw: unknown): LancioIntake | null {
   const slug = typeof o.slug === 'string' ? o.slug.trim() : '';
   if (!slug) return null;
   const ingresso: LancioIngresso = o.ingresso === 'pulsante_webinar' ? 'pulsante_webinar' : 'lista';
+  // Uno slug che non conosciamo si accetta lo stesso — il lead entra comunque nel
+  // flusso del lancio, che e' l'unico che sappiamo fare — ma non deve passare in
+  // silenzio: e' o un lancio futuro non ancora implementato o, molto piu'
+  // probabilmente, un refuso lato CRM che manderebbe a queste persone i messaggi del
+  // lancio sbagliato. La riga `event_log` la scrive il route di intake.
+  if (slug !== LANCIO_SLUG) {
+    console.warn(`[bot-contract] slug lancio sconosciuto: "${slug}" (atteso "${LANCIO_SLUG}")`);
+  }
   return { slug, ingresso };
 }
 
