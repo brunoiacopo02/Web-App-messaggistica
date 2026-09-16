@@ -16,17 +16,40 @@ export async function impostaFaseLancio(
   conversationId: number,
   fase: LancioFase,
   campi: { lancio_link_inviato_at?: string; lancio_followup_inviato_at?: string; lancio_info?: Json } = {},
+  /**
+   * `soloDaFasi`: compare-and-set sulla fase di partenza. Serve a chi scrive la fase da
+   * un cron, in parallelo a un turno che sta girando sulla stessa chat — il blast del
+   * link (B4) contro il turno dell'attesa (B1): il blast scriveva `link_inviato` alla
+   * cieca e poteva riportare indietro una chat appena passata a `posto_bloccato`, col
+   * link ormai partito. Con la guardia, se nel frattempo la fase e' avanzata la riga non
+   * si tocca e resta la traccia `lancio_fase_non_cambiata`. Senza, il comportamento e'
+   * quello di sempre: chi scrive dentro un turno gia' serializzato non ne ha bisogno.
+   */
+  opzioni: { soloDaFasi?: readonly LancioFase[] } = {},
 ): Promise<void> {
-  const { error } = await supabase
+  const base = supabase
     .from('conversations')
     .update({ lancio_fase: fase, ...campi })
     .eq('id', conversationId);
+  const { error, cambiata } = opzioni.soloDaFasi
+    ? await (async () => {
+        const { data, error: e } = await base.in('lancio_fase', opzioni.soloDaFasi as LancioFase[]).select('id');
+        return { error: e, cambiata: !e && (data ?? []).length > 0 };
+      })()
+    : { error: (await base).error, cambiata: true };
+  const tipo = error ? 'lancio_fase_non_scritta' : cambiata ? 'lancio_fase_cambiata' : 'lancio_fase_non_cambiata';
   await supabase.from('event_log').insert({
-    type: error ? 'lancio_fase_non_scritta' : 'lancio_fase_cambiata',
-    payload: { conversationId, fase, ...campi, ...(error ? { errore: error.message } : {}) } as never,
+    type: tipo,
+    payload: {
+      conversationId, fase, ...campi,
+      ...(opzioni.soloDaFasi ? { soloDaFasi: opzioni.soloDaFasi } : {}),
+      ...(error ? { errore: error.message } : {}),
+    } as never,
     message: error
       ? `[lancio] conv ${conversationId}: fase ${fase} NON scritta — ${error.message}`
-      : `[lancio] conv ${conversationId}: fase → ${fase}`,
+      : cambiata
+        ? `[lancio] conv ${conversationId}: fase → ${fase}`
+        : `[lancio] conv ${conversationId}: fase ${fase} non scritta, la chat era gia' oltre`,
     level: error ? 'error' : 'info',
   });
 }

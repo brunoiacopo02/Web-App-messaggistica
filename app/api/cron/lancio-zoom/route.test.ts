@@ -160,7 +160,12 @@ vi.mock('@/lib/twilio', () => ({
 // riuscito da uno dall'esito incerto quando a fine serata si contano i conti.
 const impostaFaseLancio = vi.fn<(...a: unknown[]) => Promise<void>>(async (...a) => {
   const conversazione = stato.convs.find((c) => c.id === a[1]);
-  if (conversazione) conversazione.lancio_fase = a[2] as string;
+  if (!conversazione) return;
+  // `soloDaFasi` e' il compare-and-set sulla fase di partenza: qui e' finto come e' finto
+  // il lucchetto del timbro, perche' e' esattamente quello che il test deve vedere.
+  const soloDaFasi = (a[4] as { soloDaFasi?: readonly string[] } | undefined)?.soloDaFasi;
+  if (soloDaFasi && !soloDaFasi.includes(conversazione.lancio_fase ?? '')) return;
+  conversazione.lancio_fase = a[2] as string;
 });
 vi.mock('@/lib/lancio-db', () => ({
   impostaFaseLancio: (...a: unknown[]) => impostaFaseLancio(...a),
@@ -422,7 +427,23 @@ describe('GET /api/cron/lancio-zoom — invio', () => {
     expect(String(msg[0].body)).toContain(`Ciao Mario, link: ${ZOOM}`);
     expect(impostaFaseLancio).toHaveBeenCalledWith(expect.anything(), 1, 'link_inviato', {
       lancio_link_inviato_at: expect.any(String),
+    }, { soloDaFasi: ['attesa', 'posto_bloccato'] });
+  });
+
+  // La corsa vera: mentre il link e' in volo, il turno dell'attesa (B1) — o il pulsante
+  // del webinar — porta avanti la stessa chat. Prima il blast ci scriveva sopra
+  // `link_inviato` alla cieca e la fase tornava indietro col link gia' partito.
+  it('una fase avanzata durante l invio non torna indietro', async () => {
+    stato.convs = [conv(1)];
+    sendTemplate.mockImplementationOnce(async () => {
+      stato.convs[0].lancio_fase = 'post_pitch';
+      return { sid: 'SMtest', status: 'queued' };
     });
+    await expect((await richiesta()).json()).resolves.toMatchObject({ sent: 1, failed: 0 });
+    expect(stato.convs[0].lancio_fase).toBe('post_pitch');
+    // Il timbro invece resta: il messaggio e' partito e non si rimanda.
+    expect(stato.timbrate).toEqual(new Set([1]));
+    expect(impostaFaseLancio).toHaveBeenCalledWith(expect.anything(), 1, 'link_inviato', expect.anything(), { soloDaFasi: ['attesa', 'posto_bloccato'] });
   });
 
   it('il timbro si mette PRIMA di Twilio, non dopo', async () => {
@@ -455,7 +476,7 @@ describe('GET /api/cron/lancio-zoom — invio', () => {
     await expect((await richiesta()).json()).resolves.toMatchObject({ sent: 1, riparati: 1 });
     expect(sendTemplate).toHaveBeenCalledTimes(1);
     expect(sendTemplate).toHaveBeenCalledWith(expect.objectContaining({ to: tel(2) }));
-    expect(impostaFaseLancio).toHaveBeenCalledWith(expect.anything(), 1, 'link_inviato', expect.anything());
+    expect(impostaFaseLancio).toHaveBeenCalledWith(expect.anything(), 1, 'link_inviato', expect.anything(), { soloDaFasi: ['attesa', 'posto_bloccato'] });
   });
 
   it('lead senza telefono: saltato senza rompere il giro e senza timbro', async () => {

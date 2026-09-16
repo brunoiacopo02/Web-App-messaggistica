@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { marcaCongedo, contaBenvenutiUltimaOra } from './lancio-db';
+import { impostaFaseLancio, marcaCongedo, contaBenvenutiUltimaOra } from './lancio-db';
 
 /**
  * Finto Supabase: registra gli update su `conversations`, gli insert su `event_log` e la
@@ -14,9 +14,12 @@ function makeSupabase(opts: {
   erroreScrittura?: { message: string } | null;
   count?: number | null;
   erroreConteggio?: { message: string } | null;
+  /** La fase a DB adesso: decide se un update con `in('lancio_fase', ...)` trova la riga. */
+  faseCorrente?: string;
 } = {}) {
   const calls = {
     updates: [] as any[],
+    updateFiltri: [] as Filtro[][],
     events: [] as any[],
     conteggi: [] as { colonne: string; opzioni: unknown; filtri: Filtro[] }[],
   };
@@ -26,7 +29,20 @@ function makeSupabase(opts: {
         return {
           update(p: any) {
             calls.updates.push(p);
-            const c: any = { eq: () => c, then: (r: any) => r({ error: opts.erroreScrittura ?? null }) };
+            const filtri: Filtro[] = [];
+            calls.updateFiltri.push(filtri);
+            const c: any = {
+              eq: (col: string, v: unknown) => { filtri.push(['eq', col, v]); return c; },
+              in: (col: string, v: unknown) => { filtri.push(['in', col, v]); return c; },
+              select: () => c,
+              then: (r: any) => {
+                // Compare-and-set finto: con `in('lancio_fase', [...])` la riga torna solo
+                // se la fase a DB e' fra quelle ammesse, come farebbe Postgres.
+                const fasi = filtri.find((f) => f[0] === 'in' && f[1] === 'lancio_fase')?.[2] as string[] | undefined;
+                const trovata = !fasi || (opts.faseCorrente !== undefined && fasi.includes(opts.faseCorrente));
+                return r({ data: trovata ? [{ id: 1 }] : [], error: opts.erroreScrittura ?? null });
+              },
+            };
             return c;
           },
           select() {
@@ -64,6 +80,43 @@ function makeSupabase(opts: {
 
 const eventiDiTipo = (calls: { events: any[] }, type: string) =>
   calls.events.filter((e) => e.type === type);
+
+describe('impostaFaseLancio — la guardia sulla fase di partenza', () => {
+  // Il blast del link (B4) e il turno dell'attesa (B1) possono girare insieme sulla
+  // stessa chat: senza guardia il blast riportava a `link_inviato` una chat gia'
+  // avanzata, col link ormai partito.
+  it('con soloDaFasi la fase gia avanzata NON si riscrive, e resta la traccia', async () => {
+    const { supabase, calls } = makeSupabase({ faseCorrente: 'post_pitch' });
+    await impostaFaseLancio(supabase, 42, 'link_inviato', { lancio_link_inviato_at: 'T1' }, { soloDaFasi: ['attesa', 'posto_bloccato'] });
+    expect(calls.updateFiltri[0]).toContainEqual(['in', 'lancio_fase', ['attesa', 'posto_bloccato']]);
+    const traccia = eventiDiTipo(calls, 'lancio_fase_non_cambiata');
+    expect(traccia).toHaveLength(1);
+    expect(traccia[0].payload).toMatchObject({ conversationId: 42, fase: 'link_inviato', soloDaFasi: ['attesa', 'posto_bloccato'] });
+    expect(eventiDiTipo(calls, 'lancio_fase_cambiata')).toHaveLength(0);
+  });
+
+  it('con soloDaFasi e la fase ancora in attesa: si scrive come sempre', async () => {
+    const { supabase, calls } = makeSupabase({ faseCorrente: 'attesa' });
+    await impostaFaseLancio(supabase, 42, 'link_inviato', { lancio_link_inviato_at: 'T1' }, { soloDaFasi: ['attesa', 'posto_bloccato'] });
+    expect(eventiDiTipo(calls, 'lancio_fase_cambiata')).toHaveLength(1);
+  });
+
+  it('senza soloDaFasi niente guardia: update secco, come prima', async () => {
+    const { supabase, calls } = makeSupabase();
+    await impostaFaseLancio(supabase, 42, 'chiuso');
+    expect(calls.updates[0]).toEqual({ lancio_fase: 'chiuso' });
+    expect(calls.updateFiltri[0].some((f) => f[0] === 'in')).toBe(false);
+    expect(eventiDiTipo(calls, 'lancio_fase_cambiata')).toHaveLength(1);
+  });
+
+  it('errore del DB: resta lancio_fase_non_scritta, a livello error', async () => {
+    const { supabase, calls } = makeSupabase({ faseCorrente: 'attesa', erroreScrittura: { message: 'connessione persa' } });
+    await impostaFaseLancio(supabase, 42, 'link_inviato', {}, { soloDaFasi: ['attesa'] });
+    const traccia = eventiDiTipo(calls, 'lancio_fase_non_scritta');
+    expect(traccia).toHaveLength(1);
+    expect(traccia[0]).toMatchObject({ level: 'error' });
+  });
+});
 
 describe('marcaCongedo', () => {
   it('merge sulle chiavi gia’ presenti: il congedo si aggiunge, non sostituisce', async () => {

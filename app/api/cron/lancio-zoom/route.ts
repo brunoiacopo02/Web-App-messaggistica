@@ -8,6 +8,7 @@ import { templateName } from '@/lib/name';
 import { runPool } from '@/lib/run-pool';
 import { getLancioSettings, setLancioSetting } from '@/lib/lancio-settings';
 import { impostaFaseLancio } from '@/lib/lancio-db';
+import type { LancioFase } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
 import {
   inFinestraBlast,
@@ -55,7 +56,9 @@ const TEMPO_MASSIMO_MS = 240_000;
 /** Paracadute sulla paginazione dei candidati: 20.000 e' gia' un'anomalia da guardare. */
 const MAX_PAGINE = 20;
 const PAGINA = 1000;
-const FASI_BERSAGLIO = ['attesa', 'posto_bloccato'];
+/** Le fasi che il link non l'hanno ancora avuto: sono il bersaglio della query E la
+ *  guardia della scrittura della fase (vedi `impostaFaseLancio` con `soloDaFasi`). */
+const FASI_BERSAGLIO: readonly LancioFase[] = ['attesa', 'posto_bloccato'];
 
 type Esito = 'sent' | 'riparato' | 'capped' | 'failed' | 'incerto' | 'skip' | 'errore' | 'bloccato';
 
@@ -186,9 +189,11 @@ export async function GET(req: NextRequest) {
     return q;
   };
 
-  // Config PRIMA della finestra: un template o un mittente che mancano sono un guasto da
-  // vedere il 4 ottobre, non alle 19:30 del 5. Il cron gira anche fuori finestra e questo
-  // e' l'unico modo perche' l'allarme suoni prima della serata invece che durante.
+  // Config PRIMA della finestra: un template o un mittente che mancano devono suonare
+  // al primo run fuori finestra — cioe' la sera del 5 alle 19:00, l'ultimo giro prima
+  // che la finestra si apra alle 19:30 — e non a blast gia' partito. Il cron gira anche
+  // fuori finestra apposta: e' l'unico modo perche' l'allarme arrivi prima della serata
+  // invece che durante.
   const missing = [
     !sid && 'LANCIO_ZOOM_TEMPLATE_SID',
     !from && 'TWILIO_WHATSAPP_NUMBER_FENICE',
@@ -317,9 +322,11 @@ export async function GET(req: NextRequest) {
       if (!phone) return 'skip';
 
       if (giaSpediti.has(c.id)) {
+        // Riparazione: il messaggio era gia' a DB e manca solo la fase. Stessa guardia
+        // dell'invio — fra la select e adesso la chat puo' essere andata avanti da sola.
         await impostaFaseLancio(supabase, c.id, 'link_inviato', {
           lancio_link_inviato_at: new Date().toISOString(),
-        });
+        }, { soloDaFasi: FASI_BERSAGLIO });
         return 'riparato';
       }
 
@@ -384,7 +391,12 @@ export async function GET(req: NextRequest) {
           .from('conversations')
           .update({ last_message_at: new Date().toISOString() })
           .eq('id', c.id);
-        await impostaFaseLancio(supabase, c.id, 'link_inviato', { lancio_link_inviato_at: timbro });
+        // Compare-and-set sulla fase, non un update alla cieca: mentre il blast girava,
+        // il turno dell'attesa (B1) puo' aver portato questa chat a `posto_bloccato` —
+        // o il lead puo' aver gia' premuto il pulsante. Scrivere `link_inviato` sopra
+        // una fase piu' avanzata la riporterebbe indietro col link ormai partito. Il
+        // timbro invece si scrive comunque: l'invio e' andato e non si ripete.
+        await impostaFaseLancio(supabase, c.id, 'link_inviato', { lancio_link_inviato_at: timbro }, { soloDaFasi: FASI_BERSAGLIO });
         return 'sent';
       } catch (err) {
         const e = err as { message?: string; code?: number };
