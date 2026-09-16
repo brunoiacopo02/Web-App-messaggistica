@@ -126,17 +126,22 @@ export async function silenzioLancio(
  *   chiude la conversazione da solo): trattarlo come ritentabile lascerebbe la fase
  *   aperta per sempre. Un timeout o un 500 invece no: lo stato resta `active` e il turno
  *   dopo ritenta l'esito — con `giaInviato` per non mandare una seconda volta la frase.
+ *
+ * `opts.testo` esiste per il post-pitch (B4): là il congedo arriva DOPO la live, e la
+ * frase del B1 ("non ti scrivo più per questo evento") parlerebbe di un evento che è
+ * già passato. Il default resta `TESTO_CONGEDO`: tutto quello che c'era prima di questo
+ * parametro si comporta esattamente come prima.
  */
 export async function congedoLancio(
   supabase: Supa,
   c: ContestoTurno,
   leadWords: string,
   nota: string,
-  opts: { giaInviato?: boolean } = {},
+  opts: { giaInviato?: boolean; testo?: string } = {},
 ): Promise<StatoTurno> {
   const ritentato = opts.giaInviato === true;
   if (!ritentato) {
-    await inviaBollaLancio(supabase, c, TESTO_CONGEDO);
+    await inviaBollaLancio(supabase, c, opts.testo ?? TESTO_CONGEDO);
     await marcaCongedo(supabase, c.conversationId);
   }
 

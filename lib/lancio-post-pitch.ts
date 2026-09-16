@@ -1,0 +1,278 @@
+import type { getSupabaseAdmin } from './supabase/admin';
+import type { Json } from './supabase/types';
+import type { LancioSettings } from './lancio-settings';
+import type { TurnoLancioInput } from './lancio-turno';
+import { generateLancioReply } from './lancio-reply';
+import { RISPOSTE_RISCALDAMENTO } from './lancio-prompt';
+import { impostaFaseLancio } from './lancio-db';
+import { sendCrmNota } from './bot-outcome';
+import { pushLeadEntrante } from './lead-entrante';
+import { PROVENIENZA_LANCIO_WEBDEV } from './primo-messaggio';
+import { haCongedo, paroleDelCongedo } from './lancio-fase';
+import { lancioSlots, lancioBook, lancioCallNow, type LancioInfo, type LancioKind } from './lancio-crm';
+import { romeDayKey, romeHour } from './rome-time';
+import {
+  giorniLancio, modoPostPitch, puoRispondere, validaAtLancio, oreProponibili, testoSlots, bloccoSlotPerPrompt,
+  testoConfermaChiamata, testoConfermaPrenotazione, testoOraEsaurita, testoAtNonValido, raccogliRisposte,
+  etichettaGiorno,
+  TESTO_NESSUN_VENDITORE, TESTO_CHIAMATA_FUORI_ORARIO, TESTO_ERRORE_CRM, TESTO_DOPO_SCELTA, TESTO_CONGEDO_POST_PITCH,
+  type OreProponibili, type GiorniLancio, type ModoPostPitch,
+} from './lancio-scelta';
+import {
+  congedoLancio, contestoDi, historyDi, eventoAtDa, inviaBollaLancio, eventoLancio, tracciaTurnoLancio,
+  silenzioLancio, passaggioUmanoLancio, type StatoTurno, type ContestoTurno,
+} from './lancio-effetti';
+
+type Supa = ReturnType<typeof getSupabaseAdmin>;
+
+export const NOTA_SCELTA = 'Lancio Web Dev AI: ha premuto il pulsante dopo la live.';
+/** La stessa provenienza dell'intake (B2): il bucket del lancio sul CRM è uno solo. */
+export const PROVENIENZA_LANCIO = PROVENIENZA_LANCIO_WEBDEV;
+const NOTA_CONGEDO = 'Lancio Web Dev AI: ha seguito la live ma non vuole una call.';
+const NOTA_SENZA_ORE = 'Lancio Web Dev AI: vuole una call ma non ci sono più ore libere nei due giorni dopo la live.';
+/** Quanto delle parole del lead entra nella nota al CRM dopo la scelta. */
+const MAX_PAROLE_NOTA = 300;
+/** `gia_prenotato` senza `appointmentAt`: il CRM dice che l'ora c'è ma non qual è. */
+const TESTO_GIA_PRENOTATO_SENZA_ORA =
+  'Risulta che hai già un appuntamento fissato con noi: ti richiamiamo noi, non serve fissarne un altro.';
+
+/**
+ * 409 `gia_prenotato` (contratto §6.2): il lead ha già la sua ora sul CRM — l'ha presa
+ * dal sito, dai GDO, o da un turno di questo stesso bot andato a buon fine di cui non
+ * ha visto la conferma. Non è un errore da far vedere al lead: gli si ricorda l'ora che
+ * ha, e basta. L'ora si formatta con gli stessi ferri dei testi fissi (`etichettaGiorno`
+ * + l'ora di Roma), così "martedì 6 ottobre alle 11:00" è scritto una volta sola in
+ * tutto il blocco.
+ */
+function testoGiaPrenotato(appointmentAt: string | null): string {
+  if (!appointmentAt) return TESTO_GIA_PRENOTATO_SENZA_ORA;
+  const ms = Date.parse(appointmentAt);
+  if (!Number.isFinite(ms)) return TESTO_GIA_PRENOTATO_SENZA_ORA;
+  const d = new Date(ms);
+  return `Risulta che hai già un appuntamento con noi ${etichettaGiorno(romeDayKey(d))} alle ${romeHour(d)}:00: ti chiamiamo lì, non serve fissarne un altro.`;
+}
+
+/**
+ * Fase `post_pitch` (spec §5.4): il lead ha premuto il pulsante dopo la live. Due domande
+ * di riscaldamento (le risposte finiscono in `lancio_info` e poi al venditore), poi la
+ * scelta fra "adesso" e "una call". Il modello NON scrive mai un'ora: le ore le elenca il
+ * codice nel prompt (blocco ORE PRENOTABILI, dal CRM), il modello le riporta in un tag e
+ * il tag torna qui per le regole dure — date ammesse, ora tonda, `at ≥ now+1h`, chiamata
+ * immediata solo di notte. Ogni conferma è un testo fisso.
+ *
+ * Un solo tag per turno e una sola chiamata al CRM per tag: il turno gira dentro il
+ * drain, il lead sta aspettando la bolla.
+ */
+export async function turnoPostPitch(
+  supabase: Supa,
+  i: TurnoLancioInput,
+  ctx: { settings: LancioSettings; now: Date },
+): Promise<StatoTurno> {
+  const genera = i.genera ?? generateLancioReply;
+  const c = contestoDi(i);
+  const now = ctx.now;
+  const eventoAt = eventoAtDa(ctx.settings);
+  const giorni = giorniLancio(eventoAt);
+  const modo = modoPostPitch(now, eventoAt);
+
+  // Il congedo è già uscito e la fase non è terminale: il CRM aveva rifiutato lo scarto
+  // e questo turno serve solo a ritentarlo. Niente modello, niente seconda bolla, nessuna
+  // riclassificazione — chi ha detto no resta un no anche se poi scrive "ok". Si legge
+  // dal marcatore durevole (`lancio_info.congedo_at`, scritto da `marcaCongedo`) e non
+  // dalla cronologia: `congedoGiaInviato` cerca la frase del B1, e qui il congedo ha il
+  // suo testo. Prima della finestra, come nell'assistenza: un ritentativo non manda
+  // niente al lead e toglie dal limbo chi aveva già detto no.
+  if (haCongedo(i.lancioInfo)) {
+    return congedoLancio(supabase, c, paroleDelCongedo(i.rows) ?? '', NOTA_CONGEDO, { giaInviato: true });
+  }
+
+  // Fuori orario (03:00-08:30, dopo le 23:00): silenzio TEMPORANEO, senza traccia, così
+  // il re-drive di bot-followups delle 08:30 rifà il turno e risponde.
+  if (!puoRispondere(now, eventoAt, 'post_pitch')) return silenzioLancio(supabase, c, 'fuori_orario', false);
+
+  // Le parole del lead, accumulate (il marker del pulsante no): sono le "info" per chi chiama.
+  const info: LancioInfo = raccogliRisposte(i.lancioInfo ?? null, [i.inboundBody]);
+  const faseScelta = info.risposte.length >= RISPOSTE_RISCALDAMENTO || !!info.slotsMostratiAt;
+
+  // Update diretto: la fase non cambia, e `impostaFaseLancio` è l'unico scrittore di
+  // `lancio_fase`, non di `lancio_info`.
+  const salvaInfo = async (dati: LancioInfo): Promise<void> => {
+    await supabase.from('conversations').update({ lancio_info: dati as unknown as Json }).eq('id', c.conversationId);
+  };
+
+  // Le ore si leggono una volta per turno e solo quando servono.
+  let ore: OreProponibili | null = null;
+  const leggiOre = async (): Promise<OreProponibili> => {
+    if (ore) return ore;
+    const r = await lancioSlots(giorni.giornoDopo);
+    if (!r.ok) {
+      await eventoLancio(supabase, c, 'lancio_slots_non_letti', { motivo: r.motivo }, `[lancio] conv ${c.conversationId}: slot non letti dal CRM (${r.motivo}), propongo pomeriggio e dopodomani`, 'warn');
+    }
+    ore = oreProponibili(r.ok ? r.slots : null, now, eventoAt);
+    return ore;
+  };
+
+  /** Manda un testo con le ore (scritto dal codice) e segna che le ore sono state mostrate. */
+  const mostraOre = async (componi: (o: OreProponibili, g: GiorniLancio, m: ModoPostPitch) => string = testoSlots): Promise<'active'> => {
+    const o = await leggiOre();
+    await inviaBollaLancio(supabase, c, componi(o, giorni, modo));
+    await salvaInfo({ ...info, slotsMostratiAt: now.toISOString() });
+    if (o.mattina.length === 0 && o.pomeriggio.length === 0 && o.dopodomani.length === 0) {
+      // Il testo promette "lascio nota": la nota parte davvero, altrimenti nessuno lo richiama.
+      if (c.crmLeadId) await sendCrmNota(supabase, c.conversationId, NOTA_SENZA_ORE);
+      await eventoLancio(supabase, c, 'lancio_slots_vuoti', {}, `[lancio] conv ${c.conversationId}: nessuna ora libera nei due giorni, nota al CRM`, 'warn');
+    }
+    await eventoLancio(supabase, c, 'lancio_slots_mostrati', { mattina: o.mattina, pomeriggio: o.pomeriggio, dopodomani: o.dopodomani, modo }, `[lancio] conv ${c.conversationId}: ore proposte`);
+    await tracciaTurnoLancio(supabase, c, 'slots');
+    return 'active';
+  };
+
+  const erroreCrm = async (tipo: string, dettagli: Record<string, unknown>): Promise<'active'> => {
+    await inviaBollaLancio(supabase, c, TESTO_ERRORE_CRM);
+    await salvaInfo(info);
+    await eventoLancio(supabase, c, tipo, dettagli, `[lancio] conv ${c.conversationId}: scelta non registrata (${tipo})`, 'error');
+    await tracciaTurnoLancio(supabase, c, 'errore_crm');
+    return 'active';
+  };
+
+  /** Il leadId per il CRM: quello della chat, riletto ora, o chiesto al CRM se manca ancora. */
+  const leadIdPerCrm = async (): Promise<string | null> => {
+    const { data } = await supabase.from('conversations').select('crm_lead_id').eq('id', c.conversationId).maybeSingle();
+    const attuale = (data as { crm_lead_id: string | null } | null)?.crm_lead_id ?? c.crmLeadId;
+    if (attuale) return attuale;
+    // Numero sconosciuto che ha premuto il pulsante: il push del webhook (B2) è
+    // fire-and-forget e può non essere arrivato. Il CRM deduplica per numero: si rispinge.
+    const primo = i.rows.find((m) => m.direction === 'in');
+    const res = await pushLeadEntrante(supabase, {
+      conversationId: c.conversationId, telefono: c.phone, nome: i.nome, provenienza: PROVENIENZA_LANCIO,
+      primoMessaggio: primo?.body ?? null, scrittoIl: primo?.created_at ?? now.toISOString(),
+    });
+    return res.ok && res.leadId ? res.leadId : null;
+  };
+
+  const sceltaFatta = async (tipo: 'chiama_ora' | 'prenota' | 'gia_prenotato', extra: Record<string, unknown>): Promise<'closed'> => {
+    await impostaFaseLancio(supabase, c.conversationId, 'scelta_fatta', { lancio_info: info as unknown as Json });
+    await eventoLancio(supabase, c, 'lancio_scelta', { tipo, ...extra }, `[lancio] conv ${c.conversationId}: scelta ${tipo}`);
+    await tracciaTurnoLancio(supabase, c, `scelta_${tipo}`);
+    return 'closed';
+  };
+
+  /**
+   * Il CRM dice che il lead ha già un appuntamento (409 `gia_prenotato`, da `book` o da
+   * `call-now`). Si chiude come una prenotazione riuscita — stessa fase, stesso evento,
+   * stesso `closed` — perché per il lead il risultato è lo stesso: ha la sua ora. Quello
+   * che NON si fa è riprovare: l'appuntamento c'è già e un secondo giro lo duplicherebbe.
+   */
+  const giaPrenotato = async (
+    esito: { appointmentAt: string | null; kind: LancioKind | null },
+    tag: string,
+  ): Promise<'closed'> => {
+    await inviaBollaLancio(supabase, c, testoGiaPrenotato(esito.appointmentAt));
+    return sceltaFatta('gia_prenotato', { at: esito.appointmentAt, kind: esito.kind, tag });
+  };
+
+  const bloccoSlot = faseScelta ? bloccoSlotPerPrompt(await leggiOre(), giorni, modo) : null;
+  const r = await genera(historyDi(i.rows), {
+    fase: 'post_pitch', nome: i.nome, eventoAt: ctx.settings.eventoAt, now,
+    modo, risposteRaccolte: info.risposte.length, bloccoSlot,
+  });
+
+  if (r.passToHuman) {
+    await salvaInfo(info);
+    return passaggioUmanoLancio(supabase, c, r.visibleReply, i.inboundBody);
+  }
+
+  const tag = r.lancioTag;
+  switch (tag?.tag) {
+    case 'CHIAMA_ORA': {
+      // Regola dura: la chiamata immediata esiste solo la notte del webinar.
+      if (modo !== 'notte') return mostraOre((o, g, m) => `${TESTO_CHIAMATA_FUORI_ORARIO} ${testoSlots(o, g, m)}`);
+      const leadId = await leadIdPerCrm();
+      if (!leadId) return erroreCrm('lancio_lead_senza_crm', { tag: 'CHIAMA_ORA' });
+      const esito = await lancioCallNow({ leadId, info: { risposte: info.risposte }, note: NOTA_SCELTA });
+      if (esito.ok) {
+        await inviaBollaLancio(supabase, c, testoConfermaChiamata(esito.venditore.nome));
+        return sceltaFatta('chiama_ora', { venditore: esito.venditore });
+      }
+      if (esito.motivo === 'gia_prenotato') return giaPrenotato(esito, 'CHIAMA_ORA');
+      if (esito.motivo === 'nessun_venditore') return mostraOre((o, g, m) => `${TESTO_NESSUN_VENDITORE} ${testoSlots(o, g, m)}`);
+      // `conflitto` compreso: il client l'ha già ritentato una volta, qui si dice al lead
+      // di riscrivere invece di martellare il CRM dentro il turno.
+      return erroreCrm('lancio_crm_errore', { tag: 'CHIAMA_ORA', ...esito });
+    }
+    case 'PRENOTA': {
+      const v = validaAtLancio(tag.at, now, eventoAt);
+      if (!v.ok) {
+        await eventoLancio(supabase, c, 'lancio_at_non_valido', { at: tag.at, motivo: v.motivo }, `[lancio] conv ${c.conversationId}: ora ${tag.at} rifiutata (${v.motivo})`);
+        return mostraOre(testoAtNonValido);
+      }
+      const leadId = await leadIdPerCrm();
+      if (!leadId) return erroreCrm('lancio_lead_senza_crm', { tag: 'PRENOTA', at: tag.at });
+      const esito = await lancioBook({ leadId, at: tag.at, info: { risposte: info.risposte }, note: NOTA_SCELTA });
+      if (esito.ok) {
+        await inviaBollaLancio(supabase, c, testoConfermaPrenotazione(esito.kind, tag.at, esito.venditore?.nome ?? null));
+        return sceltaFatta('prenota', { at: tag.at, kind: esito.kind, venditore: esito.venditore ?? null, deduped: esito.deduped === true });
+      }
+      if (esito.motivo === 'gia_prenotato') return giaPrenotato(esito, 'PRENOTA');
+      if (esito.motivo === 'ora_esaurita') {
+        // Le ore aggiornate sono nella risposta: si ripropone da quelle, non da quelle di
+        // prima. `esito.slots` è già `LancioSlots | null` letto dal client: niente cast.
+        ore = oreProponibili(esito.slots, now, eventoAt);
+        return mostraOre((o, g, m) => testoOraEsaurita(v.hour, o, g, m));
+      }
+      if (esito.motivo === 'nessun_venditore') return mostraOre((o, g, m) => `${TESTO_NESSUN_VENDITORE} ${testoSlots(o, g, m)}`);
+      if (esito.motivo === 'fuori_regole') {
+        await eventoLancio(supabase, c, 'lancio_at_non_valido', { at: tag.at, motivo: 'crm_fuori_regole' }, `[lancio] conv ${c.conversationId}: il CRM rifiuta ${tag.at} (422)`, 'warn');
+        return mostraOre(testoAtNonValido);
+      }
+      return erroreCrm('lancio_crm_errore', { tag: 'PRENOTA', at: tag.at, ...esito });
+    }
+    case 'SLOTS':
+      return mostraOre();
+    case 'NO': {
+      // Le risposte si salvano PRIMA del congedo: `congedoLancio` → `marcaCongedo` legge
+      // `lancio_info` dal DB e ci aggiunge `congedo_at`, quindi trova le risposte già
+      // scritte e non le perde. Scriverle dopo (o passarle a `impostaFaseLancio`)
+      // cancellerebbe il marcatore del congedo appena messo, che è quello che tiene il
+      // blast del link e il follow-up del B5 lontani da chi si è appena tirato indietro.
+      await salvaInfo(info);
+      return congedoLancio(supabase, c, i.inboundBody, NOTA_CONGEDO, { testo: TESTO_CONGEDO_POST_PITCH });
+    }
+    default: {
+      // Riscaldamento o risposta a una domanda: la bolla del modello, una sola.
+      const testo = r.visibleReply.trim();
+      await salvaInfo(info);
+      if (!testo) return silenzioLancio(supabase, c, 'risposta_vuota', true);
+      await inviaBollaLancio(supabase, c, testo);
+      await eventoLancio(supabase, c, 'lancio_post_pitch_domanda', { risposte: info.risposte.length, faseScelta }, `[lancio] conv ${c.conversationId}: post-pitch, ${info.risposte.length} risposte`);
+      await tracciaTurnoLancio(supabase, c, 'post_pitch');
+      return 'active';
+    }
+  }
+}
+
+/**
+ * Fase `scelta_fatta`: la conversazione è `closed`, il webhook la riapre a ogni inbound.
+ * Si ringrazia una volta sola (`TESTO_DOPO_SCELTA`), poi silenzio definitivo; le parole
+ * del lead vanno sempre al CRM come nota, perché "alle 9 non posso più" lo deve leggere
+ * chi lo chiama, non il bot. Stato `closed`: la chat resta ferma finché non riscrive.
+ */
+export async function turnoDopoScelta(supabase: Supa, i: TurnoLancioInput): Promise<StatoTurno> {
+  const c: ContestoTurno = contestoDi(i);
+  const parole = i.inboundBody.trim();
+  if (c.crmLeadId && parole) {
+    const nota = await sendCrmNota(supabase, c.conversationId, `Lancio Web Dev AI, dopo la scelta il lead scrive: "${parole.slice(0, MAX_PAROLE_NOTA)}"`);
+    if (!nota.sent) {
+      await eventoLancio(supabase, c, 'lancio_nota_dopo_scelta_non_inviata', { error: nota.error ?? null, status: nota.status ?? null }, `[lancio] conv ${c.conversationId}: nota dopo la scelta non inviata al CRM`, 'warn');
+    }
+  }
+  const giaDetto = i.rows.some((m) => m.direction === 'out' && (m.body ?? '').trim() === TESTO_DOPO_SCELTA);
+  if (giaDetto) {
+    await silenzioLancio(supabase, c, 'dopo_scelta', true);
+    return 'closed';
+  }
+  await inviaBollaLancio(supabase, c, TESTO_DOPO_SCELTA);
+  await eventoLancio(supabase, c, 'lancio_dopo_scelta', {}, `[lancio] conv ${c.conversationId}: ha scritto dopo la scelta, ringraziato`);
+  await tracciaTurnoLancio(supabase, c, 'dopo_scelta');
+  return 'closed';
+}
