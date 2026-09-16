@@ -108,9 +108,18 @@ export function ordinaCandidatiBlast<T extends CandidatoBlast>(candidati: readon
     .map(({ c }) => c);
 }
 
-/** Codici errore Twilio che segnalano un problema col numero mittente, non col singolo
- *  destinatario (spec §11): qualunque presenza ferma il blast, a prescindere dal conteggio. */
-export const CODICI_FRENO_TWILIO: readonly number[] = [63018, 63049, 63051];
+/**
+ * Codici errore Twilio che segnalano un problema col numero MITTENTE, non col singolo
+ * destinatario (spec §11): qualunque presenza ferma il blast, a prescindere dal
+ * conteggio. 63018 = limite di messaggi del numero, 63051 = numero in sospensione.
+ *
+ * 63049 NON e' qui (ruling del 16/09, correzione alla prima stesura della spec): il
+ * frequency cap di Meta e' per DESTINATARIO — quella persona ha gia' ricevuto troppi
+ * template nelle ultime 24h — e non dice niente sulla salute del mittente. Fermare
+ * 3.000 invii perche' un lead e' sopra il suo cap sarebbe il freno che si tira da solo
+ * nel caso piu' banale della serata. Il cap si conta come mancato invio e basta.
+ */
+export const CODICI_FRENO_TWILIO: readonly number[] = [63018, 63051];
 
 export type EsitoFreno = {
   /**

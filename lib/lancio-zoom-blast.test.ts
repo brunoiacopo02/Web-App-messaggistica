@@ -10,6 +10,7 @@ import {
   ordinaCandidatiBlast,
   decideFreno,
   finestraBlastChiusa,
+  CODICI_FRENO_TWILIO,
   LANCIO_BATCH_MAX_DEFAULT,
   LANCIO_BLAST_CONCURRENCY,
   LANCIO_BLAST_PERIMETRO_DEFAULT,
@@ -168,10 +169,14 @@ describe('decideFreno: il denominatore sono i TENTATIVI, non gli invii riusciti'
   it('un run tutto fallito si ferma: col vecchio denominatore (i riusciti) sarebbe 0/0', () => {
     expect(decideFreno({ tentati: 20, falliti: 20, codici: [] })).toBe('ferma');
   });
-  it('ferma su qualunque codice Twilio 63018/63049/63051, anche con pochi invii', () => {
+  it('ferma su un codice del mittente (63018/63051), anche con pochi invii', () => {
     expect(decideFreno({ tentati: 1, falliti: 1, codici: [63018] })).toBe('ferma');
-    expect(decideFreno({ tentati: 1, falliti: 0, codici: [63049] })).toBe('ferma');
     expect(decideFreno({ tentati: 1, falliti: 0, codici: [63051] })).toBe('ferma');
+  });
+  it('63049 NON ferma: il frequency cap e del destinatario, non del mittente', () => {
+    expect(decideFreno({ tentati: 1, falliti: 1, codici: [63049] })).toBe('continua');
+    expect(decideFreno({ tentati: 100, falliti: 5, codici: [63049, 63049, 63049] })).toBe('continua');
+    expect(CODICI_FRENO_TWILIO).not.toContain(63049);
   });
   it('altri codici Twilio non fermano da soli', () => {
     expect(decideFreno({ tentati: 20, falliti: 1, codici: [21211] })).toBe('continua');

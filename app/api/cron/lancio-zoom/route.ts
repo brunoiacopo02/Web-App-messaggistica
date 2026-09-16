@@ -49,6 +49,9 @@ type Supa = ReturnType<typeof getSupabaseAdmin>;
  *  controlli per run: il freno deve poter fermare il lotto mentre e' in corso, non
  *  scoprire a cose fatte che i primi 200 messaggi erano gia' tutti da buttare. */
 const PASSO_FRENO = 25;
+/** Quanto puo' durare il giro di invii prima di fermarsi da solo. `maxDuration` e' 300s:
+ *  ci si ferma a 240 per avere il tempo di scrivere il riepilogo. */
+const TEMPO_MASSIMO_MS = 240_000;
 /** Paracadute sulla paginazione dei candidati: 20.000 e' gia' un'anomalia da guardare. */
 const MAX_PAGINE = 20;
 const PAGINA = 1000;
@@ -178,6 +181,16 @@ export async function GET(req: NextRequest) {
     return q;
   };
 
+  // Config PRIMA della finestra: un template o un mittente che mancano sono un guasto da
+  // vedere il 4 ottobre, non alle 19:30 del 5. Il cron gira anche fuori finestra e questo
+  // e' l'unico modo perche' l'allarme suoni prima della serata invece che durante.
+  const missing = [
+    !sid && 'LANCIO_ZOOM_TEMPLATE_SID',
+    !from && 'TWILIO_WHATSAPP_NUMBER_FENICE',
+    !link && 'lancio_zoom_link',
+  ].filter((x): x is string => typeof x === 'string');
+  if (missing.length > 0 || !sid || !from || !link) return configError(missing);
+
   if (!forza && !inFinestraBlast(now, evento)) {
     // A serata finita i residui sono definitivi: e' l'unico momento in cui "quanti
     // iscritti non hanno mai ricevuto il link" e' un numero e non una fotografia.
@@ -196,13 +209,6 @@ export async function GET(req: NextRequest) {
     );
     return NextResponse.json({ ok: true, skipped: 'fuori_finestra', finestraChiusa: chiusa, residui });
   }
-
-  const missing = [
-    !sid && 'LANCIO_ZOOM_TEMPLATE_SID',
-    !from && 'TWILIO_WHATSAPP_NUMBER_FENICE',
-    !link && 'lancio_zoom_link',
-  ].filter((x): x is string => typeof x === 'string');
-  if (missing.length > 0 || !sid || !from || !link) return configError(missing);
 
   // Mittente (spec §11.1): il secondo client Twilio arriva col task "Mittente
   // secondario". Finche' non c'e', `secondario` non e' eseguibile — e mandare 3.000
@@ -223,6 +229,9 @@ export async function GET(req: NextRequest) {
   // lotto si sceglie sull'intera coda. Tagliando nella query si riordinerebbero 200
   // candidati presi a caso per id.
   const tutti: Candidata[] = [];
+  // Una coda letta a meta' e una coda vuota danno lo stesso numero: il run deve dire
+  // quale delle due e' successa, o "0 inviati" a serata finita non si sa interpretare.
+  let queryKo = false;
   for (let pagina = 0; pagina < MAX_PAGINE; pagina++) {
     const { data, error } = await bersaglio('id, crm_lead_id, lancio_fase, lancio_info, last_inbound_at, leads(phone_e164, first_name)')
       .order('id', { ascending: true })
@@ -231,6 +240,7 @@ export async function GET(req: NextRequest) {
     // run risponderebbe `sent: 0` identico a una coda vuota. E' proprio il caso della
     // migrazione `lancio_*` non ancora applicata (Postgres 42703).
     if (error) {
+      queryKo = true;
       await logCronQueryError(supabase, 'lancio_zoom_query_error', error);
       break;
     }
@@ -300,12 +310,25 @@ export async function GET(req: NextRequest) {
       // passa oltre. `is('lancio_link_inviato_at', null)` rende l'update un
       // compare-and-set: chi non si riprende righe ha perso la gara.
       const timbro = new Date().toISOString();
-      const { data: preso } = await supabase
+      const { data: preso, error: erroreClaim } = await supabase
         .from('conversations')
         .update({ lancio_link_inviato_at: timbro })
         .eq('id', c.id)
         .is('lancio_link_inviato_at', null)
         .select('id');
+      // Un claim fallito e uno perso in volata danno lo stesso `data` vuoto, e in
+      // entrambi i casi si passa oltre — ma il primo e' il DB in affanno mentre stiamo
+      // mandando 3.000 messaggi, e deve lasciare traccia invece di sparire fra i saltati.
+      if (erroreClaim) {
+        await logEvento(
+          supabase,
+          'lancio_zoom_claim_error',
+          { conversationId: c.id, error: erroreClaim.message },
+          `[lancio] conv ${c.id}: timbro non scritto, link non spedito — ${erroreClaim.message}`,
+          'error',
+        );
+        return 'skip';
+      }
       if (((preso ?? []) as unknown[]).length === 0) return 'skip';
 
       // Si libera SOLO il timbro che ha messo questo giro: se nel frattempo un altro run
@@ -359,14 +382,13 @@ export async function GET(req: NextRequest) {
           );
           return 'errore';
         }
-        // Niente e' partito: il timbro va tolto, o la chat non sarebbe piu' candidata e
-        // il lead resterebbe senza link per sempre.
-        await liberaTimbro();
-        tentati--;
-
         if (eRifiutoDiPolicy(e)) {
           // Non e' un invio fallito: e' il presidio che non ci ha fatto nemmeno chiamare
-          // Twilio, e vale identico per tutti. Nessuna riga, e il run finisce qui.
+          // Twilio, e vale identico per tutti. Nessuna riga, nessun tentativo consumato
+          // (l'unico caso in cui `tentati` torna indietro), timbro restituito, e il run
+          // finisce qui.
+          await liberaTimbro();
+          tentati--;
           fermo = 'template_bloccato';
           await logEvento(
             supabase,
@@ -378,25 +400,46 @@ export async function GET(req: NextRequest) {
           return 'bloccato';
         }
 
-        if (e?.code !== undefined) codici.push(e.code);
+        if (typeof e?.code !== 'number') {
+          // Nessun codice e nessun rifiuto di policy: Twilio non ha risposto (timeout,
+          // connessione caduta, abort). Il messaggio PUO' essere partito lo stesso e da
+          // qui non c'e' modo di saperlo — quindi il timbro RESTA. Un lead senza link e'
+          // un problema che si recupera a mano; un lead con due link sullo stesso numero
+          // a qualita' LOW e' danno al mittente, cioe' a tutti gli altri.
+          await logEvento(
+            supabase,
+            'lancio_zoom_esito_incerto',
+            { conversationId: c.id, crmLeadId: c.crm_lead_id, error: e?.message ?? 'errore' },
+            `[lancio] conv ${c.id}: Twilio non ha risposto, esito dell'invio incerto — timbro tenuto, nessun ritentativo`,
+            'warn',
+          );
+          return 'errore';
+        }
 
-        if (e?.code === 63049) {
-          // Frequency cap Meta: nessuna riga (non racconta un invio che non c'e' stato) e
-          // si riproverebbe al run dopo. Ma 63049 e' anche un codice del freno: se il
-          // numero e' arrivato al tetto di Meta, il run si ferma lo stesso.
+        // Twilio ha risposto con un codice: l'invio non e' partito davvero. Solo qui il
+        // timbro va tolto, o la chat non sarebbe piu' candidata e il lead resterebbe
+        // senza link per sempre.
+        await liberaTimbro();
+
+        if (e.code === 63049) {
+          // Frequency cap Meta: e' del DESTINATARIO (quella persona ha gia' ricevuto
+          // troppi template in 24h), non del mittente. Quindi non entra nei codici del
+          // freno e non fa riga `messages`: si riprova al run dopo.
           await logEvento(
             supabase,
             'lancio_zoom_freq_capped',
             { conversationId: c.id, templateSid: sid },
-            `[lancio] frequency cap Meta su conv ${c.id}: link non spedito`,
+            `[lancio] frequency cap Meta su conv ${c.id}: link non spedito, ritento al prossimo run`,
           );
           return 'capped';
         }
 
+        codici.push(e.code);
+
         await logEvento(
           supabase,
           'send_error',
-          { conversationId: c.id, crmLeadId: c.crm_lead_id, code: e?.code ?? null, error: e?.message ?? 'errore' },
+          { conversationId: c.id, crmLeadId: c.crm_lead_id, code: e.code, error: e?.message ?? 'errore' },
           `[lancio] link Zoom fallito per ${phone}: ${e?.message ?? 'errore'}`,
           'error',
         );
@@ -406,7 +449,7 @@ export async function GET(req: NextRequest) {
           direction: 'out',
           body,
           twilio_status: 'failed',
-          twilio_error_code: e?.code ?? null,
+          twilio_error_code: e.code,
           template_sid: sid,
           template_vars: vars as never,
           is_template: true,
@@ -427,7 +470,16 @@ export async function GET(req: NextRequest) {
   };
 
   const report: Esito[] = [];
+  const t0 = Date.now();
   for (let i = 0; i < lotto.length && !fermo; i += PASSO_FRENO) {
+    // Sveglia prima del taglio di Vercel (`maxDuration = 300`): una tempesta su Twilio
+    // (retry, timeout) allunga ogni invio, e una funzione uccisa a meta' non scrive il
+    // riepilogo — cioe' proprio la riga che serve per sapere dove ripartire. Ci si ferma
+    // con un minuto di margine; i residui li prende il run dopo, fra 5 minuti.
+    if (Date.now() - t0 > TEMPO_MASSIMO_MS) {
+      fermo = 'tempo';
+      break;
+    }
     const esiti = await runPool(lotto.slice(i, i + PASSO_FRENO), LANCIO_BLAST_CONCURRENCY, inviaUno);
     report.push(...esiti);
     for (const e of esiti) {
@@ -439,13 +491,13 @@ export async function GET(req: NextRequest) {
       else saltati++;
     }
     if (fermo) break;
-    if (decideFreno({ tentati, falliti: falliti + capped, codici }) === 'ferma') {
+    if (decideFreno({ tentati, falliti, codici }) === 'ferma') {
       fermo = 'freno';
       await logEvento(
         supabase,
         'lancio_zoom_freno',
         { tentati, inviati, falliti, capped, codici, candidati: candidati.length, lotto: lotto.length },
-        `[lancio] FRENO sul blast Zoom: ${falliti + capped} non arrivati su ${tentati} tentativi (codici: ${codici.join(', ') || 'nessuno'}). Lancio spento, riaccendere a mano dal pannello.`,
+        `[lancio] FRENO sul blast Zoom: ${falliti} falliti su ${tentati} tentativi (codici: ${codici.join(', ') || 'nessuno'}). Lancio spento, riaccendere a mano dal pannello.`,
         'error',
       );
       // Il freno spegne il lancio: senza, il run dopo (fra 5 minuti) ricomincerebbe da
@@ -461,7 +513,7 @@ export async function GET(req: NextRequest) {
   const riepilogo = { candidati: candidati.length, inviati, riparati, capped, falliti, saltati, errori, residui, fermo };
 
   await scriviRun(
-    { ...riepilogo, tentati, codici, max, perimetro, sender: settings.sender },
+    { ...riepilogo, tentati, codici, max, perimetro, sender: settings.sender, queryKo },
     `[lancio] blast Zoom: ${inviati} inviati, ${riparati} riparati, ${capped} cap, ${falliti} falliti, ${saltati} saltati, ${errori} errori, ${residui} residui (su ${candidati.length} candidati)${fermo ? ` — FERMO: ${fermo}` : ''}`,
     fermo || falliti > 0 || errori > 0 ? 'warn' : 'info',
   );
@@ -469,6 +521,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     ok: true,
     candidati: candidati.length,
+    queryKo,
     sent: inviati,
     riparati,
     capped,

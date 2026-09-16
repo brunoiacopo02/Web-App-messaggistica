@@ -46,6 +46,8 @@ const stato = {
   /** Chat che la select restituisce ma che un run gemello si prende un istante dopo: il
    *  claim non deve riuscire. E' la corsa vera fra due run del cron. */
   rubate: new Set<number>(),
+  /** L'update del claim torna un errore (DB in affanno): niente invio, ma si deve vedere. */
+  claimError: null as { message: string } | null,
   /** Chi era già timbrato nel momento in cui Twilio è stato chiamato: se un invio parte
    *  prima del timbro, il crash di mezzo lo fa ripartire al run dopo. */
   timbrateAllInvio: [] as number[][],
@@ -86,6 +88,7 @@ function esegui(rec: Chiamata): { data: unknown; error: unknown; count?: number 
       return { data: [], error: null };
     }
     // Claim: `is('lancio_link_inviato_at', null)` è un compare-and-set.
+    if (stato.claimError) return { data: null, error: stato.claimError };
     if (stato.timbrate.has(id) || stato.rubate.has(id)) return { data: [], error: null };
     stato.timbrate.add(id);
     stato.timbri.set(id, String(campi.lancio_link_inviato_at));
@@ -208,6 +211,7 @@ beforeEach(() => {
   stato.convSelectError = null;
   stato.messagesInsertKo = false;
   stato.rubate = new Set();
+  stato.claimError = null;
   stato.timbrateAllInvio = [];
   stato.settings = {
     lancio_attivo: true,
@@ -226,7 +230,10 @@ beforeEach(() => {
   vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
   vi.stubEnv('LANCIO_BATCH_MAX', '');
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.useRealTimers();
+});
 
 describe('GET /api/cron/lancio-zoom — cancelli', () => {
   it('senza segreto: 401 e nessuna lettura', async () => {
@@ -292,6 +299,12 @@ describe('GET /api/cron/lancio-zoom — cancelli', () => {
     expect(sendTemplate).not.toHaveBeenCalled();
   });
 
+  it('la config si controlla PRIMA della finestra: l allarme suona il 4, non alle 19:30 del 5', async () => {
+    vi.stubEnv('LANCIO_ZOOM_TEMPLATE_SID', '');
+    await expect((await richiesta(PRIMA)).json()).resolves.toMatchObject({ skipped: 'config' });
+    expect(tipiEvento()).toContain('lancio_zoom_config_error');
+  });
+
   it('link Zoom non impostato: config error, mai un messaggio senza link', async () => {
     stato.settings.lancio_zoom_link = '';
     await expect((await richiesta()).json()).resolves.toMatchObject({ skipped: 'config' });
@@ -315,6 +328,7 @@ describe('GET /api/cron/lancio-zoom — cancelli', () => {
     stato.convSelectError = { message: 'column conversations.lancio_fase does not exist', code: '42703' };
     await richiesta();
     expect(tipiEvento()).toContain('lancio_zoom_query_error');
+    expect((eventoRun()?.payload as Record<string, unknown>).queryKo).toBe(true);
     expect(sendTemplate).not.toHaveBeenCalled();
   });
 });
@@ -438,13 +452,49 @@ describe('GET /api/cron/lancio-zoom — invio', () => {
     expect(stato.timbrate.has(1)).toBe(false);
   });
 
-  it('63049: nessuna riga messages, timbro liberato, e il freno scatta (è un codice grave)', async () => {
+  it('63049: nessuna riga messages, timbro liberato, e il blast TIRA DRITTO', async () => {
+    // Il frequency cap è del destinatario, non del mittente: fermare 3.000 invii perché
+    // un lead è sopra il suo cap sarebbe il freno che si tira da solo sul caso più banale.
     sendTemplate.mockRejectedValueOnce(Object.assign(new Error('cap'), { code: 63049 }));
     const res = await (await richiesta()).json();
-    expect(res).toMatchObject({ capped: 1, sent: 1, fermo: 'freno' });
+    expect(res).toMatchObject({ capped: 1, sent: 1, fermo: null });
     expect(insertIn('messages')).toHaveLength(1);
     expect(tipiEvento()).toContain('lancio_zoom_freq_capped');
     expect(stato.timbrate.has(1)).toBe(false);
+    // Nessuno spegne il lancio per un cap: i run dopo devono continuare.
+    expect(upserts()).toHaveLength(0);
+    expect((eventoRun()?.payload as Record<string, unknown>).codici).toEqual([]);
+  });
+
+  it('una valanga di 63049 non ferma comunque il run: contano solo i falliti veri', async () => {
+    stato.convs = Array.from({ length: 30 }, (_, i) => conv(i + 1));
+    sendTemplate.mockImplementation(async () => {
+      throw Object.assign(new Error('cap'), { code: 63049 });
+    });
+    const res = await (await richiesta()).json();
+    expect(res).toMatchObject({ capped: 30, failed: 0, sent: 0, fermo: null });
+    expect(upserts()).toHaveLength(0);
+  });
+
+  it('Twilio non risponde (errore senza codice): timbro TENUTO e esito incerto', async () => {
+    // Il messaggio può essere partito lo stesso: un lead senza link si recupera a mano,
+    // un lead con due link sullo stesso numero a qualità LOW no.
+    stato.convs = [conv(1)];
+    sendTemplate.mockRejectedValueOnce(new Error('socket hang up'));
+    const res = await (await richiesta()).json();
+    expect(res).toMatchObject({ sent: 0, failed: 0, capped: 0, errori: 1 });
+    expect(timbriTolti()).toHaveLength(0);
+    expect(stato.timbrate.has(1)).toBe(true);
+    expect(tipiEvento()).toContain('lancio_zoom_esito_incerto');
+    expect(insertIn('messages')).toHaveLength(0);
+  });
+
+  it('claim fallito per un errore del DB: si salta, ma la riga si vede', async () => {
+    stato.claimError = { message: 'deadlock detected' };
+    const res = await (await richiesta()).json();
+    expect(res).toMatchObject({ sent: 0, skip: 2 });
+    expect(tipiEvento()).toContain('lancio_zoom_claim_error');
+    expect(sendTemplate).not.toHaveBeenCalled();
   });
 
   it('il presidio UTILITY_ONLY rifiuta il template: run fermo subito, nessuna riga messages', async () => {
@@ -469,6 +519,39 @@ describe('GET /api/cron/lancio-zoom — invio', () => {
 
 describe('GET /api/cron/lancio-zoom — freno automatico', () => {
   const tanti = (n: number) => Array.from({ length: n }, (_, i) => conv(i + 1));
+
+  it('un run in cui NON arriva niente si ferma al primo blocco: il denominatore sono i tentativi', async () => {
+    // Col vecchio conteggio (denominatore = invii riusciti) qui il tasso era 0/0 e il
+    // freno non scattava mai: proprio il caso peggiore passava liscio.
+    stato.convs = tanti(60);
+    sendTemplate.mockImplementation(async () => {
+      throw Object.assign(new Error('giu'), { code: 21211 });
+    });
+    const res = await (await richiesta()).json();
+    expect(res).toMatchObject({ sent: 0, fermo: 'freno' });
+    expect(res.failed).toBe(25); // un solo blocco da PASSO_FRENO, poi stop
+    expect(res.residui).toBe(35);
+    expect(upserts()).toContainEqual(expect.objectContaining({ key: 'lancio_attivo', value: false }));
+  });
+
+  it('la sveglia dei 4 minuti: il run si ferma e scrive il riepilogo invece di morire in timeout', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-05T18:00:00Z'));
+    stato.convs = tanti(60);
+    // Ogni invio "dura" 20 secondi: il primo blocco da 25 sfonda i 240s.
+    sendTemplate.mockImplementation(async () => {
+      vi.setSystemTime(Date.now() + 20_000);
+      return { sid: 'SMtest', status: 'queued' };
+    });
+    const res = await (await richiesta()).json();
+    expect(res.fermo).toBe('tempo');
+    expect(res.sent).toBe(25);
+    expect(res.residui).toBe(35);
+    // Il riepilogo c'è: è la riga che dice da dove riparte il run dopo.
+    expect(eventoRun()).toBeTruthy();
+    // La sveglia non è il freno: il lancio resta acceso.
+    expect(upserts()).toHaveLength(0);
+  });
 
   it('oltre il 10% di falliti il run si ferma e spegne il lancio per i run dopo', async () => {
     stato.convs = tanti(60);
