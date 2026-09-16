@@ -1,9 +1,17 @@
+import { createHmac } from 'node:crypto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const messagesCreate = vi.fn();
+// `validateRequest` simulata: risponde true solo se la firma corrisponde
+// DAVVERO al token passato. Con un `() => true` fisso il test sui due account
+// non proverebbe niente — accetterebbe anche una firma inventata.
 vi.mock('twilio', () => ({
   default: () => ({ messages: { create: messagesCreate } }),
-  validateRequest: vi.fn(() => true),
+  validateRequest: vi.fn((token: string, signature: string, url: string, params: Record<string, string>) => {
+    const base = url + Object.keys(params).sort().map((k) => k + params[k]).join('');
+    const atteso = createHmac('sha1', token).update(Buffer.from(base, 'utf-8')).digest('base64');
+    return signature === atteso;
+  }),
 }));
 
 import { sendTemplate, sendFreeText, validateTwilioSignature } from './twilio';
@@ -158,5 +166,49 @@ describe('validateTwilioSignature', () => {
       url: 'https://x', signature: '', params: {},
     });
     expect(ok).toBe(true);
+  });
+
+  // I numeri WhatsApp stanno su due account Twilio: ognuno firma i propri
+  // webhook col proprio token. Validarne uno solo bocciava con 403 tutto cio'
+  // che arrivava sul secondo numero — comprese le risposte dopo l'agenda, da
+  // cui dipendono video e solleciti.
+  describe('due account Twilio', () => {
+    const url = 'https://esempio.test/api/webhooks/twilio';
+    const params = { MessageSid: 'SM1', Body: 'ciao' };
+    /** La firma che Twilio produrrebbe con quel token, per quella richiesta. */
+    const firmaCon = (token: string) => {
+      const base = url + Object.keys(params).sort()
+        .map((k) => k + (params as Record<string, string>)[k]).join('');
+      return createHmac('sha1', token).update(Buffer.from(base, 'utf-8')).digest('base64');
+    };
+
+    beforeEach(() => {
+      process.env.TWILIO_VALIDATE_SIGNATURE = 'true';
+      process.env.TWILIO_AUTH_TOKEN = 'token-account-1';
+      process.env.TWILIO_AUTH_TOKEN_2 = 'token-account-2';
+    });
+
+    it('accetta la firma del primo account', async () => {
+      expect(await validateTwilioSignature({ url, signature: firmaCon('token-account-1'), params })).toBe(true);
+    });
+
+    it('accetta la firma del secondo account', async () => {
+      expect(await validateTwilioSignature({ url, signature: firmaCon('token-account-2'), params })).toBe(true);
+    });
+
+    it('rifiuta una firma che non viene da nessuno dei due', async () => {
+      expect(await validateTwilioSignature({ url, signature: firmaCon('token-a-caso'), params })).toBe(false);
+    });
+
+    it('col secondo token assente il primo continua a funzionare', async () => {
+      delete process.env.TWILIO_AUTH_TOKEN_2;
+      expect(await validateTwilioSignature({ url, signature: firmaCon('token-account-1'), params })).toBe(true);
+    });
+
+    it('senza nessun token rifiuta: mai aprire per mancanza di configurazione', async () => {
+      delete process.env.TWILIO_AUTH_TOKEN;
+      delete process.env.TWILIO_AUTH_TOKEN_2;
+      expect(await validateTwilioSignature({ url, signature: firmaCon('token-account-1'), params })).toBe(false);
+    });
   });
 });

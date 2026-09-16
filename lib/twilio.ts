@@ -161,9 +161,27 @@ export type ValidateSigInput = {
   params: Record<string, string>;
 };
 
+/**
+ * I token con cui puo' essere firmato un webhook in arrivo.
+ *
+ * Dal 16/09/2026 i numeri WhatsApp stanno su DUE account Twilio distinti: il
+ * principale e "Account fenice 2" (+393522070047). Twilio firma con il token
+ * dell'account che possiede il numero, quindi validare con un token solo
+ * bocciava con 403 tutti i messaggi in arrivo sul secondo numero — e li'
+ * finisce anche il flusso dopo l'agenda: video, solleciti e risposte del lead
+ * passano tutti da qui. Sarebbero spariti in silenzio.
+ */
+function tokenAmmessi(): string[] {
+  return [process.env.TWILIO_AUTH_TOKEN, process.env.TWILIO_AUTH_TOKEN_2]
+    .map((t) => (t ?? '').trim())
+    .filter(Boolean);
+}
+
 export async function validateTwilioSignature(input: ValidateSigInput): Promise<boolean> {
   if (process.env.TWILIO_VALIDATE_SIGNATURE === 'false') return true;
-  const tok = process.env.TWILIO_AUTH_TOKEN;
-  if (!tok) return false;
-  return validateRequest(tok, input.signature, input.url, input.params);
+  const tokens = tokenAmmessi();
+  if (tokens.length === 0) return false;
+  // Basta che UNO dei token validi la firma: e' lo stesso messaggio, cambia
+  // solo quale account Twilio lo possiede.
+  return tokens.some((tok) => validateRequest(tok, input.signature, input.url, input.params));
 }
