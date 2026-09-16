@@ -1,3 +1,4 @@
+import { credenzialiPerMittente } from './twilio-account';
 import twilio, { validateRequest } from 'twilio';
 
 type SendTemplateInput = {
@@ -19,11 +20,17 @@ type SendOptions = {
 
 const defaultBackoff = (attempt: number) => (attempt === 1 ? 1000 : 4000);
 
-function getClient() {
-  const sid = process.env.TWILIO_ACCOUNT_SID;
-  const tok = process.env.TWILIO_AUTH_TOKEN;
-  if (!sid || !tok) throw new Error('Missing Twilio credentials');
-  return twilio(sid, tok);
+/**
+ * Il client Twilio con cui mandare DA un certo numero.
+ *
+ * Il mittente decide l'account: dal 16/09/2026 i numeri stanno su due account
+ * distinti, e un account non puo' inviare da un numero che non possiede
+ * (Twilio risponde 401 e il messaggio non parte). Vedi lib/twilio-account.ts.
+ */
+function getClient(from?: string | null) {
+  const cred = credenzialiPerMittente(from);
+  if (!cred) throw new Error('Missing Twilio credentials');
+  return twilio(cred.sid, cred.token);
 }
 
 function statusCallbackUrl() {
@@ -62,11 +69,14 @@ export async function sendTemplate(
   input: SendTemplateInput,
   opts: SendOptions = {},
 ) {
-  await assertTemplateSendable(input.contentSid);
-  const client = getClient();
+  // Il mittente si risolve per PRIMO: serve a scegliere l'account, e da
+  // quello dipendono sia il controllo della categoria sia l'invio.
+  const mittente = input.from ?? fromNumber();
+  await assertTemplateSendable(input.contentSid, mittente);
+  const client = getClient(mittente);
   return withRetry(async () => {
     const msg = await client.messages.create({
-      from: input.from ?? fromNumber(),
+      from: mittente,
       to: `whatsapp:${input.to}`,
       contentSid: input.contentSid,
       contentVariables: JSON.stringify(input.variables),
@@ -80,10 +90,11 @@ export async function sendFreeText(
   input: SendFreeTextInput,
   opts: SendOptions = {},
 ) {
-  const client = getClient();
+  const mittente = input.from ?? fromNumber();
+  const client = getClient(mittente);
   return withRetry(async () => {
     const msg = await client.messages.create({
-      from: input.from ?? fromNumber(),
+      from: mittente,
       to: `whatsapp:${input.to}`,
       body: input.body,
       statusCallback: statusCallbackUrl(),
@@ -103,28 +114,39 @@ export async function sendFreeText(
 // l'interruttore da alzare quando il numero è in riabilitazione (qualità LOW).
 const _templateCategoryCache = new Map<string, string | null>();
 
-export async function getTemplateCategory(contentSid: string): Promise<string | null> {
-  if (_templateCategoryCache.has(contentSid)) return _templateCategoryCache.get(contentSid)!;
-  const sid = process.env.TWILIO_ACCOUNT_SID;
-  const tok = process.env.TWILIO_AUTH_TOKEN;
-  if (!sid || !tok) return null;
+/**
+ * `from` serve perche' i template vivono DENTRO un account: lo stesso template
+ * esiste sui due account con SID diversi, e chiedere la categoria di un SID del
+ * secondo account con le credenziali del primo torna 404. Siccome
+ * `assertTemplateSendable` fallisce chiuso, quel 404 bloccherebbe l'invio.
+ *
+ * La cache e' per (account, template): due SID diversi non collidono, ma un
+ * giorno lo stesso SID potrebbe rispondere diversamente su account diversi, e
+ * una cache per solo SID lo nasconderebbe.
+ */
+export async function getTemplateCategory(contentSid: string, from?: string | null): Promise<string | null> {
+  const cred = credenzialiPerMittente(from);
+  if (!cred) return null;
+  const chiave = `${cred.sid}:${contentSid}`;
+  if (_templateCategoryCache.has(chiave)) return _templateCategoryCache.get(chiave)!;
+  const { sid, token: tok } = cred;
   const res = await fetch(`https://content.twilio.com/v1/Content/${contentSid}/ApprovalRequests`, {
     headers: { Authorization: 'Basic ' + Buffer.from(`${sid}:${tok}`).toString('base64') },
   });
   if (!res.ok) throw new Error(`categoria del template ${contentSid} non verificabile (HTTP ${res.status})`);
   const data = (await res.json()) as { whatsapp?: { category?: string } };
   const cat = data?.whatsapp?.category ?? null;
-  _templateCategoryCache.set(contentSid, cat);
+  _templateCategoryCache.set(chiave, cat);
   return cat;
 }
 
 /** Lancia se il template non è spedibile con la policy corrente. Fail-closed: se la
  * categoria non è verificabile non si spedisce, perché è esattamente la condizione in
  * cui l'incidente si ripete. */
-export async function assertTemplateSendable(contentSid: string): Promise<void> {
+export async function assertTemplateSendable(contentSid: string, from?: string | null): Promise<void> {
   if (process.env.UTILITY_ONLY !== '1') return;
   if ((process.env.UTILITY_ONLY_ALLOW ?? '').split(',').map((s) => s.trim()).includes(contentSid)) return;
-  const cat = await getTemplateCategory(contentSid);
+  const cat = await getTemplateCategory(contentSid, from);
   if (cat !== 'UTILITY') {
     throw new Error(
       `template ${contentSid} bloccato: categoria ${cat ?? 'sconosciuta'} con UTILITY_ONLY attivo. ` +
@@ -136,11 +158,12 @@ export async function assertTemplateSendable(contentSid: string): Promise<void> 
 // Cache del testo dei template (per mostrare il messaggio reale invece di "[template] X").
 const _templateBodyCache = new Map<string, string>();
 
-export async function getTemplateBody(contentSid: string): Promise<string | null> {
-  if (_templateBodyCache.has(contentSid)) return _templateBodyCache.get(contentSid)!;
-  const sid = process.env.TWILIO_ACCOUNT_SID;
-  const tok = process.env.TWILIO_AUTH_TOKEN;
-  if (!sid || !tok) return null;
+export async function getTemplateBody(contentSid: string, from?: string | null): Promise<string | null> {
+  const cred = credenzialiPerMittente(from);
+  if (!cred) return null;
+  const chiave = `${cred.sid}:${contentSid}`;
+  if (_templateBodyCache.has(chiave)) return _templateBodyCache.get(chiave)!;
+  const { sid, token: tok } = cred;
   try {
     const res = await fetch(`https://content.twilio.com/v1/Content/${contentSid}`, {
       headers: { Authorization: 'Basic ' + Buffer.from(`${sid}:${tok}`).toString('base64') },
@@ -148,7 +171,7 @@ export async function getTemplateBody(contentSid: string): Promise<string | null
     if (!res.ok) return null;
     const data = (await res.json()) as { types?: Record<string, { body?: string }> };
     const text = data?.types?.['twilio/text']?.body ?? null;
-    if (text) _templateBodyCache.set(contentSid, text);
+    if (text) _templateBodyCache.set(chiave, text);
     return text;
   } catch {
     return null;
@@ -161,9 +184,27 @@ export type ValidateSigInput = {
   params: Record<string, string>;
 };
 
+/**
+ * I token con cui puo' essere firmato un webhook in arrivo.
+ *
+ * Dal 16/09/2026 i numeri WhatsApp stanno su DUE account Twilio distinti: il
+ * principale e "Account fenice 2" (+393522070047). Twilio firma con il token
+ * dell'account che possiede il numero, quindi validare con un token solo
+ * bocciava con 403 tutti i messaggi in arrivo sul secondo numero — e li'
+ * finisce anche il flusso dopo l'agenda: video, solleciti e risposte del lead
+ * passano tutti da qui. Sarebbero spariti in silenzio.
+ */
+function tokenAmmessi(): string[] {
+  return [process.env.TWILIO_AUTH_TOKEN, process.env.TWILIO_AUTH_TOKEN_2]
+    .map((t) => (t ?? '').trim())
+    .filter(Boolean);
+}
+
 export async function validateTwilioSignature(input: ValidateSigInput): Promise<boolean> {
   if (process.env.TWILIO_VALIDATE_SIGNATURE === 'false') return true;
-  const tok = process.env.TWILIO_AUTH_TOKEN;
-  if (!tok) return false;
-  return validateRequest(tok, input.signature, input.url, input.params);
+  const tokens = tokenAmmessi();
+  if (tokens.length === 0) return false;
+  // Basta che UNO dei token validi la firma: e' lo stesso messaggio, cambia
+  // solo quale account Twilio lo possiede.
+  return tokens.some((tok) => validateRequest(tok, input.signature, input.url, input.params));
 }
