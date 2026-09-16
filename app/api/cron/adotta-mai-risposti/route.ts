@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { fetchAllRows } from '@/lib/supabase/paginate';
 import { sendTemplateAndLog } from '@/lib/messaging';
-import { funnelDaPrimoMessaggio } from '@/lib/persona';
+import { classificaPrimoMessaggio } from '@/lib/primo-messaggio';
+import { LANCIO_SLUG } from '@/lib/lancio-fase';
+import { impostaFaseLancio } from '@/lib/lancio-db';
 import { templateName } from '@/lib/name';
 import { inSendWindow } from '@/lib/sequence';
 import { assertTemplateSendable } from '@/lib/twilio';
@@ -60,12 +62,20 @@ export async function POST(req: NextRequest) {
   // Candidati: nessun padrone, il lead ha scritto, sul numero Fenice, nessuno l'ha
   // presa in mano. Il filtro sugli outbound si fa dopo, in memoria: PostgREST non sa
   // fare "nessuna riga collegata" senza una vista.
+  //
+  // `lancio_slug` nullo: una chat del lancio e' gia' presa in carico da qualcun altro —
+  // il suo benvenuto, il suo turno, la sua restituzione di fine lancio — e non e' mai
+  // "mai risposta" in questo senso. Il riaggancio di Marta sopra una chat del lancio
+  // sarebbe una seconda voce sulla stessa persona. E' piu' stretto di
+  // `FILTRO_FUORI_LANCIO` (che lascia passare le fasi terminali) apposta: qui non
+  // interessa se il lancio e' finito, interessa che quella chat e' roba sua.
   const convs = await fetchAllRows<any>((from_, to) => admin
     .from('conversations')
     .select('id, lead_id, wa_number, ai_paused_at, handed_off_at, last_inbound_at')
     .is('ai_owner', null)
     .is('handed_off_at', null)
     .is('ai_paused_at', null)
+    .is('lancio_slug', null)
     .not('last_inbound_at', 'is', null)
     .eq('wa_number', from)
     .gte('last_inbound_at', dal)
@@ -134,7 +144,9 @@ export async function POST(req: NextRequest) {
         .select('body, created_at').eq('conversation_id', c.id).eq('direction', 'in')
         .order('created_at', { ascending: true }).limit(1);
       const primoRiga = (primi ?? [])[0] as { body: string | null; created_at: string } | undefined;
-      const provenienza = funnelDaPrimoMessaggio(primoRiga?.body);
+      // Qui il primo inbound e' anche l'ultimo: la chat ha un solo messaggio, il suo.
+      const esito = classificaPrimoMessaggio({ primoInbound: primoRiga?.body, inboundCorrente: primoRiga?.body });
+      const provenienza = esito.provenienza;
 
       const now = new Date().toISOString();
       // Compare-and-set su `ai_owner`: la lista dei candidati si calcola all'inizio e
@@ -157,6 +169,25 @@ export async function POST(req: NextRequest) {
         continue;
       }
       if (!adottate || adottate.length === 0) { giaPrese++; continue; }
+
+      // Ha premuto il pulsante del webinar e nessuno gli ha mai risposto: la chat entra
+      // nel lancio PRIMA del riaggancio, cosi' i cron del lancio (link, follow-up) la
+      // trovano al loro primo giro. I candidati hanno `lancio_slug` nullo per
+      // costruzione, quindi le colonne d'ingresso si scrivono sempre; la fase passa da
+      // `impostaFaseLancio`, unico scrittore di `lancio_fase`, e l'evento del pulsante
+      // si inserisce a parte come nel webhook.
+      if (esito.tipo === 'lancio_pulsante') {
+        await admin.from('conversations')
+          .update({ lancio_slug: LANCIO_SLUG, lancio_ingresso: 'pulsante_webinar' })
+          .eq('id', c.id);
+        await impostaFaseLancio(admin, c.id, 'post_pitch');
+        await admin.from('event_log').insert({
+          type: 'lancio_pulsante',
+          payload: { conversationId: c.id, giaDiMario: false, daCron: 'adotta-mai-risposti' } as never,
+          message: `[lancio] ${l.phone} aveva premuto il pulsante del webinar e non gli ha mai risposto nessuno (conv ${c.id})`,
+          level: 'info',
+        });
+      }
 
       // Qui, prima del riaggancio: non c'e' nessun Twilio da non far aspettare, e il
       // CRM ha bisogno del leadId per poter accettare l'esito quando arriva. Il loro
