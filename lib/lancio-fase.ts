@@ -21,6 +21,23 @@ export function isLancioFase(v: unknown): v is LancioFase {
 /** Con queste fasi il lancio è finito per quella chat: torna a Mario (o al GDO). */
 export const LANCIO_FASI_TERMINALI: readonly LancioFase[] = ['chiuso', 'restituito'];
 
+/** Le fasi che il pulsante del webinar NON riscrive: sono già il dopo-pitch. */
+const FASI_GIA_POST_PITCH: ReadonlySet<string> = new Set<string>(['post_pitch', 'scelta_fatta']);
+
+/**
+ * Il pulsante del webinar deve (ri)portare questa chat in `post_pitch`?
+ *
+ * Il marker vince su tutto — chi lo preme sta chiedendo adesso, qualunque cosa sia
+ * successa prima: una chat in `attesa`, col link già inviato, o perfino `chiuso` da un
+ * no di settimane fa torna al dopo-pitch. Non si riscrive però una fase che c'è già:
+ * `post_pitch` e `scelta_fatta` SONO il dopo-pitch, e un secondo tocco del pulsante (o
+ * la stessa frase incollata due volte) lascerebbe solo un `lancio_fase_cambiata` in più
+ * senza cambiare niente — e su `scelta_fatta` cancellerebbe anche l'avanzamento.
+ */
+export function pulsanteRiportaInPostPitch(fase: string | null | undefined): boolean {
+  return !FASI_GIA_POST_PITCH.has(fase ?? '');
+}
+
 /** Le fasi che questo blocco (B1) sa gestire nel turno. Le altre arrivano con B4/B5. */
 export const LANCIO_FASI_B1: readonly LancioFase[] = ['attesa', 'posto_bloccato'];
 export const FASI_GESTITE_B1: ReadonlySet<string> = new Set<string>(LANCIO_FASI_B1);

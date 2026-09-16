@@ -3,7 +3,7 @@ import {
   LANCIO_SLUG, LANCIO_FASI, LANCIO_FASI_TERMINALI, FILTRO_FUORI_LANCIO, MAX_SCAMBI_DOMANDE,
   TESTO_POSTO_BLOCCATO, TESTO_CONGEDO, TESTO_CHIUSURA_DOMANDE, TESTO_PASSAGGIO_UMANO,
   isLancioFase, lancioInCorso, decideLancioTurno, contaScambiDomande, lancioFaseLabel, lancioBenvenutoText,
-  inboundDelLotto, ultimoTestoDelLotto, haCongedo,
+  inboundDelLotto, ultimoTestoDelLotto, haCongedo, pulsanteRiportaInPostPitch,
 } from './lancio-fase';
 
 describe('costanti della spec §3.2 / §5.2', () => {
@@ -177,5 +177,24 @@ describe('haCongedo — il marcatore durevole', () => {
     expect(haCongedo({ congedo_at: 123 })).toBe(false);
     expect(haCongedo([{ congedo_at: 'x' }])).toBe(false);
     expect(haCongedo('congedo_at')).toBe(false);
+  });
+});
+
+describe('pulsanteRiportaInPostPitch — il pulsante del webinar vince, ma non si ripete', () => {
+  it('riporta a post_pitch ogni fase che non sia già il dopo-pitch, chiuso compreso', () => {
+    for (const fase of ['attesa', 'posto_bloccato', 'link_inviato', 'followup_inviato', 'restituito', 'chiuso']) {
+      expect(pulsanteRiportaInPostPitch(fase)).toBe(true);
+    }
+  });
+
+  it('una chat senza fase (mai stata nel lancio) entra nel dopo-pitch', () => {
+    expect(pulsanteRiportaInPostPitch(null)).toBe(true);
+    expect(pulsanteRiportaInPostPitch(undefined)).toBe(true);
+    expect(pulsanteRiportaInPostPitch('')).toBe(true);
+  });
+
+  it('non riscrive post_pitch né scelta_fatta: nessun lancio_fase_cambiata doppio', () => {
+    expect(pulsanteRiportaInPostPitch('post_pitch')).toBe(false);
+    expect(pulsanteRiportaInPostPitch('scelta_fatta')).toBe(false);
   });
 });

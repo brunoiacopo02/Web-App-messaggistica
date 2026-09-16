@@ -10,7 +10,9 @@ import { handleGdoDeliveryUpdate } from '@/lib/send-agenda-gdo';
 import { sendCrmNota } from '@/lib/bot-outcome';
 import { buildBotRipresoNote } from '@/lib/bot-outcome-rules';
 import { segnalaRispostaDopoTerzoNr } from '@/lib/risposta-post-nr';
-import { funnelDaPrimoMessaggio } from '@/lib/persona';
+import { classificaPrimoMessaggio, isMarkerPulsanteWebinar } from '@/lib/primo-messaggio';
+import { LANCIO_SLUG, pulsanteRiportaInPostPitch } from '@/lib/lancio-fase';
+import { impostaFaseLancio } from '@/lib/lancio-db';
 import { pushLeadEntrante } from '@/lib/lead-entrante';
 
 export const runtime = 'nodejs';
@@ -181,7 +183,7 @@ export async function POST(req: NextRequest) {
     if (toMatchesFenice) {
       const { data: conv } = await supabase
         .from('conversations')
-        .select('ai_owner, ai_status, ai_paused_at, handed_off_at, crm_lead_id, bot_outcome, lancio_slug, lancio_info')
+        .select('ai_owner, ai_status, ai_paused_at, handed_off_at, crm_lead_id, bot_outcome, lancio_slug, lancio_fase, lancio_ingresso, lancio_info')
         .eq('id', conversationId)
         .single();
 
@@ -191,6 +193,54 @@ export async function POST(req: NextRequest) {
       // lascerebbe quella conversazione fuori da tutte e tre le reti di recupero.
       // Non costa una query in piu': serviva comunque a `shouldAutoReply` qui sotto.
       const autoReplyOn = await getAutoReply(supabase);
+
+      // Pulsante del webinar (spec lancio §5.4, §6.3): scatta sull'inbound CORRENTE e
+      // vince su tutto — anche su una chat gia' di Mario, anche su una gia' dentro il
+      // lancio. Il lead della lista d'attesa ha la chat aperta da settimane e preme il
+      // pulsante la sera del 5: e' quel messaggio che conta, non il primo. Non e' gatato
+      // da INBOUND_ADOPTION_ENABLED: il testo del pulsante non esiste in pubblico prima
+      // del 5/10, e la fase serve a B4 in ogni caso. Un inbound SENZA marker invece non
+      // tocca mai `lancio_fase`: le fasi le muove il turno del lancio dentro il drain.
+      const lancioPulsante = isMarkerPulsanteWebinar(messageBody);
+      if (conv && lancioPulsante) {
+        // Se la chat era 'closed' (un no di settimane fa, o il congedo del lancio) si
+        // riapre: sta scrivendo adesso, e col pulsante. Le colonne d'ingresso si
+        // scrivono solo se mancano: chi e' entrato dalla lista resta 'lista'.
+        const riapri = conv.ai_status === 'closed';
+        const colonne = {
+          ...(conv.lancio_slug ? {} : { lancio_slug: LANCIO_SLUG }),
+          ...(conv.lancio_ingresso ? {} : { lancio_ingresso: 'pulsante_webinar' }),
+          ...(riapri ? { ai_status: 'active' } : {}),
+        };
+        if (Object.keys(colonne).length > 0) {
+          const { error: erroreColonne } = await supabase
+            .from('conversations').update(colonne).eq('id', conversationId);
+          if (erroreColonne) {
+            await supabase.from('event_log').insert({
+              type: 'lancio_pulsante_colonne_non_scritte',
+              payload: { conversationId, phone, colonne, errore: erroreColonne.message } as never,
+              message: `[lancio] conv ${conversationId}: colonne d'ingresso del pulsante NON scritte — ${erroreColonne.message}`,
+              level: 'warn',
+            });
+          } else if (riapri) {
+            // La copia in memoria serve subito dopo: e' quella che `shouldAutoReply` legge.
+            conv.ai_status = 'active';
+          }
+        }
+        // `impostaFaseLancio` (lib/lancio-db.ts) e' l'unico scrittore di `lancio_fase` e
+        // si scrive da solo l'evento `lancio_fase_cambiata`. Await e non `after()`: e' un
+        // update solo, e la fase deve essere sul posto prima che il drain parta qui sotto.
+        if (pulsanteRiportaInPostPitch(conv.lancio_fase)) {
+          await impostaFaseLancio(supabase, conversationId, 'post_pitch');
+          conv.lancio_fase = 'post_pitch';
+        }
+        await supabase.from('event_log').insert({
+          type: 'lancio_pulsante',
+          payload: { conversationId, giaDiMario: conv.ai_owner === 'mario' } as never,
+          message: `[lancio] ${phone} ha premuto il pulsante del webinar (conv ${conversationId})`,
+          level: 'info',
+        });
+      }
 
       // Adozione: il lead ha scritto per primo e questa chat non e' di nessuno.
       //
@@ -221,6 +271,7 @@ export async function POST(req: NextRequest) {
           aiPausedAt: conv.ai_paused_at,
           handedOffAt: conv.handed_off_at,
           hasOutbound,
+          lancioPulsante,
         })) {
           // La provenienza si legge dal PRIMO messaggio della conversazione, non da
           // quello appena arrivato: chi e' in arretrato e riscrive "Scusa poi risponde"
@@ -228,6 +279,7 @@ export async function POST(req: NextRequest) {
           // statistiche del CRM sarebbe falsa. E' quello che fa gia'
           // `app/api/cron/adotta-mai-risposti/route.ts`. La query sta dentro il ramo
           // dell'adozione, che e' raro: il webhook normale non paga niente.
+          // Il pulsante del webinar fa eccezione e si legge dal messaggio corrente: vedi lib/primo-messaggio.ts.
           const { data: primiInbound } = await supabase
             .from('messages')
             .select('body, created_at')
@@ -239,7 +291,8 @@ export async function POST(req: NextRequest) {
           // Il messaggio corrente e' il fallback: se la lettura fallisce o la riga non si
           // vede ancora, e' comunque il primo inbound di questa conversazione.
           const primoMessaggioTesto = primoRigaInbound?.body ?? messageBody;
-          const provenienza = funnelDaPrimoMessaggio(primoMessaggioTesto);
+          const esito = classificaPrimoMessaggio({ primoInbound: primoMessaggioTesto, inboundCorrente: messageBody });
+          const provenienza = esito.provenienza;
           // Cinque minuti indietro, e non `now`: il messaggio che ha innescato questa
           // adozione e' stato inserito qui sopra col `created_at` di default, cioe'
           // l'orologio di Postgres, mentre `now` viene da quello di Node. Con
@@ -273,7 +326,7 @@ export async function POST(req: NextRequest) {
             conv.ai_status = 'active';
             await supabase.from('event_log').insert({
               type: 'inbound_adottato',
-              payload: { conversationId, phone, provenienza } as never,
+              payload: { conversationId, phone, provenienza, tipo: esito.tipo } as never,
               message: `[bot-fissatore] adottato ${phone}: ha scritto per primo (${provenienza})`,
               level: 'info',
             });
