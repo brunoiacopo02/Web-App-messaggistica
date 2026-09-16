@@ -52,6 +52,26 @@ export function pulsanteRiportaInPostPitch(fase: string | null | undefined): boo
   return FASI_CHE_IL_PULSANTE_RIPORTA.has(fase ?? '');
 }
 
+/**
+ * Il pulsante deve riportare ad 'active' una chat chiusa?
+ *
+ * Solo se la fase si e' mossa davvero (`cambiaFase`, cioe' `pulsanteRiportaInPostPitch`).
+ * Prima bastava "di Mario e chiusa", e su una chat gia' `restituito` questo bastava a
+ * riaccenderla: la fase restava `restituito` — giusto, il lead e' del GDO — ma la riga
+ * tornava 'active' con un inbound senza risposta, e il cron `bot-followups` fa re-drive
+ * proprio su quella forma. Mario avrebbe risposto a una persona che un GDO sta chiamando,
+ * cioe' il danno che il ruling C8 esiste per evitare. Vale allo stesso modo per le altre
+ * fasi che il pulsante non muove (`followup_inviato`, `post_pitch`, `scelta_fatta`): se la
+ * fase resta dov'e', lo stato non si tocca.
+ */
+export function pulsanteRiapreChat(g: {
+  cambiaFase: boolean;
+  aiOwner: string | null;
+  aiStatus: string | null;
+}): boolean {
+  return g.cambiaFase && g.aiOwner === 'mario' && g.aiStatus === 'closed';
+}
+
 /** Perché il pulsante non ha potuto scrivere: chi ha in mano quella chat, o cosa è spento. */
 export type MotivoPulsanteOrfano =
   | 'pulsante_spento' | 'bot_spento' | 'adozione_spenta' | 'in_pausa' | 'passata_umano' | 'altro_owner';
@@ -254,6 +274,29 @@ export function haCongedo(lancioInfo: unknown): boolean {
   if (!lancioInfo || typeof lancioInfo !== 'object' || Array.isArray(lancioInfo)) return false;
   const v = (lancioInfo as Record<string, unknown>).congedo_at;
   return typeof v === 'string' && v.trim() !== '';
+}
+
+/** Ogni quanto si riavvisa il CRM che un lead restituito sta scrivendo (ruling C8). */
+export const NOTA_RESTITUZIONE_OGNI_MS = 60 * 60 * 1000;
+
+/**
+ * Va mandata al CRM la nota per questo inbound di un lead gia' restituito al pool?
+ *
+ * Una nota per ogni messaggio vorrebbe dire cinque campanelle per chi manda cinque
+ * messaggi, e il testo cambia sempre (orario + parole del lead) quindi la divergenza
+ * anti-collisione di `inviaNotaAlCrm` non le fonde. La finestra e' un'ora per chat, letta
+ * dal marcatore durevole `conversations.lancio_info.restituito_nota_at` — l'evento
+ * `lancio_inbound_dopo_restituzione` invece si scrive sempre, cosi' nei pannelli resta
+ * tutto. Marcatore assente o illeggibile: si avvisa. Meglio una campanella in piu' che un
+ * GDO che chiama a vuoto.
+ */
+export function serveNotaRestituzione(lancioInfo: unknown, nowMs: number): boolean {
+  if (!lancioInfo || typeof lancioInfo !== 'object' || Array.isArray(lancioInfo)) return true;
+  const v = (lancioInfo as Record<string, unknown>).restituito_nota_at;
+  if (typeof v !== 'string') return true;
+  const quando = Date.parse(v);
+  if (Number.isNaN(quando)) return true;
+  return nowMs - quando >= NOTA_RESTITUZIONE_OGNI_MS;
 }
 
 /**

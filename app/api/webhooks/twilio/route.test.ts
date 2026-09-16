@@ -59,6 +59,8 @@ function from(table: string) {
       return { data: null, error: null };
     }
     if (s.colonne.includes('unread_count')) return { data: { unread_count: 0 }, error: null };
+    // La rilettura di `marcaCongedo`/`marcaNotaRestituzione`: solo `lancio_info`.
+    if (s.colonne.trim() === 'lancio_info') return { data: { lancio_info: stato.conv.lancio_info }, error: null };
     if (s.colonne.includes('ai_owner')) return { data: stato.conv, error: null };
     return { data: { id: 7 }, error: null };
   };
@@ -248,5 +250,66 @@ describe('lead restituito al pool che riscrive (C8)', () => {
     await inbound('ci sono ancora?');
     expect(eventi('lancio_inbound_dopo_restituzione')).toHaveLength(1);
     expect(sendCrmNota).not.toHaveBeenCalled();
+  });
+});
+
+describe('pulsante del webinar su una chat restituita (C8)', () => {
+  beforeEach(() => {
+    vi.mocked(getLancioSettings).mockResolvedValue({
+      attivo: true, pulsanteAttivo: true, zoomLink: null, videoLiveLink: null,
+      offertaDelMeseLink: null, eventoAt: null, blastPerimetro: 'tutti', sender: 'principale',
+    });
+    stato.conv = {
+      ai_owner: 'mario', ai_status: 'closed', ai_paused_at: null, handed_off_at: null,
+      crm_lead_id: 'L9', bot_outcome: 'NON_RISPOSTO',
+      lancio_slug: 'webdev-2026-10', lancio_fase: 'restituito', lancio_ingresso: 'lista', lancio_info: null,
+    };
+  });
+  afterEach(() => {
+    vi.mocked(getLancioSettings).mockReset();
+  });
+
+  it('la fase non si muove e nemmeno ai_status: la chat resta closed e il cron non la ridraina', async () => {
+    await inbound(TESTO_PULSANTE_WEBINAR);
+    expect(stato.updates.find((u) => 'lancio_fase' in u.valori)).toBeUndefined();
+    expect(stato.updates.some((u) => u.valori.ai_status === 'active')).toBe(false);
+    expect(eventi('lancio_pulsante')[0].payload).toMatchObject({ faseInvariata: true });
+    expect(drainMarioReplies).not.toHaveBeenCalled();
+  });
+});
+
+describe('nota al CRM ogni ora per chat restituita (C8)', () => {
+  beforeEach(() => {
+    stato.conv = {
+      ai_owner: 'mario', ai_status: 'closed', ai_paused_at: null, handed_off_at: null,
+      crm_lead_id: 'L9', bot_outcome: 'NON_RISPOSTO',
+      lancio_slug: 'webdev-2026-10', lancio_fase: 'restituito', lancio_ingresso: 'lista', lancio_info: null,
+    };
+    vi.mocked(sendCrmNota).mockClear();
+  });
+
+  it('prima nota: si scrive il marcatore accanto alle chiavi gia presenti', async () => {
+    stato.conv.lancio_info = { congedo_at: '2026-10-08T09:00:00.000Z' };
+    await inbound('ci sono ancora?');
+    expect(sendCrmNota).toHaveBeenCalledTimes(1);
+    const marcatore = stato.updates.find((u) => 'lancio_info' in u.valori)?.valori.lancio_info as Riga;
+    expect(marcatore.congedo_at).toBe('2026-10-08T09:00:00.000Z');
+    expect(typeof marcatore.restituito_nota_at).toBe('string');
+  });
+
+  it('secondo messaggio entro l ora: evento si, nota no', async () => {
+    stato.conv.lancio_info = { restituito_nota_at: new Date(Date.now() - 30 * 60_000).toISOString() };
+    await inbound('allora?');
+    expect(eventi('lancio_inbound_dopo_restituzione')).toHaveLength(1);
+    expect(eventi('lancio_inbound_dopo_restituzione')[0].payload).toMatchObject({ notaSoppressa: true });
+    expect(sendCrmNota).not.toHaveBeenCalled();
+    expect(stato.updates.find((u) => 'lancio_info' in u.valori)).toBeUndefined();
+  });
+
+  it('passata l ora: si torna ad avvisare, con le parole nuove', async () => {
+    stato.conv.lancio_info = { restituito_nota_at: new Date(Date.now() - 61 * 60_000).toISOString() };
+    await inbound('mi richiamate?');
+    expect(sendCrmNota).toHaveBeenCalledTimes(1);
+    expect(String(vi.mocked(sendCrmNota).mock.calls[0][2])).toContain('mi richiamate?');
   });
 });

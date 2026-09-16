@@ -110,6 +110,55 @@ export async function marcaCongedo(
 }
 
 /**
+ * Il marcatore durevole dell'ultima nota mandata al CRM per un lead gia' restituito al
+ * pool (ruling C8): e' quello che tiene la finestra di un'ora di `serveNotaRestituzione`.
+ *
+ * Stessa disciplina di `marcaCongedo`, e per la stessa ragione: `lancio_info` porta anche
+ * le chiavi di B4 e il congedo, quindi si rilegge prima di scrivere e su una lettura
+ * fallita non si scrive niente. Il costo di non scrivere e' una nota in piu' alla
+ * prossima, quello di sovrascrivere sarebbe perdere il congedo.
+ *
+ * Non lancia: il webhook deve rispondere a Twilio comunque.
+ */
+export async function marcaNotaRestituzione(
+  supabase: Supa,
+  conversationId: number,
+  quandoIso: string = new Date().toISOString(),
+): Promise<void> {
+  const { data, error: erroreLettura } = await supabase
+    .from('conversations')
+    .select('lancio_info')
+    .eq('id', conversationId)
+    .maybeSingle();
+  if (erroreLettura) {
+    await supabase.from('event_log').insert({
+      type: 'lancio_nota_restituzione_non_marcata',
+      payload: { conversationId, errore: erroreLettura.message, fase: 'lettura' } as never,
+      message: `[lancio] conv ${conversationId}: lancio_info non letto, marcatore della nota NON scritto — ${erroreLettura.message}`,
+      level: 'warn',
+    });
+    return;
+  }
+  const attuale = (data as { lancio_info?: Json | null } | null)?.lancio_info;
+  const base =
+    attuale && typeof attuale === 'object' && !Array.isArray(attuale)
+      ? (attuale as Record<string, unknown>)
+      : {};
+  const { error } = await supabase
+    .from('conversations')
+    .update({ lancio_info: { ...base, restituito_nota_at: quandoIso } as Json })
+    .eq('id', conversationId);
+  if (error) {
+    await supabase.from('event_log').insert({
+      type: 'lancio_nota_restituzione_non_marcata',
+      payload: { conversationId, errore: error.message, fase: 'scrittura' } as never,
+      message: `[lancio] conv ${conversationId}: marcatore della nota NON scritto — ${error.message}`,
+      level: 'warn',
+    });
+  }
+}
+
+/**
  * Quando questa chat e' entrata nel lancio, letto dall'evento `lancio_intake`. E' il
  * taglio della cronologia sulle chat riusate, dove `ai_started_at` resta quello del giro
  * di Mario (scelta dell'intake: la storia non si azzera). Si interroga solo quando il

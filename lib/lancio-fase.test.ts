@@ -4,6 +4,7 @@ import {
   TESTO_POSTO_BLOCCATO, TESTO_CONGEDO, TESTO_CHIUSURA_DOMANDE, TESTO_PASSAGGIO_UMANO,
   isLancioFase, lancioInCorso, decideLancioTurno, contaScambiDomande, lancioFaseLabel, lancioBenvenutoText,
   inboundDelLotto, ultimoTestoDelLotto, haCongedo, pulsanteRiportaInPostPitch, pulsanteScriveFase,
+  pulsanteRiapreChat, serveNotaRestituzione, NOTA_RESTITUZIONE_OGNI_MS,
   tagliaRigheDalLancio,
 } from './lancio-fase';
 
@@ -299,5 +300,39 @@ describe('tagliaRigheDalLancio: il taglio sull ancora confronta ISTANTI, non str
   it('una data illeggibile non fa sparire la riga: si torna al confronto di prima', () => {
     const rows = [riga('data-strana', 'illeggibile'), riga('2026-10-05T21:00:00Z', 'dopo')];
     expect(tagliaRigheDalLancio(rows, null, '2026-10-05T20:00:00Z').map((r) => r.body)).toEqual(['illeggibile', 'dopo']);
+  });
+});
+
+describe('pulsanteRiapreChat — si riapre solo se la fase si e mossa davvero (C8)', () => {
+  it('fase mossa su una chat chiusa di Mario: si riapre', () => {
+    expect(pulsanteRiapreChat({ cambiaFase: true, aiOwner: 'mario', aiStatus: 'closed' })).toBe(true);
+  });
+  it('fase ferma (restituito, followup_inviato, post_pitch, scelta_fatta): ai_status non si tocca', () => {
+    expect(pulsanteRiapreChat({ cambiaFase: false, aiOwner: 'mario', aiStatus: 'closed' })).toBe(false);
+  });
+  it('chat non chiusa o non di Mario: niente da riaprire', () => {
+    expect(pulsanteRiapreChat({ cambiaFase: true, aiOwner: 'mario', aiStatus: 'active' })).toBe(false);
+    expect(pulsanteRiapreChat({ cambiaFase: true, aiOwner: null, aiStatus: 'closed' })).toBe(false);
+  });
+});
+
+describe('serveNotaRestituzione — una nota al CRM ogni ora per chat (C8)', () => {
+  const ADESSO = Date.parse('2026-10-09T10:00:00.000Z');
+  it('mai avvisato: si', () => {
+    expect(serveNotaRestituzione(null, ADESSO)).toBe(true);
+    expect(serveNotaRestituzione({ risposta_riscaldamento: 'si' }, ADESSO)).toBe(true);
+  });
+  it('avvisato da meno di un ora: no', () => {
+    expect(serveNotaRestituzione({ restituito_nota_at: '2026-10-09T09:30:00.000Z' }, ADESSO)).toBe(false);
+  });
+  it('avvisato da piu di un ora: si', () => {
+    expect(serveNotaRestituzione({ restituito_nota_at: '2026-10-09T08:59:00.000Z' }, ADESSO)).toBe(true);
+  });
+  it('marcatore illeggibile: si avvisa (meglio una campanella in piu che un silenzio)', () => {
+    expect(serveNotaRestituzione({ restituito_nota_at: 'ieri' }, ADESSO)).toBe(true);
+    expect(serveNotaRestituzione({ restituito_nota_at: 42 }, ADESSO)).toBe(true);
+  });
+  it('la finestra e un ora esatta', () => {
+    expect(NOTA_RESTITUZIONE_OGNI_MS).toBe(60 * 60 * 1000);
   });
 });

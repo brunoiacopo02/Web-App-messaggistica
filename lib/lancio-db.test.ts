@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { impostaFaseLancio, marcaCongedo, contaBenvenutiUltimaOra } from './lancio-db';
+import { impostaFaseLancio, marcaCongedo, marcaNotaRestituzione, contaBenvenutiUltimaOra } from './lancio-db';
 
 /**
  * Finto Supabase: registra gli update su `conversations`, gli insert su `event_log` e la
@@ -156,6 +156,36 @@ describe('marcaCongedo', () => {
     const { supabase, calls } = makeSupabase({ erroreScrittura: { message: 'update ko' } });
     await expect(marcaCongedo(supabase, 42)).resolves.toBeUndefined();
     expect(eventiDiTipo(calls, 'lancio_congedo_non_marcato')[0].payload).toMatchObject({ fase: 'scrittura' });
+  });
+});
+
+describe('marcaNotaRestituzione', () => {
+  it('merge come il congedo: il marcatore si aggiunge, le altre chiavi restano', async () => {
+    const { supabase, calls } = makeSupabase({ lancioInfo: { congedo_at: '2026-10-08T09:00:00.000Z' } });
+    await marcaNotaRestituzione(supabase, 42, '2026-10-09T10:00:00.000Z');
+    expect(calls.updates[0].lancio_info).toEqual({
+      congedo_at: '2026-10-08T09:00:00.000Z',
+      restituito_nota_at: '2026-10-09T10:00:00.000Z',
+    });
+  });
+
+  it('lettura fallita: non scrive NIENTE e lascia la traccia', async () => {
+    const { supabase, calls } = makeSupabase({
+      lancioInfo: { congedo_at: '2026-10-08T09:00:00.000Z' },
+      erroreLettura: { message: 'connessione persa' },
+    });
+    await marcaNotaRestituzione(supabase, 42, '2026-10-09T10:00:00.000Z');
+    expect(calls.updates).toHaveLength(0);
+    const traccia = eventiDiTipo(calls, 'lancio_nota_restituzione_non_marcata');
+    expect(traccia).toHaveLength(1);
+    expect(traccia[0]).toMatchObject({ level: 'warn' });
+    expect(traccia[0].payload).toMatchObject({ conversationId: 42, fase: 'lettura', errore: 'connessione persa' });
+  });
+
+  it('scrittura fallita: traccia distinta, e non lancia', async () => {
+    const { supabase, calls } = makeSupabase({ erroreScrittura: { message: 'update ko' } });
+    await expect(marcaNotaRestituzione(supabase, 42)).resolves.toBeUndefined();
+    expect(eventiDiTipo(calls, 'lancio_nota_restituzione_non_marcata')[0].payload).toMatchObject({ fase: 'scrittura' });
   });
 });
 
