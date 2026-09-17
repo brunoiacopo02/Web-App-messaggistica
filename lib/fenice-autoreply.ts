@@ -20,6 +20,7 @@ import { haCongedo, lancioInCorso } from './lancio-fase';
 import { eseguiTurnoLancio } from './lancio-turno';
 import { lancioStandardDrain, lancioStandardContextNote } from './lancio-followup';
 import { getLancioSettings } from './lancio-settings';
+import { alertUnaVolta } from './alert-una-volta';
 import type { LancioInfo } from './lancio-crm';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
@@ -538,10 +539,14 @@ export async function drainMarioReplies(
   const leggiVideoLive = async (): Promise<string | null> => {
     if (lancioVideoLive !== undefined) return lancioVideoLive;
     lancioVideoLive = (await getLancioSettings(supabase)).videoLiveLink;
+    // Una volta per chat, non a ogni drain: la mattina del 6, col link non ancora
+    // impostato, ogni messaggio di ogni lead del lancio ne scriveva uno — e un avviso che
+    // si ripete non e' un avviso. Il fatto che manchi e' uno solo e si legge alla prima.
     if (!lancioVideoLive) {
-      await supabase.from('event_log').insert({
+      await alertUnaVolta(supabase, {
         type: 'lancio_video_live_link_missing',
-        payload: { conversationId, crmLeadId } as never,
+        conversationId,
+        payload: { crmLeadId },
         message: `[lancio] conv ${conversationId}: lancio_video_live_link non impostato, Mario usa i video classici`,
         level: 'warn',
       });

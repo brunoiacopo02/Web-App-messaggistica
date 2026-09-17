@@ -382,8 +382,27 @@ function makeDrainSupabase(claimedRow: ClaimedRow, initialRows: FakeMsgRow[]) {
           },
         };
       }
-      // event_log
-      return { insert(payload: any) { calls.events.push(payload); return Promise.resolve({ data: null }); } };
+      // event_log: l'insert e' quello che i test guardano; la select serve ad
+      // `alertUnaVolta` (un alert gia' scritto per questa chat non si ripete).
+      return {
+        select() {
+          const cerca: Record<string, unknown> = {};
+          const stub: any = {
+            eq(col: string, val: unknown) { cerca[col] = val; return stub; },
+            contains(_col: string, val: Record<string, unknown>) { cerca.payload = val; return stub; },
+            limit() { return stub; },
+            then(resolve: any) {
+              const payload = (cerca.payload ?? {}) as Record<string, unknown>;
+              const prior = calls.events.filter((e) =>
+                e.type === cerca.type
+                && Object.entries(payload).every(([k, v]) => (e.payload ?? {})[k] === v));
+              resolve({ data: prior.map((_, i) => ({ id: i + 1 })), error: null });
+            },
+          };
+          return stub;
+        },
+        insert(payload: any) { calls.events.push(payload); return Promise.resolve({ data: null }); },
+      };
     },
   };
 
@@ -2354,6 +2373,27 @@ describe('drainMarioReplies — dopo il follow-up la chat passa a Mario nello ST
     expect(opts.contextNote).toBeUndefined();
     expect(calls.events.map((e) => e.type)).toContain('lancio_video_live_link_missing');
     expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+
+  // Il 6/10 mattina, con il link non ancora impostato, questo warn usciva a ogni drain di
+  // ogni chat del lancio: centinaia di righe identiche addosso agli eventi che contano.
+  it('senza lancio_video_live_link il warn si scrive UNA volta per chat, non a ogni drain', async () => {
+    const senzaLink = {
+      attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null,
+      eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti' as const, sender: 'principale' as const,
+    };
+    vi.mocked(getLancioSettings).mockResolvedValueOnce(senzaLink).mockResolvedValueOnce(senzaLink);
+    vi.mocked(eseguiTurnoLancio).mockResolvedValueOnce('handed_to_mario').mockResolvedValueOnce('handed_to_mario');
+    vi.mocked(generateMarioReply)
+      .mockResolvedValueOnce(rispostaMario('Ciao! Raccontami: lavori al momento?'))
+      .mockResolvedValueOnce(rispostaMario('Perfetto, ti mando due cose.'));
+    const { supabase, calls, messagesRows } = makeDrainSupabase(riga(), [FU, RISPOSTA]);
+
+    await drainMarioReplies(supabase, 7, '+391234567890', () => 0);
+    messagesRows.push({ direction: 'in', body: 'ci sei?', template_sid: null, created_at: '2026-10-06T11:00:00Z' });
+    await drainMarioReplies(supabase, 7, '+391234567890', () => 0);
+
+    expect(calls.events.filter((e) => e.type === 'lancio_video_live_link_missing')).toHaveLength(1);
   });
 
   it('un turno che chiude il lancio in altro modo (closed) non passa a Mario e scrive closed', async () => {
