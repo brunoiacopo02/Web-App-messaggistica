@@ -58,7 +58,7 @@ export async function GET(req: NextRequest) {
   // Recupera i telefoni dei lead delle conversazioni target.
   // `.is('ai_paused_at', null)`: una chat presa in carico da una persona resta fuori
   // anche dagli invii mirati, altrimenti il video le arriverebbe in mezzo al discorso.
-  const { data: convs } = await supabase.from('conversations').select('id, lead_id').in('id', targets).is('ai_paused_at', null);
+  const { data: convs } = await supabase.from('conversations').select('id, lead_id, wa_number').in('id', targets).is('ai_paused_at', null);
   const leadIds = [...new Set((convs ?? []).map((c) => c.lead_id))];
   const { data: leads } = await supabase.from('leads').select('id, phone_e164').in('id', leadIds);
   const phoneByLead = new Map((leads ?? []).map((l) => [l.id, l.phone_e164]));
@@ -68,7 +68,10 @@ export async function GET(req: NextRequest) {
   for (const conv of convs ?? []) {
     const phone = phoneByLead.get(conv.lead_id);
     if (!phone) continue;
-    const r = await sendTemplateAndLog(supabase, conv.id, phone, videoSid, 'Video');
+    // Il video segue l'agenda sullo stesso numero della chat. Senza `wa_number` resta
+    // il mittente di default di questo flusso (legacy, fermo dal 19/06): non e' un
+    // flusso del bot Fenice e non si cambia il suo ripiego.
+    const r = await sendTemplateAndLog(supabase, conv.id, phone, videoSid, 'Video', conv.wa_number ?? undefined);
     if (r.ok) sent++;
     else failed++;
   }

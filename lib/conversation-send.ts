@@ -75,7 +75,8 @@ export async function sendConversationMessage(input: SendMessageInput): Promise<
     });
     return NextResponse.json({ error: 'twilio_error', code: err?.code }, { status: 502 });
   }
-  const tplBodyRaw = (await getTemplateBody((campaign as any).twilio_template_sid)) ?? `[template] ${(campaign as any).name}`;
+  // `from` anche qui: il testo del template si legge dall'account che possiede il mittente.
+  const tplBodyRaw = (await getTemplateBody((campaign as any).twilio_template_sid, from)) ?? `[template] ${(campaign as any).name}`;
   const tplBody = renderBodyTemplate(tplBodyRaw, input.vars);
   const { data: msg } = await admin.from('messages').insert({
     conversation_id: input.conversation_id,

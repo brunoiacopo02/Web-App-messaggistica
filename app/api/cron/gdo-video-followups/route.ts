@@ -18,6 +18,7 @@ import { romeHour, romeMinute, romeDaysBetween } from '@/lib/rome-time';
 import { templateName } from '@/lib/name';
 import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
+import { mittenteDiConversazione, numeroPrimario } from '@/lib/mittente';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -70,10 +71,12 @@ export async function GET(req: NextRequest) {
   // cambio dell'ora legale non sposta gli orari italiani.
   if (!slot) return NextResponse.json({ ok: true, skipped: 'fuori slot' });
 
-  const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
+  // Il mittente e' della singola chat (`wa_number`, letto sotto): qui si controlla solo
+  // che il primario ci sia, cioe' che la configurazione regga.
+  const primario = numeroPrimario();
   const solleciteSid = process.env.SOLLECITO_VIDEO_GDO_SID;
   const supabase = getSupabaseAdmin();
-  if (!from) {
+  if (!primario) {
     await supabase.from('event_log').insert({
       type: 'gdo_followup_config_error',
       payload: { missing: 'TWILIO_WHATSAPP_NUMBER_FENICE' } as never,
@@ -92,7 +95,7 @@ export async function GET(req: NextRequest) {
     .select(`
       id, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at,
       gdo_video_followups_sent, gdo_noemi_reminded_at, gdo_appuntamento_at, bot_scheduled_at,
-      ai_started_at, leads(phone_e164, first_name)
+      ai_started_at, wa_number, leads(phone_e164, first_name)
     `)
     .not('gdo_agenda_at', 'is', null)
     .gte('gdo_agenda_at', da)
@@ -122,6 +125,9 @@ export async function GET(req: NextRequest) {
     try {
       const phone = c.leads?.phone_e164 as string | undefined;
       if (!phone) { report.push({ id: c.id, action: 'skip', reason: 'no_phone' }); continue; }
+      // Il numero con cui l'agenda e' partita: video e solleciti restano su quello. Il
+      // `?? primario` e' solo per il tipo — col primario configurato non e' mai undefined.
+      const from = mittenteDiConversazione(c) ?? primario;
 
       // Cronologia dall'arruolamento in poi (stesso pattern di bot-followups e
       // sequence-touches): il cutoff sta nella query, non dopo in JS, perché

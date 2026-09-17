@@ -10,6 +10,7 @@ import { getLancioSettings } from './lancio-settings';
 import { lancioBenvenutoText } from './lancio-fase';
 import { leggiTettoOrario, sottoTettoOrario } from './lancio-tetto';
 import { contaBenvenutiUltimaOra } from './lancio-db';
+import { mittenteDiConversazione, numeroPrimario } from './mittente';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -89,18 +90,21 @@ export async function enrollLeadIntoMario(
   if (args.lancio) return enrollLancio(supabase, { ...args, lancio: args.lancio });
 
   const templateSid = process.env.FENICE_OPENING_TEMPLATE_SID;
-  const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
-  if (!templateSid || !from) {
+  const primario = numeroPrimario();
+  if (!templateSid || !primario) {
     throw new Error('FENICE_OPENING_TEMPLATE_SID o TWILIO_WHATSAPP_NUMBER_FENICE non configurati');
   }
 
   const firstName = args.firstName ?? undefined;
-  const { conversationId } = await findOrCreateLeadConversation(supabase, {
+  const { conversationId, waNumber } = await findOrCreateLeadConversation(supabase, {
     phone: args.phone,
     firstName,
     lastName: args.lastName ?? undefined,
     email: args.email ?? undefined,
   });
+  // Il numero della chat: sorteggiato se e' appena nata, il suo se esisteva gia'. Il
+  // `?? primario` e' solo per il tipo — col primario configurato non e' mai undefined.
+  const from = mittenteDiConversazione({ wa_number: waNumber }) ?? primario;
 
   // Non si lascia cadere un'apertura sopra una conversazione gia' avviata: il lead
   // vedrebbe il bot ricominciare da capo. Si prende comunque in carico il lead per il
@@ -314,15 +318,18 @@ export async function enrollGdoLeadAsPostino(
   args: GdoEnrollArgs,
 ): Promise<{ ok: boolean; conversationId: number; sid?: string; error?: string }> {
   const templateSid = process.env.AGENDA_GDO_TEMPLATE_SID;
-  const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
+  const primario = numeroPrimario();
   if (!templateSid) throw new Error('AGENDA_GDO_TEMPLATE_SID non configurato');
-  if (!from) throw new Error('TWILIO_WHATSAPP_NUMBER_FENICE non configurato');
+  if (!primario) throw new Error('TWILIO_WHATSAPP_NUMBER_FENICE non configurato');
 
-  const { conversationId } = await findOrCreateLeadConversation(supabase, {
+  const { conversationId, waNumber } = await findOrCreateLeadConversation(supabase, {
     phone: args.phone,
     firstName: args.name ?? undefined,
     email: args.email ?? undefined,
   });
+  // Una chat riaperta resta sul suo numero: il video e i solleciti che seguono
+  // l'agenda partiranno dallo stesso (vedi drainMarioReplies e gdo-video-followups).
+  const from = mittenteDiConversazione({ wa_number: waNumber }) ?? primario;
 
   const res = await sendTemplateAndLog(
     supabase,
@@ -395,18 +402,21 @@ async function enrollLancio(
   args: EnrollArgs & { lancio: LancioIntake },
 ): Promise<EnrollResult> {
   const templateSid = process.env.LANCIO_WELCOME_TEMPLATE_SID;
-  const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
-  if (!templateSid || !from) {
+  const primario = numeroPrimario();
+  if (!templateSid || !primario) {
     throw new Error('LANCIO_WELCOME_TEMPLATE_SID o TWILIO_WHATSAPP_NUMBER_FENICE non configurati');
   }
 
   const firstName = args.firstName ?? undefined;
-  const { conversationId } = await findOrCreateLeadConversation(supabase, {
+  const { conversationId, waNumber } = await findOrCreateLeadConversation(supabase, {
     phone: args.phone,
     firstName,
     lastName: args.lastName ?? undefined,
     email: args.email ?? undefined,
   });
+  // Come nel ramo di Mario: il numero e' della chat, e se il benvenuto viene differito
+  // il cron `lancio-aperture` lo rilegge da `wa_number`.
+  const from = mittenteDiConversazione({ wa_number: waNumber }) ?? primario;
 
   const lancioFields = {
     lancio_slug: args.lancio.slug,

@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { toE164 } from '@/lib/phone';
 import { findOrCreateLeadConversation, sendTemplateAndLog } from '@/lib/messaging';
 import { getTemplateBody } from '@/lib/twilio';
+import { mittenteDiConversazione } from '@/lib/mittente';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -46,13 +47,26 @@ export async function POST(req: NextRequest) {
 
   const supabase = getSupabaseAdmin();
 
-  const { conversationId } = await findOrCreateLeadConversation(supabase, {
+  // Il mittente, in tre casi:
+  //  - `from: 'fenice'` → il numero della chat (lib/mittente.ts): sorteggiato fra i
+  //    numeri del bot se la chat nasce adesso, il suo se esisteva gia'. Prima era sempre
+  //    il numero storico, e con due numeri avrebbe spezzato le chat nate sul secondo;
+  //  - `from: '+39…'` → quel numero, scritto in `wa_number` se la chat nasce adesso;
+  //  - `from` assente → il numero di default di `sendTemplate` (`TWILIO_WHATSAPP_NUMBER`),
+  //    come sempre: e' la strada di Serenamente (`serenamenteMessaging.ts` nel CRM), che
+  //    non manda `from` e non deve finire su un numero Fenice. Alla nascita si scrive
+  //    quel numero, cosi' `wa_number` dice sempre da dove la chat ha parlato davvero.
+  const fromRaw = (body.from ?? body.sender) as string | undefined;
+  const esplicito = fromRaw === 'fenice' ? undefined : (fromRaw || process.env.TWILIO_WHATSAPP_NUMBER || null);
+
+  const { conversationId, waNumber } = await findOrCreateLeadConversation(supabase, {
     phone,
     firstName: (body.firstName ?? body.first_name) as string | undefined,
     lastName: (body.lastName ?? body.last_name) as string | undefined,
     email: body.email as string | undefined,
     acContactId: (body.acContactId ?? body.contact_id) as string | undefined,
-  });
+  }, { mittente: esplicito });
+  const from = fromRaw === 'fenice' ? mittenteDiConversazione({ wa_number: waNumber }) : (fromRaw || undefined);
 
   // Le variabili del template ({{1}} = nome) e il numero mittente. Senza le prime un
   // template che saluta per nome parte come "Ciao ,"; senza il secondo esce dal numero
@@ -66,8 +80,6 @@ export async function POST(req: NextRequest) {
       if (typeof v === 'string' || typeof v === 'number') variables[k] = String(v);
     }
   }
-  const fromRaw = (body.from ?? body.sender) as string | undefined;
-  const from = fromRaw === 'fenice' ? process.env.TWILIO_WHATSAPP_NUMBER_FENICE : fromRaw;
 
   // Il testo che salviamo deve essere quello che il lead ha davvero letto: senza questa
   // sostituzione in chat resta scritto "Ciao {{1}}", e chi guarda il pannello non sa cosa
@@ -75,7 +87,7 @@ export async function POST(req: NextRequest) {
   // log meno bello vale meno del messaggio.
   let bodyLog: string | undefined;
   if (Object.keys(variables).length > 0) {
-    const grezzo = await getTemplateBody(templateSid);
+    const grezzo = await getTemplateBody(templateSid, from);
     if (grezzo) {
       bodyLog = Object.entries(variables).reduce(
         (testo, [k, v]) => testo.replaceAll(`{{${k}}}`, v),

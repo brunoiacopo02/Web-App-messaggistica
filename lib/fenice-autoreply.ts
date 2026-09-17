@@ -19,6 +19,7 @@ import { notaPrimoContatto } from './primo-contatto-note';
 import { haCongedo, lancioInCorso } from './lancio-fase';
 import { eseguiTurnoLancio } from './lancio-turno';
 import type { LancioInfo } from './lancio-crm';
+import { mittenteDiConversazione } from './mittente';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -330,15 +331,6 @@ export async function drainMarioReplies(
   phone: string,
   delayMs: () => number = marioDelayMs,
 ): Promise<void> {
-  const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
-  if (!from) {
-    await supabase.from('event_log').insert({
-      type: 'fenice_ai_error', payload: { conversationId } as never,
-      message: 'TWILIO_WHATSAPP_NUMBER_FENICE non configurato', level: 'error',
-    });
-    return;
-  }
-
   // Lock: claim del turno. Se un'altra esecuzione sta già rispondendo, esci:
   // quel drain ricontrolla i messaggi e gestirà anche questo inbound.
   // Il lucchetto vive su ai_lock_at: ai_status resta lo stato di prodotto, così una
@@ -357,7 +349,9 @@ export async function drainMarioReplies(
     // `bot_outcome` e `bot_scheduled_at` servono al ramo degli esiti senza leadId
     // (`registraEsitoSenzaLeadId`): senza di loro non saprebbe che su questa
     // conversazione c'e' gia' un appuntamento in piedi, e lo declasserebbe.
-    .select('id, ai_started_at, crm_lead_id, bot_outcome, bot_scheduled_at, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, gdo_appuntamento_at, lancio_slug, lancio_fase, lancio_info, leads(first_name)')
+    // `wa_number` e' il numero con cui questa chat e' nata: ogni bolla del turno — le
+    // risposte di Mario, il video del GDO, i turni del lancio — deve partire da li'.
+    .select('id, ai_started_at, crm_lead_id, bot_outcome, bot_scheduled_at, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, gdo_appuntamento_at, lancio_slug, lancio_fase, lancio_info, wa_number, leads(first_name)')
     .single();
   // PGRST116 = nessuna riga: e' il caso NORMALE (conversazione non claimabile, o
   // lucchetto di un altro drain) e non va segnalato. Qualunque altro errore invece qui
@@ -380,6 +374,19 @@ export async function drainMarioReplies(
   const crmLeadId = (claimed as { crm_lead_id: string | null }).crm_lead_id;
   const esitoInPiedi = (claimed as { bot_outcome?: BotOutcome | null }).bot_outcome ?? null;
   const dataInPiedi = (claimed as { bot_scheduled_at?: string | null }).bot_scheduled_at ?? null;
+
+  // Il mittente e' quello della chat (vedi lib/mittente.ts). Si risolve DOPO il claim
+  // perche' sta sulla riga; se manca e' la configurazione (nemmeno il primario in env)
+  // e si esce sciogliendo il lucchetto a mano, come nel ramo dello stop del CRM sotto.
+  const from = mittenteDiConversazione(claimed as { wa_number?: string | null });
+  if (!from) {
+    await supabase.from('event_log').insert({
+      type: 'fenice_ai_error', payload: { conversationId } as never,
+      message: 'TWILIO_WHATSAPP_NUMBER_FENICE non configurato', level: 'error',
+    });
+    await supabase.from('conversations').update({ ai_lock_at: null }).eq('id', conversationId).eq('ai_lock_at', nowIso);
+    return;
+  }
 
   // Lo stop che viene dal CRM, non dalla chat: chi si e' presentato alla call o ha
   // comprato non deve ricevere piu' niente, e nemmeno chi una persona ha scartato per un

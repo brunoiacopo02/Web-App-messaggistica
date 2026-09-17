@@ -29,6 +29,7 @@ import {
 import { firstNameOf, templateName } from '@/lib/name';
 import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
+import { mittenteDiConversazione } from '@/lib/mittente';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -64,7 +65,8 @@ async function sendSequenceTemplate(
   variables: Record<string, string>,
   bodyOverride?: string,
 ): Promise<{ ok: boolean; capped?: boolean; error?: string }> {
-  const tplBody = bodyOverride ?? (await getTemplateBody(templateSid)) ?? `[template] ${label}`;
+  // `from` anche qui: il testo del template si legge dall'account che possiede il mittente.
+  const tplBody = bodyOverride ?? (await getTemplateBody(templateSid, from)) ?? `[template] ${label}`;
   try {
     const sent = await sendTemplate({ to: phone, contentSid: templateSid, variables, from });
     await supabase.from('messages').insert({
@@ -118,9 +120,11 @@ export async function GET(req: NextRequest) {
   const supabase = getSupabaseAdmin();
   const now = Date.now();
 
-  const followupFrom =
-    process.env.TWILIO_WHATSAPP_NUMBER_FOLLOWUP ?? process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
-  const openingFrom = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
+  // Il mittente — dell'apertura differita, dei touch e dei nudge — e' quello della
+  // singola chat (`wa_number`, sorteggiato all'arruolamento, vedi lib/mittente.ts).
+  // `TWILIO_WHATSAPP_NUMBER_FOLLOWUP` non si legge piu': un numero "dei follow-up"
+  // diverso da quello dell'apertura e' proprio il thread spezzato che questa regola
+  // chiude, e sull'apertura differita avrebbe ignorato il sorteggio dell'intake.
   const openingSid = process.env.FENICE_OPENING_TEMPLATE_SID;
   const maxPerRun = Math.max(1, Number(process.env.SEQUENCE_MAX_PER_RUN) || 25);
 
@@ -180,7 +184,7 @@ export async function GET(req: NextRequest) {
   for (let fromRow = 0; ; fromRow += 1000) {
     const { data, error } = await supabase
       .from('conversations')
-      .select('id, ai_status, ai_started_at, crm_lead_id, crm_funnel, bot_outcome, bot_followups_sent, leads(phone_e164, first_name)')
+      .select('id, ai_status, ai_started_at, crm_lead_id, crm_funnel, bot_outcome, bot_followups_sent, wa_number, leads(phone_e164, first_name)')
       .not('crm_lead_id', 'is', null)
       .in('ai_status', ['active'])
       // Lead dei GDO (modalità postino): hanno già l'appuntamento, la sequenza di
@@ -221,6 +225,9 @@ export async function GET(req: NextRequest) {
         skipped++;
         continue;
       }
+      // Undefined solo senza il primario in env: sull'apertura si segnala sotto, sui
+      // touch e sui nudge `sendTemplate`/`sendFreeText` ripiegano come sempre.
+      const from = mittenteDiConversazione(c);
 
       // Lo stop che arriva dal CRM: presentato alla call, cliente, o scartato da una
       // persona per un motivo che dalla chat non si vede. Un template di sequenza a un
@@ -265,7 +272,7 @@ export async function GET(req: NextRequest) {
         const action = decideTrackA({ nowMs: now, msgs, seqSids, sequenceEnabled: true });
 
         if (action.kind === 'send_opening') {
-          if (!openingFrom) {
+          if (!from) {
             await logConfigError('TWILIO_WHATSAPP_NUMBER_FENICE');
             skipped++;
             continue;
@@ -280,7 +287,7 @@ export async function GET(req: NextRequest) {
             if (newSid) {
               sent++;
               await sendSequenceTemplate(
-                supabase, c.id, phone, newSid, `Apertura ${envKey}`, openingFrom,
+                supabase, c.id, phone, newSid, `Apertura ${envKey}`, from,
                 { '1': templateName(firstName) },
                 openingBody(funnel, variant, firstName),
               );
@@ -298,7 +305,7 @@ export async function GET(req: NextRequest) {
           const variables: Record<string, string> = cleanName ? { '3': cleanName } : {};
           sent++;
           await sendSequenceTemplate(
-            supabase, c.id, phone, openingSid, 'Fenice apertura', openingFrom, variables, feniceOpening(firstName),
+            supabase, c.id, phone, openingSid, 'Fenice apertura', from, variables, feniceOpening(firstName),
           );
         } else if (action.kind === 'send_touch') {
           const sid =
@@ -315,7 +322,7 @@ export async function GET(req: NextRequest) {
           }
           sent++;
           const touchRes = await sendSequenceTemplate(
-            supabase, c.id, phone, sid, `Sequenza touch ${action.touchIndex}`, followupFrom, { '1': templateName(firstName) },
+            supabase, c.id, phone, sid, `Sequenza touch ${action.touchIndex}`, from, { '1': templateName(firstName) },
           );
           // Dopo il primo follow-up riuscito: RICHIAMO interim (una volta sola,
           // perché il touch 1 parte una volta sola) con data = fine sequenza, così
@@ -371,7 +378,7 @@ export async function GET(req: NextRequest) {
       }
       const body = pickNudgeText(c.id, firstName, PERSONA_NAME[persona]);
       sent++;
-      const res = await sendFreeText({ to: phone, body, from: followupFrom });
+      const res = await sendFreeText({ to: phone, body, from });
       await supabase.from('messages').insert({
         conversation_id: c.id,
         direction: 'out',

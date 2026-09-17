@@ -4,6 +4,7 @@ import { romeHour } from './rome-time';
 import { firstNameOf } from './name';
 import { FILTRO_FUORI_LANCIO } from './lancio-fase';
 import { logCronQueryError } from './cron-query-error';
+import { mittenteDiConversazione, numeroPrimario } from './mittente';
 
 const H = 3600_000;
 
@@ -71,8 +72,9 @@ export async function runAgendaFollowups(
   supabase: Supa,
   now: Date = new Date(),
 ): Promise<{ sent: number; skipped: number }> {
-  const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
-  if (!from) return { sent: 0, skipped: 0 };
+  // Il mittente e' della singola chat (`wa_number`, vedi lib/mittente.ts); qui si
+  // controlla solo che la configurazione regga, come prima.
+  if (!numeroPrimario()) return { sent: 0, skipped: 0 };
 
   const nowMs = now.getTime();
   const twoHAgo = new Date(nowMs - AGENDA_FOLLOWUP_DELAY_MS).toISOString();
@@ -101,7 +103,7 @@ export async function runAgendaFollowups(
   // 2. Stato delle conversazioni candidate.
   const { data: convs, error: errConvs } = await supabase
     .from('conversations')
-    .select('id, lead_id, ai_status, bot_outcome, bot_followups_sent, gdo_agenda_at')
+    .select('id, lead_id, ai_status, bot_outcome, bot_followups_sent, gdo_agenda_at, wa_number')
     .in('id', convIds)
     // Lancio Web Dev AI: il link di prenotazione in chat non e' suo, ma l'intake del
     // lancio azzera `bot_outcome` e rimette `ai_status='active'` — cioe' scioglie la
@@ -161,7 +163,10 @@ export async function runAgendaFollowups(
       gdoPostino: c.gdo_agenda_at != null,
     });
 
-    if (decision === 'none' || !phone) { skipped++; continue; }
+    // Dallo stesso numero della chat: il link dell'agenda e' partito da li', e la
+    // finestra 24h dentro cui questo free-text e' lecito vale per quella coppia.
+    const from = mittenteDiConversazione(c);
+    if (decision === 'none' || !phone || !from) { skipped++; continue; }
 
     const body = agendaFollowupText((lead?.first_name as string | null) ?? null);
     const msg = await sendFreeText({ to: phone, body, from });

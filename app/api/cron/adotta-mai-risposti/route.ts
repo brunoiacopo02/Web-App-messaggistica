@@ -10,6 +10,7 @@ import { templateName } from '@/lib/name';
 import { inSendWindow } from '@/lib/sequence';
 import { assertTemplateSendable } from '@/lib/twilio';
 import { pushLeadEntrante } from '@/lib/lead-entrante';
+import { mittenteDiConversazione, numeriDelBot } from '@/lib/mittente';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -57,8 +58,10 @@ export async function POST(req: NextRequest) {
   const max = typeof body.max === 'number' && body.max > 0 ? Math.min(body.max, 100) : 25;
 
   const templateSid = process.env.MARTA_REENGAGE_TEMPLATE_SID;
-  const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
-  if (!templateSid || !from) {
+  // I numeri del bot, tutti: chi ha scritto per primo sul secondo numero e' "mai
+  // risposto" quanto chi ha scritto sul primo, e il riaggancio gli parte da li'.
+  const numeri = numeriDelBot();
+  if (!templateSid || numeri.length === 0) {
     return NextResponse.json({ ok: false, error: 'MARTA_REENGAGE_TEMPLATE_SID o TWILIO_WHATSAPP_NUMBER_FENICE non configurati' }, { status: 503 });
   }
 
@@ -70,9 +73,9 @@ export async function POST(req: NextRequest) {
   // INBOUND, riaggancio di Marta compreso.
   const { pulsanteAttivo } = await getLancioSettings(admin);
 
-  // Candidati: nessun padrone, il lead ha scritto, sul numero Fenice, nessuno l'ha
-  // presa in mano. Il filtro sugli outbound si fa dopo, in memoria: PostgREST non sa
-  // fare "nessuna riga collegata" senza una vista.
+  // Candidati: nessun padrone, il lead ha scritto, su uno dei numeri del bot, nessuno
+  // l'ha presa in mano. Il filtro sugli outbound si fa dopo, in memoria: PostgREST non
+  // sa fare "nessuna riga collegata" senza una vista.
   //
   // `lancio_slug` nullo: una chat del lancio e' gia' presa in carico da qualcun altro —
   // il suo benvenuto, il suo turno, la sua restituzione di fine lancio — e non e' mai
@@ -88,7 +91,7 @@ export async function POST(req: NextRequest) {
     .is('ai_paused_at', null)
     .is('lancio_slug', null)
     .not('last_inbound_at', 'is', null)
-    .eq('wa_number', from)
+    .in('wa_number', numeri)
     .gte('last_inbound_at', dal)
     .order('id', { ascending: true })
     .range(from_, to));
@@ -223,8 +226,10 @@ export async function POST(req: NextRequest) {
       if (!vaRiagganciato(esito)) { pulsante++; continue; }
 
       const nome = templateName(l.first_name);
+      // Dal numero su cui ci ha scritto: e' quello che ha in rubrica, ed e' l'unico
+      // da cui il suo primo messaggio conta come inizio di conversazione.
       const res = await sendTemplateAndLog(
-        admin, c.id, l.phone, templateSid, 'Riaggancio (mai risposto)', from,
+        admin, c.id, l.phone, templateSid, 'Riaggancio (mai risposto)', mittenteDiConversazione(c),
         { '1': nome },
         `Ciao ${nome}, sono Marta di Fenice Academy: ci eravamo persi a metà discorso 🙂 Se ti va riprendiamo da dove eravamo rimasti, altrimenti scrivimi NO e non ti disturbo più.`,
       );

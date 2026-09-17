@@ -5,6 +5,7 @@ import { dueReminder, slotLabel, pickReminder24Template, type ReminderKind } fro
 import { templateName } from '@/lib/name';
 import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
+import { mittenteDiConversazione } from '@/lib/mittente';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -58,9 +59,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, sent: 0, skipped: 'config' });
   }
 
-  // Stesso numero Fenice usato dai follow-up della sequenza (sequence-touches).
-  const from =
-    process.env.TWILIO_WHATSAPP_NUMBER_FOLLOWUP ?? process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
+  // Il mittente e' quello della singola chat (`wa_number`, letto sotto, vedi
+  // lib/mittente.ts): un promemoria da un altro numero arriverebbe al lead come un
+  // thread nuovo. `TWILIO_WHATSAPP_NUMBER_FOLLOWUP` non si legge piu' per lo stesso
+  // motivo: un numero "dei follow-up" diverso da quello della chat e' proprio il
+  // thread spezzato che questa regola chiude.
 
   const now = Date.now();
   const windowStart = new Date(now - 1 * H).toISOString();
@@ -69,7 +72,7 @@ export async function GET(req: NextRequest) {
   // Appuntamenti fissati (terminali) la cui data cade nella finestra utile ai promemoria.
   const { data: convData, error: convErr } = await supabase
     .from('conversations')
-    .select('id, bot_scheduled_at, leads(phone_e164, first_name)')
+    .select('id, bot_scheduled_at, wa_number, leads(phone_e164, first_name)')
     .eq('bot_outcome', 'APPUNTAMENTO')
     // Fermo manuale dal pannello: nessun invio automatico su una chat presa in
     // carico da una persona, promemoria pre-call compresi.
@@ -183,7 +186,7 @@ export async function GET(req: NextRequest) {
       const label = kind === 'r24' ? 'Promemoria T-24h' : 'Promemoria T-3h';
       const firstName = (c.leads?.first_name as string | null | undefined) ?? null;
 
-      const res = await sendTemplateAndLog(supabase, c.id as number, phone, sid, label, from, {
+      const res = await sendTemplateAndLog(supabase, c.id as number, phone, sid, label, mittenteDiConversazione(c), {
         '1': templateName(firstName),
         '2': slotLabel(scheduledAt, now),
       });

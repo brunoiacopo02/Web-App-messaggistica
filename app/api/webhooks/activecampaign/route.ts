@@ -117,14 +117,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, skipped: 'lead_upsert_failed' });
   }
 
-  // Find or create conversation
+  // Find or create conversation.
+  // Il mittente: questo flusso manda dal numero di default di `sendTemplate`
+  // (`TWILIO_WHATSAPP_NUMBER`), e resta cosi' per chi nasce adesso — si scrive in
+  // `wa_number` perche' la chat sappia da dove ha parlato. Una chat che esiste gia'
+  // resta invece sul SUO numero: da un altro la si spezzerebbe in due thread.
   const { data: convExisting } = await supabase
-    .from('conversations').select('id').eq('lead_id', leadRow.id).maybeSingle();
+    .from('conversations').select('id, wa_number').eq('lead_id', leadRow.id).maybeSingle();
   let conversationId = convExisting?.id;
+  const from = convExisting?.wa_number ?? undefined;
   if (!conversationId) {
     const { data: convNew, error: convErr } = await supabase
       .from('conversations')
-      .insert({ lead_id: leadRow.id, campaign_id: campaign.id })
+      .insert({ lead_id: leadRow.id, campaign_id: campaign.id, wa_number: process.env.TWILIO_WHATSAPP_NUMBER ?? null })
       .select('id').single();
     if (convErr || !convNew) {
       await supabase.from('event_log').insert({
@@ -138,7 +143,7 @@ export async function POST(req: NextRequest) {
 
   // Render variabili e invia template
   const vars = renderTemplateVariables(campaign.template_variables, lead);
-  const tplBody = (await getTemplateBody(campaign.twilio_template_sid)) ?? `[template] ${campaign.name}`;
+  const tplBody = (await getTemplateBody(campaign.twilio_template_sid, from)) ?? `[template] ${campaign.name}`;
 
   let sent: { sid: string; status: string } | null = null;
   try {
@@ -146,6 +151,7 @@ export async function POST(req: NextRequest) {
       to: phone,
       contentSid: campaign.twilio_template_sid,
       variables: vars,
+      from,
     });
   } catch (err: any) {
     await supabase.from('event_log').insert({

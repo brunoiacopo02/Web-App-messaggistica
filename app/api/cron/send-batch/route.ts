@@ -80,10 +80,14 @@ async function sendOne(
 
   const { data: convExisting } = await supabase
     .from('conversations')
-    .select('id')
+    .select('id, wa_number')
     .eq('lead_id', leadRow.id)
     .maybeSingle();
   let conversationId = convExisting?.id;
+  // Una chat che esiste gia' resta sul suo numero: mandarle la campagna da un altro la
+  // spezzerebbe in due thread agli occhi del lead. Il numero della campagna vale solo
+  // per chi nasce adesso (e per le righe senza `wa_number`, come sempre).
+  const from = convExisting?.wa_number ?? waNumber;
   if (!conversationId) {
     const { data: convNew, error: convErr } = await supabase
       .from('conversations')
@@ -114,10 +118,10 @@ async function sendOne(
 
   // Body salvato a DB già renderizzato (Twilio sostituisce le variabili all'invio,
   // ma il testo raw mostrerebbe "{{2}}" nel pannello).
-  const tplBodyRaw = (await getTemplateBody(campaign.twilio_template_sid)) ?? `[template] ${campaign.name}`;
+  const tplBodyRaw = (await getTemplateBody(campaign.twilio_template_sid, from)) ?? `[template] ${campaign.name}`;
   const tplBody = renderBodyTemplate(tplBodyRaw, vars);
   try {
-    const sent = await sendTemplate({ to: phone, contentSid: campaign.twilio_template_sid, variables: vars, from: waNumber });
+    const sent = await sendTemplate({ to: phone, contentSid: campaign.twilio_template_sid, variables: vars, from });
     await supabase.from('messages').insert({
       conversation_id: conversationId,
       direction: 'out',
@@ -129,9 +133,11 @@ async function sendOne(
       is_template: true,
       sender: 'automazione',
     });
+    // Si scrive il numero da cui e' DAVVERO partito: su una chat esistente e' il suo
+    // (no-op), su una senza `wa_number` e' quello della campagna.
     await supabase
       .from('conversations')
-      .update({ last_message_at: new Date().toISOString(), wa_number: waNumber })
+      .update({ last_message_at: new Date().toISOString(), wa_number: from })
       .eq('id', conversationId);
     return 'sent';
   } catch (err: unknown) {

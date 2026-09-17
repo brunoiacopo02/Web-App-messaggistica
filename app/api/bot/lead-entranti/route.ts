@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
+import { numeriDelBot } from '@/lib/mittente';
 import { verifySignature } from '@/lib/bot-hmac';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { fetchAllRows } from '@/lib/supabase/paginate';
@@ -46,8 +47,10 @@ export async function POST(req: NextRequest) {
   // registra l'anomalia e si risponde lo stesso senza quel filtro. Un 503 a un client
   // esterno per una nostra variabile assente sarebbe una dipendenza nuova su una rotta
   // che il CRM chiama in automatico, e li lascerebbe senza lista fino al deploy dopo.
-  const feniceNumber = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
-  if (!feniceNumber) {
+  // Tutti i numeri del bot, non solo lo storico: chi scrive per primo sul secondo
+  // numero e' un lead entrante come gli altri, e senza questo il CRM non lo vedrebbe.
+  const numeriBot = numeriDelBot();
+  if (numeriBot.length === 0) {
     await admin.from('event_log').insert({
       type: 'lead_entranti_senza_numero',
       payload: {} as never,
@@ -75,7 +78,7 @@ export async function POST(req: NextRequest) {
         .is('crm_lead_id', null)
         .is('handed_off_at', null)
         .not('last_inbound_at', 'is', null);
-      return (feniceNumber ? q.eq('wa_number', feniceNumber) : q)
+      return (numeriBot.length > 0 ? q.in('wa_number', numeriBot) : q)
         .order('ai_started_at', { ascending: true, nullsFirst: true })
         .range(from, to);
     });

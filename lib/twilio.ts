@@ -1,4 +1,5 @@
 import { credenzialiPerMittente } from './twilio-account';
+import { templatePerMittente } from './template-account';
 import twilio, { validateRequest } from 'twilio';
 
 type SendTemplateInput = {
@@ -70,15 +71,22 @@ export async function sendTemplate(
   opts: SendOptions = {},
 ) {
   // Il mittente si risolve per PRIMO: serve a scegliere l'account, e da
-  // quello dipendono sia il controllo della categoria sia l'invio.
+  // quello dipendono la traduzione del template, il controllo della categoria
+  // e l'invio.
   const mittente = input.from ?? fromNumber();
-  await assertTemplateSendable(input.contentSid, mittente);
+  // Un Content template vive DENTRO un account: lo stesso messaggio esiste sui
+  // due account con SID diversi, e tutte le env `*_TEMPLATE_SID` contengono
+  // quelli dell'account storico. Senza questa traduzione, mandare dal numero
+  // del secondo account chiederebbe un template che quell'account non ha — 404,
+  // e con UTILITY_ONLY=1 il presidio fallisce chiuso ancora prima.
+  const sidTemplate = await templatePerMittente(input.contentSid, mittente);
+  await assertTemplateSendable(sidTemplate, mittente);
   const client = getClient(mittente);
   return withRetry(async () => {
     const msg = await client.messages.create({
       from: mittente,
       to: `whatsapp:${input.to}`,
-      contentSid: input.contentSid,
+      contentSid: sidTemplate,
       contentVariables: JSON.stringify(input.variables),
       statusCallback: statusCallbackUrl(),
     });
@@ -161,6 +169,10 @@ const _templateBodyCache = new Map<string, string>();
 export async function getTemplateBody(contentSid: string, from?: string | null): Promise<string | null> {
   const cred = credenzialiPerMittente(from);
   if (!cred) return null;
+  // Come nell'invio: il SID va tradotto sull'account del mittente, altrimenti
+  // si chiede un template che quell'account non ha e il corpo torna vuoto —
+  // nel log del messaggio comparirebbe "[template] X" invece del testo vero.
+  contentSid = await templatePerMittente(contentSid, from);
   const chiave = `${cred.sid}:${contentSid}`;
   if (_templateBodyCache.has(chiave)) return _templateBodyCache.get(chiave)!;
   const { sid, token: tok } = cred;

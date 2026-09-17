@@ -21,6 +21,7 @@ import {
   LANCIO_BLAST_CONCURRENCY,
   type PerimetroBlast,
 } from '@/lib/lancio-zoom-blast';
+import { mittenteDiConversazione } from '@/lib/mittente';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -68,6 +69,8 @@ type Candidata = {
   lancio_fase: string | null;
   lancio_info: unknown;
   last_inbound_at: string | null;
+  /** Il numero con cui la chat e' nata (lib/mittente.ts): il link parte da li'. */
+  wa_number: string | null;
   leads: { phone_e164: string | null; first_name: string | null } | null;
 };
 
@@ -250,7 +253,7 @@ export async function GET(req: NextRequest) {
   // quale delle due e' successa, o "0 inviati" a serata finita non si sa interpretare.
   let queryKo = false;
   for (let pagina = 0; pagina < MAX_PAGINE; pagina++) {
-    const { data, error } = await bersaglio('id, crm_lead_id, lancio_fase, lancio_info, last_inbound_at, leads(phone_e164, first_name)')
+    const { data, error } = await bersaglio('id, crm_lead_id, lancio_fase, lancio_info, last_inbound_at, wa_number, leads(phone_e164, first_name)')
       .order('id', { ascending: true })
       .range(pagina * PAGINA, pagina * PAGINA + PAGINA - 1);
     // Una query fallita torna `data: null`, cioe' zero candidati: senza questa riga il
@@ -372,7 +375,10 @@ export async function GET(req: NextRequest) {
       tentati++;
       let spedito = false;
       try {
-        const res = await sendTemplate({ to: phone, contentSid: sid, variables: vars, from });
+        // Dal numero con cui questa chat e' nata, non da quello di default del run: il
+        // benvenuto e' partito da li', e il lead risponde li'. `from` (il primario in
+        // env) resta il ripiego per le chat senza `wa_number`.
+        const res = await sendTemplate({ to: phone, contentSid: sid, variables: vars, from: mittenteDiConversazione(c) ?? from });
         // Il messaggio e' su WhatsApp: da qui in poi il timbro non si tocca piu'.
         // Qualunque cosa fallisca dopo non annulla un invio gia' partito, e liberare il
         // timbro rimetterebbe la chat fra i candidati: al run dopo il lead riceverebbe il

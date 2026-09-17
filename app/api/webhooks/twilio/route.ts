@@ -15,6 +15,7 @@ import { LANCIO_SLUG, pulsanteRiportaInPostPitch, pulsanteScriveFase } from '@/l
 import { impostaFaseLancio } from '@/lib/lancio-db';
 import { getLancioSettings } from '@/lib/lancio-settings';
 import { pushLeadEntrante } from '@/lib/lead-entrante';
+import { eNumeroDelBot } from '@/lib/mittente';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -178,9 +179,12 @@ export async function POST(req: NextRequest) {
       message: `Inbound ricevuto da ${phone}`, level: 'info',
     });
 
-    // Auto-risposta Mario (solo numero Fenice + lead arruolato + switch ON)
-    const feniceNumber = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
-    const toMatchesFenice = !!feniceNumber && (params.To ?? '') === feniceNumber;
+    // Auto-risposta Mario (solo numeri del bot + lead arruolato + switch ON).
+    // "Del bot" e non "Fenice": dal secondo numero (`TWILIO_WHATSAPP_NUMBER_FENICE_2`)
+    // partono conversazioni intere, e chi risponde li' scriverebbe nel vuoto se il gate
+    // conoscesse solo il numero storico. Il nome `toMatchesFenice` resta perche' e' il
+    // campo delle guardie pure (`shouldAutoReply`, `shouldAdoptInbound`).
+    const toMatchesFenice = eNumeroDelBot(params.To);
     if (toMatchesFenice) {
       const { data: conv } = await supabase
         .from('conversations')
