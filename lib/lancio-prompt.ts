@@ -32,6 +32,30 @@ export const DOMANDA_SCELTA_NOTTE =
   'Preferisci che ti chiami un nostro consulente adesso, anche se è tardi, oppure fissiamo una call domani?';
 export const DOMANDA_SCELTA_GIORNO = 'Fissiamo una call oggi pomeriggio, oppure domani mattina?';
 
+/**
+ * La spinta verso la chiamata immediata (delibera PO 17/09), SOLO la notte del webinar.
+ *
+ * Non è una promessa e non contiene numeri: dice che i posti dell'offerta sono limitati,
+ * che si assegnano in ordine di chiamata e che in questo momento si sta chiamando. Di
+ * giorno non esiste — la chiamata immediata non è nemmeno possibile, e consigliarla
+ * sarebbe consigliare una cosa che il codice poi rifiuta.
+ *
+ * Si aggiunge in CODA alla domanda, che resta verbatim: la frase della spec non cambia
+ * di una virgola.
+ */
+export const SPINTA_CHIAMATA_NOTTE =
+  "Ti consiglio di farti chiamare subito: i posti per l'offerta sono limitati e si assegnano in ordine di chiamata, e in questo momento stiamo chiamando tante persone.";
+
+/**
+ * Il testo della scelta che il lead legge davvero: di notte la domanda più la spinta, di
+ * giorno la sola domanda. È la stessa stringa che sta nel corpo dei due template a
+ * pulsanti (`scripts/create-lancio-scelta-templates.mjs`): se cambia qui va rigenerato
+ * anche il template, o il lead legge una cosa e in `messages` ne resta un'altra.
+ */
+export function testoScelta(modo: ModoPostPitch): string {
+  return modo === 'notte' ? `${DOMANDA_SCELTA_NOTTE} ${SPINTA_CHIAMATA_NOTTE}` : DOMANDA_SCELTA_GIORNO;
+}
+
 /** Quante risposte di riscaldamento prima della scelta (spec §5.4: "due domande"). */
 export const RISPOSTE_RISCALDAMENTO = 2;
 
@@ -178,7 +202,7 @@ function promptPostPitch(i: LancioPromptInput): string {
   // La domanda della scelta sta nel prompt in ENTRAMBI i rami: se il lead taglia corto
   // durante il riscaldamento, il modello deve avere sotto gli occhi la frase esatta da
   // usare, non improvvisarne una sua.
-  const domandaScelta = modo === 'notte' ? DOMANDA_SCELTA_NOTTE : DOMANDA_SCELTA_GIORNO;
+  const domandaScelta = testoScelta(modo);
   const doveSiamo =
     n < RISPOSTE_RISCALDAMENTO
       ? `Fai UNA sola domanda di riscaldamento, breve e naturale, e rispondi a quello che dice. Esempi: cosa fa oggi (studio, lavoro); cosa l'ha colpita della live. Una domanda alla volta, niente interrogatorio. Non proporre ancora la scelta, a meno che sia il lead a chiedere di essere chiamato o di fissare: in quel caso salta il riscaldamento e chiedi esattamente: "${domandaScelta}".`
@@ -186,7 +210,8 @@ function promptPostPitch(i: LancioPromptInput): string {
 
   const regolaAdesso =
     modo === 'notte'
-      ? '- "Adesso" (anche a quest\'ora): un consulente lo chiama fra pochi minuti → [LANCIO:CHIAMA_ORA].'
+      ? '- "Adesso" (anche a quest\'ora): un consulente lo chiama fra pochi minuti → [LANCIO:CHIAMA_ORA].\n'
+        + "- CONSIGLIA la chiamata subito: i posti per l'offerta sono limitati e si assegnano in ordine di chiamata, se finiscono non ci si può più accedere, e in questo momento stiamo chiamando tante persone. Una riga sola di incoraggiamento, dandogli del tu: non promettere NIENTE, niente garanzie, niente prezzi, niente numeri (né posti rimasti né persone in attesa), niente scadenze inventate."
       : '- A quest\'ora non si chiama subito: si fissa una call. Non offrire MAI "adesso"; se lo chiede lui, digli che fissiamo l\'ora più vicina e usa [LANCIO:SLOTS].';
 
   const regolaOre = blocco
