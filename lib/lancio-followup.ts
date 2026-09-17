@@ -1,6 +1,6 @@
 import { romeDayKey, romeHour, romeMinute } from './rome-time';
 import { giorniLancio } from './lancio-scelta';
-import { haCongedo, type RigaLancio } from './lancio-fase';
+import { haCongedo, indiceUltimaPressionePulsante, type RigaLancio } from './lancio-fase';
 import { congedoEsplicito } from './lancio-classifica';
 import { templateName } from './name';
 
@@ -68,8 +68,17 @@ function nonPrimaDi(iso: string | null | undefined, ancoraIso: string): boolean 
 /**
  * L'istante da cui un messaggio del lead "conta" per questo lancio: la colonna
  * `lancio_benvenuto_at` (timbrata all'invio del benvenuto), poi l'ultima riga del
- * template di benvenuto in cronologia, poi l'evento `lancio_intake` (chat riusate senza
- * benvenuto). Null = non si sa: chi chiama NON manda (template su numero a qualita' LOW).
+ * template di benvenuto in cronologia, poi l'ULTIMA pressione del pulsante del webinar
+ * (inclusa), poi l'evento `lancio_intake`. Null = non si sa: chi chiama NON manda
+ * (template su numero a qualita' LOW).
+ *
+ * Il pulsante e' l'ancora di chi nel lancio e' entrato la sera della live senza essere
+ * mai stato in lista: li' il benvenuto non esiste, e `lancio_intake` e' scritto DOPO la
+ * riga del pulsante (il webhook salva il messaggio e poi arruola). Con l'intake come
+ * ancora quella pressione restava fuori, `haInteragito` era falso, e un lead che aveva
+ * alzato la mano risultava "non ha mai scritto": niente follow-up il 6 e, l'8, ritorno al
+ * pool con la nota `Lancio: mai risposto`. L'ordine e la regola sono gli stessi del
+ * taglio della cronologia (`tagliaRigheDalLancio`), che li applica dal B4.
  */
 export function ancoraLancio(i: {
   rows: RigaLancio[];
@@ -84,6 +93,8 @@ export function ancoraLancio(i: {
       if (r.template_sid === i.welcomeSid && r.created_at) return r.created_at;
     }
   }
+  const pulsante = indiceUltimaPressionePulsante(i.rows);
+  if (pulsante >= 0 && i.rows[pulsante].created_at) return i.rows[pulsante].created_at as string;
   return i.ingressoAt;
 }
 

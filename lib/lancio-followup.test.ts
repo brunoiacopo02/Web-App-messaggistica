@@ -46,8 +46,38 @@ describe('ancoraLancio — da quando un inbound conta', () => {
     expect(ancoraLancio({ rows, welcomeSid: WELCOME, benvenutoAt: null, ingressoAt: null })).toBe('2026-09-20T10:00:00Z');
     expect(ancoraLancio({ rows: [rows[0]], welcomeSid: WELCOME, benvenutoAt: null, ingressoAt: '2026-09-19T00:00:00Z' })).toBe('2026-09-19T00:00:00Z');
   });
-  it('senza nessuno dei tre e null: ancora ignota', () => {
+  it('senza nessuno dei quattro e null: ancora ignota', () => {
     expect(ancoraLancio({ rows: [rows[0]], welcomeSid: null, benvenutoAt: null, ingressoAt: null })).toBeNull();
+  });
+});
+
+// Chi entra col pulsante la sera della live il benvenuto non ce l'ha: l'unica cosa che
+// dice "da qui e' lancio" e' la pressione stessa. L'evento `lancio_intake` e' scritto DOPO
+// quella riga (il webhook salva il messaggio e poi arruola), quindi prendendo l'intake
+// come ancora la pressione restava fuori e la chat risultava "non ha mai scritto".
+describe('ancoraLancio — le chat entrate col pulsante del webinar', () => {
+  const PULSANTE = 'Ho visto la live Web Developer AI e voglio saperne di piu';
+  const pressione = (created_at: string) => inb(PULSANTE, created_at);
+
+  it('senza benvenuto l ancora e l ULTIMA pressione del pulsante, e vince sull intake', () => {
+    const rows = [out('vecchio giro di Mario', '2026-08-01T10:00:00Z'), pressione('2026-10-05T21:40:00+02:00')];
+    expect(ancoraLancio({ rows, welcomeSid: WELCOME, benvenutoAt: null, ingressoAt: '2026-10-05T21:40:05+02:00' }))
+      .toBe('2026-10-05T21:40:00+02:00');
+    const due = [...rows, inb('ci sono', '2026-10-05T21:45:00+02:00'), pressione('2026-10-07T09:00:00+02:00')];
+    expect(ancoraLancio({ rows: due, welcomeSid: WELCOME, benvenutoAt: null, ingressoAt: null }))
+      .toBe('2026-10-07T09:00:00+02:00');
+  });
+
+  it('chi e entrato dalla lista non cambia: il benvenuto viene prima del pulsante', () => {
+    const rows = [out('benvenuto', '2026-09-20T10:00:00Z', WELCOME), pressione('2026-10-05T21:40:00+02:00')];
+    expect(ancoraLancio({ rows, welcomeSid: WELCOME, benvenutoAt: '2026-09-20T10:00:05Z', ingressoAt: null })).toBe('2026-09-20T10:00:05Z');
+    expect(ancoraLancio({ rows, welcomeSid: WELCOME, benvenutoAt: null, ingressoAt: null })).toBe('2026-09-20T10:00:00Z');
+  });
+
+  it('la pressione conta come interazione: l ancora e inclusa', () => {
+    const rows = [pressione('2026-10-05T21:40:00+02:00')];
+    const ancoraPulsante = ancoraLancio({ rows, welcomeSid: WELCOME, benvenutoAt: null, ingressoAt: null }) as string;
+    expect(haInteragito(rows, ancoraPulsante)).toBe(true);
   });
 });
 
@@ -114,6 +144,12 @@ describe('decideFollowup', () => {
     // Il confine e' stretto: alle 02:59 la notte non e' finita e la chat e' ferma.
     expect(decideFollowup(attivo('2026-10-06T02:59:00+02:00'))).toEqual({ kind: 'invia' });
   });
+  it('entrata col pulsante e muta da allora: il follow-up ci va (non e "mai scritto")', () => {
+    const rows = [inb('Ho visto la live Web Developer AI e voglio saperne di piu', '2026-10-05T21:40:00+02:00')];
+    const ancoraPulsante = '2026-10-05T21:40:00+02:00';
+    expect(decideFollowup(c({ lancio_fase: 'post_pitch', rows, ancora: ancoraPulsante }))).toEqual({ kind: 'invia' });
+  });
+
   it('in_scelta vale solo per post_pitch: nelle altre fasi un inbound del 6 non ferma il follow-up', () => {
     const rows = [out('benvenuto', ancora, WELCOME), inb('eccomi', '2026-10-06T11:30:00+02:00')];
     for (const f of ['attesa', 'posto_bloccato', 'link_inviato']) {

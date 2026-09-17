@@ -199,6 +199,28 @@ describe('GET /api/cron/lancio-restituzioni — decisioni e CRM', () => {
     await richiesta();
     expect(sendOutcome).toHaveBeenCalledWith(expect.anything(), 1, { outcome: 'NON_RISPOSTO', note: 'Lancio: mai risposto' });
   });
+  // Chi entra col pulsante il benvenuto non ce l'ha: l'ancora e' la pressione stessa, e
+  // l'evento `lancio_intake` (scritto DOPO quella riga) la lasciava fuori — cosi' un lead
+  // che aveva alzato la mano tornava al pool come "mai risposto".
+  it('entrata col pulsante e muta: dopo il follow-up e silenzio, mai "mai risposto"', async () => {
+    stato.convs = [conv(1, {
+      lancio_benvenuto_at: null, lancio_fase: 'followup_inviato',
+      lancio_followup_inviato_at: '2026-10-06T07:00:00Z', last_inbound_at: '2026-10-05T19:40:00Z',
+    })];
+    stato.messaggi.set(1, [inb(1, 'Ho visto la live Web Developer AI e voglio saperne di piu', '2026-10-05T19:40:00Z')]);
+    leggiIngressoLancioAt.mockResolvedValue('2026-10-05T19:40:05Z');
+    await richiesta();
+    expect(sendOutcome).toHaveBeenCalledWith(expect.anything(), 1, { outcome: 'NON_RISPOSTO', note: 'Lancio: silenzio dopo il follow-up' });
+  });
+
+  it('entrata col pulsante, rimasta in post_pitch e senza follow-up: "follow-up non inviato"', async () => {
+    stato.convs = [conv(1, { lancio_benvenuto_at: null, lancio_fase: 'post_pitch', last_inbound_at: '2026-10-05T19:40:00Z' })];
+    stato.messaggi.set(1, [inb(1, 'Ho visto la live Web Developer AI e voglio saperne di piu', '2026-10-05T19:40:00Z')]);
+    leggiIngressoLancioAt.mockResolvedValue('2026-10-05T19:40:05Z');
+    await richiesta();
+    expect(sendOutcome).toHaveBeenCalledWith(expect.anything(), 1, { outcome: 'NON_RISPOSTO', note: 'Lancio: follow-up non inviato' });
+  });
+
   it('ancora ignota (nessun benvenuto, nessun intake): non si tocca e si conta', async () => {
     stato.convs = [conv(1, { lancio_benvenuto_at: null })];
     stato.messaggi.set(1, [inb(1, 'si', '2026-09-21T10:00:00Z')]);

@@ -356,11 +356,29 @@ export function tagliaRigheDalLancio(
       if (rows[i].template_sid === welcomeSid) return rows.slice(i);
     }
   }
-  for (let i = rows.length - 1; i >= 0; i--) {
-    if (rows[i].direction === 'in' && isMarkerPulsanteWebinar(rows[i].body)) return rows.slice(i);
-  }
+  const pulsante = indiceUltimaPressionePulsante(rows);
+  if (pulsante >= 0) return rows.slice(pulsante);
   if (ingressoAt) return rows.filter((m) => !m.created_at || nonPrimaDi(m.created_at, ingressoAt));
   return rows;
+}
+
+/**
+ * L'indice dell'ULTIMA pressione del pulsante del webinar in queste righe, o -1.
+ *
+ * Una riga sola, ma e' la regola su cui si appoggiano due cose che devono dire la stessa
+ * identica frase: il taglio della cronologia qui sopra e l'ancora del lancio
+ * (`ancoraLancio`, lib/lancio-followup.ts) per le chat che nel lancio ci sono entrate
+ * proprio col pulsante — dove il benvenuto non c'e' e l'evento `lancio_intake` e' scritto
+ * DOPO la riga del pulsante (il webhook salva il messaggio e poi arruola). Tenerle
+ * separate voleva dire che il taglio partiva dalla pressione e l'ancora no: quella
+ * pressione non contava come interazione, e un lead che aveva alzato la mano risultava
+ * "non ha mai scritto". L'ultima e non la prima: chi ripreme dopo giorni ricomincia da li'.
+ */
+export function indiceUltimaPressionePulsante(rows: RigaLancio[]): number {
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (rows[i].direction === 'in' && isMarkerPulsanteWebinar(rows[i].body)) return i;
+  }
+  return -1;
 }
 
 /**
