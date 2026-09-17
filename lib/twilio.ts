@@ -1,5 +1,5 @@
 import { credenzialiPerMittente } from './twilio-account';
-import { templatePerMittente } from './template-account';
+import { templatePerMittente, traduciTemplate } from './template-account';
 import twilio, { validateRequest } from 'twilio';
 
 type SendTemplateInput = {
@@ -79,15 +79,40 @@ export async function sendTemplate(
   // quelli dell'account storico. Senza questa traduzione, mandare dal numero
   // del secondo account chiederebbe un template che quell'account non ha — 404,
   // e con UTILITY_ONLY=1 il presidio fallisce chiuso ancora prima.
-  const sidTemplate = await templatePerMittente(input.contentSid, mittente);
+  const traduzione = await traduciTemplate(input.contentSid, mittente);
+
+  // Il secondo account non ha TUTTI i template del primo: ne sono stati copiati
+  // una parte (le aperture), non le agende ne' i video. Finche' mancano, un
+  // messaggio di quel tipo da quel numero non puo' partire in nessun modo.
+  //
+  // Prima qui si mandava lo stesso il SID dell'altro account e l'invio moriva:
+  // il 17/09/2026 TUTTE e tre le agende chieste dal numero nuovo sono fallite,
+  // quindici tentativi, nessuno arrivato, e cinque appuntamenti sono rimasti
+  // senza agenda. Un lead che non riceve l'agenda e' un danno vero; ricevere
+  // l'agenda da un nostro altro numero e' solo un fastidio. Quindi si ripiega
+  // sul numero che quel template ce l'ha, e lo si dice forte nei log.
+  let mittenteEffettivo = mittente;
+  let sidTemplate = traduzione.sid;
+  if (!traduzione.tradotto) {
+    const storico = process.env.TWILIO_WHATSAPP_NUMBER;
+    if (storico && storico !== mittente) {
+      console.error(
+        `[twilio] il template ${input.contentSid} non esiste sull'account di ${mittente}: ` +
+        `il messaggio parte da ${storico}. Va creato e approvato anche sull'altro account.`,
+      );
+      mittenteEffettivo = storico;
+      sidTemplate = input.contentSid;
+    }
+  }
+
   // Si passa anche il SID di partenza: la lista di sblocco parla la lingua
   // dell'account storico, e un template gia' autorizzato li' non va ribloccato
   // solo perche' sul secondo account ha un altro identificativo.
-  await assertTemplateSendable(sidTemplate, mittente, input.contentSid);
-  const client = getClient(mittente);
+  await assertTemplateSendable(sidTemplate, mittenteEffettivo, input.contentSid);
+  const client = getClient(mittenteEffettivo);
   return withRetry(async () => {
     const msg = await client.messages.create({
-      from: mittente,
+      from: mittenteEffettivo,
       to: `whatsapp:${input.to}`,
       contentSid: sidTemplate,
       contentVariables: JSON.stringify(input.variables),

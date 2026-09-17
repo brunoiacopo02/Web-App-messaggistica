@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { templatePerMittente, _svuotaCacheTemplate } from './template-account';
+import { templatePerMittente, traduciTemplate, _svuotaCacheTemplate } from './template-account';
 
 const CHIAVI = [
   'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN',
@@ -129,5 +129,38 @@ describe('lista di sblocco fra i due account', () => {
       if (salva.u === undefined) delete process.env.UTILITY_ONLY; else process.env.UTILITY_ONLY = salva.u;
       if (salva.a === undefined) delete process.env.UTILITY_ONLY_ALLOW; else process.env.UTILITY_ONLY_ALLOW = salva.a;
     }
+  });
+});
+
+
+describe('traduciTemplate: dice se ha tradotto davvero', () => {
+  it('template presente sul secondo account: tradotto', async () => {
+    fingiApi({ nomeSuAccount1: 'fenice_open_v1', contenutiAccount2: [{ friendly_name: 'fenice_open_v1', sid: 'HXtradotto' }] });
+    expect(await traduciTemplate('HXoriginale', SECONDO)).toEqual({ sid: 'HXtradotto', tradotto: true });
+  });
+
+  it('template ASSENTE sul secondo account: NON tradotto, cosi chi chiama puo ripiegare', async () => {
+    fingiApi({ nomeSuAccount1: 'fenice_agenda_gdo_v3', contenutiAccount2: [{ friendly_name: 'fenice_open_v1', sid: 'HXaltro' }] });
+    expect(await traduciTemplate('HXagenda', SECONDO)).toEqual({ sid: 'HXagenda', tradotto: false });
+  });
+
+  it('nome non leggibile sull account di origine: NON tradotto', async () => {
+    fingiApi({ nomeSuAccount1: null });
+    expect(await traduciTemplate('HXoriginale', SECONDO)).toEqual({ sid: 'HXoriginale', tradotto: false });
+  });
+
+  it('dal numero storico non c e niente da tradurre, e non e un fallimento', async () => {
+    fingiApi({ nomeSuAccount1: 'x' });
+    expect(await traduciTemplate('HXoriginale', PRIMARIO)).toEqual({ sid: 'HXoriginale', tradotto: true });
+  });
+
+  it('un indice vuoto NON resta in cache: un errore di rete non deve avvelenare l istanza', async () => {
+    // Primo giro: l'API del secondo account non torna niente.
+    fingiApi({ nomeSuAccount1: 'fenice_open_v1', contenutiAccount2: [] });
+    expect((await traduciTemplate('HXoriginale', SECONDO)).tradotto).toBe(false);
+    // Secondo giro: l'API si e' ripresa. Se l'indice vuoto fosse rimasto in
+    // cache, questa traduzione fallirebbe per sempre.
+    fingiApi({ nomeSuAccount1: 'fenice_open_v1', contenutiAccount2: [{ friendly_name: 'fenice_open_v1', sid: 'HXtradotto' }] });
+    expect(await traduciTemplate('HXoriginale', SECONDO)).toEqual({ sid: 'HXtradotto', tradotto: true });
   });
 });
