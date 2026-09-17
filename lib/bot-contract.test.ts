@@ -165,6 +165,7 @@ describe('parseSendAgendaPayload', () => {
         personKey: null,
         previousLeadIds: [],
         lancio: null,
+        riscaldamento: false,
         variant: { lavora: true, haFamiglia: false, offertaDelMese: false },
       },
     });
@@ -291,5 +292,29 @@ describe('parseIntakePayload — campo lancio (contratto v1.6)', () => {
     const r = parseIntakePayload({ ...base, lancio: 'spazzatura' });
     expect(r.ok).toBe(true);
     expect(r.ok && r.value.lancio).toBeNull();
+  });
+});
+
+
+// La quota del bot e' globale: l'unico modo di mandare al numero in
+// riscaldamento *solo* i lead del riscaldamento e' che il CRM lo dica.
+describe('campo riscaldamento', () => {
+  const base = { leadId: 'L1', phone: '+393331112223', companyId: 'fenice' };
+
+  it('assente = lead ordinario', () => {
+    const r = parseIntakePayload(base);
+    expect(r.ok && r.value.riscaldamento).toBe(false);
+  });
+
+  it('true = lead del riscaldamento', () => {
+    const r = parseIntakePayload({ ...base, riscaldamento: true });
+    expect(r.ok && r.value.riscaldamento).toBe(true);
+  });
+
+  it('qualunque altra cosa vale come ordinario: nel dubbio non si tocca il numero nuovo', () => {
+    for (const v of ['true', 1, {}, null]) {
+      const r = parseIntakePayload({ ...base, riscaldamento: v });
+      expect(r.ok && r.value.riscaldamento).toBe(false);
+    }
   });
 });
