@@ -4,7 +4,12 @@ import { canAccess, landingPath } from '@/lib/access';
 
 // /api/bot è macchina-a-macchina: si autentica via firma HMAC, mai via sessione.
 // Va esentato dal redirect a /login (come /api/webhooks e /api/cron).
-const PUBLIC_PATHS = ['/login', '/api/webhooks', '/api/cron', '/api/bot', '/api/send-agenda', '/api/send-template'];
+// `/api/admin/secondo-numero` sta qui per lo stesso motivo di `/api/cron`: si
+// autentica da se' con un segreto proprio (ADMIN_TOOLS_SECRET), non con una
+// sessione. E' elencato per percorso ESATTO e non come `/api/admin`, cosi' una
+// rotta admin aggiunta domani non si trova esentata senza che nessuno l'abbia
+// deciso.
+const PUBLIC_PATHS = ['/login', '/api/webhooks', '/api/cron', '/api/bot', '/api/send-agenda', '/api/send-template', '/api/admin/secondo-numero'];
 
 export async function proxy(request: NextRequest) {
   const { response, user } = await refreshSession(request);
