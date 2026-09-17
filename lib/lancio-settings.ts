@@ -111,14 +111,19 @@ export async function getLancioSettings(supabase: Supa): Promise<LancioSettings>
   return parseLancioSettings((data ?? []) as { key: string; value: unknown }[]);
 }
 
+/** L'esito di una scrittura: queste chiavi sono manopole d'emergenza, e una scrittura
+ *  che non e' andata a segno non puo' passare per fatta (ne' al pannello ne' al freno). */
+export type EsitoScrittura = { ok: true } | { ok: false; error: string };
+
 export async function setLancioSetting(
   supabase: Supa,
   key: LancioSettingKey,
   value: string | boolean,
-): Promise<void> {
-  await supabase
+): Promise<EsitoScrittura> {
+  const { error } = await supabase
     .from('app_settings')
     .upsert({ key, value: value as never, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+  return error ? { ok: false, error: error.message ?? String(error) } : { ok: true };
 }
 
 /**
@@ -172,6 +177,10 @@ export function validateLancioSettingInput(key: string, raw: unknown): SettingVa
     return { ok: true, value: v };
   }
   if (v === null) return { ok: true, value: '' };
-  if (!/^https:\/\/[^\s]+$/.test(v)) return { ok: false, reason: 'link_non_https' };
-  return { ok: true, value: v };
+  // Lo schema si accetta anche urlato (un link incollato dal cellulare arriva cosi') e
+  // si normalizza minuscolo; il resto dell'URL resta com'e', perche' i path di Zoom e
+  // del corso distinguono maiuscole e minuscole.
+  const link = /^https:\/\/([^\s]+)$/i.exec(v);
+  if (!link) return { ok: false, reason: 'link_non_https' };
+  return { ok: true, value: `https://${link[1]}` };
 }

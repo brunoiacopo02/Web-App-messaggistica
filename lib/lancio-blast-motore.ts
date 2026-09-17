@@ -397,5 +397,17 @@ export async function frenaLancio(
     `[lancio] FRENO sul ${p.etichetta}: ${conti.falliti + conti.incerti} non arrivati su ${stato.tentati} tentativi (${conti.falliti} falliti, ${conti.incerti} incerti; codici: ${stato.codici.join(', ') || 'nessuno'}). Lancio spento, riaccendere a mano dal pannello.`,
     'error',
   );
-  await setLancioSetting(supabase, 'lancio_attivo', false);
+  // Il freno vale solo se `lancio_attivo` diventa davvero falso: se il DB rifiuta la
+  // scrittura il run successivo riparte come se niente fosse, e l'unico evento in giro
+  // direbbe "Lancio spento". Meglio urlarlo qui, che e' dove qualcuno sta guardando.
+  const spento = await setLancioSetting(supabase, 'lancio_attivo', false);
+  if (!spento.ok) {
+    await logEvento(
+      supabase,
+      `${p.prefisso}_freno_non_applicato`,
+      { errore: spento.error },
+      `[lancio] FRENO NON APPLICATO sul ${p.etichetta}: lancio_attivo NON e' stato spento (${spento.error}). Spegnerlo a mano dal pannello, subito.`,
+      'error',
+    );
+  }
 }

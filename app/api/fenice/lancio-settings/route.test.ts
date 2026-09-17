@@ -11,7 +11,12 @@ const stato = {
   /** L'utente che la sessione restituisce; null = nessuna sessione. */
   utente: null as { id: string; email: string | null } | null,
   upsert: [] as Record<string, unknown>[],
+  /** Gli insert su `event_log` TENTATI, riusciti o no. */
   eventi: [] as Record<string, unknown>[],
+  /** Se valorizzato, l'upsert su `app_settings` fallisce con questo messaggio. */
+  upsertKo: null as string | null,
+  /** I `type` di evento che `event_log` rifiuta (registro rotto, RLS, colonna assente). */
+  eventLogKo: new Set<string>(),
 };
 
 function appSettings() {
@@ -28,6 +33,7 @@ function appSettings() {
       error: null,
     }),
     upsert: (row: Record<string, unknown>) => {
+      if (stato.upsertKo) return Promise.resolve({ error: { message: stato.upsertKo } });
       stato.upsert.push(row);
       stato.righe[row.key as string] = row.value;
       return Promise.resolve({ error: null });
@@ -40,7 +46,9 @@ function eventLog() {
   return {
     insert: (row: Record<string, unknown>) => {
       stato.eventi.push(row);
-      return Promise.resolve({ error: null });
+      return stato.eventLogKo.has(String(row.type))
+        ? Promise.resolve({ error: { message: 'event_log ko' } })
+        : Promise.resolve({ error: null });
     },
   };
 }
@@ -72,6 +80,8 @@ beforeEach(() => {
   stato.utente = { id: 'u1', email: 'bruno@esempio.it' };
   stato.upsert = [];
   stato.eventi = [];
+  stato.upsertKo = null;
+  stato.eventLogKo = new Set();
 });
 
 describe('GET /api/fenice/lancio-settings', () => {
@@ -149,7 +159,7 @@ describe('POST /api/fenice/lancio-settings — la scrittura e la sua traccia', (
   it('l\'interruttore si salva come booleano, come lo scrive il freno automatico', async () => {
     const res = await posta({ key: 'lancio_attivo', value: true });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, key: 'lancio_attivo', value: true });
+    expect(await res.json()).toMatchObject({ ok: true, key: 'lancio_attivo', value: true });
     expect(stato.upsert[0]).toMatchObject({ key: 'lancio_attivo', value: true });
   });
 
@@ -186,5 +196,54 @@ describe('POST /api/fenice/lancio-settings — la scrittura e la sua traccia', (
     stato.utente = { id: 'u-senza-mail', email: null };
     await posta({ key: 'lancio_blast_perimetro', value: 'risposto' });
     expect((stato.eventi[0].payload as Record<string, unknown>).who).toBe('u-senza-mail');
+  });
+
+  it('un salvataggio riuscito lo dice anche del registro', async () => {
+    const body = await (await posta({ key: 'lancio_attivo', value: true })).json();
+    expect(body).toEqual({ ok: true, key: 'lancio_attivo', value: true, audit: true });
+  });
+});
+
+describe('POST /api/fenice/lancio-settings — quando il DB dice di no', () => {
+  // Il pannello e' la manopola d'emergenza della sera del 5: un 200 su una scrittura
+  // mai avvenuta farebbe credere a chi guarda lo schermo che il lancio e' spento
+  // mentre i messaggi continuano a partire. Meglio un errore in faccia.
+  it('se l\'upsert fallisce la rotta risponde 500 e non dice "salvato"', async () => {
+    stato.upsertKo = 'permission denied for table app_settings';
+    const res = await posta({ key: 'lancio_attivo', value: false });
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ ok: false, errore: 'scrittura_fallita' });
+  });
+
+  it('una scrittura fallita non lascia in registro una riga che la da\' per fatta', async () => {
+    stato.upsertKo = 'permission denied for table app_settings';
+    await posta({ key: 'lancio_attivo', value: false });
+    expect(stato.eventi.some((e) => e.type === 'lancio_setting_cambiata')).toBe(false);
+  });
+
+  // Il contrario: il registro rotto non deve bloccare la manopola. La scrittura vale,
+  // ma chi guarda deve sapere che di quel cambio non resta traccia.
+  it('se l\'audit fallisce la scrittura resta valida: 200 con audit false', async () => {
+    stato.eventLogKo = new Set(['lancio_setting_cambiata']);
+    const res = await posta({ key: 'lancio_attivo', value: true });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, key: 'lancio_attivo', value: true, audit: false });
+    expect(stato.upsert[0]).toMatchObject({ key: 'lancio_attivo', value: true });
+  });
+
+  it('un audit fallito prova comunque a lasciare un avviso', async () => {
+    stato.eventLogKo = new Set(['lancio_setting_cambiata']);
+    await posta({ key: 'lancio_attivo', value: true });
+    const avviso = stato.eventi.find((e) => e.type === 'lancio_setting_audit_fallito');
+    expect(avviso).toBeDefined();
+    expect(avviso?.level).toBe('warn');
+    expect((avviso?.payload as Record<string, unknown>).key).toBe('lancio_attivo');
+  });
+
+  it('anche con event_log rotto del tutto la rotta risponde, non esplode', async () => {
+    stato.eventLogKo = new Set(['lancio_setting_cambiata', 'lancio_setting_audit_fallito']);
+    const res = await posta({ key: 'lancio_sender', value: 'secondario' });
+    expect(res.status).toBe(200);
+    expect((await res.json()).audit).toBe(false);
   });
 });

@@ -63,9 +63,20 @@ export default async function FeniceImpostazioniPage() {
   const supabase = await getSupabaseServer();
   const { data: { user } } = await supabase.auth.getUser();
 
+  const puoModificare = puoModificareLancio(user?.email);
   const admin = getSupabaseAdmin();
   const settings = await getLancioSettings(admin);
   const cambi = await ultimiCambi(admin);
+
+  // A chi legge e basta (il bot) l'indirizzo di chi ha girato la manopola non serve, e
+  // sarebbe un'email di un collega esposta a un account che non deve averla: resta il
+  // "quando", il "chi" diventa generico.
+  if (!puoModificare) {
+    for (const k of Object.keys(cambi) as LancioSettingKey[]) {
+      const c = cambi[k];
+      if (c?.who) cambi[k] = { at: c.at, who: 'un admin' };
+    }
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -76,11 +87,7 @@ export default async function FeniceImpostazioniPage() {
         description="Interruttori, link e mittente del lancio si cambiano da qui, senza deploy: il video della live editata e l’offerta del mese arrivano dopo il 5 ottobre."
       />
       <div className="flex-1 overflow-y-auto px-4 py-6 md:px-8">
-        <ImpostazioniLancioPanel
-          initial={settings}
-          cambi={cambi}
-          puoModificare={puoModificareLancio(user?.email)}
-        />
+        <ImpostazioniLancioPanel initial={settings} cambi={cambi} puoModificare={puoModificare} />
       </div>
     </div>
   );

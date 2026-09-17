@@ -7,7 +7,9 @@ import { Switch } from '@/components/ui/switch';
 import { Save, CheckCircle2, AlertTriangle, ShieldAlert } from 'lucide-react';
 import type { LancioSettings, LancioSettingKey } from '@/lib/lancio-settings';
 
-type Esito = { ok: boolean; text: string };
+/** Tre toni, non due: una scrittura riuscita di cui non resta traccia nel registro non
+ *  e' un errore (il valore e' nel DB) ma non e' nemmeno un "Salvato" liscio. */
+type Esito = { tono: 'ok' | 'avviso' | 'errore'; text: string };
 type Interruttore = 'lancio_attivo' | 'lancio_pulsante_attivo';
 
 export type UltimoCambio = { at: string; who: string | null };
@@ -18,6 +20,7 @@ const ERRORI: Record<string, string> = {
   chiave_non_modificabile: 'Questa impostazione non si cambia da qui.',
   valore_non_valido: 'Valore non valido.',
   sola_lettura: 'Il tuo account vede le impostazioni ma non le cambia.',
+  scrittura_fallita: 'NON salvato: il database ha rifiutato la scrittura. Riprova, e se insiste cambiala in SQL.',
 };
 
 const INTERRUTTORI: Array<{ key: Interruttore; label: string; hint: string; acceso: string; spento: string }> = [
@@ -115,15 +118,27 @@ export function ImpostazioniLancioPanel({
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ key, value }),
       });
-      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; value?: string | boolean };
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean; error?: string; errore?: string; value?: string | boolean; audit?: boolean;
+      };
       if (!res.ok || !data.ok) {
-        setEsiti((s) => ({ ...s, [key]: { ok: false, text: ERRORI[data.error ?? ''] ?? 'Errore di salvataggio' } }));
+        const motivo = data.errore ?? data.error ?? '';
+        setEsiti((s) => ({ ...s, [key]: { tono: 'errore', text: ERRORI[motivo] ?? 'Errore di salvataggio' } }));
         return false;
       }
-      setEsiti((s) => ({ ...s, [key]: { ok: true, text: data.value === '' ? 'Azzerato' : 'Salvato' } }));
+      // La scrittura è andata: `audit: false` dice solo che non ne resta traccia nel
+      // registro. È un avviso, non un fallimento — ma non può passare per un "Salvato"
+      // liscio, o la sera del 5 nessuno saprebbe che la cronologia ha un buco.
+      const fatto = data.value === '' ? 'Azzerato' : 'Salvato';
+      setEsiti((s) => ({
+        ...s,
+        [key]: data.audit === false
+          ? { tono: 'avviso', text: `${fatto}, ma senza traccia nel registro` }
+          : { tono: 'ok', text: fatto },
+      }));
       return true;
     } catch {
-      setEsiti((s) => ({ ...s, [key]: { ok: false, text: 'Errore di rete: riprova' } }));
+      setEsiti((s) => ({ ...s, [key]: { tono: 'errore', text: 'Errore di rete: riprova' } }));
       return false;
     } finally {
       setBusy(null);
@@ -239,8 +254,13 @@ export function ImpostazioniLancioPanel({
             disabled={!puoModificare || busy === key}
             onChange={(e) => {
               const value = e.target.value;
+              const prima = valori[key];
               setValori((v) => ({ ...v, [key]: value }));
-              void salva(key, value);
+              // Se il salvataggio non passa, il menu non puo' restare sulla scelta
+              // nuova: mostrerebbe un perimetro o un mittente che nel DB non c'e'.
+              void salva(key, value).then((fatto) => {
+                if (!fatto) setValori((v) => ({ ...v, [key]: prima }));
+              });
             }}
           >
             {opzioni.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -252,14 +272,20 @@ export function ImpostazioniLancioPanel({
   );
 }
 
+const TONO: Record<Esito['tono'], string> = {
+  ok: 'text-emerald-600',
+  avviso: 'text-amber-600',
+  errore: 'text-red-600',
+};
+
 /** Esito dell'ultimo salvataggio + l'ultimo cambio noto della chiave (chi e quando). */
 function PiedeCampo({ esito, cambio }: { esito?: Esito; cambio?: UltimoCambio }) {
   if (!esito && !cambio) return null;
   return (
     <div className="mt-2 space-y-1">
       {esito && (
-        <div className={`flex items-center gap-1.5 text-xs ${esito.ok ? 'text-emerald-600' : 'text-red-600'}`}>
-          {esito.ok ? <CheckCircle2 className="size-3.5" /> : <AlertTriangle className="size-3.5" />}
+        <div className={`flex items-center gap-1.5 text-xs ${TONO[esito.tono]}`}>
+          {esito.tono === 'ok' ? <CheckCircle2 className="size-3.5" /> : <AlertTriangle className="size-3.5" />}
           {esito.text}
         </div>
       )}

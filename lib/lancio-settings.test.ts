@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import {
   parseLancioSettings, isAttivo, LANCIO_SETTING_KEYS, LANCIO_SETTINGS_DEFAULT,
-  LANCIO_EDITABLE_KEYS, validateLancioSettingInput,
+  LANCIO_EDITABLE_KEYS, validateLancioSettingInput, setLancioSetting,
 } from './lancio-settings';
 
 describe('isAttivo — la chiave lancio_attivo si legge come 0/1 o booleano', () => {
@@ -142,6 +142,18 @@ describe('validateLancioSettingInput — le regole della pagina', () => {
     expect(validateLancioSettingInput('lancio_sender', null)).toEqual({ ok: true, value: 'principale' });
     expect(validateLancioSettingInput('lancio_sender', 'terzo')).toEqual({ ok: false, reason: 'valore_non_valido' });
   });
+  it('lo schema si accetta anche urlato, e si salva minuscolo', () => {
+    // Un link incollato da un cellulare arriva con l'iniziale maiuscola: e' lo stesso
+    // link, non un errore di battitura da rifiutare. Lo schema si normalizza, il resto
+    // dell'URL no (il path di Zoom e' sensibile alle maiuscole).
+    expect(validateLancioSettingInput('lancio_zoom_link', 'HTTPS://us06web.zoom.us/j/1'))
+      .toEqual({ ok: true, value: 'https://us06web.zoom.us/j/1' });
+    expect(validateLancioSettingInput('offerta_del_mese_link', ' HtTpS://corso.feniceacademy.it/Offerta-WebDev '))
+      .toEqual({ ok: true, value: 'https://corso.feniceacademy.it/Offerta-WebDev' });
+    expect(validateLancioSettingInput('lancio_video_live_link', 'HTTP://corso.feniceacademy.it/x'))
+      .toEqual({ ok: false, reason: 'link_non_https' });
+  });
+
   it('un valore che il pannello sa scrivere e uno che parseLancioSettings sa rileggere', () => {
     // Il giro completo: quello che esce dalla validazione torna dentro `app_settings`
     // e deve rileggersi identico, o la pagina salverebbe valori muti.
@@ -151,5 +163,25 @@ describe('validateLancioSettingInput — le regole della pagina', () => {
     const off = validateLancioSettingInput('lancio_video_live_link', '   ');
     expect(off.ok && parseLancioSettings([{ key: 'lancio_video_live_link', value: off.value }]).videoLiveLink)
       .toBeNull();
+  });
+});
+
+describe('setLancioSetting — una scrittura fallita si vede', () => {
+  function fintoSupabase(errore: string | null) {
+    return {
+      from: () => ({ upsert: () => Promise.resolve({ error: errore ? { message: errore } : null }) }),
+    } as never;
+  }
+
+  it('la scrittura riuscita torna ok', async () => {
+    expect(await setLancioSetting(fintoSupabase(null), 'lancio_attivo', false)).toEqual({ ok: true });
+  });
+
+  it('la scrittura rifiutata torna il motivo, invece di sparire', async () => {
+    // Il freno spegne `lancio_attivo` con questa funzione: se il DB dice di no e
+    // nessuno se ne accorge, i run successivi ripartono come se niente fosse.
+    const esito = await setLancioSetting(fintoSupabase('permission denied'), 'lancio_attivo', false);
+    expect(esito.ok).toBe(false);
+    expect(esito.ok === false && esito.error).toContain('permission denied');
   });
 });

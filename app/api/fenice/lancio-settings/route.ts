@@ -34,6 +34,14 @@ export async function GET() {
  * Ogni scrittura lascia una riga in `event_log` con il prima, il dopo e chi: la sera
  * del 5 ottobre queste manopole si girano di fretta, e senza traccia non si saprebbe
  * più chi ha spento il lancio né da quale valore.
+ *
+ * I due errori non sono simmetrici, e non devono esserlo:
+ * - **la scrittura fallita è un 500**. Questa pagina è la manopola d'emergenza: un 200
+ *   su un `update` mai avvenuto farebbe leggere "Salvato" a chi sta spegnendo il lancio
+ *   mentre i messaggi continuano a partire. Meglio un errore in faccia.
+ * - **l'audit fallito non è un errore**. Il registro non può bloccare la manopola: la
+ *   scrittura è già valida, si risponde 200 con `audit: false` e la pagina dice che di
+ *   quel cambio non resta traccia. Il tentativo di avviso è best effort.
  */
 export async function POST(req: NextRequest) {
   const user = await requireUser();
@@ -50,16 +58,36 @@ export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin();
   const chiave = key as LancioSettingKey;
   const prima = await getLancioSettingValue(admin, chiave);
-  await setLancioSetting(admin, chiave, valid.value);
+
+  const scritto = await setLancioSetting(admin, chiave, valid.value);
+  if (!scritto.ok) {
+    // Best effort: se anche il registro è giù, l'errore resta comunque nella risposta.
+    await admin.from('event_log').insert({
+      type: 'lancio_setting_scrittura_fallita',
+      payload: { key: chiave, value: valid.value, who: user.email ?? user.id, error: scritto.error } as never,
+      message: `[lancio] impostazione ${chiave} NON salvata: ${scritto.error}`,
+      level: 'error',
+    }).then(() => undefined, () => undefined);
+    return NextResponse.json({ ok: false, errore: 'scrittura_fallita' }, { status: 500 });
+  }
 
   const chi = user.email ?? user.id;
   const leggibile = valid.value === '' ? '(vuoto)' : String(valid.value);
-  await admin.from('event_log').insert({
+  const audit = await admin.from('event_log').insert({
     type: 'lancio_setting_cambiata',
     payload: { key: chiave, old: prima ?? null, new: valid.value, who: chi } as never,
     message: `[lancio] ${chiave}: ${prima === null || prima === undefined ? '(vuoto)' : String(prima)} → ${leggibile} (${chi})`,
     level: 'info',
-  });
+  }).then(({ error }) => !error, () => false);
 
-  return NextResponse.json({ ok: true, key: chiave, value: valid.value });
+  if (!audit) {
+    await admin.from('event_log').insert({
+      type: 'lancio_setting_audit_fallito',
+      payload: { key: chiave, value: valid.value, who: chi } as never,
+      message: `[lancio] ${chiave} salvata, ma la riga di registro non è stata scritta (${chi})`,
+      level: 'warn',
+    }).then(() => undefined, () => undefined);
+  }
+
+  return NextResponse.json({ ok: true, key: chiave, value: valid.value, audit });
 }
