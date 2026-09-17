@@ -1,4 +1,4 @@
-# Lancio "Web Developer AI" — recap per la sessione del bot (bozza 17/09/2026, aggiornare a fine B5)
+# Lancio "Web Developer AI" — recap per la sessione del bot (17/09/2026 sera)
 
 Webinar Zoom **5 ottobre 2026 ore 21:00** (`https://us06web.zoom.us/j/89845223337`, nessun passcode). Lista AC 132 "Lancio Web Developer AI", ads dal 19/09. Spec: `docs/superpowers/specs/2026-09-14-lancio-webdev-ottobre-design.md` (stessa copia nel CRM). Piani: `docs/superpowers/plans/2026-09-14-lancio-*.md` + nota di riconciliazione `…-00-riconciliazione-interfacce.md` (vince sui piani). Ledger di esecuzione: `.superpowers/sdd/2026-09-14-lancio-B*/progress.md` (git-ignorati, solo su questo PC).
 
@@ -8,12 +8,19 @@ Webinar Zoom **5 ottobre 2026 ore 21:00** (`https://us06web.zoom.us/j/8984522333
 | B1 intake + benvenuto lista d'attesa (fase `attesa` → `posto_bloccato`, domande, congedo, tetto 200/h) | in prod | `app_settings.lancio_attivo` (false) + lato CRM `LANCIO_WEBDEV_INTAKE` (off) | `lib/lancio-*.ts`, `lib/fenice-enroll.ts`, cron `lancio-aperture` |
 | B2 lead che scrivono per primi (Telegram / INBOUND / pulsante webinar) | in prod | `INBOUND_ADOPTION_ENABLED` (non impostata) + `app_settings.lancio_pulsante_attivo` (false) | `app/api/webhooks/twilio/route.ts`, `lib/primo-messaggio.ts`, cron manuale `adotta-mai-risposti` |
 | B4 sera del webinar: blast Zoom 19:30-20:45 a lotti con freno, assistenza al collegamento, scelta (chiamata subito / prenotazione 6-7/10), client HMAC verso il CRM | in prod | `lancio_attivo` + cron a data fissa 5/10 in `vercel.json` | `lib/lancio-zoom-blast.ts`, cron `lancio-zoom`, `lib/lancio-assistenza.ts`, `lib/lancio-post-pitch.ts`, `lib/lancio-crm.ts` |
-| B5 follow-up 6/10, restituzioni al pool, veto riapertura, pagina impostazioni, offerta del mese | IN CORSO su `feat/lancio-webdev` | — | piano B5 |
+| B5 follow-up 6/10 (12-14 e 17:30-19:30, anche 7/10), restituzioni al pool dall'8/10, veto riapertura dei restituiti, pagina `/fenice/impostazioni`, offerta del mese da impostazione | COMPLETO su `feat/lancio-webdev` = `main` locale (90dd567, 91 file / 2203 test), review finale fable + fix; **PUSH DA FARE** dopo aver impostato `offerta_del_mese_link` (vedi sotto) | `lancio_attivo`, cron a data fissa; `LANCIO_RESTITUZIONI_MAX` (500) | motore `lib/lancio-blast-motore.ts`, cron `lancio-followup`/`lancio-restituzioni`, `lib/lancio-followup.ts`, `lib/lancio-restituzioni.ts`, runbook `docs/lancio-webdev-runbook-b6.md` |
 
 Lato CRM (repo `CRM GDO`, tutto su main): webhook AC lista 132 bloccata, pool `LANCIO_WEBDEV_2026` + push al bot, turni venditori `/lancio`, rotte `/api/bot/lancio/{slots,book,call-now}`, scheda "chiamate subito", badge Conferme, ritorno al pool su NON_RISPOSTO/INTERROTTO, pulsante "Offerta del mese" nell'agenda. Contratto: `docs/bot-fissatore-contract.md` v1.6 (v1.7 da scrivere a fine B5).
 
 ## Chiavi `app_settings` del lancio (tutte presenti in prod, 16/09)
 `lancio_attivo` (false) · `lancio_pulsante_attivo` (false — accendere SOLO dopo le 21:00 del 5/10) · `lancio_zoom_link` · `lancio_video_live_link` (vuoto, lo da' Bruno la mattina del 6) · `offerta_del_mese_link` (vuoto, dopo la live) · `lancio_evento_at` (2026-10-05T21:00:00+02:00) · `lancio_blast_perimetro` (`tutti`; piano B = `risposto`) · `lancio_sender` (`principale`; il secondario resta spento finche' Bruno non lo dice).
+
+## PRIMA DEL PUSH DEL B5 (non inerte: agende GDO "Offerta del mese")
+Dopo il deploy il pulsante "Offerta del mese" dell'agenda GDO manda il video preso da `app_settings.offerta_del_mese_link` (oggi vuoto → agenda SENZA video + evento `offerta_del_mese_link_mancante`). Fino a oggi quel pulsante mandava il video Black Summer. Per non cambiare comportamento, impostare PRIMA del push (la scrittura dal browser della sessione Claude e' stata bloccata dal classificatore):
+```sql
+update public.app_settings set value = '"https://corso.feniceacademy.it/conferenza-black-summer"'::jsonb where key = 'offerta_del_mese_link';
+```
+oppure, subito dopo il deploy, dalla pagina `/fenice/impostazioni` (admin). Poi: `git push origin main` dal repo del bot (main locale e' gia' al B5).
 
 ## Decisioni del PO da ricordare
 - Benvenuti tutti dal numero principale finche' il secondo numero (+393522070047, Account fenice 2) non ha le verifiche legali Twilio; poi il secondario prende i primi 50/g.
