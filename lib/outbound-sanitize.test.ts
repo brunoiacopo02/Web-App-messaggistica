@@ -89,3 +89,23 @@ describe('link Black Summer (offerta del mese, invii per conto GDO)', () => {
     expect(sanitizeOutbound(`Eccolo 👉 https://corso.feniceacademy.it/conferenza-black-\nsummer`)).toContain(BS);
   });
 });
+
+describe('unknownFeniceLinks con link extra (video della live, offerta del mese)', () => {
+  const live = 'https://corso.feniceacademy.it/live-webdev-2026';
+  it('un link extra noto non e piu inventato; senza extra lo e', () => {
+    expect(unknownFeniceLinks(`ecco il video ${live}`, [live])).toEqual([]);
+    expect(unknownFeniceLinks(`ecco il video ${live}`)).toEqual([live]);
+  });
+  // Il link dell'offerta del mese viene da `app_settings.offerta_del_mese_link` e non
+  // sta (ne puo' stare) nella whitelist statica: sia il drain sia il cron dei solleciti
+  // glielo passano come extra, altrimenti ogni offerta sarebbe un falso "link inventato".
+  it('il link dell offerta del mese passato come extra non e inventato', () => {
+    const offerta = 'https://corso.feniceacademy.it/webdev-offerta';
+    expect(unknownFeniceLinks(`ecco il video ${offerta}`, [offerta])).toEqual([]);
+    expect(unknownFeniceLinks(`ecco il video ${offerta}`)).toEqual([offerta]);
+  });
+
+  it('gli altri link ignoti restano segnalati', () => {
+    expect(unknownFeniceLinks(`${live} e https://corso.feniceacademy.it/conferenza-zx`, [live])).toEqual(['https://corso.feniceacademy.it/conferenza-zx']);
+  });
+});

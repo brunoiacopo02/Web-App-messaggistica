@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { parseLancioSettings, isAttivo, LANCIO_SETTING_KEYS, LANCIO_SETTINGS_DEFAULT } from './lancio-settings';
+import {
+  parseLancioSettings, isAttivo, LANCIO_SETTING_KEYS, LANCIO_SETTINGS_DEFAULT,
+  LANCIO_EDITABLE_KEYS, validateLancioSettingInput, setLancioSetting,
+} from './lancio-settings';
 
 describe('isAttivo — la chiave lancio_attivo si legge come 0/1 o booleano', () => {
   it('accende su true, 1, "1", "true", "on"', () => {
@@ -100,5 +103,85 @@ describe('parseLancioSettings', () => {
     const s = parseLancioSettings([{ key: 'lancio_pulsante_attivo', value: true }]);
     expect(s.attivo).toBe(false);
     expect(s.pulsanteAttivo).toBe(true);
+  });
+});
+
+describe('validateLancioSettingInput — le regole della pagina', () => {
+  it('tutte e 8 le chiavi sono modificabili; una chiave estranea no', () => {
+    expect([...LANCIO_EDITABLE_KEYS].sort()).toEqual([...LANCIO_SETTING_KEYS].sort());
+    expect(validateLancioSettingInput('fenice_ai_autoreply', true)).toEqual({ ok: false, reason: 'chiave_non_modificabile' });
+  });
+  it('interruttori: booleano o 0/1/on/off; vuoto = spento; altro = errore', () => {
+    for (const k of ['lancio_attivo', 'lancio_pulsante_attivo']) {
+      expect(validateLancioSettingInput(k, true)).toEqual({ ok: true, value: true });
+      expect(validateLancioSettingInput(k, '1')).toEqual({ ok: true, value: true });
+      expect(validateLancioSettingInput(k, 'off')).toEqual({ ok: true, value: false });
+      expect(validateLancioSettingInput(k, '')).toEqual({ ok: true, value: false });
+      expect(validateLancioSettingInput(k, 'forse')).toEqual({ ok: false, reason: 'valore_non_valido' });
+    }
+  });
+  it('link: https obbligatorio, spazi tolti, vuoto = azzera (stringa vuota)', () => {
+    for (const k of ['offerta_del_mese_link', 'lancio_video_live_link', 'lancio_zoom_link']) {
+      expect(validateLancioSettingInput(k, ' https://corso.feniceacademy.it/live-webdev ')).toEqual({ ok: true, value: 'https://corso.feniceacademy.it/live-webdev' });
+      expect(validateLancioSettingInput(k, 'http://corso.feniceacademy.it/x')).toEqual({ ok: false, reason: 'link_non_https' });
+      expect(validateLancioSettingInput(k, 'ciao')).toEqual({ ok: false, reason: 'link_non_https' });
+      expect(validateLancioSettingInput(k, '')).toEqual({ ok: true, value: '' });
+      expect(validateLancioSettingInput(k, null)).toEqual({ ok: true, value: '' });
+    }
+  });
+  it('lancio_evento_at: ISO con offset, mai vuoto', () => {
+    expect(validateLancioSettingInput('lancio_evento_at', '2026-10-05T21:00:00+02:00')).toEqual({ ok: true, value: '2026-10-05T21:00:00+02:00' });
+    expect(validateLancioSettingInput('lancio_evento_at', '2026-10-05 21:00')).toEqual({ ok: false, reason: 'data_non_valida' });
+    expect(validateLancioSettingInput('lancio_evento_at', '')).toEqual({ ok: false, reason: 'data_non_valida' });
+  });
+  it('perimetro e mittente: solo i due valori, vuoto = default', () => {
+    expect(validateLancioSettingInput('lancio_blast_perimetro', ' Risposto ')).toEqual({ ok: true, value: 'risposto' });
+    expect(validateLancioSettingInput('lancio_blast_perimetro', '')).toEqual({ ok: true, value: 'tutti' });
+    expect(validateLancioSettingInput('lancio_blast_perimetro', 'alcuni')).toEqual({ ok: false, reason: 'valore_non_valido' });
+    expect(validateLancioSettingInput('lancio_sender', 'secondario')).toEqual({ ok: true, value: 'secondario' });
+    expect(validateLancioSettingInput('lancio_sender', null)).toEqual({ ok: true, value: 'principale' });
+    expect(validateLancioSettingInput('lancio_sender', 'terzo')).toEqual({ ok: false, reason: 'valore_non_valido' });
+  });
+  it('lo schema si accetta anche urlato, e si salva minuscolo', () => {
+    // Un link incollato da un cellulare arriva con l'iniziale maiuscola: e' lo stesso
+    // link, non un errore di battitura da rifiutare. Lo schema si normalizza, il resto
+    // dell'URL no (il path di Zoom e' sensibile alle maiuscole).
+    expect(validateLancioSettingInput('lancio_zoom_link', 'HTTPS://us06web.zoom.us/j/1'))
+      .toEqual({ ok: true, value: 'https://us06web.zoom.us/j/1' });
+    expect(validateLancioSettingInput('offerta_del_mese_link', ' HtTpS://corso.feniceacademy.it/Offerta-WebDev '))
+      .toEqual({ ok: true, value: 'https://corso.feniceacademy.it/Offerta-WebDev' });
+    expect(validateLancioSettingInput('lancio_video_live_link', 'HTTP://corso.feniceacademy.it/x'))
+      .toEqual({ ok: false, reason: 'link_non_https' });
+  });
+
+  it('un valore che il pannello sa scrivere e uno che parseLancioSettings sa rileggere', () => {
+    // Il giro completo: quello che esce dalla validazione torna dentro `app_settings`
+    // e deve rileggersi identico, o la pagina salverebbe valori muti.
+    const v = validateLancioSettingInput('lancio_zoom_link', ' https://us06web.zoom.us/j/1 ');
+    expect(v.ok && parseLancioSettings([{ key: 'lancio_zoom_link', value: v.value }]).zoomLink)
+      .toBe('https://us06web.zoom.us/j/1');
+    const off = validateLancioSettingInput('lancio_video_live_link', '   ');
+    expect(off.ok && parseLancioSettings([{ key: 'lancio_video_live_link', value: off.value }]).videoLiveLink)
+      .toBeNull();
+  });
+});
+
+describe('setLancioSetting — una scrittura fallita si vede', () => {
+  function fintoSupabase(errore: string | null) {
+    return {
+      from: () => ({ upsert: () => Promise.resolve({ error: errore ? { message: errore } : null }) }),
+    } as never;
+  }
+
+  it('la scrittura riuscita torna ok', async () => {
+    expect(await setLancioSetting(fintoSupabase(null), 'lancio_attivo', false)).toEqual({ ok: true });
+  });
+
+  it('la scrittura rifiutata torna il motivo, invece di sparire', async () => {
+    // Il freno spegne `lancio_attivo` con questa funzione: se il DB dice di no e
+    // nessuno se ne accorge, i run successivi ripartono come se niente fosse.
+    const esito = await setLancioSetting(fintoSupabase('permission denied'), 'lancio_attivo', false);
+    expect(esito.ok).toBe(false);
+    expect(esito.ok === false && esito.error).toContain('permission denied');
   });
 });

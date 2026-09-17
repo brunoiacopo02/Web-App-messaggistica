@@ -11,8 +11,9 @@ import { sendCrmNota } from '@/lib/bot-outcome';
 import { buildBotRipresoNote } from '@/lib/bot-outcome-rules';
 import { segnalaRispostaDopoTerzoNr } from '@/lib/risposta-post-nr';
 import { classificaPrimoMessaggio, isMarkerPulsanteWebinar } from '@/lib/primo-messaggio';
-import { LANCIO_SLUG, pulsanteRiportaInPostPitch, pulsanteScriveFase } from '@/lib/lancio-fase';
-import { impostaFaseLancio } from '@/lib/lancio-db';
+import { LANCIO_SLUG, pulsanteRiportaInPostPitch, pulsanteRiapreChat, pulsanteScriveFase, serveNotaRestituzione } from '@/lib/lancio-fase';
+import { impostaFaseLancio, marcaNotaRestituzione } from '@/lib/lancio-db';
+import { notaInboundDopoRestituzione } from '@/lib/lancio-restituzioni';
 import { getLancioSettings } from '@/lib/lancio-settings';
 import { pushLeadEntrante } from '@/lib/lead-entrante';
 import { eNumeroDelBot } from '@/lib/mittente';
@@ -267,12 +268,20 @@ export async function POST(req: NextRequest) {
             level: 'warn',
           });
         } else {
+          // La fase si calcola PRIMA delle colonne perche' decide anche la riapertura:
+          // l'elenco delle fasi da cui si rientra e' chiuso (vedi `pulsanteRiportaInPostPitch`)
+          // e da `followup_inviato` e `restituito` la fase NON si muove — dopo il follow-up
+          // la chat e' del flusso standard di B5, e un restituito e' tornato al GDO.
+          const cambiaFase = pulsanteRiportaInPostPitch(conv.lancio_fase);
           // Se la chat di Mario era 'closed' (un no di settimane fa, o il congedo del
           // lancio) si riapre: sta scrivendo adesso, e col pulsante. Mai su una chat
-          // senza padrone, in pausa o passata a una persona: quelle non arrivano qui.
+          // senza padrone, in pausa o passata a una persona: quelle non arrivano qui — e
+          // mai quando la fase resta dov'e' (ruling C8, vedi `pulsanteRiapreChat`).
           // Le colonne d'ingresso si scrivono solo se mancano: chi e' entrato dalla
           // lista resta 'lista'.
-          const riapri = conv.ai_owner === 'mario' && conv.ai_status === 'closed';
+          const riapri = pulsanteRiapreChat({
+            cambiaFase, aiOwner: conv.ai_owner, aiStatus: conv.ai_status,
+          });
           const colonne = {
             ...(conv.lancio_slug ? {} : { lancio_slug: LANCIO_SLUG }),
             ...(conv.lancio_ingresso ? {} : { lancio_ingresso: 'pulsante_webinar' }),
@@ -296,10 +305,6 @@ export async function POST(req: NextRequest) {
           // `impostaFaseLancio` (lib/lancio-db.ts) e' l'unico scrittore di `lancio_fase` e
           // si scrive da solo l'evento `lancio_fase_cambiata`. Await e non `after()`: e' un
           // update solo, e la fase deve essere sul posto prima che il drain parta qui sotto.
-          // L'elenco delle fasi da cui si rientra e' chiuso (vedi la funzione): da
-          // `followup_inviato` e `restituito` la fase NON si muove — dopo il follow-up la
-          // chat e' del flusso standard di B5, e un restituito e' tornato al GDO.
-          const cambiaFase = pulsanteRiportaInPostPitch(conv.lancio_fase);
           if (cambiaFase) {
             await impostaFaseLancio(supabase, conversationId, 'post_pitch');
             conv.lancio_fase = 'post_pitch';
@@ -438,13 +443,44 @@ export async function POST(req: NextRequest) {
         after(segnalaRispostaDopoTerzoNr(supabase, conversationId, conv.crm_lead_id));
       }
 
+      // Lead del lancio gia' restituito al pool (B5, ruling C8): non si riapre, il bot
+      // tace, e chi lo ha in carico sul CRM viene avvisato con una nota — e' l'unico
+      // modo perche' non chiami a vuoto una persona che intanto sta scrivendo qui.
+      const restituito = !!conv?.lancio_slug && conv.lancio_fase === 'restituito';
+      if (conv && restituito) {
+        await supabase.from('event_log').insert({
+          type: 'lancio_inbound_dopo_restituzione',
+          payload: {
+            conversationId, phone, crmLeadId: conv.crm_lead_id, testo: messageBody.slice(0, 300),
+            ...(conv.crm_lead_id && !serveNotaRestituzione(conv.lancio_info, Date.now())
+              ? { notaSoppressa: true }
+              : {}),
+          } as never,
+          message: `[lancio] ${phone} ha riscritto dopo il ritorno nel pool (conv ${conversationId}): il bot non risponde`,
+          level: 'info',
+        });
+        // Dopo la risposta a Twilio, come tutte le altre note: la rete del CRM non deve
+        // rallentare il webhook. Senza `crm_lead_id` non c'e' nessuno da avvisare —
+        // `sendCrmNota` lo rileggerebbe da se' e uscirebbe con 'not_crm_lead'.
+        // Una nota all'ora per chat (ruling C8): chi manda cinque messaggi non deve
+        // produrre cinque campanelle. L'evento qui sopra invece si scrive sempre.
+        // Il marcatore si stampa PRIMA dell'invio, e con l'await: due inbound in volo
+        // insieme devono trovarlo gia' li' e mandarne una sola.
+        if (conv.crm_lead_id && serveNotaRestituzione(conv.lancio_info, Date.now())) {
+          const quandoNota = new Date().toISOString();
+          await marcaNotaRestituzione(supabase, conversationId, quandoNota);
+          after(sendCrmNota(supabase, conversationId, notaInboundDopoRestituzione(messageBody, quandoNota)));
+        }
+      }
+
       if (conv && shouldReopen({
         aiOwner: conv.ai_owner,
         aiStatus: conv.ai_status,
         aiPausedAt: conv.ai_paused_at,
-        // Chat del lancio gia' congedata: non si riapre (vedi `shouldReopen`).
+        // Chat del lancio gia' congedata o restituita: non si riapre (vedi `shouldReopen`).
         lancioSlug: conv.lancio_slug,
         lancioInfo: conv.lancio_info,
+        lancioFase: conv.lancio_fase,
       })) {
         await supabase.from('conversations').update({ ai_status: 'active' }).eq('id', conversationId);
         conv.ai_status = 'active';
@@ -464,7 +500,7 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      if (shouldAutoReply({
+      if (!restituito && shouldAutoReply({
         toMatchesFenice,
         autoReplyOn,
         aiOwner: conv?.ai_owner ?? null,

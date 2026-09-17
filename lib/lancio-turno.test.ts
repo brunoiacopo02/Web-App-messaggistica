@@ -413,13 +413,17 @@ describe('eseguiTurnoLancio — le fasi del B4 delegano ai loro turni', () => {
     });
   });
 
-  it('followup_inviato resta del B5: silenzio fase_non_gestita, mai il pitch', async () => {
+  // Era il segnaposto del B4 (silenzio `fase_non_gestita`): dal B5 questa fase ha il suo
+  // ramo, che passa la mano a Mario. Quello che non cambia e' che i turni del B4 non la
+  // toccano e che nessuna bolla del lancio esce da qui.
+  it('followup_inviato non passa dai turni del B4: e il ramo del B5 a prenderlo', async () => {
     const { supabase, calls } = makeSupabase();
-    await eseguiTurnoLancio(supabase, base({ fase: 'followup_inviato', rows: [WELCOME, inb('ok')], inboundBody: 'ok' }));
+    const esito = await eseguiTurnoLancio(supabase, base({ fase: 'followup_inviato', rows: [WELCOME, inb('ok')], inboundBody: 'ok' }));
+    expect(esito).toBe('handed_to_mario');
     expect(turnoAssistenza).not.toHaveBeenCalled();
     expect(turnoPostPitch).not.toHaveBeenCalled();
     expect(sendFreeText).not.toHaveBeenCalled();
-    expect(calls.events.some((e) => e.type === 'lancio_silenzio' && e.payload.motivo === 'fase_non_gestita')).toBe(true);
+    expect(calls.events.some((e) => e.type === 'lancio_silenzio')).toBe(false);
   });
 });
 
@@ -499,5 +503,25 @@ describe('eseguiTurnoLancio — marcatore del congedo', () => {
     }));
     expect(sendFreeText).not.toHaveBeenCalled();
     expect(calls.convUpdates.some((u) => u.lancio_info)).toBe(false);
+  });
+});
+
+describe('followup_inviato — il lead ha risposto al follow-up: la chat passa a Mario', () => {
+  it('porta la fase a chiuso, scrive l evento e torna handed_to_mario senza bolle, senza modello, senza traccia', async () => {
+    const { supabase, calls } = makeSupabase();
+    const esito = await eseguiTurnoLancio(supabase, base({
+      fase: 'followup_inviato',
+      rows: [WELCOME, inb('si'), { direction: 'out', body: 'Ciao Anna, ieri sera alla live...', template_sid: 'HX_FU' }, inb('si mi interessa, dimmi')],
+      inboundBody: 'si mi interessa, dimmi',
+    }));
+    expect(esito).toBe('handed_to_mario');
+    expect(calls.convUpdates).toContainEqual(expect.objectContaining({ lancio_fase: 'chiuso' }));
+    expect(calls.events.map((e) => e.type)).toContain('lancio_followup_risposta');
+    expect(sendFreeText).not.toHaveBeenCalled();
+    expect(genera).not.toHaveBeenCalled();
+    expect(turnoAssistenza).not.toHaveBeenCalled();
+    expect(turnoPostPitch).not.toHaveBeenCalled();
+    // Nessuna traccia fenice_ai_reply qui: la scrive il giro di Mario che segue.
+    expect(calls.events.map((e) => e.type)).not.toContain('fenice_ai_reply');
   });
 });

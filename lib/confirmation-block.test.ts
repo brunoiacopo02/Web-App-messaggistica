@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ensureConfirmationBlock, STEP4_TEXT, VIDEO_PITCH_TEXT } from './confirmation-block';
+import { ensureConfirmationBlock, containsVideoLink, STEP4_TEXT, VIDEO_PITCH_TEXT } from './confirmation-block';
 import { MARIO_SYSTEM_PROMPT } from './mario-prompt';
 
 const step1 = 'Perfetto, allora ci siamo. Confermami tu giorno e ora della call come li hai scelti, così sono sicura che siamo allineati';
@@ -133,5 +133,19 @@ describe('le costanti del blocco restano allineate al prompt di Mario', () => {
 
   it('il pitch del video iniettato e quello scritto nel prompt', () => {
     expect(prompt).toContain(normalizza(VIDEO_PITCH_TEXT));
+  });
+});
+
+describe('blocco di conferma con un video extra', () => {
+  const live = 'https://corso.feniceacademy.it/live-webdev-2026';
+  it('containsVideoLink riconosce il link extra solo se glielo si passa', () => {
+    expect(containsVideoLink(`guarda ${live}`)).toBe(false);
+    expect(containsVideoLink(`guarda ${live}`, [live])).toBe(true);
+  });
+  it('ensureConfirmationBlock non segnala il video assente se il link extra c e, e aggiunge il FATTO', () => {
+    const res = ensureConfirmationBlock([`Ecco il video ${live}`], { extraVideoLinks: [live] });
+    expect(res.missingVideoLink).toBe(false);
+    expect(res.parts.some((p) => /\bFATTO\b/.test(p))).toBe(true);
+    expect(ensureConfirmationBlock([`Ecco il video ${live}`]).missingVideoLink).toBe(true);
   });
 });

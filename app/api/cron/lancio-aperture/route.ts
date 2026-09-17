@@ -16,7 +16,7 @@ import { inOpeningWindow } from '@/lib/sequence';
 import { lancioBenvenutoText } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
 import { templateName } from '@/lib/name';
-import { mittenteDiConversazione, numeroPrimario } from '@/lib/mittente';
+import { eRifiutoDiPolicy } from '@/lib/lancio-blast-motore';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -53,26 +53,12 @@ function authorized(req: NextRequest): boolean {
   return false;
 }
 
-/**
- * Il presidio categoria (`UTILITY_ONLY`) ha detto no: nessuna chiamata a Twilio e'
- * partita. Vale identico per ogni conversazione, quindi il run si ferma qui invece di
- * sbatterci contro mille volte — e nessuna riga `messages` racconta un invio che non
- * c'e' stato.
- */
-function eRifiutoDiPolicy(e: { message?: string; code?: number }): boolean {
-  if (typeof e?.code === 'number') return false;
-  const m = e?.message ?? '';
-  return m.includes('bloccato: categoria') || m.includes('non verificabile');
-}
-
 type Conv = {
   id: number;
   crm_lead_id: string | null;
   lancio_fase: string | null;
   lancio_benvenuto_at: string | null;
   last_inbound_at: string | null;
-  /** Il numero sorteggiato all'intake (lib/mittente.ts): il benvenuto differito parte da li'. */
-  wa_number: string | null;
   leads: { phone_e164: string | null; first_name: string | null } | null;
 };
 
@@ -93,17 +79,15 @@ export async function GET(req: NextRequest) {
 
   const supabase = getSupabaseAdmin();
   const templateSid = process.env.LANCIO_WELCOME_TEMPLATE_SID;
-  // Il mittente e' della singola chat (`wa_number`, sorteggiato all'intake): qui si
-  // controlla solo che il primario ci sia, cioe' che la configurazione regga.
-  const primario = numeroPrimario();
-  if (!templateSid || !primario) {
+  const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
+  if (!templateSid || !from) {
     await logEvento(
       supabase,
       'lancio_aperture_config_error',
       {
         missing: [
           !templateSid ? 'LANCIO_WELCOME_TEMPLATE_SID' : null,
-          !primario ? 'TWILIO_WHATSAPP_NUMBER_FENICE' : null,
+          !from ? 'TWILIO_WHATSAPP_NUMBER_FENICE' : null,
         ].filter(Boolean),
       },
       '[lancio] env mancanti per i benvenuti differiti: run saltato',
@@ -176,7 +160,7 @@ export async function GET(req: NextRequest) {
   for (let pagina = 0; pagina < MAX_PAGINE; pagina++) {
     const { data, error } = await supabase
       .from('conversations')
-      .select('id, crm_lead_id, lancio_fase, lancio_benvenuto_at, last_inbound_at, wa_number, leads(phone_e164, first_name)')
+      .select('id, crm_lead_id, lancio_fase, lancio_benvenuto_at, last_inbound_at, leads(phone_e164, first_name)')
       .not('lancio_slug', 'is', null)
       .eq('lancio_fase', 'attesa')
       .eq('ai_status', 'active')
@@ -293,9 +277,6 @@ export async function GET(req: NextRequest) {
 
         const nome = c.leads?.first_name ?? null;
         const corpo = lancioBenvenutoText(nome);
-        // Il numero della chat, sorteggiato all'intake. Il `?? primario` e' solo per
-        // il tipo: col primario configurato non e' mai undefined.
-        const from = mittenteDiConversazione(c) ?? primario;
         tentati++;
         numeriServiti.add(phone);
         // Il messaggio e' su WhatsApp: da qui in poi il timbro non si tocca piu'.

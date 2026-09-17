@@ -18,6 +18,9 @@ import { confermaVideoVisto } from './video-visto';
 import { notaPrimoContatto } from './primo-contatto-note';
 import { haCongedo, lancioInCorso } from './lancio-fase';
 import { eseguiTurnoLancio } from './lancio-turno';
+import { lancioStandardDrain, lancioStandardContextNote } from './lancio-followup';
+import { getLancioSettings } from './lancio-settings';
+import { alertUnaVolta } from './alert-una-volta';
 import type { LancioInfo } from './lancio-crm';
 import { mittenteDiConversazione } from './mittente';
 
@@ -74,6 +77,9 @@ export function shouldAutoReply(g: AutoReplyGate): boolean {
  * proprio dopo una promessa di silenzio. La restituzione di fine lancio (B5) sa gia'
  * dove trovarla. I chiamanti che non leggono le colonne del lancio non passano questi
  * campi e si comportano come prima.
+ *
+ * Falso anche per una chat del lancio in fase `restituito`: il lead e' tornato al pool
+ * del CRM (ruling C8).
  */
 export function shouldReopen(g: {
   aiOwner: string | null;
@@ -81,10 +87,14 @@ export function shouldReopen(g: {
   aiPausedAt?: string | null;
   lancioSlug?: string | null;
   lancioInfo?: unknown;
+  lancioFase?: string | null;
 }): boolean {
   if (g.aiPausedAt) return false;
   if (g.aiOwner !== 'mario') return false;
   if (g.lancioSlug && haCongedo(g.lancioInfo)) return false;
+  // Restituito al pool (B5, ruling C8): il lead e' del CRM, non del bot. Riaprire qui
+  // rimetterebbe Mario su una persona che un GDO sta chiamando. Il webhook avvisa il CRM.
+  if (g.lancioSlug && g.lancioFase === 'restituito') return false;
   return g.aiStatus === 'closed';
 }
 
@@ -528,6 +538,28 @@ export async function drainMarioReplies(
   // Giornate già al completo: il bot non le propone. Si legge una volta per drain,
   // non per turno. Senza BOOKING_DAILY_CAP la lista è vuota e non si tocca il DB.
   const giorniPieni = await datePiene(supabase, tettoGiornaliero(process.env.BOOKING_DAILY_CAP), new Date());
+
+  // Lancio Web Developer AI, dopo il follow-up (spec §5.5): la chat e' di Mario standard e
+  // il video di preparazione e' la live editata. Il link si legge una volta per drain, e
+  // solo se serve; se manca, Mario usa i quattro video classici e resta la traccia.
+  let lancioVideoLive: string | null | undefined;
+  const leggiVideoLive = async (): Promise<string | null> => {
+    if (lancioVideoLive !== undefined) return lancioVideoLive;
+    lancioVideoLive = (await getLancioSettings(supabase)).videoLiveLink;
+    // Una volta per chat, non a ogni drain: la mattina del 6, col link non ancora
+    // impostato, ogni messaggio di ogni lead del lancio ne scriveva uno — e un avviso che
+    // si ripete non e' un avviso. Il fatto che manchi e' uno solo e si legge alla prima.
+    if (!lancioVideoLive) {
+      await alertUnaVolta(supabase, {
+        type: 'lancio_video_live_link_missing',
+        conversationId,
+        payload: { crmLeadId },
+        message: `[lancio] conv ${conversationId}: lancio_video_live_link non impostato, Mario usa i video classici`,
+        level: 'warn',
+      });
+    }
+    return lancioVideoLive;
+  };
   try {
     for (let round = 0; round < MAX_ROUNDS_PER_DRAIN; round++) {
       const before = await loadHistory();
@@ -541,9 +573,6 @@ export async function drainMarioReplies(
       // Il messaggio del lead a cui stiamo rispondendo in questo giro.
       const inboundIdx = nextUnansweredInboundIndex(rows);
       const inboundBody = inboundIdx >= 0 ? (rows[inboundIdx].body ?? '') : '';
-      // Un link del video già uscito in questa chat: serve sia alla patch del blocco
-      // conferma, sia alla rete di sicurezza sul FATTO qui sotto.
-      const videoGiaInviato = rows.some((m) => m.direction === 'out' && containsVideoLink(m.body));
 
       if (lancioInCorso(lancio)) {
         // Il turno del lancio dura 5-20 secondi (modello + CRM + Twilio) e scrive la sua
@@ -565,10 +594,14 @@ export async function drainMarioReplies(
         let faseTurno = lancio.lancio_fase ?? null;
         let infoTurno = lancio.lancio_info ?? null;
         let leadIdTurno = crmLeadId;
+        // B5: ha risposto al follow-up. Il turno chiude il lancio e passa la mano a Mario
+        // in QUESTO drain: 'handed_to_mario' non e' uno stato di ai_status e non deve mai
+        // entrare in finalStatus (che il finally scrive grezzo in conversations).
+        let passaggioAMario = false;
         for (let giro = 0; giro < MAX_GIRI_LANCIO; giro++) {
           // La soglia si prende PRIMA del turno: dopo, la cronologia e' gia' cambiata.
           const ultimoVisto = ultimoInboundAt(righeTurno);
-          finalStatus = await eseguiTurnoLancio(supabase, {
+          const esitoTurno = await eseguiTurnoLancio(supabase, {
             conversationId, phone, from,
             crmLeadId: leadIdTurno,
             fase: faseTurno,
@@ -578,6 +611,11 @@ export async function drainMarioReplies(
             // post-pitch ricomincerebbe da capo a ogni messaggio del lead.
             lancioInfo: infoTurno,
           });
+          if (esitoTurno === 'handed_to_mario') {
+            passaggioAMario = true;
+            break;
+          }
+          finalStatus = esitoTurno;
           // Solo mentre il lancio resta 'active': un congedo o un passaggio umano hanno
           // chiuso la partita.
           if (finalStatus !== 'active') break;
@@ -598,8 +636,29 @@ export async function drainMarioReplies(
           righeTurno = dopoIlTurno;
           inboundTurno = dopoIlTurno[iNuovo].body ?? '';
         }
-        break;
+        if (!passaggioAMario) break;
+        // Ha risposto al follow-up: il turno ha chiuso il lancio, da qui in poi e' Mario
+        // standard NELLO STESSO round. La copia in memoria segue il DB, e finalStatus
+        // resta 'active' come per qualunque chat che Mario sta servendo.
+        lancio.lancio_fase = 'chiuso';
+        finalStatus = 'active';
       }
+
+      // Link ufficiali "in piu'" per questa conversazione: il video della live (lancio).
+      // `linkExtra` = link che non sono "inventati" E che valgono come "video gia'
+      // uscito"; `videoExtra` = i soli link del lancio. Il video del GDO entra in
+      // `linkExtra` perche' dall'offerta del mese quel link arriva da un'impostazione e
+      // non sta nella whitelist statica: senza dirlo ai sanitizzatori ogni offerta
+      // finirebbe a log come link inventato, e il blocco di conferma direbbe "link video
+      // assente" (niente passaggio FATTO) proprio nel turno in cui il video esce.
+      // Sui quattro video classici non cambia nulla: sono gia' nella whitelist.
+      const lancioStandard = lancioStandardDrain(lancio);
+      const videoLive = lancioStandard ? await leggiVideoLive() : null;
+      const videoExtra: string[] = videoLive ? [videoLive] : [];
+      const linkExtra: string[] = [...videoExtra, ...(gdoVideoUrl ? [gdoVideoUrl] : [])];
+      // Un link del video già uscito in questa chat: serve sia alla patch del blocco
+      // conferma, sia alla rete di sicurezza sul FATTO qui sotto.
+      const videoGiaInviato = rows.some((m) => m.direction === 'out' && containsVideoLink(m.body, linkExtra));
 
       /** Manda il video del GDO come bolla a sé e ne registra l'invio. */
       const inviaVideoGdo = async (): Promise<void> => {
@@ -686,9 +745,11 @@ export async function drainMarioReplies(
                 gdoAppuntamentoAt: gdoAppuntamentoAt,
               }),
             }
-          : notaPrimo
-            ? { contextNote: notaPrimo }
-            : {}),
+          : lancioStandard && lancioStandardContextNote(videoLive)
+            ? { contextNote: lancioStandardContextNote(videoLive) as string }
+            : notaPrimo
+              ? { contextNote: notaPrimo }
+              : {}),
       });
 
       // Il lead può confermare di aver visto il video PRIMA che gli sia mai arrivato
@@ -759,7 +820,7 @@ export async function drainMarioReplies(
       // riceverebbe senza che ne resti traccia da nessuna parte. Non blocchiamo
       // l'invio — è un segnale diagnostico, non un filtro — ma l'URL fasullo va
       // registrato per poterlo ritrovare.
-      const linkInventati = parts.flatMap((p) => unknownFeniceLinks(p));
+      const linkInventati = parts.flatMap((p) => unknownFeniceLinks(p, linkExtra));
       if (linkInventati.length > 0) {
         await supabase.from('event_log').insert({
           type: 'unknown_fenice_link',
@@ -776,7 +837,7 @@ export async function drainMarioReplies(
       // precedente è il segnale che il blocco è già stato mandato; se invece il link
       // esce proprio adesso, la cronologia non lo contiene ancora e la patch si applica.
       if (result.appointmentFixed && !videoGiaInviato) {
-        const block = ensureConfirmationBlock(parts);
+        const block = ensureConfirmationBlock(parts, { extraVideoLinks: linkExtra });
         parts = block.parts;
         if (block.added.length > 0 || block.missingVideoLink) {
           await supabase.from('event_log').insert({

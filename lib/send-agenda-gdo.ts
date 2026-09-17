@@ -10,6 +10,7 @@ import {
   waitForDelivery,
   type SendAgendaEsito,
 } from './gdo-agenda';
+import { getLancioSettings } from './lancio-settings';
 import { toE164 } from './phone';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
@@ -72,6 +73,19 @@ export async function runSendAgenda(
     return { ok: false, esito: 'fallito', error: 'invalid_phone' };
   }
 
+  // L'offerta del mese è un'impostazione (spec §5.7): si legge una volta per richiesta e
+  // vale sia per la deduplica sia per l'arruolamento. Senza link il video non parte.
+  const settings = await getLancioSettings(supabase);
+  const videoCorretto = videoLinkForVariant(payload.variant, settings);
+  if (payload.variant.offertaDelMese && !videoCorretto) {
+    await supabase.from('event_log').insert({
+      type: 'offerta_del_mese_link_mancante',
+      payload: { crmLeadId: payload.leadId } as never,
+      message: `[gdo] offerta del mese chiesta per il lead ${payload.leadId} ma offerta_del_mese_link non è impostato: agenda inviata senza video`,
+      level: 'warn',
+    });
+  }
+
   // Deduplica: il GDO che non vede arrivare nulla riclicca. Rimandare farebbe
   // arrivare due messaggi identici al lead che ha solo il telefono offline.
   const { data: precedenti } = await supabase
@@ -100,9 +114,9 @@ export async function runSendAgenda(
 
     // Il GDO può aver ricliccato perché aveva sbagliato lavora/famiglia. L'agenda non
     // si rimanda comunque — il lead riceverebbe due volte lo stesso testo — ma il video
-    // che parte alla sua risposta dev'essere quello giusto.
-    const videoCorretto = videoLinkForVariant(payload.variant);
-    if (precedente.gdo_video_url && videoCorretto !== precedente.gdo_video_url) {
+    // che parte alla sua risposta dev'essere quello giusto. Senza link corretto (offerta
+    // del mese non impostata) non c'è niente da correggere: il video vecchio resta.
+    if (precedente.gdo_video_url && videoCorretto && videoCorretto !== precedente.gdo_video_url) {
       if (precedente.gdo_video_sent_at) {
         // Correzione tardiva: il lead ha già in mano il video sbagliato. Riscrivere la
         // colonna non lo rimedierebbe e nasconderebbe il problema al GDO.
@@ -140,6 +154,7 @@ export async function runSendAgenda(
     crmLeadId: payload.leadId,
     crmFunnel: payload.funnel,
     variant: payload.variant,
+    gdoVideoUrl: videoCorretto,
   });
 
   if (!inviata.ok || !inviata.sid) {

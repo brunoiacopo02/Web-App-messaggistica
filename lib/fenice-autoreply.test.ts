@@ -10,12 +10,22 @@ vi.mock('./bot-outcome', () => ({
   registraEsitoSenzaLeadId: vi.fn(async () => ({ decisione: 'registrato', chiudi: true })),
 }));
 vi.mock('./lancio-turno', () => ({ eseguiTurnoLancio: vi.fn(async () => 'active') }));
+// Il link della live sta in `app_settings`: qui vale il valore di default, i test che
+// servono il caso "link assente" lo sovrascrivono con `mockResolvedValueOnce`.
+vi.mock('./lancio-settings', () => ({
+  getLancioSettings: vi.fn(async () => ({
+    attivo: true, pulsanteAttivo: false, zoomLink: null,
+    videoLiveLink: 'https://corso.feniceacademy.it/live-webdev-2026', offertaDelMeseLink: null,
+    eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti', sender: 'principale',
+  })),
+}));
 
 import { generateMarioReply, GDO_CONTEXT_NOTE } from './mario';
 import { sendOutcome, inviaNotaAlCrm, registraEsitoSenzaLeadId } from './bot-outcome';
 import { NOTA_VIDEO, NOTA_NOEMI } from './gdo-context-note';
 import { OPENING_ENV_KEYS, personaForConversation } from './persona';
 import { eseguiTurnoLancio } from './lancio-turno';
+import { getLancioSettings } from './lancio-settings';
 import { TESTO_POSTO_BLOCCATO } from './lancio-fase';
 
 describe('shouldAutoReply', () => {
@@ -372,8 +382,27 @@ function makeDrainSupabase(claimedRow: ClaimedRow, initialRows: FakeMsgRow[]) {
           },
         };
       }
-      // event_log
-      return { insert(payload: any) { calls.events.push(payload); return Promise.resolve({ data: null }); } };
+      // event_log: l'insert e' quello che i test guardano; la select serve ad
+      // `alertUnaVolta` (un alert gia' scritto per questa chat non si ripete).
+      return {
+        select() {
+          const cerca: Record<string, unknown> = {};
+          const stub: any = {
+            eq(col: string, val: unknown) { cerca[col] = val; return stub; },
+            contains(_col: string, val: Record<string, unknown>) { cerca.payload = val; return stub; },
+            limit() { return stub; },
+            then(resolve: any) {
+              const payload = (cerca.payload ?? {}) as Record<string, unknown>;
+              const prior = calls.events.filter((e) =>
+                e.type === cerca.type
+                && Object.entries(payload).every(([k, v]) => (e.payload ?? {})[k] === v));
+              resolve({ data: prior.map((_, i) => ({ id: i + 1 })), error: null });
+            },
+          };
+          return stub;
+        },
+        insert(payload: any) { calls.events.push(payload); return Promise.resolve({ data: null }); },
+      };
     },
   };
 
@@ -863,6 +892,56 @@ describe('drainMarioReplies — modalità postino (lead dei GDO)', () => {
     });
     expect(vi.mocked(generateMarioReply).mock.calls[0][1]?.contextNote).toContain(NOTA_VIDEO);
     expect(calls.messageInserts.map((m: any) => m.body)).toEqual(['Te lo spiega il tutor in call 🙂']);
+  });
+
+  // Il video dell'offerta del mese arriva da `offerta_del_mese_link`: è un link
+  // ufficiale deciso dal pannello, che però NON sta nella whitelist statica. Senza
+  // dirlo al sanitizzatore ogni offerta del mese finirebbe a log come "link inventato
+  // dal modello", e il vero rumore si perderebbe in mezzo a quello finto.
+  it('il video dell\'offerta del mese non è un link inventato, pur non essendo in whitelist', async () => {
+    const OFFERTA = 'https://corso.feniceacademy.it/webdev-offerta';
+    const rows: FakeMsgRow[] = [
+      AGENDA, RISPOSTA,
+      { direction: 'in', body: 'ma quanto costa?', template_sid: null, created_at: '2026-07-29T10:10:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(postino({ gdo_video_url: OFFERTA }), rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Te lo spiega il tutor in call 🙂',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    expect(calls.messageInserts.some((m: any) => m.body.includes(OFFERTA))).toBe(true);
+    expect(calls.events.some((e: { type: string }) => e.type === 'unknown_fenice_link')).toBe(false);
+  });
+
+  // Ruling: il video dell'offerta vale come video anche per il blocco di conferma. Senza
+  // passarlo, il turno in cui l'appuntamento si fissa E il video esce finirebbe con
+  // `missingVideoLink` (niente passaggio FATTO, warn a log) solo perché quel link non è
+  // nella whitelist statica: il lead non saprebbe più come confermare di averlo visto.
+  it('offerta del mese + appuntamento fissato nello stesso turno: il passaggio FATTO c\'è e nessun warn', async () => {
+    const OFFERTA = 'https://corso.feniceacademy.it/webdev-offerta';
+    // Un solo inbound, ed è una domanda: il video esce INSIEME alla risposta, nello
+    // stesso turno in cui l'appuntamento si fissa — il caso del ruling.
+    const rows: FakeMsgRow[] = [
+      AGENDA,
+      { direction: 'in', body: 'possiamo fare lunedì alle 13?', template_sid: null, created_at: '2026-07-29T10:10:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(postino({ gdo_video_url: OFFERTA }), rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto, confermato lunedì alle 13',
+      appointmentFixed: true, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    const inviati = calls.messageInserts.map((m: any) => m.body);
+    expect(inviati.some((b: string) => b.includes(OFFERTA))).toBe(true);
+    expect(inviati.some((b: string) => /\bFATTO\b/.test(b))).toBe(true);
+    const patch = calls.events.find((e: any) => e.type === 'confirmation_block_patched');
+    expect(patch?.payload?.missingVideoLink ?? false).toBe(false);
+    expect(patch?.level ?? 'info').toBe('info');
   });
 
   it('video già confermato: la nota non ripete il promemoria video (smaschera uno scambio sent/watched)', async () => {
@@ -2236,5 +2315,110 @@ describe('drainMarioReplies — esito di un lead che il CRM non conosce', () => 
     await drainMarioReplies(supabase, 7249, '+391234567890', () => 0);
 
     expect(registraEsitoSenzaLeadId).not.toHaveBeenCalled();
+  });
+});
+
+describe('drainMarioReplies — dopo il follow-up la chat passa a Mario nello STESSO drain (B5)', () => {
+  const LIVE = 'https://corso.feniceacademy.it/live-webdev-2026';
+  const FU: FakeMsgRow = { direction: 'out', body: 'Ciao Anna, ieri sera alla live...', template_sid: 'HX_FU', created_at: '2026-10-06T10:10:00Z' };
+  const RISPOSTA: FakeMsgRow = { direction: 'in', body: 'si mi interessa, mandami il video', template_sid: null, created_at: '2026-10-06T10:20:00Z' };
+  const riga = (): ClaimedRow => ({
+    id: 7, ai_started_at: null, crm_lead_id: 'crm7', bot_outcome: null,
+    lancio_slug: 'webdev-2026-10', lancio_fase: 'followup_inviato', lancio_info: null,
+  });
+  const rispostaMario = (testo: string) => ({
+    visibleReply: testo, appointmentFixed: false, passToHuman: false, videoWatched: false, outcome: undefined, scheduledAt: undefined,
+  });
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(eseguiTurnoLancio).mockReset();
+    vi.mocked(getLancioSettings).mockClear();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('handed_to_mario: Mario risponde subito, con il link della live nel contesto, e ai_status resta active', async () => {
+    vi.mocked(eseguiTurnoLancio).mockResolvedValueOnce('handed_to_mario');
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(rispostaMario(`Perfetto! Ecco il video della live: ${LIVE}`));
+    const { supabase, calls } = makeDrainSupabase(riga(), [FU, RISPOSTA]);
+
+    await drainMarioReplies(supabase, 7, '+391234567890', () => 0);
+
+    expect(eseguiTurnoLancio).toHaveBeenCalledTimes(1);
+    expect(generateMarioReply).toHaveBeenCalledTimes(1);
+    const opts = vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string };
+    expect(opts.contextNote).toContain(LIVE);
+    expect(opts.contextNote).toContain('conferenza-*');
+    expect(calls.messageInserts.map((m) => m.body)).toEqual([`Perfetto! Ecco il video della live: ${LIVE}`]);
+    // Il link della live e' ufficiale: nessun "link inventato" a log.
+    expect(calls.events.map((e) => e.type)).not.toContain('unknown_fenice_link');
+    // Il quarto stato del turno non arriva MAI a conversations.ai_status.
+    expect(calls.finalStatusWrites).toEqual(['active']);
+    expect(calls.finalStatusWrites).not.toContain('handed_to_mario');
+  });
+
+  it('senza lancio_video_live_link: Mario risponde coi video classici (nessuna contextNote) e resta un warn', async () => {
+    vi.mocked(getLancioSettings).mockResolvedValueOnce({
+      attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null,
+      eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti', sender: 'principale',
+    });
+    vi.mocked(eseguiTurnoLancio).mockResolvedValueOnce('handed_to_mario');
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(rispostaMario('Ciao! Raccontami: lavori al momento?'));
+    const { supabase, calls } = makeDrainSupabase(riga(), [FU, RISPOSTA]);
+
+    await drainMarioReplies(supabase, 7, '+391234567890', () => 0);
+
+    const opts = vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string };
+    expect(opts.contextNote).toBeUndefined();
+    expect(calls.events.map((e) => e.type)).toContain('lancio_video_live_link_missing');
+    expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+
+  // Il 6/10 mattina, con il link non ancora impostato, questo warn usciva a ogni drain di
+  // ogni chat del lancio: centinaia di righe identiche addosso agli eventi che contano.
+  it('senza lancio_video_live_link il warn si scrive UNA volta per chat, non a ogni drain', async () => {
+    const senzaLink = {
+      attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null,
+      eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti' as const, sender: 'principale' as const,
+    };
+    vi.mocked(getLancioSettings).mockResolvedValueOnce(senzaLink).mockResolvedValueOnce(senzaLink);
+    vi.mocked(eseguiTurnoLancio).mockResolvedValueOnce('handed_to_mario').mockResolvedValueOnce('handed_to_mario');
+    vi.mocked(generateMarioReply)
+      .mockResolvedValueOnce(rispostaMario('Ciao! Raccontami: lavori al momento?'))
+      .mockResolvedValueOnce(rispostaMario('Perfetto, ti mando due cose.'));
+    const { supabase, calls, messagesRows } = makeDrainSupabase(riga(), [FU, RISPOSTA]);
+
+    await drainMarioReplies(supabase, 7, '+391234567890', () => 0);
+    messagesRows.push({ direction: 'in', body: 'ci sei?', template_sid: null, created_at: '2026-10-06T11:00:00Z' });
+    await drainMarioReplies(supabase, 7, '+391234567890', () => 0);
+
+    expect(calls.events.filter((e) => e.type === 'lancio_video_live_link_missing')).toHaveLength(1);
+  });
+
+  it('un turno che chiude il lancio in altro modo (closed) non passa a Mario e scrive closed', async () => {
+    vi.mocked(eseguiTurnoLancio).mockResolvedValueOnce('closed');
+    const { supabase, calls } = makeDrainSupabase({ ...riga(), lancio_fase: 'attesa' }, [FU, RISPOSTA]);
+
+    await drainMarioReplies(supabase, 7, '+391234567890', () => 0);
+
+    expect(generateMarioReply).not.toHaveBeenCalled();
+    expect(calls.finalStatusWrites).toEqual(['closed']);
+  });
+});
+
+describe('shouldReopen — veto sulle chat del lancio restituite al pool (C8)', () => {
+  const base = { aiOwner: 'mario', aiStatus: 'closed', aiPausedAt: null, lancioSlug: 'webdev-2026-10', lancioInfo: null };
+  it('restituito: mai, anche se closed e senza congedo', () => {
+    expect(shouldReopen({ ...base, lancioFase: 'restituito' })).toBe(false);
+  });
+  it('chiuso dal follow-up: si riapre come una chat normale', () => {
+    expect(shouldReopen({ ...base, lancioFase: 'chiuso' })).toBe(true);
+  });
+  it('senza slug la fase non conta', () => {
+    expect(shouldReopen({ ...base, lancioSlug: null, lancioFase: 'restituito' })).toBe(true);
+  });
+  it('il congedo continua a vincere', () => {
+    expect(shouldReopen({ ...base, lancioFase: 'chiuso', lancioInfo: { congedo_at: '2026-10-05T23:00:00Z' } })).toBe(false);
   });
 });

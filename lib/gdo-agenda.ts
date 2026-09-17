@@ -4,12 +4,15 @@
 // Modulo client-safe: niente import da supabase/twilio.
 
 import type { GdoVariant } from './bot-contract';
+import type { LancioSettings } from './lancio-settings';
 import { firstNameOf, templateName } from './name';
 
 /** Form di prenotazione: lo stesso del bot, confermato dal CRM (28/07). */
 export const BOOKING_LINK = 'https://form.jotform.com/240755654585063';
 
-/** Video dell'offerta del mese: prevale su lavora/famiglia. */
+/** Il link del Black Summer: NON è più il valore di nessuna variante (l'offerta del mese
+ *  viene da `app_settings.offerta_del_mese_link`), ma resta nella whitelist e nella mappa
+ *  dei template perché le chat vecchie ce l'hanno in cronologia. */
 export const BLACK_SUMMER_LINK = 'https://corso.feniceacademy.it/conferenza-black-summer';
 
 const VIDEO_BY_PROFILO = {
@@ -19,9 +22,19 @@ const VIDEO_BY_PROFILO = {
   nonLavoraFamiglia: 'https://corso.feniceacademy.it/conferenza-ex',
 } as const;
 
-/** Il video da mandare al lead, dal profilo raccolto dal GDO al telefono. */
-export function videoLinkForVariant(v: GdoVariant): string {
-  if (v.offertaDelMese) return BLACK_SUMMER_LINK;
+/** Il pezzo di `LancioSettings` che serve qui: il modulo resta client-safe e puro.
+ *  L'import da `lancio-settings` è e deve restare un `import type` — quel modulo ha un
+ *  import di VALORE da `lancio-zoom-blast` e uno da `supabase/admin`: solo la cancellazione
+ *  dei tipi in compilazione tiene questo file fuori dal bundle del server. */
+export type OffertaDelMeseSettings = Pick<LancioSettings, 'offertaDelMeseLink'>;
+
+/**
+ * Il video da mandare al lead, dal profilo raccolto dal GDO al telefono. L'offerta del
+ * mese (spec §5.7, ruling B5) è un'impostazione: senza link si torna `null` e il video
+ * NON parte — niente ripiego su un video vecchio spacciato per l'offerta di questo mese.
+ */
+export function videoLinkForVariant(v: GdoVariant, settings?: OffertaDelMeseSettings | null): string | null {
+  if (v.offertaDelMese) return settings?.offertaDelMeseLink?.trim() || null;
   if (v.haFamiglia) return v.lavora ? VIDEO_BY_PROFILO.lavoraFamiglia : VIDEO_BY_PROFILO.nonLavoraFamiglia;
   return v.lavora ? VIDEO_BY_PROFILO.lavora : VIDEO_BY_PROFILO.nonLavora;
 }

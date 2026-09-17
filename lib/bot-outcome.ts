@@ -609,12 +609,23 @@ export async function registraEsitoSenzaLeadId(
   return { decisione, chiudi: true };
 }
 
+/** Il JSON di una risposta 2xx del CRM, se c'e' e se e' un oggetto; altrimenti undefined.
+ *  Non lancia mai: un corpo che non si legge non rende meno vero l'esito appena inviato. */
+async function leggiCorpoJson(res: Response): Promise<Record<string, unknown> | undefined> {
+  try {
+    const j: unknown = await res.json();
+    return j && typeof j === 'object' && !Array.isArray(j) ? (j as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function sendOutcome(
   supabase: Supa,
   conversationId: number,
   args: SendOutcomeArgs,
   opts: SendOutcomeOpts = {},
-): Promise<{ sent: boolean; status?: number; error?: string; keepOpen?: true; notifySuppressed?: true }> {
+): Promise<{ sent: boolean; status?: number; error?: string; keepOpen?: true; notifySuppressed?: true; corpo?: Record<string, unknown> }> {
   const interim = opts.interim === true && args.outcome === 'RICHIAMO';
   const secret = process.env.BOT_WEBHOOK_SECRET;
   if (!secret) return { sent: false, error: 'not_configured' };
@@ -827,6 +838,10 @@ export async function sendOutcome(
       body: rawBody,
     });
     if (res.ok) {
+      // Il corpo della 2xx serve alle restituzioni del lancio: il CRM risponde 200 anche
+      // quando NON ha rimesso il lead nel pool (`returnedToPool: false, skipped`). Chi
+      // non lo guarda si comporta esattamente come prima.
+      const corpo = await leggiCorpoJson(res);
       if (interim) {
         // Visibilità sul cruscotto CRM, ma la lavorazione continua: niente
         // bot_outcome, niente chiusura.
@@ -836,7 +851,7 @@ export async function sendOutcome(
           message: `[bot-fissatore] RICHIAMO interim inviato per lead ${crmLeadId} (sequenza in corso)`,
           level: 'info',
         });
-        return { sent: true, status: res.status };
+        return { sent: true, status: res.status, corpo };
       }
       if (action.kind === 'reschedule') {
         // Si aggiorna la DATA, non l'esito. `bot_outcome_at` resta quello del primo
@@ -881,7 +896,7 @@ export async function sendOutcome(
           level: 'info',
         });
       }
-      return { sent: true, status: res.status };
+      return { sent: true, status: res.status, corpo };
     }
     const text = await res.text().catch(() => '');
     if (res.status === 403) {

@@ -1,5 +1,6 @@
 import type { getSupabaseAdmin } from './supabase/admin';
 import { parsePerimetroBlast, type PerimetroBlast } from './lancio-zoom-blast';
+import { isoWithOffset } from './bot-contract';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -110,12 +111,76 @@ export async function getLancioSettings(supabase: Supa): Promise<LancioSettings>
   return parseLancioSettings((data ?? []) as { key: string; value: unknown }[]);
 }
 
+/** L'esito di una scrittura: queste chiavi sono manopole d'emergenza, e una scrittura
+ *  che non e' andata a segno non puo' passare per fatta (ne' al pannello ne' al freno). */
+export type EsitoScrittura = { ok: true } | { ok: false; error: string };
+
 export async function setLancioSetting(
   supabase: Supa,
   key: LancioSettingKey,
   value: string | boolean,
-): Promise<void> {
-  await supabase
+): Promise<EsitoScrittura> {
+  const { error } = await supabase
     .from('app_settings')
     .upsert({ key, value: value as never, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+  return error ? { ok: false, error: error.message ?? String(error) } : { ok: true };
+}
+
+/**
+ * Il valore grezzo di una chiave, cosi' com'e' nel DB. Serve all'audit del pannello:
+ * accanto al "dopo" va scritto il "prima", altrimenti la sera del 5 ottobre un evento
+ * dice solo che qualcosa e' cambiato, non da cosa. Chiave assente = `null`.
+ */
+export async function getLancioSettingValue(supabase: Supa, key: LancioSettingKey): Promise<unknown> {
+  const { data } = await supabase.from('app_settings').select('value').eq('key', key).maybeSingle();
+  return (data as { value: unknown } | null)?.value ?? null;
+}
+
+/** Le chiavi che la pagina /fenice/impostazioni puo' scrivere: tutte (ruling B5). */
+export const LANCIO_EDITABLE_KEYS: readonly LancioSettingKey[] = LANCIO_SETTING_KEYS;
+
+export type SettingValidation =
+  | { ok: true; value: string | boolean }
+  | { ok: false; reason: 'chiave_non_modificabile' | 'link_non_https' | 'data_non_valida' | 'valore_non_valido' };
+
+/**
+ * Le regole di scrittura dalla pagina. I valori scritti sono quelli che
+ * `parseLancioSettings` sa leggere: booleani per i due interruttori (come li scrive il
+ * freno), stringhe per il resto, stringa vuota per azzerare un link (letta come null).
+ * `lancio_evento_at` non si azzera: blast, follow-up e restituzioni ne derivano le date.
+ */
+export function validateLancioSettingInput(key: string, raw: unknown): SettingValidation {
+  if (!(LANCIO_EDITABLE_KEYS as readonly string[]).includes(key)) return { ok: false, reason: 'chiave_non_modificabile' };
+  const k = key as LancioSettingKey;
+  if (k === 'lancio_attivo' || k === 'lancio_pulsante_attivo') {
+    if (raw === true || raw === false) return { ok: true, value: raw };
+    const s = normalizza(raw);
+    if (s === null || ['0', 'false', 'off'].includes(s)) return { ok: true, value: false };
+    if (['1', 'true', 'on'].includes(s)) return { ok: true, value: true };
+    return { ok: false, reason: 'valore_non_valido' };
+  }
+  if (k === 'lancio_blast_perimetro') {
+    const s = normalizza(raw);
+    if (s === null || s === 'tutti') return { ok: true, value: 'tutti' };
+    if (s === 'risposto') return { ok: true, value: 'risposto' };
+    return { ok: false, reason: 'valore_non_valido' };
+  }
+  if (k === 'lancio_sender') {
+    const s = normalizza(raw);
+    if (s === null || s === 'principale') return { ok: true, value: 'principale' };
+    if (s === 'secondario') return { ok: true, value: 'secondario' };
+    return { ok: false, reason: 'valore_non_valido' };
+  }
+  const v = stringaOrNull(raw);
+  if (k === 'lancio_evento_at') {
+    if (v === null || !isoWithOffset(v)) return { ok: false, reason: 'data_non_valida' };
+    return { ok: true, value: v };
+  }
+  if (v === null) return { ok: true, value: '' };
+  // Lo schema si accetta anche urlato (un link incollato dal cellulare arriva cosi') e
+  // si normalizza minuscolo; il resto dell'URL resta com'e', perche' i path di Zoom e
+  // del corso distinguono maiuscole e minuscole.
+  const link = /^https:\/\/([^\s]+)$/i.exec(v);
+  if (!link) return { ok: false, reason: 'link_non_https' };
+  return { ok: true, value: `https://${link[1]}` };
 }

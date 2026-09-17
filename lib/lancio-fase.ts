@@ -52,6 +52,26 @@ export function pulsanteRiportaInPostPitch(fase: string | null | undefined): boo
   return FASI_CHE_IL_PULSANTE_RIPORTA.has(fase ?? '');
 }
 
+/**
+ * Il pulsante deve riportare ad 'active' una chat chiusa?
+ *
+ * Solo se la fase si e' mossa davvero (`cambiaFase`, cioe' `pulsanteRiportaInPostPitch`).
+ * Prima bastava "di Mario e chiusa", e su una chat gia' `restituito` questo bastava a
+ * riaccenderla: la fase restava `restituito` — giusto, il lead e' del GDO — ma la riga
+ * tornava 'active' con un inbound senza risposta, e il cron `bot-followups` fa re-drive
+ * proprio su quella forma. Mario avrebbe risposto a una persona che un GDO sta chiamando,
+ * cioe' il danno che il ruling C8 esiste per evitare. Vale allo stesso modo per le altre
+ * fasi che il pulsante non muove (`followup_inviato`, `post_pitch`, `scelta_fatta`): se la
+ * fase resta dov'e', lo stato non si tocca.
+ */
+export function pulsanteRiapreChat(g: {
+  cambiaFase: boolean;
+  aiOwner: string | null;
+  aiStatus: string | null;
+}): boolean {
+  return g.cambiaFase && g.aiOwner === 'mario' && g.aiStatus === 'closed';
+}
+
 /** Perché il pulsante non ha potuto scrivere: chi ha in mano quella chat, o cosa è spento. */
 export type MotivoPulsanteOrfano =
   | 'pulsante_spento' | 'bot_spento' | 'adozione_spenta' | 'in_pausa' | 'passata_umano' | 'altro_owner';
@@ -124,6 +144,23 @@ export function faseGestitaB1(fase: string | null): boolean {
 export function lancioInCorso(c: { lancio_slug?: string | null; lancio_fase?: string | null }): boolean {
   if (!c.lancio_slug) return false;
   return !(LANCIO_FASI_TERMINALI as readonly string[]).includes(c.lancio_fase ?? '');
+}
+
+/**
+ * Questa chat e' stata restituita al pool: il lead e' del GDO, il bot non le scrive piu'.
+ *
+ * Difesa in profondita' sul re-drive di `app/api/cron/bot-followups`. Quel cron ridrive
+ * ogni riga `active`/`replying` con un inbound senza risposta, e il blocco che tiene il
+ * lancio fuori da Mario (`lancioInCorso`) viene DOPO — ed e' gia' falso su `restituito`,
+ * che e' una fase terminale. Le porte che dovrebbero impedire a una chat restituita di
+ * restare `active` ci sono tutte (`pulsanteRiapreChat`, il veto di `shouldReopen`), ma
+ * basta che una sola non tenga — un 200 `returnedToPool:false` dopo la chiusura locale,
+ * una riapertura scritta da una strada nuova — perche' Mario risponda a una persona che
+ * un GDO sta chiamando. E' il danno esatto che il ruling C8 esiste per evitare, quindi
+ * la fase vale da sola, senza guardare `ai_status`.
+ */
+export function lancioRestituito(c: { lancio_fase?: string | null }): boolean {
+  return (c.lancio_fase ?? '') === 'restituito';
 }
 
 /**
@@ -256,6 +293,29 @@ export function haCongedo(lancioInfo: unknown): boolean {
   return typeof v === 'string' && v.trim() !== '';
 }
 
+/** Ogni quanto si riavvisa il CRM che un lead restituito sta scrivendo (ruling C8). */
+export const NOTA_RESTITUZIONE_OGNI_MS = 60 * 60 * 1000;
+
+/**
+ * Va mandata al CRM la nota per questo inbound di un lead gia' restituito al pool?
+ *
+ * Una nota per ogni messaggio vorrebbe dire cinque campanelle per chi manda cinque
+ * messaggi, e il testo cambia sempre (orario + parole del lead) quindi la divergenza
+ * anti-collisione di `inviaNotaAlCrm` non le fonde. La finestra e' un'ora per chat, letta
+ * dal marcatore durevole `conversations.lancio_info.restituito_nota_at` — l'evento
+ * `lancio_inbound_dopo_restituzione` invece si scrive sempre, cosi' nei pannelli resta
+ * tutto. Marcatore assente o illeggibile: si avvisa. Meglio una campanella in piu' che un
+ * GDO che chiama a vuoto.
+ */
+export function serveNotaRestituzione(lancioInfo: unknown, nowMs: number): boolean {
+  if (!lancioInfo || typeof lancioInfo !== 'object' || Array.isArray(lancioInfo)) return true;
+  const v = (lancioInfo as Record<string, unknown>).restituito_nota_at;
+  if (typeof v !== 'string') return true;
+  const quando = Date.parse(v);
+  if (Number.isNaN(quando)) return true;
+  return nowMs - quando >= NOTA_RESTITUZIONE_OGNI_MS;
+}
+
 /**
  * Le parole con cui il lead si e' tirato indietro: l'ultimo messaggio suo PRIMA del
  * congedo. Su un esito ritentato sono quelle che devono arrivare al CRM — l'inbound del
@@ -296,11 +356,44 @@ export function tagliaRigheDalLancio(
       if (rows[i].template_sid === welcomeSid) return rows.slice(i);
     }
   }
-  for (let i = rows.length - 1; i >= 0; i--) {
-    if (rows[i].direction === 'in' && isMarkerPulsanteWebinar(rows[i].body)) return rows.slice(i);
-  }
-  if (ingressoAt) return rows.filter((m) => !m.created_at || m.created_at >= ingressoAt);
+  const pulsante = indiceUltimaPressionePulsante(rows);
+  if (pulsante >= 0) return rows.slice(pulsante);
+  if (ingressoAt) return rows.filter((m) => !m.created_at || nonPrimaDi(m.created_at, ingressoAt));
   return rows;
+}
+
+/**
+ * L'indice dell'ULTIMA pressione del pulsante del webinar in queste righe, o -1.
+ *
+ * Una riga sola, ma e' la regola su cui si appoggiano due cose che devono dire la stessa
+ * identica frase: il taglio della cronologia qui sopra e l'ancora del lancio
+ * (`ancoraLancio`, lib/lancio-followup.ts) per le chat che nel lancio ci sono entrate
+ * proprio col pulsante — dove il benvenuto non c'e' e l'evento `lancio_intake` e' scritto
+ * DOPO la riga del pulsante (il webhook salva il messaggio e poi arruola). Tenerle
+ * separate voleva dire che il taglio partiva dalla pressione e l'ancora no: quella
+ * pressione non contava come interazione, e un lead che aveva alzato la mano risultava
+ * "non ha mai scritto". L'ultima e non la prima: chi ripreme dopo giorni ricomincia da li'.
+ */
+export function indiceUltimaPressionePulsante(rows: RigaLancio[]): number {
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (rows[i].direction === 'in' && isMarkerPulsanteWebinar(rows[i].body)) return i;
+  }
+  return -1;
+}
+
+/**
+ * `a` non viene prima di `b`, confrontati come ISTANTI e non come stringhe. Le righe
+ * arrivano da `messages.created_at` e l'ancora da un'altra colonna (l'evento
+ * `lancio_intake`): Postgres e i client le serializzano in modi che l'ordine alfabetico
+ * sbaglia — `...Z` contro `...+00:00`, microsecondi contro millisecondi — e un taglio
+ * sbagliato butta via la cronologia del lancio o si tira dietro il giro precedente di
+ * Mario. Se una delle due non e' leggibile si torna al confronto lessicografico di prima:
+ * meglio il comportamento storico che una riga persa. Il confine resta INCLUSIVO.
+ */
+function nonPrimaDi(a: string, b: string): boolean {
+  const ta = Date.parse(a);
+  const tb = Date.parse(b);
+  return Number.isNaN(ta) || Number.isNaN(tb) ? a >= b : ta >= tb;
 }
 
 const FASE_LABEL: Record<LancioFase, string> = {

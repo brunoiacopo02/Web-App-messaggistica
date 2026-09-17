@@ -11,9 +11,10 @@ import {
   buildSollecitoHistory,
   decideGdoVideoFollowup,
   inviaBolleSollecito,
-  VIDEO_TEMPLATE_ENV_BY_LINK,
+  videoTemplateEnvForLink,
   type GdoSlot,
 } from '@/lib/gdo-video-followup';
+import { getLancioSettings } from '@/lib/lancio-settings';
 import { romeHour, romeMinute, romeDaysBetween } from '@/lib/rome-time';
 import { templateName } from '@/lib/name';
 import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
@@ -85,6 +86,11 @@ export async function GET(req: NextRequest) {
     });
     return NextResponse.json({ ok: true, sent: 0, skipped: 'config' });
   }
+
+  // Il link dell'offerta del mese cambia dal pannello senza deploy: si legge una volta
+  // per run e serve a riconoscere quel link come "video dell'offerta" (template
+  // VIDEO_GDO_OFFERTA_SID), che la mappa statica non può contenere.
+  const offertaLink = (await getLancioSettings(supabase)).offertaDelMeseLink;
 
   // Gli slot utili sono solo quelli di oggi e ieri; qui si pesca con tre giorni di
   // margine (il fuso e i bordi di mezzanotte non devono tagliare fuori nessuno) e
@@ -219,7 +225,7 @@ export async function GET(req: NextRequest) {
 
       if (action === 'video-template') {
         const link = c.gdo_video_url as string | null;
-        const envName = link ? VIDEO_TEMPLATE_ENV_BY_LINK[link] : undefined;
+        const envName = videoTemplateEnvForLink(link, offertaLink);
         const sid = envName ? process.env[envName] : undefined;
         if (!sid) {
           // Fail-closed: non si ripiega su un altro template e non si inventa un link.
@@ -287,7 +293,10 @@ export async function GET(req: NextRequest) {
         // lasciare traccia da nessuna parte.
         const parts = splitMarioMessages(result.visibleReply ?? '');
 
-        const linkInventati = parts.flatMap((p) => unknownFeniceLinks(p));
+        // Il link dell'offerta del mese e' ufficiale ma non sta nella whitelist statica:
+        // senza passarlo, Marta che lo ripete nel sollecito verrebbe accusata di essersi
+        // inventata un link, e il rumore vero si perderebbe fra i falsi positivi.
+        const linkInventati = parts.flatMap((p) => unknownFeniceLinks(p, offertaLink ? [offertaLink] : []));
         if (linkInventati.length > 0) {
           await supabase.from('event_log').insert({
             type: 'unknown_fenice_link',

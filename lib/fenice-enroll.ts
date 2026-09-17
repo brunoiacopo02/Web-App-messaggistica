@@ -295,6 +295,9 @@ export type GdoEnrollArgs = {
   crmLeadId: string;
   crmFunnel?: string | null;
   variant: GdoVariant;
+  /** Link video già risolto dal chiamante (offerta del mese da impostazione). `null` =
+   *  nessun video. Assente = si calcola dalla variante. */
+  gdoVideoUrl?: string | null;
 };
 
 /**
@@ -356,7 +359,7 @@ export async function enrollGdoLeadAsPostino(
       // Esito provvisorio: la route lo aggiorna dopo l'attesa di consegna. Se il
       // processo muore prima, la deduplica trova comunque un esito coerente.
       gdo_agenda_esito: res.ok ? 'inviato' : 'fallito',
-      gdo_video_url: videoLinkForVariant(args.variant),
+      gdo_video_url: args.gdoVideoUrl !== undefined ? args.gdoVideoUrl : videoLinkForVariant(args.variant),
       // Nuova agenda = nuovo appuntamento: il video deve poter ripartire, e con lui i
       // suoi due solleciti. Senza questo azzeramento un lead ri-arruolato (il GDO
       // sposta la call, cosa ordinaria) resterebbe a followups 2 e con la conferma

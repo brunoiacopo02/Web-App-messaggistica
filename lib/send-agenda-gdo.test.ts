@@ -21,13 +21,22 @@ const PAYLOAD = {
  * Fake Supabase: la riga precedente del lead (per la deduplica) e lo stato Twilio del
  * messaggio appena inviato, che cambia nel tempo come farebbero le status callback.
  */
-function makeSupabase(opts: { convPrecedente?: any; statusSequence?: (string | null)[] } = {}) {
+function makeSupabase(
+  opts: { convPrecedente?: any; statusSequence?: (string | null)[]; settingsRows?: { key: string; value: unknown }[] } = {},
+) {
   const statusSequence = opts.statusSequence ?? [null];
   let letture = 0;
   const calls = { updates: [] as any[], events: [] as any[] };
 
   const supabase: any = {
     from(table: string) {
+      if (table === 'app_settings') {
+        return {
+          select() {
+            return { in() { return Promise.resolve({ data: opts.settingsRows ?? [] }); } };
+          },
+        };
+      }
       if (table === 'conversations') {
         return {
           select() {
@@ -254,6 +263,118 @@ describe('runSendAgenda — correzione della variante entro la finestra di dedup
     // Il video sbagliato è già dal lead: non si riscrive la colonna come se nulla fosse.
     expect(calls.updates).toHaveLength(0);
     expect(calls.events.some((e) => e.type === 'gdo_variante_tardiva' && e.level === 'warn')).toBe(true);
+  });
+});
+
+describe('runSendAgenda — l\'offerta del mese viene dalle impostazioni', () => {
+  const OFFERTA = 'https://corso.feniceacademy.it/webdev-offerta';
+  const righeOfferta = [{ key: 'offerta_del_mese_link', value: OFFERTA }];
+
+  it('offerta del mese con link impostato: il video dell\'arruolamento è quello impostato', async () => {
+    const { supabase } = makeSupabase({ settingsRows: righeOfferta });
+
+    await runSendAgenda(
+      supabase,
+      { ...PAYLOAD, variant: { lavora: false, haFamiglia: false, offertaDelMese: true } },
+      fakeDeps(),
+    );
+
+    expect(vi.mocked(enrollGdoLeadAsPostino).mock.calls.at(-1)![1]).toMatchObject({ gdoVideoUrl: OFFERTA });
+  });
+
+  it('offerta del mese senza link: l\'agenda parte, il video è null e resta un avviso', async () => {
+    const { supabase, calls } = makeSupabase();
+
+    const res = await runSendAgenda(
+      supabase,
+      { ...PAYLOAD, variant: { lavora: true, haFamiglia: false, offertaDelMese: true } },
+      fakeDeps(),
+    );
+
+    expect(res.ok).toBe(true);
+    expect(vi.mocked(enrollGdoLeadAsPostino).mock.calls.at(-1)![1].gdoVideoUrl).toBeNull();
+    expect(calls.events.some((e) => e.type === 'offerta_del_mese_link_mancante' && e.level === 'warn')).toBe(true);
+  });
+
+  it('correzione della variante entro la finestra: il video corretto viene dalle impostazioni', async () => {
+    const { supabase, calls } = makeSupabase({
+      convPrecedente: {
+        id: 42,
+        gdo_agenda_at: new Date(Date.now() - 3 * 60_000).toISOString(),
+        gdo_agenda_esito: 'consegnato',
+        gdo_video_url: 'https://corso.feniceacademy.it/conferenza-bx',
+        gdo_video_sent_at: null,
+      },
+      settingsRows: righeOfferta,
+    });
+
+    const res = await runSendAgenda(supabase, {
+      ...PAYLOAD,
+      variant: { lavora: true, haFamiglia: false, offertaDelMese: true },
+    });
+
+    expect(res.deduplicato).toBe(true);
+    expect(res.varianteAggiornata).toBe(true);
+    expect(calls.updates.some((u) => u.gdo_video_url === OFFERTA)).toBe(true);
+  });
+
+  // Idempotenza: il GDO riclicca "Offerta del mese" sullo stesso lead. L'agenda non si
+  // rimanda e il video resta quello già scritto: niente secondo invio, niente update.
+  it('seconda agenda con la stessa offerta entro la finestra: deduplica secca', async () => {
+    const { supabase, calls } = makeSupabase({
+      convPrecedente: {
+        id: 42,
+        gdo_agenda_at: new Date(Date.now() - 3 * 60_000).toISOString(),
+        gdo_agenda_esito: 'consegnato',
+        gdo_video_url: OFFERTA,
+        gdo_video_sent_at: null,
+      },
+      settingsRows: righeOfferta,
+    });
+
+    const res = await runSendAgenda(supabase, {
+      ...PAYLOAD,
+      variant: { lavora: true, haFamiglia: false, offertaDelMese: true },
+    });
+
+    expect(res).toMatchObject({ deduplicato: true, varianteAggiornata: false });
+    expect(enrollGdoLeadAsPostino).not.toHaveBeenCalled();
+    expect(calls.updates).toHaveLength(0);
+  });
+
+  it('offerta senza link su un lead già arruolato: niente correzione, il video vecchio resta', async () => {
+    const { supabase, calls } = makeSupabase({
+      convPrecedente: {
+        id: 42,
+        gdo_agenda_at: new Date(Date.now() - 3 * 60_000).toISOString(),
+        gdo_agenda_esito: 'consegnato',
+        gdo_video_url: 'https://corso.feniceacademy.it/conferenza-bx',
+        gdo_video_sent_at: null,
+      },
+    });
+
+    const res = await runSendAgenda(supabase, {
+      ...PAYLOAD,
+      variant: { lavora: true, haFamiglia: false, offertaDelMese: true },
+    });
+
+    expect(res).toMatchObject({ deduplicato: true, varianteAggiornata: false });
+    expect(calls.updates).toHaveLength(0);
+    expect(calls.events.some((e) => e.type === 'gdo_agenda_dedup')).toBe(true);
+  });
+
+  it('le quattro varianti classiche non leggono niente dalle impostazioni', async () => {
+    const { supabase } = makeSupabase({ settingsRows: righeOfferta });
+
+    await runSendAgenda(
+      supabase,
+      { ...PAYLOAD, variant: { lavora: true, haFamiglia: true, offertaDelMese: false } },
+      fakeDeps(),
+    );
+
+    expect(vi.mocked(enrollGdoLeadAsPostino).mock.calls.at(-1)![1]).toMatchObject({
+      gdoVideoUrl: 'https://corso.feniceacademy.it/conferenza-dx',
+    });
   });
 });
 

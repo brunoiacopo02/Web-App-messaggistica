@@ -31,6 +31,13 @@ export function canAccess(email: string | null | undefined, path: string): boole
     || path === '/api/fenice' || path.startsWith('/api/fenice/');
 }
 
+/** Chi può scrivere le impostazioni del lancio (/fenice/impostazioni): gli account
+ *  con area `all`. Gli account confinati a una sola area (il bot, le campagne) le
+ *  vedono e basta. Non c'è un ruolo nel DB: l'area è l'unica nozione di ruolo qui. */
+export function puoModificareLancio(email: string | null | undefined): boolean {
+  return areaForEmail(email) === 'all';
+}
+
 /** Dove mandare l'utente dopo il login. */
 export function landingPath(email: string | null | undefined): string {
   const area = areaForEmail(email);

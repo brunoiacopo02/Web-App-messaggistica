@@ -7,7 +7,7 @@ import { buildConfermaPersaNote } from '@/lib/bot-outcome-rules';
 import type { MarioTurn } from '@/lib/mario';
 import { drainMarioReplies, lastIsUnansweredInbound, isOrphanedReplyingLock, isLockStale, LOCK_TTL_MS, serveRedrive } from '@/lib/fenice-autoreply';
 import { runAgendaFollowups } from '@/lib/agenda-followup';
-import { lancioInCorso } from '@/lib/lancio-fase';
+import { lancioInCorso, lancioRestituito } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
 import { alertUnaVolta } from '@/lib/alert-una-volta';
 
@@ -106,7 +106,9 @@ export async function GET(req: NextRequest) {
 
       // 2. Rete di sicurezza: re-drive se c'è un inbound senza risposta.
       // Solo per gli stati guidati dal bot: su handed_off/booked risponde l'umano.
-      if ((c.ai_status === 'active' || c.ai_status === 'replying') && lastIsUnansweredInbound(msgsForDecision)) {
+      // `lancioRestituito` è il veto del ruling C8: quel lead è tornato al GDO e il bot
+      // non gli scrive più, qualunque cosa dica `ai_status` (vedi lib/lancio-fase.ts).
+      if ((c.ai_status === 'active' || c.ai_status === 'replying') && !lancioRestituito(c) && lastIsUnansweredInbound(msgsForDecision)) {
         // lastIsUnansweredInbound true ⇒ l'ultima riga è un inbound.
         const lastPendingInboundAtMs = Date.parse(rows[rows.length - 1].created_at);
 

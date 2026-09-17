@@ -6,6 +6,13 @@ import { FINESTRA_TETTO_MS } from './lancio-tetto';
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
 /**
+ * Com'e' andata la scrittura della fase. Serve a chi scrive da un cron con `soloDaFasi`:
+ * `non_cambiata` vuol dire che qualcun altro ha portato avanti quella chat mentre il run
+ * era in volo, e chi chiama deve fermarsi li' invece di proseguire come se avesse scritto.
+ */
+export type EsitoFase = 'cambiata' | 'non_cambiata' | 'errore';
+
+/**
  * Cambio di fase di una chat del lancio: un update e una traccia. E' l'unico punto che
  * scrive `lancio_fase`, cosi' la storia di ogni chat si ricostruisce da `event_log`
  * (`lancio_fase_cambiata`) senza interpretare gli altri eventi. B4 (link, post_pitch,
@@ -26,7 +33,7 @@ export async function impostaFaseLancio(
    * quello di sempre: chi scrive dentro un turno gia' serializzato non ne ha bisogno.
    */
   opzioni: { soloDaFasi?: readonly LancioFase[] } = {},
-): Promise<void> {
+): Promise<EsitoFase> {
   const base = supabase
     .from('conversations')
     .update({ lancio_fase: fase, ...campi })
@@ -52,6 +59,7 @@ export async function impostaFaseLancio(
         : `[lancio] conv ${conversationId}: fase ${fase} non scritta, la chat era gia' oltre`,
     level: error ? 'error' : 'info',
   });
+  return error ? 'errore' : cambiata ? 'cambiata' : 'non_cambiata';
 }
 
 /**
@@ -104,6 +112,55 @@ export async function marcaCongedo(
       type: 'lancio_congedo_non_marcato',
       payload: { conversationId, errore: error.message, fase: 'scrittura' } as never,
       message: `[lancio] conv ${conversationId}: marcatore del congedo NON scritto — ${error.message}`,
+      level: 'warn',
+    });
+  }
+}
+
+/**
+ * Il marcatore durevole dell'ultima nota mandata al CRM per un lead gia' restituito al
+ * pool (ruling C8): e' quello che tiene la finestra di un'ora di `serveNotaRestituzione`.
+ *
+ * Stessa disciplina di `marcaCongedo`, e per la stessa ragione: `lancio_info` porta anche
+ * le chiavi di B4 e il congedo, quindi si rilegge prima di scrivere e su una lettura
+ * fallita non si scrive niente. Il costo di non scrivere e' una nota in piu' alla
+ * prossima, quello di sovrascrivere sarebbe perdere il congedo.
+ *
+ * Non lancia: il webhook deve rispondere a Twilio comunque.
+ */
+export async function marcaNotaRestituzione(
+  supabase: Supa,
+  conversationId: number,
+  quandoIso: string = new Date().toISOString(),
+): Promise<void> {
+  const { data, error: erroreLettura } = await supabase
+    .from('conversations')
+    .select('lancio_info')
+    .eq('id', conversationId)
+    .maybeSingle();
+  if (erroreLettura) {
+    await supabase.from('event_log').insert({
+      type: 'lancio_nota_restituzione_non_marcata',
+      payload: { conversationId, errore: erroreLettura.message, fase: 'lettura' } as never,
+      message: `[lancio] conv ${conversationId}: lancio_info non letto, marcatore della nota NON scritto — ${erroreLettura.message}`,
+      level: 'warn',
+    });
+    return;
+  }
+  const attuale = (data as { lancio_info?: Json | null } | null)?.lancio_info;
+  const base =
+    attuale && typeof attuale === 'object' && !Array.isArray(attuale)
+      ? (attuale as Record<string, unknown>)
+      : {};
+  const { error } = await supabase
+    .from('conversations')
+    .update({ lancio_info: { ...base, restituito_nota_at: quandoIso } as Json })
+    .eq('id', conversationId);
+  if (error) {
+    await supabase.from('event_log').insert({
+      type: 'lancio_nota_restituzione_non_marcata',
+      payload: { conversationId, errore: error.message, fase: 'scrittura' } as never,
+      message: `[lancio] conv ${conversationId}: marcatore della nota NON scritto — ${error.message}`,
       level: 'warn',
     });
   }
