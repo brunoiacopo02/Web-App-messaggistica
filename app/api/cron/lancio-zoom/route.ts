@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { mittenteDiConversazione } from '@/lib/mittente';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { getTemplateBody } from '@/lib/twilio';
 import { renderBodyTemplate } from '@/lib/campaigns';
@@ -61,6 +62,7 @@ const FASI_BERSAGLIO: readonly LancioFase[] = ['attesa', 'posto_bloccato'];
 type Candidata = {
   id: number;
   crm_lead_id: string | null;
+  wa_number: string | null;
   lancio_fase: string | null;
   lancio_info: unknown;
   last_inbound_at: string | null;
@@ -201,7 +203,7 @@ export async function GET(req: NextRequest) {
   // Una coda letta a meta' e una coda vuota danno lo stesso numero: `queryKo` dice quale
   // delle due e' successa, o "0 inviati" a serata finita non si sa interpretare.
   const { righe: tutti, queryKo } = await leggiCoda<Candidata>(supabase, 'lancio_zoom_query_error', (da, a) =>
-    bersaglio('id, crm_lead_id, lancio_fase, lancio_info, last_inbound_at, leads(phone_e164, first_name)')
+    bersaglio('id, crm_lead_id, wa_number, lancio_fase, lancio_info, last_inbound_at, leads(phone_e164, first_name)')
       .order('id', { ascending: true })
       .range(da, a),
   );
@@ -242,11 +244,14 @@ export async function GET(req: NextRequest) {
     const phone = c.leads?.phone_e164 ?? null;
     if (stato.fermo || !phone) return Promise.resolve('skip');
     return inviaTemplateTimbrato(supabase, stato, {
-      conv: { id: c.id, crm_lead_id: c.crm_lead_id, phone, nome: c.leads?.first_name ?? null },
+      conv: { id: c.id, crm_lead_id: c.crm_lead_id, phone, nome: c.leads?.first_name ?? null, wa_number: c.wa_number },
       colonna: 'lancio_link_inviato_at',
       faseDopo: 'link_inviato',
       sid,
-      from,
+      // Il numero della CHAT, non quello del run: dal 17/09 le conversazioni
+      // possono nascere sul secondo numero, e mandare il link del lancio
+      // dall'altro la spezzerebbe in due thread chiudendo la finestra 24h.
+      from: mittenteDiConversazione(c) ?? from,
       // Le due variabili del template ({{1}} nome, {{2}} link) e il corpo reso. Le
       // costruisce il motore, dentro il suo try/catch: un nome che facesse saltare il
       // render sarebbe un destinatario saltato, non il blocco di 25 perso.

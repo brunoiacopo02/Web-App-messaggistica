@@ -17,6 +17,15 @@ export interface BotIntakePayload {
   previousLeadIds?: PreviousLead[];
   /** Lead del lancio (contratto v1.6). Null/assente = flusso normale. */
   lancio?: LancioIntake | null;
+  /**
+   * Lead del riscaldamento del numero nuovo: la chat deve nascere SUL numero
+   * che stiamo scaldando, non su quello sorteggiato dalla quota.
+   *
+   * Serve perche' la quota e' globale: alzarla manderebbe li' anche i lead
+   * ordinari, abbassarla terrebbe fuori anche questi. L'unico modo di mandare
+   * al numero nuovo *solo* i lead del riscaldamento e' che il CRM lo dica.
+   */
+  riscaldamento?: boolean;
 }
 
 /** Come e' arrivato il lead del lancio: dalla lista AC 132 o dal pulsante della live. */
@@ -171,6 +180,10 @@ export function parseIntakePayload(
       personKey: typeof o.personKey === 'string' && o.personKey.trim() ? o.personKey.trim() : null,
       previousLeadIds: parsePreviousLeads(o.previousLeadIds),
       lancio: parseLancioField(o.lancio),
+      // Solo `true` vale: un campo assente, o qualunque altra cosa, e' un lead
+      // ordinario. Nel dubbio si sceglie il numero storico, che e' il flusso di
+      // sempre e non tocca il numero in riscaldamento.
+      riscaldamento: o.riscaldamento === true,
     },
   };
 }

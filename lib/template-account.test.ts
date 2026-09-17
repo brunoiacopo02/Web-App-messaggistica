@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { templatePerMittente, _svuotaCacheTemplate } from './template-account';
+import { templatePerMittente, traduciTemplate, _svuotaCacheTemplate } from './template-account';
 
 const CHIAVI = [
   'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN',
@@ -12,11 +12,20 @@ const PRIMARIO = '+393520413199';
 const SECONDO = '+393522070047';
 
 /** Le risposte che darebbe l'API Content dei due account. */
-function fingiApi(opts: { nomeSuAccount1?: string | null; contenutiAccount2?: Array<{ friendly_name: string; sid: string }> }) {
+function fingiApi(opts: {
+  nomeSuAccount1?: string | null;
+  contenutiAccount2?: Array<{ friendly_name: string; sid: string }>;
+  approvazioni?: Record<string, { status: string; category: string }>;
+}) {
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: any) => {
     const auth = String(init?.headers?.Authorization ?? '');
     const eSecondo = auth.includes(Buffer.from('AC_secondo:tok_secondo').toString('base64'));
 
+    if (url.includes('/ApprovalRequests')) {
+      const sid = url.split('/Content/')[1]?.split('/')[0] ?? '';
+      const a = opts.approvazioni?.[sid];
+      return { ok: true, status: 200, json: async () => (a ? { whatsapp: a } : {}) };
+    }
     if (!eSecondo && url.includes('/Content/')) {
       if (opts.nomeSuAccount1 === null) return { ok: false, status: 404, json: async () => ({}) };
       return { ok: true, status: 200, json: async () => ({ friendly_name: opts.nomeSuAccount1 }) };
@@ -129,5 +138,134 @@ describe('lista di sblocco fra i due account', () => {
       if (salva.u === undefined) delete process.env.UTILITY_ONLY; else process.env.UTILITY_ONLY = salva.u;
       if (salva.a === undefined) delete process.env.UTILITY_ONLY_ALLOW; else process.env.UTILITY_ONLY_ALLOW = salva.a;
     }
+  });
+});
+
+
+describe('traduciTemplate: dice se ha tradotto davvero', () => {
+  it('template presente sul secondo account: tradotto', async () => {
+    fingiApi({ nomeSuAccount1: 'fenice_open_v1', contenutiAccount2: [{ friendly_name: 'fenice_open_v1', sid: 'HXtradotto' }] });
+    expect(await traduciTemplate('HXoriginale', SECONDO)).toEqual({ sid: 'HXtradotto', tradotto: true });
+  });
+
+  it('template ASSENTE sul secondo account: NON tradotto, cosi chi chiama puo ripiegare', async () => {
+    fingiApi({ nomeSuAccount1: 'fenice_agenda_gdo_v3', contenutiAccount2: [{ friendly_name: 'fenice_open_v1', sid: 'HXaltro' }] });
+    expect(await traduciTemplate('HXagenda', SECONDO)).toEqual({ sid: 'HXagenda', tradotto: false });
+  });
+
+  it('nome non leggibile sull account di origine: NON tradotto', async () => {
+    fingiApi({ nomeSuAccount1: null });
+    expect(await traduciTemplate('HXoriginale', SECONDO)).toEqual({ sid: 'HXoriginale', tradotto: false });
+  });
+
+  it('dal numero storico non c e niente da tradurre, e non e un fallimento', async () => {
+    fingiApi({ nomeSuAccount1: 'x' });
+    expect(await traduciTemplate('HXoriginale', PRIMARIO)).toEqual({ sid: 'HXoriginale', tradotto: true });
+  });
+
+  it('un indice vuoto NON resta in cache: un errore di rete non deve avvelenare l istanza', async () => {
+    // Primo giro: l'API del secondo account non torna niente.
+    fingiApi({ nomeSuAccount1: 'fenice_open_v1', contenutiAccount2: [] });
+    expect((await traduciTemplate('HXoriginale', SECONDO)).tradotto).toBe(false);
+    // Secondo giro: l'API si e' ripresa. Se l'indice vuoto fosse rimasto in
+    // cache, questa traduzione fallirebbe per sempre.
+    fingiApi({ nomeSuAccount1: 'fenice_open_v1', contenutiAccount2: [{ friendly_name: 'fenice_open_v1', sid: 'HXtradotto' }] });
+    expect(await traduciTemplate('HXoriginale', SECONDO)).toEqual({ sid: 'HXtradotto', tradotto: true });
+  });
+});
+
+
+// Lo stesso template puo' avere categorie diverse sui due account: e' Meta a
+// deciderla alla sottomissione, e la copia sul secondo account e' stata
+// sottomessa a parte. `fenice_agenda_gdo_v3` e' UTILITY sull'account storico e
+// MARKETING su quello nuovo, con lo stesso identico testo.
+describe('presidio UTILITY_ONLY fra i due account', () => {
+  /** Finge le due API: categorie diverse per lo stesso template sui due account. */
+  function fingiCategorie(catSecondo: string, catOriginale: string) {
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: any) => {
+      const auth = String(init?.headers?.Authorization ?? '');
+      const eSecondo = auth.includes(Buffer.from('AC_secondo:tok_secondo').toString('base64'));
+      if (url.includes('/ApprovalRequests')) {
+        return { ok: true, status: 200, json: async () => ({ whatsapp: { category: eSecondo ? catSecondo : catOriginale } }) };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    }));
+  }
+
+  async function conPresidio(fn: () => Promise<void>) {
+    const salva = { u: process.env.UTILITY_ONLY, a: process.env.UTILITY_ONLY_ALLOW };
+    process.env.UTILITY_ONLY = '1';
+    process.env.UTILITY_ONLY_ALLOW = '';
+    try { await fn(); } finally {
+      if (salva.u === undefined) delete process.env.UTILITY_ONLY; else process.env.UTILITY_ONLY = salva.u;
+      if (salva.a === undefined) delete process.env.UTILITY_ONLY_ALLOW; else process.env.UTILITY_ONLY_ALLOW = salva.a;
+    }
+  }
+
+  it('MARKETING sul secondo ma UTILITY sull originale: PASSA, decide l originale', async () => {
+    const { assertTemplateSendable } = await import('./twilio');
+    fingiCategorie('MARKETING', 'UTILITY');
+    await conPresidio(async () => {
+      await expect(assertTemplateSendable('HXagendaDue', SECONDO, 'HXagendaUno')).resolves.toBeUndefined();
+    });
+  });
+
+  it('MARKETING su ENTRAMBI: resta bloccato, il presidio non si sfonda', async () => {
+    const { assertTemplateSendable } = await import('./twilio');
+    fingiCategorie('MARKETING', 'MARKETING');
+    await conPresidio(async () => {
+      await expect(assertTemplateSendable('HXapreDue', SECONDO, 'HXapreUno')).rejects.toThrow(/bloccato/);
+    });
+  });
+
+  it('senza traduzione (un solo account) la categoria originale non si consulta', async () => {
+    const { assertTemplateSendable } = await import('./twilio');
+    fingiCategorie('MARKETING', 'UTILITY');
+    await conPresidio(async () => {
+      // stesso SID: non c e stata traduzione, quindi niente seconda opinione.
+      await expect(assertTemplateSendable('HXuguale', SECONDO, 'HXuguale')).rejects.toThrow(/bloccato/);
+    });
+  });
+});
+
+
+// Un template gia' sottomesso a Meta non si puo' ricategorizzare (Twilio 92009):
+// se ne crea una copia `<nome>_u` e si chiede UTILITY. Il codice la preferisce
+// da solo, ma solo quando Meta l'ha approvata davvero.
+describe('copie _u per la categoria UTILITY', () => {
+  it('la copia APPROVATA come UTILITY viene preferita all originale', async () => {
+    fingiApi({
+      nomeSuAccount1: 'fenice_agenda_gdo_v3',
+      contenutiAccount2: [
+        { friendly_name: 'fenice_agenda_gdo_v3', sid: 'HXmarketing' },
+        { friendly_name: 'fenice_agenda_gdo_v3_u', sid: 'HXutility' },
+      ],
+      approvazioni: { HXutility: { status: 'approved', category: 'UTILITY' } },
+    });
+    expect(await traduciTemplate('HXoriginale', SECONDO)).toEqual({ sid: 'HXutility', tradotto: true });
+  });
+
+  it('la copia ANCORA IN ATTESA non viene usata: si continua con quella di prima', async () => {
+    fingiApi({
+      nomeSuAccount1: 'fenice_agenda_gdo_v3',
+      contenutiAccount2: [
+        { friendly_name: 'fenice_agenda_gdo_v3', sid: 'HXmarketing' },
+        { friendly_name: 'fenice_agenda_gdo_v3_u', sid: 'HXinattesa' },
+      ],
+      approvazioni: { HXinattesa: { status: 'pending', category: 'UTILITY' } },
+    });
+    expect(await traduciTemplate('HXoriginale', SECONDO)).toEqual({ sid: 'HXmarketing', tradotto: true });
+  });
+
+  it('la copia approvata ma di nuovo MARKETING non viene usata', async () => {
+    fingiApi({
+      nomeSuAccount1: 'fenice_agenda_gdo_v3',
+      contenutiAccount2: [
+        { friendly_name: 'fenice_agenda_gdo_v3', sid: 'HXmarketing' },
+        { friendly_name: 'fenice_agenda_gdo_v3_u', sid: 'HXancoramkt' },
+      ],
+      approvazioni: { HXancoramkt: { status: 'approved', category: 'MARKETING' } },
+    });
+    expect(await traduciTemplate('HXoriginale', SECONDO)).toEqual({ sid: 'HXmarketing', tradotto: true });
   });
 });

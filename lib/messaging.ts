@@ -119,6 +119,22 @@ export async function sendTemplateAndLog(
       is_template: true,
       sender: 'automazione',
     });
+    // Il MOTIVO va scritto da qualche parte. Prima si perdeva: gli errori che
+    // non vengono da Twilio (le nostre guardie, una fetch andata male) non
+    // hanno un `code` numerico, quindi la riga del messaggio restava con
+    // `twilio_status='failed'` e basta — nessun codice, nessun testo. Il
+    // 17/09/2026 per capire perche' 68 invii non erano partiti e' servito
+    // rileggere il codice riga per riga, e la causa non si e' comunque vista
+    // dai dati. Ora la si legge in una query.
+    await supabase.from('event_log').insert({
+      type: 'invio_template_fallito',
+      payload: {
+        conversationId, templateSid, label, from: from ?? null,
+        code: e?.code ?? null,
+      } as never,
+      message: `[invio] template ${label} non partito da ${from ?? 'mittente predefinito'}: ${e?.message ?? 'errore sconosciuto'}`,
+      level: 'error',
+    });
     return { ok: false, error: e?.message ?? 'unknown' };
   }
 }

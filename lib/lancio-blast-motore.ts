@@ -146,7 +146,15 @@ export function timbroCampi(
   return colonna === 'lancio_link_inviato_at' ? { lancio_link_inviato_at: valore } : { lancio_followup_inviato_at: valore };
 }
 
-export type ConvInvio = { id: number; crm_lead_id: string | null; phone: string; nome: string | null };
+export type ConvInvio = {
+  id: number; crm_lead_id: string | null; phone: string; nome: string | null;
+  /**
+   * Il numero da cui questa chat parla. Serve al chiamante per riempire `from`
+   * dell'invio: una chat nata sul secondo numero deve continuare di li', o il
+   * lead la vede come un secondo thread e la finestra 24h si chiude.
+   */
+  wa_number?: string | null;
+};
 
 /** Le variabili del template e il corpo gia' reso: cambiano a ogni destinatario. */
 export type MessaggioCostruito = { vars: Record<string, string>; body: string };

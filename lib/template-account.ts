@@ -38,6 +38,22 @@ async function get(url: string, sid: string, token: string): Promise<any | null>
     return r.json();
 }
 
+/**
+ * Il suffisso delle copie rifatte per ottenere la categoria UTILITY.
+ *
+ * Un template gia' sottomesso a Meta non si puo' ricategorizzare: Twilio
+ * risponde 92009 "recreate a new template to make any changes". L'unica strada
+ * e' crearne uno nuovo — e il nome, sull'account, dev'essere diverso.
+ */
+const SUFFISSO_UTILITY = '_u';
+
+/** Un template e' approvato da Meta come UTILITY? */
+async function approvatoUtility(contentSid: string, sid: string, token: string): Promise<boolean> {
+    const j = await get(`https://content.twilio.com/v1/Content/${contentSid}/ApprovalRequests`, sid, token);
+    const w = j?.whatsapp;
+    return w?.status === 'approved' && w?.category === 'UTILITY';
+}
+
 /** Tutti i template di un account, per nome. Una sola chiamata, poi in cache. */
 async function indicePerNome(sid: string, token: string): Promise<Map<string, string>> {
     const gia = _perAccount.get(sid);
@@ -53,11 +69,26 @@ async function indicePerNome(sid: string, token: string): Promise<Map<string, st
         }
         url = j.meta?.next_page_url ?? null;
     }
-    // Si mette in cache anche un indice vuoto: se l'API e' irraggiungibile,
-    // ritentare a ogni messaggio aggiunge una chiamata di rete a ogni invio
-    // senza cambiare l'esito. Il processo e' di breve vita, si riprova al
-    // prossimo avvio.
-    _perAccount.set(sid, indice);
+
+    // Se esiste la copia `<nome>_u`, la si preferisce all'originale — ma SOLO se
+    // Meta l'ha gia' approvata come UTILITY. Finche' e' in attesa si continua a
+    // usare quella di prima: preferire un template non approvato vorrebbe dire
+    // smettere di mandare proprio i messaggi che stiamo cercando di sistemare.
+    // Il controllo costa una chiamata per copia, una volta per processo.
+    for (const [nome, sidCopia] of [...indice]) {
+        if (!nome.endsWith(SUFFISSO_UTILITY)) continue;
+        const base = nome.slice(0, -SUFFISSO_UTILITY.length);
+        if (!indice.has(base)) continue;
+        if (await approvatoUtility(sidCopia, sid, token)) indice.set(base, sidCopia);
+    }
+    // Un indice VUOTO non si mette in cache. Prima si faceva, per non ripetere
+    // una chiamata di rete destinata a fallire; ma l'effetto vero era peggiore:
+    // se l'API rispondeva male una volta sola, quell'istanza restava avvelenata
+    // per tutta la sua vita e faceva fallire OGNI invio successivo dal secondo
+    // numero. Il 17/09/2026 i fallimenti arrivavano infatti a grappoli di
+    // minuti consecutivi, cioe' esattamente la firma di un'istanza avvelenata.
+    // Un indice pieno invece si mette in cache: quello e' un risultato buono.
+    if (indice.size > 0) _perAccount.set(sid, indice);
     return indice;
 }
 
@@ -67,34 +98,53 @@ async function indicePerNome(sid: string, token: string): Promise<Map<string, st
  * Se `from` sta sull'account storico (o non e' mappato) torna il SID originale
  * senza toccare la rete: e' il caso normale, e non deve costare niente.
  */
-export async function templatePerMittente(contentSid: string, from?: string | null): Promise<string> {
-    if (!eDelSecondoAccount(from)) return contentSid;
+/** Esito della traduzione: il SID da usare, e se si e' potuto tradurre davvero. */
+export interface TraduzioneTemplate {
+    sid: string;
+    /**
+     * false = il template non esiste sull'account del mittente (o non si e'
+     * potuto verificare). Il SID tornato e' quello di partenza, che da quel
+     * numero NON partira': chi chiama deve decidere cosa fare invece di
+     * mandarlo e basta.
+     */
+    tradotto: boolean;
+}
+
+/**
+ * Come `templatePerMittente`, ma dice anche se la traduzione e' riuscita.
+ *
+ * Serve perche' "non sono riuscito a tradurre" e "non c'era niente da tradurre"
+ * portavano entrambe allo stesso valore di ritorno, e il chiamante non poteva
+ * distinguerle: mandava il SID dell'altro account e il messaggio moriva.
+ */
+export async function traduciTemplate(contentSid: string, from?: string | null): Promise<TraduzioneTemplate> {
+    if (!eDelSecondoAccount(from)) return { sid: contentSid, tradotto: true };
 
     const dest = credenzialiPerMittente(from);
-    if (!dest) return contentSid;
+    if (!dest) return { sid: contentSid, tradotto: true };
 
     // Stesso account di partenza: non c'e' niente da tradurre. Succede quando
     // il numero e' dichiarato del secondo account ma le sue credenziali non ci
     // sono, e `credenzialiPerMittente` ripiega sul principale. Senza questa
     // riga si andrebbe a cercare il SID sull'account che gia' lo possiede.
-    if (dest.sid === process.env.TWILIO_ACCOUNT_SID) return contentSid;
+    if (dest.sid === process.env.TWILIO_ACCOUNT_SID) return { sid: contentSid, tradotto: true };
 
     const chiave = `${dest.sid}:${contentSid}`;
     const inCache = _cache.get(chiave);
-    if (inCache) return inCache;
+    if (inCache) return { sid: inCache, tradotto: true };
 
     const origine = {
         sid: process.env.TWILIO_ACCOUNT_SID ?? '',
         token: process.env.TWILIO_AUTH_TOKEN ?? '',
     };
-    if (!origine.sid || !origine.token) return contentSid;
+    if (!origine.sid || !origine.token) return { sid: contentSid, tradotto: false };
 
     // Il nome del template si chiede all'account che LO possiede.
     const c = await get(`https://content.twilio.com/v1/Content/${contentSid}`, origine.sid, origine.token);
     const nome = c?.friendly_name ? String(c.friendly_name) : null;
     if (!nome) {
         console.error(`[template-account] ${contentSid} non leggibile sull'account di origine: uso il SID originale`);
-        return contentSid;
+        return { sid: contentSid, tradotto: false };
     }
 
     const indice = await indicePerNome(dest.sid, dest.token);
@@ -104,11 +154,19 @@ export async function templatePerMittente(contentSid: string, from?: string | nu
             `[template-account] "${nome}" non esiste sull'account ${dest.sid}: il messaggio da ${from} fallira'. ` +
             'Va creato e approvato anche li.',
         );
-        return contentSid;
+        return { sid: contentSid, tradotto: false };
     }
 
     _cache.set(chiave, tradotto);
-    return tradotto;
+    return { sid: tradotto, tradotto: true };
+}
+
+/**
+ * Il SID da usare per mandare `contentSid` DA `from`, senza dire se e' stato
+ * tradotto. Resta per chi quella distinzione non la usa.
+ */
+export async function templatePerMittente(contentSid: string, from?: string | null): Promise<string> {
+    return (await traduciTemplate(contentSid, from)).sid;
 }
 
 /** Svuota le cache. Serve ai test, non al codice di produzione. */

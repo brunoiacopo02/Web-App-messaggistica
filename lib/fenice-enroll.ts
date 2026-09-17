@@ -10,7 +10,7 @@ import { getLancioSettings } from './lancio-settings';
 import { lancioBenvenutoText } from './lancio-fase';
 import { leggiTettoOrario, sottoTettoOrario } from './lancio-tetto';
 import { contaBenvenutiUltimaOra } from './lancio-db';
-import { mittenteDiConversazione, numeroPrimario } from './mittente';
+import { mittenteDiConversazione, numeroPrimario, numeroSecondo } from './mittente';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -23,6 +23,8 @@ export type EnrollArgs = {
   crmFunnel?: string | null;
   /** Lead del lancio (contratto v1.6): benvenuto del lancio al posto dell'apertura. */
   lancio?: LancioIntake | null;
+  /** Lead del riscaldamento: la chat nasce sul numero nuovo, non su quello sorteggiato. */
+  riscaldamento?: boolean;
 };
 
 export type EnrollResult = {
@@ -96,12 +98,20 @@ export async function enrollLeadIntoMario(
   }
 
   const firstName = args.firstName ?? undefined;
+  // Un lead di riscaldamento nasce SUL numero che stiamo scaldando; tutti gli
+  // altri lasciano decidere alla quota (`undefined` = sorteggio). Cosi' si puo'
+  // tenere la quota a zero — ordinari tutti sul numero storico — e mandare al
+  // numero nuovo soltanto i lead del test.
+  // Se il secondo numero non e' configurato si ricade sul sorteggio: meglio un
+  // lead che parte dal numero di sempre che un lead che non parte.
+  const secondo = numeroSecondo();
+  const mittenteImposto = args.riscaldamento && secondo ? secondo : undefined;
   const { conversationId, waNumber } = await findOrCreateLeadConversation(supabase, {
     phone: args.phone,
     firstName,
     lastName: args.lastName ?? undefined,
     email: args.email ?? undefined,
-  });
+  }, { mittente: mittenteImposto });
   // Il numero della chat: sorteggiato se e' appena nata, il suo se esisteva gia'. Il
   // `?? primario` e' solo per il tipo — col primario configurato non e' mai undefined.
   const from = mittenteDiConversazione({ wa_number: waNumber }) ?? primario;
@@ -420,12 +430,20 @@ async function enrollLancio(
   }
 
   const firstName = args.firstName ?? undefined;
+  // Un lead di riscaldamento nasce SUL numero che stiamo scaldando; tutti gli
+  // altri lasciano decidere alla quota (`undefined` = sorteggio). Cosi' si puo'
+  // tenere la quota a zero — ordinari tutti sul numero storico — e mandare al
+  // numero nuovo soltanto i lead del test.
+  // Se il secondo numero non e' configurato si ricade sul sorteggio: meglio un
+  // lead che parte dal numero di sempre che un lead che non parte.
+  const secondo = numeroSecondo();
+  const mittenteImposto = args.riscaldamento && secondo ? secondo : undefined;
   const { conversationId, waNumber } = await findOrCreateLeadConversation(supabase, {
     phone: args.phone,
     firstName,
     lastName: args.lastName ?? undefined,
     email: args.email ?? undefined,
-  });
+  }, { mittente: mittenteImposto });
   // Come nel ramo di Mario: il numero e' della chat, e se il benvenuto viene differito
   // il cron `lancio-aperture` lo rilegge da `wa_number`.
   const from = mittenteDiConversazione({ wa_number: waNumber }) ?? primario;
