@@ -633,19 +633,20 @@ export async function drainMarioReplies(
       }
 
       // Link ufficiali "in piu'" per questa conversazione: il video della live (lancio).
-      // `linkExtra` = link che non sono "inventati"; `videoExtra` = link che valgono
-      // come "video gia' uscito" per il blocco di conferma. Il video del GDO entra SOLO
-      // in `linkExtra`: dall'offerta del mese quel link arriva da un'impostazione e non
-      // sta nella whitelist statica (senza questo, ogni offerta finirebbe a log come
-      // link inventato). In `videoExtra` NO: allargarlo cambierebbe `videoGiaInviato` e
-      // il blocco di conferma dei lead postino, che questo task lascia com'erano.
+      // `linkExtra` = link che non sono "inventati" E che valgono come "video gia'
+      // uscito"; `videoExtra` = i soli link del lancio. Il video del GDO entra in
+      // `linkExtra` perche' dall'offerta del mese quel link arriva da un'impostazione e
+      // non sta nella whitelist statica: senza dirlo ai sanitizzatori ogni offerta
+      // finirebbe a log come link inventato, e il blocco di conferma direbbe "link video
+      // assente" (niente passaggio FATTO) proprio nel turno in cui il video esce.
+      // Sui quattro video classici non cambia nulla: sono gia' nella whitelist.
       const lancioStandard = lancioStandardDrain(lancio);
       const videoLive = lancioStandard ? await leggiVideoLive() : null;
       const videoExtra: string[] = videoLive ? [videoLive] : [];
       const linkExtra: string[] = [...videoExtra, ...(gdoVideoUrl ? [gdoVideoUrl] : [])];
       // Un link del video già uscito in questa chat: serve sia alla patch del blocco
       // conferma, sia alla rete di sicurezza sul FATTO qui sotto.
-      const videoGiaInviato = rows.some((m) => m.direction === 'out' && containsVideoLink(m.body, videoExtra));
+      const videoGiaInviato = rows.some((m) => m.direction === 'out' && containsVideoLink(m.body, linkExtra));
 
       /** Manda il video del GDO come bolla a sé e ne registra l'invio. */
       const inviaVideoGdo = async (): Promise<void> => {
@@ -824,7 +825,7 @@ export async function drainMarioReplies(
       // precedente è il segnale che il blocco è già stato mandato; se invece il link
       // esce proprio adesso, la cronologia non lo contiene ancora e la patch si applica.
       if (result.appointmentFixed && !videoGiaInviato) {
-        const block = ensureConfirmationBlock(parts, { extraVideoLinks: videoExtra });
+        const block = ensureConfirmationBlock(parts, { extraVideoLinks: linkExtra });
         parts = block.parts;
         if (block.added.length > 0 || block.missingVideoLink) {
           await supabase.from('event_log').insert({

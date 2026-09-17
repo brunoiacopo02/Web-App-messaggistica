@@ -287,7 +287,10 @@ export async function GET(req: NextRequest) {
         // lasciare traccia da nessuna parte.
         const parts = splitMarioMessages(result.visibleReply ?? '');
 
-        const linkInventati = parts.flatMap((p) => unknownFeniceLinks(p));
+        // Il link dell'offerta del mese e' ufficiale ma non sta nella whitelist statica:
+        // senza passarlo, Marta che lo ripete nel sollecito verrebbe accusata di essersi
+        // inventata un link, e il rumore vero si perderebbe fra i falsi positivi.
+        const linkInventati = parts.flatMap((p) => unknownFeniceLinks(p, offertaLink ? [offertaLink] : []));
         if (linkInventati.length > 0) {
           await supabase.from('event_log').insert({
             type: 'unknown_fenice_link',

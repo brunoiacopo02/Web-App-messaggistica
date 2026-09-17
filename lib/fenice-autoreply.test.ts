@@ -897,6 +897,34 @@ describe('drainMarioReplies — modalità postino (lead dei GDO)', () => {
     expect(calls.events.some((e: { type: string }) => e.type === 'unknown_fenice_link')).toBe(false);
   });
 
+  // Ruling: il video dell'offerta vale come video anche per il blocco di conferma. Senza
+  // passarlo, il turno in cui l'appuntamento si fissa E il video esce finirebbe con
+  // `missingVideoLink` (niente passaggio FATTO, warn a log) solo perché quel link non è
+  // nella whitelist statica: il lead non saprebbe più come confermare di averlo visto.
+  it('offerta del mese + appuntamento fissato nello stesso turno: il passaggio FATTO c\'è e nessun warn', async () => {
+    const OFFERTA = 'https://corso.feniceacademy.it/webdev-offerta';
+    // Un solo inbound, ed è una domanda: il video esce INSIEME alla risposta, nello
+    // stesso turno in cui l'appuntamento si fissa — il caso del ruling.
+    const rows: FakeMsgRow[] = [
+      AGENDA,
+      { direction: 'in', body: 'possiamo fare lunedì alle 13?', template_sid: null, created_at: '2026-07-29T10:10:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(postino({ gdo_video_url: OFFERTA }), rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto, confermato lunedì alle 13',
+      appointmentFixed: true, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    const inviati = calls.messageInserts.map((m: any) => m.body);
+    expect(inviati.some((b: string) => b.includes(OFFERTA))).toBe(true);
+    expect(inviati.some((b: string) => /\bFATTO\b/.test(b))).toBe(true);
+    const patch = calls.events.find((e: any) => e.type === 'confirmation_block_patched');
+    expect(patch?.payload?.missingVideoLink ?? false).toBe(false);
+    expect(patch?.level ?? 'info').toBe('info');
+  });
+
   it('video già confermato: la nota non ripete il promemoria video (smaschera uno scambio sent/watched)', async () => {
     const rows: FakeMsgRow[] = [
       AGENDA, RISPOSTA,
