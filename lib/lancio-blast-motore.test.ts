@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import type { NextRequest } from 'next/server';
 import {
   leggiParametriCron, eRifiutoDiPolicy, eseguiLotti, nuovoStatoRun, timbroUpdate, timbroCampi, PASSO_FRENO,
-  inviaTemplateTimbrato,
+  inviaTemplateTimbrato, frenaLancio,
   type EsitoInvio,
 } from './lancio-blast-motore';
 
@@ -11,6 +11,9 @@ import {
 const sendTemplate = vi.fn(async () => ({ sid: 'SMtest', status: 'queued' }));
 vi.mock('./twilio', () => ({ sendTemplate: (...a: unknown[]) => sendTemplate(...(a as [])) }));
 vi.mock('./lancio-db', () => ({ impostaFaseLancio: async () => {} }));
+// Il freno spegne `lancio_attivo`: qui serve poter far fallire quella scrittura.
+const setLancioSetting = vi.fn(async (): Promise<{ ok: boolean; error?: string }> => ({ ok: true }));
+vi.mock('./lancio-settings', () => ({ setLancioSetting: () => setLancioSetting() }));
 
 type Chiamata = { table: string; op: 'insert' | 'update' | 'select'; arg: unknown };
 const chiamate: Chiamata[] = [];
@@ -190,5 +193,51 @@ describe('inviaTemplateTimbrato: la costruzione del messaggio sta DENTRO il try/
     expect(claim).toHaveLength(PASSO_FRENO - 1);
     const eventi = chiamate.filter((c) => c.table === 'event_log').map((c) => (c.arg as { type: string }).type);
     expect(eventi).toContain('lancio_zoom_messaggio_non_costruito');
+  });
+});
+
+describe('frenaLancio — quando nemmeno lo spegnimento riesce', () => {
+  beforeEach(() => {
+    chiamate.length = 0;
+    setLancioSetting.mockReset();
+  });
+
+  const conti = {
+    inviati: 3, riparati: 0, capped: 1, falliti: 9, incerti: 2, saltati: 0, errori: 0, report: [] as EsitoInvio[],
+  };
+  const stato = { fermo: 'freno', tentati: 14, codici: [63018, 63018, 'senza_codice'] };
+
+  it('un upsert fallito produce l evento <prefisso>_freno_non_applicato di livello error', async () => {
+    setLancioSetting.mockResolvedValueOnce({ ok: false, error: 'permission denied for table app_settings' });
+
+    await frenaLancio(supabase, { ...stato }, conti, {
+      prefisso: 'lancio_followup', etichetta: 'follow-up', candidati: 120, lotto: 25,
+    });
+
+    const eventi = chiamate
+      .filter((c) => c.table === 'event_log')
+      .map((c) => c.arg as { type: string; payload: Record<string, unknown>; message: string; level: string });
+    // Prima il freno (coi numeri del run), poi l'allarme che NON e' stato applicato.
+    expect(eventi.map((e) => e.type)).toEqual(['lancio_followup_freno', 'lancio_followup_freno_non_applicato']);
+    expect(eventi[0].level).toBe('error');
+    expect(eventi[0].payload).toMatchObject({ tentati: 14, inviati: 3, falliti: 9, incerti: 2, capped: 1, candidati: 120, lotto: 25 });
+
+    const allarme = eventi[1];
+    expect(allarme.level).toBe('error');
+    expect(allarme.payload).toEqual({ errore: 'permission denied for table app_settings' });
+    expect(allarme.message).toContain("lancio_attivo NON e' stato spento");
+    expect(allarme.message).toContain('permission denied for table app_settings');
+    expect(allarme.message).toContain('Spegnerlo a mano dal pannello');
+  });
+
+  it('se lo spegnimento riesce resta solo l evento del freno', async () => {
+    setLancioSetting.mockResolvedValueOnce({ ok: true });
+
+    await frenaLancio(supabase, { ...stato }, conti, {
+      prefisso: 'lancio_zoom', etichetta: 'link Zoom', candidati: 3000, lotto: 200,
+    });
+
+    const eventi = chiamate.filter((c) => c.table === 'event_log').map((c) => (c.arg as { type: string }).type);
+    expect(eventi).toEqual(['lancio_zoom_freno']);
   });
 });

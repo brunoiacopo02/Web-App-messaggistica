@@ -147,6 +147,23 @@ export function lancioInCorso(c: { lancio_slug?: string | null; lancio_fase?: st
 }
 
 /**
+ * Questa chat e' stata restituita al pool: il lead e' del GDO, il bot non le scrive piu'.
+ *
+ * Difesa in profondita' sul re-drive di `app/api/cron/bot-followups`. Quel cron ridrive
+ * ogni riga `active`/`replying` con un inbound senza risposta, e il blocco che tiene il
+ * lancio fuori da Mario (`lancioInCorso`) viene DOPO — ed e' gia' falso su `restituito`,
+ * che e' una fase terminale. Le porte che dovrebbero impedire a una chat restituita di
+ * restare `active` ci sono tutte (`pulsanteRiapreChat`, il veto di `shouldReopen`), ma
+ * basta che una sola non tenga — un 200 `returnedToPool:false` dopo la chiusura locale,
+ * una riapertura scritta da una strada nuova — perche' Mario risponda a una persona che
+ * un GDO sta chiamando. E' il danno esatto che il ruling C8 esiste per evitare, quindi
+ * la fase vale da sola, senza guardare `ai_status`.
+ */
+export function lancioRestituito(c: { lancio_fase?: string | null }): boolean {
+  return (c.lancio_fase ?? '') === 'restituito';
+}
+
+/**
  * Lo stesso criterio di `lancioInCorso`, al contrario e in sintassi PostgREST, per le
  * query dei cron: `query.or(FILTRO_FUORI_LANCIO)`. Più `.or()` sulla stessa query si
  * sommano in AND, quindi si può aggiungere a query che ne hanno già uno.

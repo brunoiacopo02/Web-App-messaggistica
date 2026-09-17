@@ -4,7 +4,7 @@ import {
   TESTO_POSTO_BLOCCATO, TESTO_CONGEDO, TESTO_CHIUSURA_DOMANDE, TESTO_PASSAGGIO_UMANO,
   isLancioFase, lancioInCorso, decideLancioTurno, contaScambiDomande, lancioFaseLabel, lancioBenvenutoText,
   inboundDelLotto, ultimoTestoDelLotto, haCongedo, pulsanteRiportaInPostPitch, pulsanteScriveFase,
-  pulsanteRiapreChat, serveNotaRestituzione, NOTA_RESTITUZIONE_OGNI_MS,
+  pulsanteRiapreChat, serveNotaRestituzione, NOTA_RESTITUZIONE_OGNI_MS, lancioRestituito,
   tagliaRigheDalLancio,
 } from './lancio-fase';
 
@@ -334,5 +334,25 @@ describe('serveNotaRestituzione — una nota al CRM ogni ora per chat (C8)', () 
   });
   it('la finestra e un ora esatta', () => {
     expect(NOTA_RESTITUZIONE_OGNI_MS).toBe(60 * 60 * 1000);
+  });
+});
+
+describe('lancioRestituito — il veto al re-drive di bot-followups (C8, difesa in profondita)', () => {
+  it('vero solo sulla fase restituito', () => {
+    expect(lancioRestituito({ lancio_fase: 'restituito' })).toBe(true);
+    for (const fase of ['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch', 'scelta_fatta', 'followup_inviato', 'chiuso']) {
+      expect(lancioRestituito({ lancio_fase: fase })).toBe(false);
+    }
+  });
+  it('una chat che nel lancio non c e mai entrata non e restituita', () => {
+    expect(lancioRestituito({ lancio_fase: null })).toBe(false);
+    expect(lancioRestituito({})).toBe(false);
+  });
+  it('lancioInCorso NON basta come guardia: su restituito e gia falso', () => {
+    // E' il motivo per cui la guardia serve: al blocco 2a-bis del cron una chat
+    // restituita non e' "in corso", ma il re-drive sta PRIMA di quel blocco.
+    const c = { lancio_slug: LANCIO_SLUG, lancio_fase: 'restituito' };
+    expect(lancioInCorso(c)).toBe(false);
+    expect(lancioRestituito(c)).toBe(true);
   });
 });
