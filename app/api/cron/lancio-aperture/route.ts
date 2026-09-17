@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { mittenteDiConversazione } from '@/lib/mittente';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 // `sendTemplate` chiama da solo `assertTemplateSendable` (presidio UTILITY_ONLY): il
 // rifiuto arriva come eccezione senza `code`, e lo riconosce `eRifiutoDiPolicy`.
@@ -56,6 +57,8 @@ function authorized(req: NextRequest): boolean {
 type Conv = {
   id: number;
   crm_lead_id: string | null;
+  /** Il numero da cui questa chat parla: il benvenuto differito deve uscire di li'. */
+  wa_number: string | null;
   lancio_fase: string | null;
   lancio_benvenuto_at: string | null;
   last_inbound_at: string | null;
@@ -160,7 +163,7 @@ export async function GET(req: NextRequest) {
   for (let pagina = 0; pagina < MAX_PAGINE; pagina++) {
     const { data, error } = await supabase
       .from('conversations')
-      .select('id, crm_lead_id, lancio_fase, lancio_benvenuto_at, last_inbound_at, leads(phone_e164, first_name)')
+      .select('id, crm_lead_id, wa_number, lancio_fase, lancio_benvenuto_at, last_inbound_at, leads(phone_e164, first_name)')
       .not('lancio_slug', 'is', null)
       .eq('lancio_fase', 'attesa')
       .eq('ai_status', 'active')
@@ -290,7 +293,10 @@ export async function GET(req: NextRequest) {
             to: phone,
             contentSid: templateSid,
             variables: { '1': templateName(nome) },
-            from,
+            // Il numero della CHAT, non quello del run: una conversazione nata
+            // sul secondo numero deve ricevere anche il benvenuto differito da
+            // li', o il lead si ritrova due thread e la finestra 24h si chiude.
+            from: mittenteDiConversazione(c) ?? from,
           });
           spedito = true;
           await supabase.from('messages').insert({
