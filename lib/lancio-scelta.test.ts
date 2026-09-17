@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  giorniLancio, modoPostPitch, modoEtichette, puoRispondere, validaAtLancio, parseLancioTag, stripLancioTags,
+  giorniLancio, modoPostPitch, fineNotteLancio, modoEtichette, puoRispondere, validaAtLancio, parseLancioTag, stripLancioTags,
   oreProponibili, atIso, etichettaGiorno, testoSlots, bloccoSlotPerPrompt,
   testoConfermaChiamata, testoConfermaPrenotazione, testoOraEsaurita, raccogliRisposte,
 } from './lancio-scelta';
@@ -235,5 +235,15 @@ describe('il marker del pulsante vive solo in primo-messaggio (ruling C5)', () =
   it('raccogliRisposte scarta il testo del pulsante anche con altre maiuscole o senza emoji', () => {
     const info = raccogliRisposte(null, ['Ho seguito la LIVE Web Developer AI e voglio saperne di più', 'faccio il barista']);
     expect(info.risposte).toEqual(['faccio il barista']);
+  });
+});
+
+describe('fineNotteLancio — le 03:00 di Roma del giorno dopo, in millisecondi', () => {
+  it('e lo stesso confine di modoPostPitch, e segue l evento', () => {
+    const evento = new Date('2026-10-05T21:00:00+02:00');
+    expect(fineNotteLancio(evento)).toBe(Date.parse('2026-10-06T03:00:00+02:00'));
+    expect(modoPostPitch(new Date(fineNotteLancio(evento) - 1), evento)).toBe('notte');
+    expect(modoPostPitch(new Date(fineNotteLancio(evento)), evento)).toBe('giorno');
+    expect(fineNotteLancio(new Date('2026-11-29T21:00:00+01:00'))).toBe(Date.parse('2026-11-30T03:00:00+01:00'));
   });
 });

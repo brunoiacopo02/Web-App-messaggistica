@@ -370,7 +370,7 @@ describe('GET /api/cron/lancio-followup — perimetro (C4) e decisione', () => {
     const f = selectConv()?.filtri ?? [];
     expect(f).toContainEqual({ m: 'is', args: ['lancio_info->>congedo_at', null] });
     expect(f).toContainEqual({ m: 'is', args: ['lancio_followup_inviato_at', null] });
-    expect(f).toContainEqual({ m: 'in', args: ['lancio_fase', ['attesa', 'posto_bloccato', 'link_inviato']] });
+    expect(f).toContainEqual({ m: 'in', args: ['lancio_fase', ['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch']] });
     expect(f).toContainEqual({ m: 'not', args: ['last_inbound_at', 'is', null] });
     expect(f).toContainEqual({ m: 'is', args: ['ai_paused_at', null] });
     expect(f).toContainEqual({ m: 'is', args: ['handed_off_at', null] });
@@ -382,6 +382,21 @@ describe('GET /api/cron/lancio-followup — perimetro (C4) e decisione', () => {
     await expect((await richiesta()).json()).resolves.toMatchObject({ candidati: 1, sent: 1 });
     expect(sendTemplate).toHaveBeenCalledTimes(1);
     expect(sendTemplate).toHaveBeenCalledWith(expect.objectContaining({ to: tel(2) }));
+  });
+
+  it('post_pitch fermo dalla sera del pitch: riceve il follow-up come gli altri', async () => {
+    stato.convs = [conv(1, { lancio_fase: 'post_pitch', last_inbound_at: '2026-10-05T20:10:00Z' })];
+    stato.messaggi.set(1, righe(1, ['ho premuto il pulsante', '2026-10-05T19:40:00Z'], ['si, lavoro', '2026-10-05T20:10:00Z']));
+    await expect((await richiesta()).json()).resolves.toMatchObject({ sent: 1 });
+    expect(sendTemplate).toHaveBeenCalledWith(expect.objectContaining({ to: tel(1) }));
+  });
+
+  it('post_pitch ancora vivo il 6: non si interrompe, si conta in_scelta', async () => {
+    stato.convs = [conv(1, { lancio_fase: 'post_pitch', last_inbound_at: '2026-10-06T09:30:00Z' })];
+    stato.messaggi.set(1, righe(1, ['ho premuto il pulsante', '2026-10-05T19:40:00Z'], ['scusa ieri, possiamo sentirci?', '2026-10-06T09:30:00Z']));
+    const res = await (await richiesta()).json();
+    expect(res.saltati.in_scelta).toBe(1);
+    expect(sendTemplate).not.toHaveBeenCalled();
   });
 
   it('un inbound solo PRIMA dell ancora (chat riusata) non e interazione: si salta, niente template', async () => {
@@ -546,20 +561,24 @@ describe('GET /api/cron/lancio-followup — invio col motore', () => {
       1,
       'followup_inviato',
       { lancio_followup_inviato_at: expect.any(String) },
-      { soloDaFasi: ['attesa', 'posto_bloccato', 'link_inviato'] },
+      { soloDaFasi: ['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch'] },
     );
     expect(tipiEvento()).toContain('lancio_followup_inviato');
     expect(stato.timbrateAllInvio[0]).toContain(1);
   });
 
-  it('una fase avanzata durante l invio (pulsante -> post_pitch) non torna indietro; il timbro resta', async () => {
+  // `post_pitch` ora e' DENTRO il perimetro (fix del 17/09), quindi la fase di prova qui
+  // e' `scelta_fatta`: il compare-and-set serve proprio a non riportare indietro una chat
+  // che nel frattempo ha scelto. Il timbro invece resta: e' del claim, e tiene la chat
+  // fuori dalla coda del run successivo.
+  it('una fase avanzata durante l invio (scelta fatta) non torna indietro; il timbro resta', async () => {
     stato.convs = [conv(1)];
     sendTemplate.mockImplementationOnce(async () => {
-      stato.convs[0].lancio_fase = 'post_pitch';
+      stato.convs[0].lancio_fase = 'scelta_fatta';
       return { sid: 'SMtest', status: 'queued' };
     });
     await expect((await richiesta()).json()).resolves.toMatchObject({ sent: 1, failed: 0 });
-    expect(stato.convs[0].lancio_fase).toBe('post_pitch');
+    expect(stato.convs[0].lancio_fase).toBe('scelta_fatta');
     expect(stato.timbrate).toEqual(new Set([1]));
   });
 
@@ -579,7 +598,7 @@ describe('GET /api/cron/lancio-followup — invio col motore', () => {
       1,
       'followup_inviato',
       expect.anything(),
-      { soloDaFasi: ['attesa', 'posto_bloccato', 'link_inviato'] },
+      { soloDaFasi: ['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch'] },
     );
   });
 

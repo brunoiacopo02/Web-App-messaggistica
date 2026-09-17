@@ -4,6 +4,7 @@ import { getTemplateBody } from '@/lib/twilio';
 import { renderBodyTemplate } from '@/lib/campaigns';
 import { templateName } from '@/lib/name';
 import { getLancioSettings } from '@/lib/lancio-settings';
+import { fineNotteLancio } from '@/lib/lancio-scelta';
 import { marcaCongedo, leggiIngressoLancioAt } from '@/lib/lancio-db';
 import { congedoLancio } from '@/lib/lancio-effetti';
 import { logCronQueryError } from '@/lib/cron-query-error';
@@ -138,6 +139,7 @@ const contatoreSalti = (): Record<MotivoSaltoRoute, number> => ({
   congedato: 0,
   ancora_ignota: 0,
   mai_scritto: 0,
+  in_scelta: 0,
   senza_telefono: 0,
 });
 
@@ -170,6 +172,9 @@ export async function GET(req: NextRequest) {
   const eventoMs = settings.eventoAt ? Date.parse(settings.eventoAt) : NaN;
   if (Number.isNaN(eventoMs)) return configError(['lancio_evento_at']);
   const evento = new Date(eventoMs);
+  // Le 03:00 di Roma del 6: da li' in poi un `post_pitch` che scrive sta scegliendo, e il
+  // follow-up non lo interrompe (`decideFollowup`, motivo `in_scelta`).
+  const fineNotte = fineNotteLancio(evento);
   // Il fondo della cronologia da leggere: tutte le ancore del lancio stanno dopo.
   const tagliaStorico = new Date(eventoMs - GIORNI_STORICO * 24 * 60 * 60 * 1000).toISOString();
 
@@ -330,6 +335,7 @@ export async function GET(req: NextRequest) {
         lancio_info: c.lancio_info,
         rows,
         ancora,
+        fineNotte,
       });
       if (decisione.kind === 'salta') {
         saltati[decisione.motivo]++;
@@ -420,9 +426,11 @@ export async function GET(req: NextRequest) {
         return { vars, body: bodyRaw ? renderBodyTemplate(bodyRaw, vars) : lancioFollowupText(conv.nome) };
       },
       giaSpedito: giaSpediti.has(c.id),
-      // Mentre il template e' in volo il pulsante del webinar puo' aver portato la chat a
-      // `post_pitch`: con `soloDaFasi` la fase non torna indietro. Il timbro resta comunque
-      // (e' del claim), quindi la chat esce da sola dai candidati.
+      // Mentre il template e' in volo il turno puo' aver portato la chat avanti (una
+      // scelta fatta, un congedo): con `soloDaFasi` la fase non torna indietro. Il timbro
+      // resta comunque (e' del claim), quindi la chat esce da sola dai candidati.
+      // `post_pitch` e' DENTRO il perimetro (e quindi dentro il compare-and-set): da
+      // quella fase il follow-up si manda, e chi lo riceve passa a `followup_inviato`.
       soloDaFasi: FASI_FOLLOWUP,
       prefisso: 'lancio_followup',
       etichetta: 'follow-up',

@@ -21,8 +21,24 @@ export const NOTA_RESTITUZIONE: Record<MotivoRestituzione, string> = {
   followup_non_inviato: 'Lancio: follow-up non inviato',
 };
 
-export const FASI_RESTITUIBILI = ['attesa', 'posto_bloccato', 'link_inviato', 'followup_inviato'] as const;
-const FASI_PRIMA_DEL_FOLLOWUP: readonly string[] = ['attesa', 'posto_bloccato', 'link_inviato'];
+/**
+ * Le fasi che tornano al pool. `scelta_fatta` resta fuori: quel lead ha scelto, ce l'ha
+ * in mano il CRM. `post_pitch` invece ci sta — chi ha premuto il pulsante e poi si e'
+ * fermato non ha nessun altro che lo guardi: senza questa riga restava del bot per
+ * sempre, senza follow-up (fino al fix del 17/09) e senza restituzione.
+ */
+export const FASI_RESTITUIBILI = ['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch', 'followup_inviato'] as const;
+/** Le fasi in cui il follow-up non e' (ancora) partito: da qui valgono `mai_risposto` e
+ *  `followup_non_inviato`. `post_pitch` compreso, per la stessa ragione. */
+const FASI_PRIMA_DEL_FOLLOWUP: readonly string[] = ['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch'];
+
+/**
+ * Tetto del lotto delle restituzioni (env `LANCIO_RESTITUZIONI_MAX`). E' suo e non quello
+ * del blast (`LANCIO_BATCH_MAX`, 200 ogni 5'): qui non parte nessun messaggio WhatsApp —
+ * si chiama il CRM e si scrive una fase — quindi il numero non ha niente a che vedere con
+ * la qualita' del numero, e il cron gira una volta l'ora. 500 e' la coda di un'ora.
+ */
+export const RESTITUZIONI_MAX_DEFAULT = 500;
 
 /** Dal giorno dopo dopodomani (regola a data, derivata dall'evento: nessuno stato). */
 export function restituzioniAttive(now: Date, eventoAt: Date): boolean {

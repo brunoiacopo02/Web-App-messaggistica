@@ -61,11 +61,22 @@ export function atIso(date: string, hour: number): string {
 
 const istante = (date: string, hhmm: string) => Date.parse(`${date}T${hhmm}:00${romeOffset(new Date(`${date}T12:00:00Z`))}`);
 
+/**
+ * La fine della notte del webinar: le 03:00 di Roma del giorno dopo, in millisecondi.
+ *
+ * E' il confine di `modoPostPitch` esposto come istante, perche' serve anche a chi non
+ * sta facendo un turno: il cron del follow-up lo usa per capire se una chat rimasta in
+ * `post_pitch` e' ferma dalla sera del pitch (e allora il follow-up ci vuole) o se il
+ * lead sta ancora scrivendo dentro il flusso della scelta (e allora non si interrompe).
+ */
+export function fineNotteLancio(eventoAt: Date): number {
+  return istante(giorniLancio(eventoAt).giornoDopo, FINE_NOTTE_HHMM);
+}
+
 /** Notte = dall'inizio dell'evento alle 03:00 del giorno dopo: il lead sta scrivendo ora. */
 export function modoPostPitch(now: Date, eventoAt: Date): ModoPostPitch {
-  const { giornoDopo } = giorniLancio(eventoAt);
   const ms = now.getTime();
-  return ms >= eventoAt.getTime() && ms < istante(giornoDopo, FINE_NOTTE_HHMM) ? 'notte' : 'giorno';
+  return ms >= eventoAt.getTime() && ms < fineNotteLancio(eventoAt) ? 'notte' : 'giorno';
 }
 
 /**

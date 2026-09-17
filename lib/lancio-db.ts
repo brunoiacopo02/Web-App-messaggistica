@@ -6,6 +6,13 @@ import { FINESTRA_TETTO_MS } from './lancio-tetto';
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
 /**
+ * Com'e' andata la scrittura della fase. Serve a chi scrive da un cron con `soloDaFasi`:
+ * `non_cambiata` vuol dire che qualcun altro ha portato avanti quella chat mentre il run
+ * era in volo, e chi chiama deve fermarsi li' invece di proseguire come se avesse scritto.
+ */
+export type EsitoFase = 'cambiata' | 'non_cambiata' | 'errore';
+
+/**
  * Cambio di fase di una chat del lancio: un update e una traccia. E' l'unico punto che
  * scrive `lancio_fase`, cosi' la storia di ogni chat si ricostruisce da `event_log`
  * (`lancio_fase_cambiata`) senza interpretare gli altri eventi. B4 (link, post_pitch,
@@ -26,7 +33,7 @@ export async function impostaFaseLancio(
    * quello di sempre: chi scrive dentro un turno gia' serializzato non ne ha bisogno.
    */
   opzioni: { soloDaFasi?: readonly LancioFase[] } = {},
-): Promise<void> {
+): Promise<EsitoFase> {
   const base = supabase
     .from('conversations')
     .update({ lancio_fase: fase, ...campi })
@@ -52,6 +59,7 @@ export async function impostaFaseLancio(
         : `[lancio] conv ${conversationId}: fase ${fase} non scritta, la chat era gia' oltre`,
     level: error ? 'error' : 'info',
   });
+  return error ? 'errore' : cambiata ? 'cambiata' : 'non_cambiata';
 }
 
 /**

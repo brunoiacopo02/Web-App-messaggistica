@@ -58,7 +58,16 @@ type EsitoOutcome = { sent: boolean; status?: number; error?: string; corpo?: Re
 const RESTITUITO: EsitoOutcome = { sent: true, status: 200, corpo: { ok: true, returnedToPool: true, motivo: 'mai_risposto' } };
 const sendOutcome = vi.fn<(...a: unknown[]) => Promise<EsitoOutcome>>(async () => RESTITUITO);
 vi.mock('@/lib/bot-outcome', () => ({ sendOutcome: (...a: unknown[]) => sendOutcome(...a) }));
-const impostaFaseLancio = vi.fn(async (...a: unknown[]) => { const c = stato.convs.find((x) => x.id === a[1]); if (c) c.lancio_fase = a[2] as string; });
+// La fase la sposta davvero nella fixture, `soloDaFasi` compreso, e torna l'esito come
+// quella vera: il compare-and-set e' proprio quello che questi test devono vedere.
+const impostaFaseLancio = vi.fn<(...a: unknown[]) => Promise<'cambiata' | 'non_cambiata' | 'errore'>>(async (...a: unknown[]) => {
+  const c = stato.convs.find((x) => x.id === a[1]);
+  if (!c) return 'non_cambiata';
+  const soloDaFasi = (a[4] as { soloDaFasi?: readonly string[] } | undefined)?.soloDaFasi;
+  if (soloDaFasi && !soloDaFasi.includes(c.lancio_fase ?? '')) return 'non_cambiata';
+  c.lancio_fase = a[2] as string;
+  return 'cambiata';
+});
 const leggiIngressoLancioAt = vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => null);
 vi.mock('@/lib/lancio-db', () => ({
   impostaFaseLancio: (...a: unknown[]) => impostaFaseLancio(...a),
@@ -166,7 +175,7 @@ describe('GET /api/cron/lancio-restituzioni — decisioni e CRM', () => {
     stato.convs = [conv(1)];
     await expect((await richiesta()).json()).resolves.toMatchObject({ restituiti: 1, rifiutati: 0, errori: 0 });
     expect(sendOutcome).toHaveBeenCalledWith(expect.anything(), 1, { outcome: 'NON_RISPOSTO', note: 'Lancio: mai risposto' });
-    expect(impostaFaseLancio).toHaveBeenCalledWith(expect.anything(), 1, 'restituito');
+    expect(impostaFaseLancio).toHaveBeenCalledWith(expect.anything(), 1, 'restituito', {}, { soloDaFasi: ['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch', 'followup_inviato'] });
     const chiusura = chiamate.find((c) => c.table === 'conversations' && c.op === 'update' && (c.arg as Record<string, unknown>).ai_status === 'closed');
     expect(chiusura?.filtri).toContainEqual({ m: 'eq', args: ['id', 1] });
     const ev = eventi().find((e) => e.type === 'lancio_restituito');
@@ -245,7 +254,7 @@ describe('GET /api/cron/lancio-restituzioni — decisioni e CRM', () => {
     stato.convs = [conv(1)];
     sendOutcome.mockResolvedValueOnce({ sent: true, status: 200, corpo: { ok: true, returnedToPool: false, skipped: 'already_returned' } });
     await expect((await richiesta()).json()).resolves.toMatchObject({ restituiti: 0, giaRestituiti: 1 });
-    expect(impostaFaseLancio).toHaveBeenCalledWith(expect.anything(), 1, 'restituito');
+    expect(impostaFaseLancio).toHaveBeenCalledWith(expect.anything(), 1, 'restituito', {}, expect.objectContaining({ soloDaFasi: expect.anything() }));
   });
   it('200 senza corpo leggibile non e una conferma: warn e fase intatta', async () => {
     stato.convs = [conv(1)];
@@ -292,9 +301,34 @@ describe('GET /api/cron/lancio-restituzioni — decisioni e CRM', () => {
     expect(sendOutcome).not.toHaveBeenCalled();
     expect(res.niente.esito_presente).toBe(1);
   });
-  it('il tetto del lotto lascia il resto al run dopo', async () => {
+  it('il tetto del lotto e LANCIO_RESTITUZIONI_MAX, non quello del blast', async () => {
+    vi.stubEnv('LANCIO_RESTITUZIONI_MAX', '1');
+    stato.convs = [conv(1), conv(2)];
+    await expect((await richiesta()).json()).resolves.toMatchObject({ restituiti: 1, residui: 0, nonValutati: 1, max: 1 });
+  });
+
+  // Qui non parte nessun messaggio WhatsApp: il tetto del blast (200 ogni 5' per non
+  // bruciare il numero) non c'entra niente, e legarli faceva sembrare governata una cosa
+  // che non lo era.
+  it('LANCIO_BATCH_MAX non tocca le restituzioni: senza env sue il tetto e 500', async () => {
     vi.stubEnv('LANCIO_BATCH_MAX', '1');
     stato.convs = [conv(1), conv(2)];
-    await expect((await richiesta()).json()).resolves.toMatchObject({ restituiti: 1, residui: 0, nonValutati: 1 });
+    await expect((await richiesta()).json()).resolves.toMatchObject({ restituiti: 2, max: 500 });
+  });
+
+  // La corsa vera: le candidate si leggono a t0, e il CRM puo' rispondere fino a 240s
+  // dopo. Se in mezzo il lead ha risposto e Mario ha chiuso la chat, timbrare
+  // `restituito` scriverebbe una fase sopra una conversazione che non e' piu' nostra.
+  it('fase mossa mentre il CRM rispondeva: niente restituito, niente closed, si conta e si dice', async () => {
+    stato.convs = [conv(1)];
+    sendOutcome.mockImplementationOnce(async () => { stato.convs[0].lancio_fase = 'chiuso'; return RESTITUITO; });
+    const res = await (await richiesta()).json();
+    expect(res).toMatchObject({ restituiti: 0, faseCambiata: 1 });
+    expect(stato.convs[0].lancio_fase).toBe('chiuso');
+    expect(chiamate.find((c) => c.table === 'conversations' && c.op === 'update' && (c.arg as Record<string, unknown>).ai_status === 'closed')).toBeUndefined();
+    expect(tipi()).not.toContain('lancio_restituito');
+    const ev = eventi().find((e) => e.type === 'lancio_restituzione_fase_cambiata');
+    expect(ev?.level).toBe('warn');
+    expect(ev?.payload).toMatchObject({ conversationId: 1, motivo: 'mai_risposto' });
   });
 });

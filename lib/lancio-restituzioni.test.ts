@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
-  RESTITUZIONE_ATTESA_MS, NOTA_RESTITUZIONE, FASI_RESTITUIBILI, restituzioniAttive, decideRestituzione,
+  RESTITUZIONE_ATTESA_MS, NOTA_RESTITUZIONE, FASI_RESTITUIBILI, RESTITUZIONI_MAX_DEFAULT,
+  restituzioniAttive, decideRestituzione,
   esitoRestituzioneDalCrm, notaInboundDopoRestituzione, fuoriFinestraCron, type CandidataRestituzione,
 } from './lancio-restituzioni';
+import { batchMax } from './lancio-zoom-blast';
 
 const H = 3600_000;
 const EVENTO = new Date('2026-10-05T21:00:00+02:00');
@@ -54,12 +56,26 @@ describe('decideRestituzione', () => {
   });
   it('un esito gia dato non si sovrascrive; su una fase fuori perimetro conta prima la fase', () => {
     expect(decideRestituzione(c({ bot_outcome: 'APPUNTAMENTO' }), NOW)).toEqual({ kind: 'niente', motivo: 'esito_presente' });
-    expect(decideRestituzione(c({ lancio_fase: 'post_pitch', bot_outcome: 'APPUNTAMENTO' }), NOW)).toEqual({ kind: 'niente', motivo: 'fase' });
+    expect(decideRestituzione(c({ lancio_fase: 'scelta_fatta', bot_outcome: 'APPUNTAMENTO' }), NOW)).toEqual({ kind: 'niente', motivo: 'fase' });
   });
-  it('post_pitch, scelta_fatta, chiuso, restituito, null: mai', () => {
-    for (const f of ['post_pitch', 'scelta_fatta', 'chiuso', 'restituito', null]) {
+  it('scelta_fatta, chiuso, restituito, null: mai (la scelta e del CRM, non del bot)', () => {
+    for (const f of ['scelta_fatta', 'chiuso', 'restituito', null]) {
       expect(decideRestituzione(c({ lancio_fase: f }), NOW)).toEqual({ kind: 'niente', motivo: 'fase' });
     }
+  });
+  // Un `post_pitch` rimasto a meta' non ha piu' nessuno che lo guardi: il follow-up del 6
+  // e' l'ultima occasione, e dall'8 torna al pool come tutti gli altri.
+  it('post_pitch: chi ha interagito e non ha avuto il follow-up torna al pool (followup_non_inviato)', () => {
+    expect(decideRestituzione(c({ lancio_fase: 'post_pitch', haInteragito: true }), NOW)).toEqual({ kind: 'restituisci', motivo: 'followup_non_inviato' });
+  });
+  it('post_pitch senza nessun inbound dopo l ancora: mai_risposto', () => {
+    expect(decideRestituzione(c({ lancio_fase: 'post_pitch' }), NOW)).toEqual({ kind: 'restituisci', motivo: 'mai_risposto' });
+  });
+  it('post_pitch col timbro del follow-up: valgono le 48 ore, come per followup_inviato', () => {
+    const fu = new Date(NOW - RESTITUZIONE_ATTESA_MS - H).toISOString();
+    expect(decideRestituzione(c({ lancio_fase: 'post_pitch', haInteragito: true, lancio_followup_inviato_at: fu }), NOW)).toEqual({ kind: 'restituisci', motivo: 'silenzio_dopo_followup' });
+    const recente = new Date(NOW - RESTITUZIONE_ATTESA_MS + H).toISOString();
+    expect(decideRestituzione(c({ lancio_fase: 'post_pitch', haInteragito: true, lancio_followup_inviato_at: recente }), NOW)).toEqual({ kind: 'niente', motivo: 'attesa_48h' });
   });
   it('ancora ignota: si lascia a una persona', () => {
     expect(decideRestituzione(c({ ancora: null }), NOW)).toEqual({ kind: 'niente', motivo: 'ancora_ignota' });
@@ -91,7 +107,15 @@ describe('decideRestituzione', () => {
       silenzio_dopo_followup: 'Lancio: silenzio dopo il follow-up',
       followup_non_inviato: 'Lancio: follow-up non inviato',
     });
-    expect([...FASI_RESTITUIBILI]).toEqual(['attesa', 'posto_bloccato', 'link_inviato', 'followup_inviato']);
+    expect([...FASI_RESTITUIBILI]).toEqual(['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch', 'followup_inviato']);
+  });
+  it('il tetto delle restituzioni e suo: 500 di default, e non lo decide LANCIO_BATCH_MAX', () => {
+    expect(RESTITUZIONI_MAX_DEFAULT).toBe(500);
+    expect(batchMax(undefined, RESTITUZIONI_MAX_DEFAULT)).toBe(500);
+    expect(batchMax('', RESTITUZIONI_MAX_DEFAULT)).toBe(500);
+    expect(batchMax('0', RESTITUZIONI_MAX_DEFAULT)).toBe(500);
+    expect(batchMax('boh', RESTITUZIONI_MAX_DEFAULT)).toBe(500);
+    expect(batchMax('120', RESTITUZIONI_MAX_DEFAULT)).toBe(120);
   });
 });
 

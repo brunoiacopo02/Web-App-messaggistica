@@ -53,10 +53,14 @@ export function zoomBlastBody(nome: string, link: string): string {
   return `Ciao ${nome}, ci siamo! Alle 21:00 inizia la live Web Developer AI. Questo è il tuo link per collegarti: ${link} — ti consigliamo di entrare qualche minuto prima. Se hai problemi a collegarti scrivimi qui.`;
 }
 
-/** Tetto del lotto da env: intero positivo, altrimenti il default (200, delibera 16/09). */
-export function batchMax(raw: string | undefined): number {
+/**
+ * Tetto del lotto da env: intero positivo, altrimenti il default (200, delibera 16/09).
+ * `predefinito` serve a chi ha un tetto suo e una env sua — le restituzioni, che non
+ * mandano nessun messaggio e girano una volta l'ora (`RESTITUZIONI_MAX_DEFAULT`).
+ */
+export function batchMax(raw: string | undefined, predefinito: number = LANCIO_BATCH_MAX_DEFAULT): number {
   const n = parseInt(raw ?? '', 10);
-  return Number.isFinite(n) && n > 0 ? n : LANCIO_BATCH_MAX_DEFAULT;
+  return Number.isFinite(n) && n > 0 ? n : predefinito;
 }
 
 /**

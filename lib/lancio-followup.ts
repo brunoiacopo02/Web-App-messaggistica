@@ -10,8 +10,15 @@ import { templateName } from './name';
  * il cron `/api/cron/lancio-followup` le applica col motore del blast.
  */
 
-/** Fasi che ricevono il follow-up. `post_pitch`/`scelta_fatta` hanno gia' scelto. */
-export const FASI_FOLLOWUP = ['attesa', 'posto_bloccato', 'link_inviato'] as const;
+/**
+ * Fasi che ricevono il follow-up. `scelta_fatta` no: quel lead ha gia' scelto ed e' del
+ * CRM. `post_pitch` SI', ma solo se la chat e' ferma (vedi `decideFollowup`): chi ha
+ * premuto il pulsante la sera del 5, ha magari risposto a una domanda di riscaldamento e
+ * poi non ha piu' scritto restava altrimenti li' per sempre — fuori dal follow-up, fuori
+ * dalle restituzioni, e fuori dal re-drive di Mario (`lancioInCorso` tiene i suoi cron
+ * lontani da tutte le fasi non terminali).
+ */
+export const FASI_FOLLOWUP = ['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch'] as const;
 
 /** Le due fasce di Roma, in minuti del giorno, estremi `[da, a)`: 12:00-14:00 e 17:30-19:30. */
 export const FASCE_FOLLOWUP: readonly { daMin: number; aMin: number }[] = [
@@ -80,6 +87,21 @@ export function ancoraLancio(i: {
   return i.ingressoAt;
 }
 
+/**
+ * L'istante dell'ULTIMO messaggio del lead dall'ancora in poi, in millisecondi. `null`
+ * se non ce n'e' nessuno o se la data non si legge: chi chiama tratta il "non si sa"
+ * come "la chat potrebbe essere viva" e sta zitto.
+ */
+export function ultimoInboundMs(rows: RigaLancio[], ancoraIso: string): number | null {
+  let ultimo: number | null = null;
+  for (const m of inboundDopo(rows, ancoraIso)) {
+    const ms = Date.parse(m.created_at ?? '');
+    if (Number.isNaN(ms)) return null;
+    if (ultimo === null || ms > ultimo) ultimo = ms;
+  }
+  return ultimo;
+}
+
 /** Gli inbound dall'ancora in poi (compresa). */
 export function inboundDopo(rows: RigaLancio[], ancoraIso: string): RigaLancio[] {
   return rows.filter((m) => m.direction === 'in' && nonPrimaDi(m.created_at, ancoraIso));
@@ -112,7 +134,7 @@ export function haDettoNo(testo: string): boolean {
   return congedoEsplicito(testo);
 }
 
-export type MotivoSalto = 'fase' | 'gia_inviato' | 'congedato' | 'ancora_ignota' | 'mai_scritto';
+export type MotivoSalto = 'fase' | 'gia_inviato' | 'congedato' | 'ancora_ignota' | 'mai_scritto' | 'in_scelta';
 export type DecisioneFollowup =
   | { kind: 'invia' }
   | { kind: 'congeda'; leadWords: string }
@@ -124,6 +146,12 @@ export type CandidataFollowup = {
   lancio_info: unknown;
   rows: RigaLancio[];
   ancora: string | null;
+  /**
+   * Le 03:00 di Roma del giorno dopo l'evento (`fineNotteLancio`), in millisecondi: la
+   * fine della modalita' notte, cioe' il confine oltre il quale un `post_pitch` che
+   * scrive e' un lead dentro il flusso della scelta e non un lead fermo.
+   */
+  fineNotte: number;
 };
 
 /**
@@ -140,6 +168,16 @@ export function decideFollowup(c: CandidataFollowup): DecisioneFollowup {
   if (!haInteragito(c.rows, c.ancora)) return { kind: 'salta', motivo: 'mai_scritto' };
   const testo = ultimoTestoInbound(c.rows, c.ancora);
   if (testo !== '' && haDettoNo(testo)) return { kind: 'congeda', leadWords: testo };
+  // `post_pitch`: il follow-up e' l'ultima rete per chi si e' fermato dopo il pulsante,
+  // ma NON si interrompe chi sta ancora scegliendo. Il discrimine e' l'ultimo inbound:
+  // prima delle 03:00 del giorno dopo la chat e' ferma dalla sera del pitch (il turno
+  // post-pitch non risponde piu' da quell'ora in poi, `puoRispondere`); dalle 03:00 in
+  // poi il lead ha scritto di giorno, e li' il flusso della scelta e' vivo — una bolla di
+  // marketing sopra una conversazione in corso e' il danno peggiore dei due.
+  if (c.lancio_fase === 'post_pitch') {
+    const ultimo = ultimoInboundMs(c.rows, c.ancora);
+    if (ultimo === null || ultimo >= c.fineNotte) return { kind: 'salta', motivo: 'in_scelta' };
+  }
   return { kind: 'invia' };
 }
 

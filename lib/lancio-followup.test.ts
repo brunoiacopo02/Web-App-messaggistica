@@ -4,6 +4,7 @@ import {
   ultimoTestoInbound, haDettoNo, decideFollowup, lancioFollowupText, lancioStandardContextNote,
   lancioStandardDrain, NOTA_CONGEDO_FOLLOWUP, type CandidataFollowup,
 } from './lancio-followup';
+import { fineNotteLancio } from './lancio-scelta';
 import type { RigaLancio } from './lancio-fase';
 
 const EVENTO = new Date('2026-10-05T21:00:00+02:00');
@@ -84,15 +85,44 @@ describe('decideFollowup', () => {
     lancio_info: null,
     rows: [out('benvenuto', ancora, WELCOME), inb('si', '2026-09-20T10:30:00Z')],
     ancora,
+    fineNotte: fineNotteLancio(EVENTO),
     ...over,
   });
-  it('attesa/posto_bloccato/link_inviato con un inbound dopo l ancora: si manda', () => {
-    for (const f of FASI_FOLLOWUP) expect(decideFollowup(c({ lancio_fase: f }))).toEqual({ kind: 'invia' });
+  it('le quattro fasi del perimetro con un inbound dopo l ancora (e la chat ferma): si manda', () => {
+    for (const f of FASI_FOLLOWUP) expect(decideFollowup(c({ lancio_fase: f })), f).toEqual({ kind: 'invia' });
+    expect([...FASI_FOLLOWUP]).toEqual(['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch']);
   });
-  it('fasi fuori perimetro: post_pitch, scelta_fatta, followup_inviato, chiuso, restituito, null', () => {
-    for (const f of ['post_pitch', 'scelta_fatta', 'followup_inviato', 'chiuso', 'restituito', null]) {
+  it('fasi fuori perimetro: scelta_fatta, followup_inviato, chiuso, restituito, null', () => {
+    for (const f of ['scelta_fatta', 'followup_inviato', 'chiuso', 'restituito', null]) {
       expect(decideFollowup(c({ lancio_fase: f }))).toEqual({ kind: 'salta', motivo: 'fase' });
     }
+  });
+  // Il buco che questo blocco chiude: chi ha premuto il pulsante la sera del 5, ha magari
+  // risposto a una domanda di riscaldamento e poi e' sparito restava in `post_pitch` per
+  // sempre — fuori dal follow-up, fuori dalle restituzioni, e fuori dal re-drive di Mario.
+  it('post_pitch fermo dalla sera del pitch (ultimo inbound prima delle 03:00 del 6): si manda', () => {
+    const rows = [out('benvenuto', ancora, WELCOME), inb('premuto il pulsante', '2026-10-05T21:40:00+02:00'), inb('si, lavoro', '2026-10-05T22:10:00+02:00')];
+    expect(decideFollowup(c({ lancio_fase: 'post_pitch', rows }))).toEqual({ kind: 'invia' });
+  });
+  it('post_pitch ancora vivo il 6 (un inbound dalle 03:00 in poi): salta, e in scelta non si interrompe', () => {
+    const attivo = (quando: string) => c({
+      lancio_fase: 'post_pitch',
+      rows: [out('benvenuto', ancora, WELCOME), inb('premuto il pulsante', '2026-10-05T21:40:00+02:00'), inb('eccomi', quando)],
+    });
+    expect(decideFollowup(attivo('2026-10-06T03:00:00+02:00'))).toEqual({ kind: 'salta', motivo: 'in_scelta' });
+    expect(decideFollowup(attivo('2026-10-06T11:30:00+02:00'))).toEqual({ kind: 'salta', motivo: 'in_scelta' });
+    // Il confine e' stretto: alle 02:59 la notte non e' finita e la chat e' ferma.
+    expect(decideFollowup(attivo('2026-10-06T02:59:00+02:00'))).toEqual({ kind: 'invia' });
+  });
+  it('in_scelta vale solo per post_pitch: nelle altre fasi un inbound del 6 non ferma il follow-up', () => {
+    const rows = [out('benvenuto', ancora, WELCOME), inb('eccomi', '2026-10-06T11:30:00+02:00')];
+    for (const f of ['attesa', 'posto_bloccato', 'link_inviato']) {
+      expect(decideFollowup(c({ lancio_fase: f, rows })), f).toEqual({ kind: 'invia' });
+    }
+  });
+  it('post_pitch: un no esplicito si congeda anche se la chat e viva (il no vince su in_scelta)', () => {
+    const rows = [out('benvenuto', ancora, WELCOME), inb('non mi interessa piu', '2026-10-06T11:30:00+02:00')];
+    expect(decideFollowup(c({ lancio_fase: 'post_pitch', rows }))).toEqual({ kind: 'congeda', leadWords: 'non mi interessa piu' });
   });
   it('gia inviato (timbro presente, anche con fase indietro = esito incerto): non si rimanda', () => {
     expect(decideFollowup(c({ lancio_followup_inviato_at: '2026-10-06T10:00:00Z' }))).toEqual({ kind: 'salta', motivo: 'gia_inviato' });

@@ -87,7 +87,10 @@ describe('impostaFaseLancio — la guardia sulla fase di partenza', () => {
   // avanzata, col link ormai partito.
   it('con soloDaFasi la fase gia avanzata NON si riscrive, e resta la traccia', async () => {
     const { supabase, calls } = makeSupabase({ faseCorrente: 'post_pitch' });
-    await impostaFaseLancio(supabase, 42, 'link_inviato', { lancio_link_inviato_at: 'T1' }, { soloDaFasi: ['attesa', 'posto_bloccato'] });
+    const esito = await impostaFaseLancio(supabase, 42, 'link_inviato', { lancio_link_inviato_at: 'T1' }, { soloDaFasi: ['attesa', 'posto_bloccato'] });
+    // Il risultato torna a chi chiama: il cron delle restituzioni deve poter dire
+    // "la chat era gia' oltre" invece di proseguire come se avesse scritto.
+    expect(esito).toBe('non_cambiata');
     expect(calls.updateFiltri[0]).toContainEqual(['in', 'lancio_fase', ['attesa', 'posto_bloccato']]);
     const traccia = eventiDiTipo(calls, 'lancio_fase_non_cambiata');
     expect(traccia).toHaveLength(1);
@@ -97,13 +100,13 @@ describe('impostaFaseLancio — la guardia sulla fase di partenza', () => {
 
   it('con soloDaFasi e la fase ancora in attesa: si scrive come sempre', async () => {
     const { supabase, calls } = makeSupabase({ faseCorrente: 'attesa' });
-    await impostaFaseLancio(supabase, 42, 'link_inviato', { lancio_link_inviato_at: 'T1' }, { soloDaFasi: ['attesa', 'posto_bloccato'] });
+    expect(await impostaFaseLancio(supabase, 42, 'link_inviato', { lancio_link_inviato_at: 'T1' }, { soloDaFasi: ['attesa', 'posto_bloccato'] })).toBe('cambiata');
     expect(eventiDiTipo(calls, 'lancio_fase_cambiata')).toHaveLength(1);
   });
 
   it('senza soloDaFasi niente guardia: update secco, come prima', async () => {
     const { supabase, calls } = makeSupabase();
-    await impostaFaseLancio(supabase, 42, 'chiuso');
+    expect(await impostaFaseLancio(supabase, 42, 'chiuso')).toBe('cambiata');
     expect(calls.updates[0]).toEqual({ lancio_fase: 'chiuso' });
     expect(calls.updateFiltri[0].some((f) => f[0] === 'in')).toBe(false);
     expect(eventiDiTipo(calls, 'lancio_fase_cambiata')).toHaveLength(1);
@@ -111,7 +114,7 @@ describe('impostaFaseLancio — la guardia sulla fase di partenza', () => {
 
   it('errore del DB: resta lancio_fase_non_scritta, a livello error', async () => {
     const { supabase, calls } = makeSupabase({ faseCorrente: 'attesa', erroreScrittura: { message: 'connessione persa' } });
-    await impostaFaseLancio(supabase, 42, 'link_inviato', {}, { soloDaFasi: ['attesa'] });
+    expect(await impostaFaseLancio(supabase, 42, 'link_inviato', {}, { soloDaFasi: ['attesa'] })).toBe('errore');
     const traccia = eventiDiTipo(calls, 'lancio_fase_non_scritta');
     expect(traccia).toHaveLength(1);
     expect(traccia[0]).toMatchObject({ level: 'error' });
