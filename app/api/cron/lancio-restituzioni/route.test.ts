@@ -272,6 +272,22 @@ describe('GET /api/cron/lancio-restituzioni — decisioni e CRM', () => {
     expect(rifiuti[0]?.level).toBe('warn');
     expect(rifiuti.map((e) => (e.payload as Record<string, unknown>).skipped).sort()).toEqual(['locked_appointment', 'scelta_fatta']);
   });
+  // La fase non scritta e' un caso a se': il compare-and-set non c'entra, l'update e'
+  // proprio fallito. Contarlo fra i restituiti (e chiudere ai_status) direbbe che il lead
+  // e' fuori quando a DB e' ancora dentro.
+  it('scrittura della fase fallita: niente closed, niente lancio_restituito, si conta faseErrore', async () => {
+    stato.convs = [conv(1)];
+    impostaFaseLancio.mockResolvedValueOnce('errore');
+    const res = await (await richiesta()).json();
+    expect(res).toMatchObject({ restituiti: 0, faseErrore: 1, faseCambiata: 0 });
+    expect(chiamate.find((c) => c.table === 'conversations' && c.op === 'update' && (c.arg as Record<string, unknown>).ai_status === 'closed')).toBeUndefined();
+    expect(tipi()).not.toContain('lancio_restituito');
+    expect(tipi()).not.toContain('lancio_restituzione_fase_cambiata');
+    const ev = eventi().find((e) => e.type === 'lancio_restituzione_fase_non_scritta');
+    expect(ev?.level).toBe('warn');
+    expect(ev?.payload).toMatchObject({ conversationId: 1, crmLeadId: 'crm-1', motivo: 'mai_risposto' });
+  });
+
   it('200 already_returned: e un doppione, si segna restituito e non si ritenta', async () => {
     stato.convs = [conv(1)];
     sendOutcome.mockResolvedValueOnce({ sent: true, status: 200, corpo: { ok: true, returnedToPool: false, skipped: 'already_returned' } });

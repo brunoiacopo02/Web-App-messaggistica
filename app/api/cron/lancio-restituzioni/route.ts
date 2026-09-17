@@ -218,6 +218,7 @@ export async function GET(req: NextRequest) {
   let rifiutateDalCrm = 0;
   let nonConfermate = 0;
   let faseCambiata = 0;
+  let faseErrore = 0;
   let errori = 0;
   const lotto = daRestituire;
   let serviti = 0;
@@ -250,13 +251,25 @@ export async function GET(req: NextRequest) {
       // aver chiuso la chat (`chiuso`), o il pulsante averla riportata avanti. Timbrare
       // `restituito` alla cieca scriverebbe la nostra fase sopra una conversazione che
       // non e' piu' del cron, e la chiusura di `ai_status` le toglierebbe la parola.
-      if (await impostaFaseLancio(supabase, c.id, 'restituito', {}, { soloDaFasi: FASI_RESTITUIBILI }) === 'non_cambiata') {
-        // Il lead al CRM c'e' andato lo stesso (l'esito e' partito): non si ritenta, si
-        // scrive che la fase se n'era andata e la guarda una persona se serve.
-        faseCambiata++;
-        await logEvento(supabase, 'lancio_restituzione_fase_cambiata',
-          { conversationId: c.id, crmLeadId: c.crm_lead_id, motivo, esito, status: res.status ?? null },
-          `[lancio] conv ${c.id}: esito mandato al CRM ma la fase si era gia' mossa: non si timbra restituito`, 'warn');
+      const esitoFase = await impostaFaseLancio(supabase, c.id, 'restituito', {}, { soloDaFasi: FASI_RESTITUIBILI });
+      // Tutto quello che non e' `cambiata` vuol dire che a DB la fase e' rimasta dov'era:
+      // da qui in poi non si chiude `ai_status` e non si scrive `lancio_restituito`, o il
+      // riepilogo direbbe che il lead e' fuori mentre la riga dice il contrario. In
+      // nessuno dei due casi si ritenta dentro questo run: al giro dopo la riga si
+      // ripresenta e il CRM risponde `already_returned`, che e' un ritorno buono.
+      if (esitoFase !== 'cambiata') {
+        // `non_cambiata` = qualcun altro ha portato avanti la chat mentre il CRM
+        // rispondeva. `errore` = l'update e' proprio fallito; il messaggio del DB sta
+        // nell'evento `lancio_fase_non_scritta` che `impostaFaseLancio` ha appena scritto
+        // per questa stessa conversazione.
+        if (esitoFase === 'errore') faseErrore++; else faseCambiata++;
+        await logEvento(supabase,
+          esitoFase === 'errore' ? 'lancio_restituzione_fase_non_scritta' : 'lancio_restituzione_fase_cambiata',
+          { conversationId: c.id, crmLeadId: c.crm_lead_id, motivo, esito, esitoFase, status: res.status ?? null },
+          esitoFase === 'errore'
+            ? `[lancio] conv ${c.id}: esito mandato al CRM ma la fase NON si e' scritta (vedi lancio_fase_non_scritta): non si chiude, si riprova al run dopo`
+            : `[lancio] conv ${c.id}: esito mandato al CRM ma la fase si era gia' mossa: non si timbra restituito`,
+          'warn');
         return;
       }
       // `sendOutcome` chiude gia' su 2xx e 403; sul 404 no. Idempotente.
@@ -284,15 +297,15 @@ export async function GET(req: NextRequest) {
   const nonValutati = coda.length - valutati;
   const riepilogo = {
     candidati: coda.length, valutati, nonValutati, daRestituire: lotto.length,
-    restituiti, giaRestituiti, rifiutati, rifiutateDalCrm, nonConfermate, faseCambiata, errori, residui,
+    restituiti, giaRestituiti, rifiutati, rifiutateDalCrm, nonConfermate, faseCambiata, faseErrore, errori, residui,
     // `scartiRitentati`/`scartiChiusi` restano piatti: sono il contratto del route.
     scartiRitentati: scarti.ritentati, scartiChiusi: scarti.chiusi, scarti,
     niente, blocchiTroncati, max, queryKo,
   };
   await scriviRun(
     riepilogo,
-    `[lancio] restituzioni: ${restituiti} restituiti, ${giaRestituiti} gia' restituiti, ${rifiutati} rifiutati (403/404), ${rifiutateDalCrm} non rimessi nel pool dal CRM, ${nonConfermate} non confermati, ${faseCambiata} con la fase gia' mossa, ${errori} errori, ${scarti.ritentati} scarti ritentati, ${scarti.chiusi} scarti chiusi, ${scarti.senza_telefono} scarti senza telefono, ${scarti.residui} scarti residui, ${residui} residui (su ${lotto.length} da restituire, ${coda.length} candidati)`,
-    errori > 0 || rifiutateDalCrm > 0 || nonConfermate > 0 || faseCambiata > 0 || scarti.senza_telefono > 0 || queryKo ? 'warn' : 'info',
+    `[lancio] restituzioni: ${restituiti} restituiti, ${giaRestituiti} gia' restituiti, ${rifiutati} rifiutati (403/404), ${rifiutateDalCrm} non rimessi nel pool dal CRM, ${nonConfermate} non confermati, ${faseCambiata} con la fase gia' mossa, ${faseErrore} con la fase non scritta, ${errori} errori, ${scarti.ritentati} scarti ritentati, ${scarti.chiusi} scarti chiusi, ${scarti.senza_telefono} scarti senza telefono, ${scarti.residui} scarti residui, ${residui} residui (su ${lotto.length} da restituire, ${coda.length} candidati)`,
+    errori > 0 || rifiutateDalCrm > 0 || nonConfermate > 0 || faseCambiata > 0 || faseErrore > 0 || scarti.senza_telefono > 0 || queryKo ? 'warn' : 'info',
   );
   return NextResponse.json({ ok: true, ...riepilogo });
 }
