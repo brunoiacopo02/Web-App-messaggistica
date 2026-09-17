@@ -11,6 +11,18 @@ Nessuna sessione, nessun cron e nessuno script li accende da solo.
 
 ---
 
+## 0-bis. Il giorno del deploy (subito, non il 4/10)
+
+- [ ] **`offerta_del_mese_link` va impostato appena il codice va in produzione**, da
+      `/fenice/impostazioni`. Il pulsante **"Offerta del mese"** dell'agenda GDO non
+      aspetta il 5 ottobre: è già in cima alla modale e i GDO lo useranno **oggi**. Con il
+      link vuoto l'agenda parte **senza video** e resta solo un
+      `offerta_del_mese_link_mancante` (warn) che nessuno sta guardando — cioè agende
+      andate a vuoto senza che nessuno se ne accorga. È l'unica chiave del lancio che
+      **non** si aspetta la sera del 5.
+
+---
+
 ## 0. I tre cron a data fissa (`vercel.json`)
 
 | Voce | Schedule (UTC) | Cosa vuol dire a Roma |
@@ -132,10 +144,16 @@ Come si prova lo stesso — tre strade, in ordine di preferenza:
       **Verificato il 17/09: ci sono tutte.**
 - [ ] Env di produzione **assenti**: `LANCIO_FAKE_NOW`, `LANCIO_FAKE_NOW_ARMED`
       (verificato il 17/09: assenti, come deve essere).
-- [ ] `LANCIO_BATCH_MAX`, `LANCIO_WELCOME_MAX_PER_HOUR`, `LANCIO_APERTURE_MAX_PER_RUN` e
-      `CRM_LANCIO_URL` **non sono in produzione, ed è giusto così**: i default del codice
-      sono già i valori deliberati (200 / 200 / 100 / URL di produzione del CRM). Si
-      aggiunge l'env solo per cambiarli.
+- [ ] `LANCIO_BATCH_MAX`, `LANCIO_RESTITUZIONI_MAX`, `LANCIO_WELCOME_MAX_PER_HOUR`,
+      `LANCIO_APERTURE_MAX_PER_RUN` e `CRM_LANCIO_URL` **non sono in produzione, ed è
+      giusto così**: i default del codice sono già i valori deliberati
+      (200 / 500 / 200 / 100 / URL di produzione del CRM). Si aggiunge l'env solo per
+      cambiarli.
+- [ ] **Chi governa cosa:** `LANCIO_BATCH_MAX` (200) è **uno solo per due cron** — il blast
+      Zoom del 5 **e** il follow-up del 6: alzarlo per il blast alza anche il follow-up.
+      Le restituzioni hanno la loro, `LANCIO_RESTITUZIONI_MAX` (500), perché da lì non
+      parte nessun messaggio WhatsApp (si chiama il CRM e si scrive una fase) e il cron
+      gira una volta l'ora.
 - [ ] Il mittente secondario resta spento: `TWILIO_WHATSAPP_NUMBERS_2` non è in produzione,
       quindi `TWILIO_ACCOUNT_SID_2`/`TWILIO_AUTH_TOKEN_2` (dell'altra sessione) non
       instradano niente. Il lancio parte dal numero principale, `lancio_sender=principale`.
@@ -196,10 +214,24 @@ Da guardare in `event_log`:
       `lancio_slots_mostrati`, `lancio_slots_vuoti`, `lancio_slots_non_letti`,
       `lancio_crm_call`, `lancio_crm_errore`, `lancio_giro_interrotto`.
 
-### 6/10 mattina — il video della live
+### 6/10 ore 11:30 — **il controllo che vale più di tutti gli altri**
+
+> Il modo più probabile in cui questo lancio fallisce non è un bug: è **il freno rimasto
+> tirato**. Se la sera del 5 il blast si è fermato da solo, `lancio_attivo` è `false`, e
+> alle 12:00 il follow-up **non parte** — senza che niente si rompa. Si accorge solo chi
+> guarda: nei log c'è un `lancio_followup_fermo` (warn) a ogni run, e il danno si vede
+> l'8/10, quando quelle persone tornano nel pool con la nota `Lancio: follow-up non inviato`.
+
+- [ ] **Alle 11:30 del 6/10 una persona apre `/fenice/impostazioni` e guarda
+      `lancio_attivo`.** Se è `false`: capire perché (§4), decidere, e riaccenderlo **prima
+      delle 12:00**. Non è un controllo automatico e non lo fa nessun cron.
 - [ ] `lancio_video_live_link` impostato **prima delle 12:00**. Senza, chi risponde riceve i
-      video classici e in `event_log` compare `lancio_video_live_link_missing` (warn).
-- [ ] `lancio_attivo` è ancora **true**? Se il freno è scattato la sera prima, vedi §4.
+      video classici e in `event_log` compare `lancio_video_live_link_missing` (warn, **una
+      volta per chat**: se lo vedi una volta sola non vuol dire che sia successo una volta
+      sola).
+- [ ] `lancio_pulsante_attivo`: finché resta acceso, chi preme il pulsante il 6 entra in
+      `post_pitch`. Non è un buco — il follow-up non interrompe chi sta scrivendo e dall'8
+      quei lead tornano al pool — ma è una decisione da prendere, non da dimenticare.
 
 ### 6/10 12:00-14:00 e 17:30-19:30 (sconfina al 7/10) — follow-up
 Da guardare: `lancio_followup_run` · `lancio_followup_inviato` · `lancio_followup_fermo` (warn,
@@ -212,6 +244,9 @@ a ogni run se `lancio_attivo` è spento) · `lancio_followup_config_error` ·
 
 - [ ] Chi aveva già detto "no" in modo esplicito non riceve niente: il cron lo congeda senza
       bolla (`lancio_followup_congedo_da_cron`).
+- [ ] Il follow-up va anche a chi era rimasto in **`post_pitch`** (pulsante premuto la sera
+      del 5 e poi silenzio). Chi invece **sta ancora scrivendo il 6** — un inbound dalle
+      03:00 in poi — non viene interrotto: nel riepilogo è `saltati.in_scelta`.
 - [ ] Chi risponde al follow-up torna al flusso standard di Mario, col video della live.
 - [ ] Chi risponde "no" dopo il follow-up lo gestisce Mario standard (`DA_SCARTARE`).
 
@@ -219,6 +254,7 @@ a ogni run se `lancio_attivo` è spento) · `lancio_followup_config_error` ·
 Da guardare: `lancio_restituzioni_run` (con `restituiti`, `rifiutati`, `errori`,
 `niente.ancora_ignota`, `scartiRitentati`/`scartiChiusi`, `fuori_finestra_cron`) ·
 `lancio_restituito` · `lancio_restituito_terminale` · `lancio_restituzione_rifiutata` (warn) ·
+`lancio_restituzione_fase_cambiata` (warn) ·
 `lancio_restituzione_error` · `lancio_restituzioni_config_error` ·
 `lancio_restituzioni_query_error` · `lancio_restituzioni_messages_query_error` ·
 `lancio_restituzioni_blocco_troncato` (warn) · `lancio_scarto_ritentato_da_cron` ·
@@ -232,8 +268,14 @@ Da guardare: `lancio_restituzioni_run` (con `restituiti`, `rifiutati`, `errori`,
 - [ ] `lancio_restituzione_rifiutata` (il CRM ha risposto 200 ma `returnedToPool: false`,
       cioè `skipped`): la fase resta intatta, quei lead si guardano **a mano**.
 - [ ] `niente.ancora_ignota`: righe senza benvenuto né intake, da guardare a mano.
-- [ ] Dall'8/10 si può anche impostare `offerta_del_mese_link` (dopo la live), per il pulsante
-      "Offerta del mese" dell'agenda GDO.
+- [ ] `faseCambiata` (evento `lancio_restituzione_fase_cambiata`, warn): il lead è andato al
+      CRM ma nel frattempo la chat si era mossa (il lead ha risposto, Mario l'ha chiusa), e
+      la fase **non** viene timbrata `restituito`. Non si ritenta: si guarda a mano se il
+      numero non è zero.
+- [ ] Tornano al pool anche i **`post_pitch`** rimasti a metà. Restano fuori solo le chat in
+      `scelta_fatta`: quel lead ce l'ha in mano il CRM.
+- [ ] `offerta_del_mese_link` **non** si aspetta l'8/10: va impostato il giorno del deploy
+      (§0-bis). Se dopo la live cambia l'offerta, si aggiorna da `/fenice/impostazioni`.
 
 ---
 
