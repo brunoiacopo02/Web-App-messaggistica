@@ -38,6 +38,22 @@ async function get(url: string, sid: string, token: string): Promise<any | null>
     return r.json();
 }
 
+/**
+ * Il suffisso delle copie rifatte per ottenere la categoria UTILITY.
+ *
+ * Un template gia' sottomesso a Meta non si puo' ricategorizzare: Twilio
+ * risponde 92009 "recreate a new template to make any changes". L'unica strada
+ * e' crearne uno nuovo — e il nome, sull'account, dev'essere diverso.
+ */
+const SUFFISSO_UTILITY = '_u';
+
+/** Un template e' approvato da Meta come UTILITY? */
+async function approvatoUtility(contentSid: string, sid: string, token: string): Promise<boolean> {
+    const j = await get(`https://content.twilio.com/v1/Content/${contentSid}/ApprovalRequests`, sid, token);
+    const w = j?.whatsapp;
+    return w?.status === 'approved' && w?.category === 'UTILITY';
+}
+
 /** Tutti i template di un account, per nome. Una sola chiamata, poi in cache. */
 async function indicePerNome(sid: string, token: string): Promise<Map<string, string>> {
     const gia = _perAccount.get(sid);
@@ -52,6 +68,18 @@ async function indicePerNome(sid: string, token: string): Promise<Map<string, st
             if (c?.friendly_name && c?.sid) indice.set(String(c.friendly_name), String(c.sid));
         }
         url = j.meta?.next_page_url ?? null;
+    }
+
+    // Se esiste la copia `<nome>_u`, la si preferisce all'originale — ma SOLO se
+    // Meta l'ha gia' approvata come UTILITY. Finche' e' in attesa si continua a
+    // usare quella di prima: preferire un template non approvato vorrebbe dire
+    // smettere di mandare proprio i messaggi che stiamo cercando di sistemare.
+    // Il controllo costa una chiamata per copia, una volta per processo.
+    for (const [nome, sidCopia] of [...indice]) {
+        if (!nome.endsWith(SUFFISSO_UTILITY)) continue;
+        const base = nome.slice(0, -SUFFISSO_UTILITY.length);
+        if (!indice.has(base)) continue;
+        if (await approvatoUtility(sidCopia, sid, token)) indice.set(base, sidCopia);
     }
     // Un indice VUOTO non si mette in cache. Prima si faceva, per non ripetere
     // una chiamata di rete destinata a fallire; ma l'effetto vero era peggiore:

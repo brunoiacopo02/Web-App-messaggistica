@@ -12,11 +12,20 @@ const PRIMARIO = '+393520413199';
 const SECONDO = '+393522070047';
 
 /** Le risposte che darebbe l'API Content dei due account. */
-function fingiApi(opts: { nomeSuAccount1?: string | null; contenutiAccount2?: Array<{ friendly_name: string; sid: string }> }) {
+function fingiApi(opts: {
+  nomeSuAccount1?: string | null;
+  contenutiAccount2?: Array<{ friendly_name: string; sid: string }>;
+  approvazioni?: Record<string, { status: string; category: string }>;
+}) {
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: any) => {
     const auth = String(init?.headers?.Authorization ?? '');
     const eSecondo = auth.includes(Buffer.from('AC_secondo:tok_secondo').toString('base64'));
 
+    if (url.includes('/ApprovalRequests')) {
+      const sid = url.split('/Content/')[1]?.split('/')[0] ?? '';
+      const a = opts.approvazioni?.[sid];
+      return { ok: true, status: 200, json: async () => (a ? { whatsapp: a } : {}) };
+    }
     if (!eSecondo && url.includes('/Content/')) {
       if (opts.nomeSuAccount1 === null) return { ok: false, status: 404, json: async () => ({}) };
       return { ok: true, status: 200, json: async () => ({ friendly_name: opts.nomeSuAccount1 }) };
@@ -216,5 +225,47 @@ describe('presidio UTILITY_ONLY fra i due account', () => {
       // stesso SID: non c e stata traduzione, quindi niente seconda opinione.
       await expect(assertTemplateSendable('HXuguale', SECONDO, 'HXuguale')).rejects.toThrow(/bloccato/);
     });
+  });
+});
+
+
+// Un template gia' sottomesso a Meta non si puo' ricategorizzare (Twilio 92009):
+// se ne crea una copia `<nome>_u` e si chiede UTILITY. Il codice la preferisce
+// da solo, ma solo quando Meta l'ha approvata davvero.
+describe('copie _u per la categoria UTILITY', () => {
+  it('la copia APPROVATA come UTILITY viene preferita all originale', async () => {
+    fingiApi({
+      nomeSuAccount1: 'fenice_agenda_gdo_v3',
+      contenutiAccount2: [
+        { friendly_name: 'fenice_agenda_gdo_v3', sid: 'HXmarketing' },
+        { friendly_name: 'fenice_agenda_gdo_v3_u', sid: 'HXutility' },
+      ],
+      approvazioni: { HXutility: { status: 'approved', category: 'UTILITY' } },
+    });
+    expect(await traduciTemplate('HXoriginale', SECONDO)).toEqual({ sid: 'HXutility', tradotto: true });
+  });
+
+  it('la copia ANCORA IN ATTESA non viene usata: si continua con quella di prima', async () => {
+    fingiApi({
+      nomeSuAccount1: 'fenice_agenda_gdo_v3',
+      contenutiAccount2: [
+        { friendly_name: 'fenice_agenda_gdo_v3', sid: 'HXmarketing' },
+        { friendly_name: 'fenice_agenda_gdo_v3_u', sid: 'HXinattesa' },
+      ],
+      approvazioni: { HXinattesa: { status: 'pending', category: 'UTILITY' } },
+    });
+    expect(await traduciTemplate('HXoriginale', SECONDO)).toEqual({ sid: 'HXmarketing', tradotto: true });
+  });
+
+  it('la copia approvata ma di nuovo MARKETING non viene usata', async () => {
+    fingiApi({
+      nomeSuAccount1: 'fenice_agenda_gdo_v3',
+      contenutiAccount2: [
+        { friendly_name: 'fenice_agenda_gdo_v3', sid: 'HXmarketing' },
+        { friendly_name: 'fenice_agenda_gdo_v3_u', sid: 'HXancoramkt' },
+      ],
+      approvazioni: { HXancoramkt: { status: 'approved', category: 'MARKETING' } },
+    });
+    expect(await traduciTemplate('HXoriginale', SECONDO)).toEqual({ sid: 'HXmarketing', tradotto: true });
   });
 });

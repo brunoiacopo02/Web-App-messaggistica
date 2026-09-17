@@ -114,7 +114,7 @@ export async function POST(req: Request) {
     if (!segreto || req.headers.get('authorization') !== `Bearer ${segreto}`) {
         return new NextResponse('Unauthorized', { status: 401 });
     }
-    let corpo: { nome?: string } = {};
+    let corpo: { nome?: string; modo?: string } = {};
     try { corpo = await req.json(); } catch { /* corpo vuoto = tutti */ }
 
     const { primo, secondo } = credenziali();
@@ -123,15 +123,52 @@ export async function POST(req: Request) {
     const { fuori } = await disallineati(primo, secondo);
     const daFare = corpo.nome ? fuori.filter((f) => f.nome === corpo.nome) : fuori;
 
-    const esiti: Array<{ nome: string; http: number; risposta: string }> = [];
+    const esiti: Array<{ nome: string; passo: string; http: number; risposta: string }> = [];
     for (const f of daFare) {
+        if (corpo.modo === 'ricrea') {
+            // Un template gia' sottomesso non si ricategorizza (Twilio 92009):
+            // se ne crea uno NUOVO con lo stesso testo e si chiede UTILITY. Il
+            // nome dev'essere diverso, da qui il suffisso `_u`; il codice lo
+            // preferisce da solo appena Meta l'ha approvato (template-account.ts),
+            // quindi finche' e' in attesa non cambia niente.
+            const originale = await chiedi(`https://content.twilio.com/v1/Content/${f.sidPrimo}`, primo);
+            if (!originale?.types) {
+                esiti.push({ nome: f.nome, passo: 'lettura originale', http: 0, risposta: 'non leggibile' });
+                continue;
+            }
+            const nuovoNome = `${f.nome}_u`;
+            const creaRes = await fetch('https://content.twilio.com/v1/Content', {
+                method: 'POST',
+                headers: { Authorization: auth(secondo), 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    friendly_name: nuovoNome,
+                    language: originale.language ?? 'it',
+                    variables: originale.variables ?? {},
+                    types: originale.types,
+                }),
+            });
+            const creato = await creaRes.json().catch(() => null);
+            if (!creaRes.ok || !creato?.sid) {
+                esiti.push({ nome: nuovoNome, passo: 'creazione', http: creaRes.status, risposta: JSON.stringify(creato).slice(0, 300) });
+                continue;
+            }
+            const appr = await fetch(`https://content.twilio.com/v1/Content/${creato.sid}/ApprovalRequests/whatsapp`, {
+                method: 'POST',
+                headers: { Authorization: auth(secondo), 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: nuovoNome, category: 'UTILITY' }),
+            });
+            const testoAppr = await appr.text();
+            esiti.push({ nome: nuovoNome, passo: 'richiesta UTILITY', http: appr.status, risposta: testoAppr.slice(0, 300) });
+            continue;
+        }
+
         const r = await fetch(`https://content.twilio.com/v1/Content/${f.sidSecondo}/ApprovalRequests/whatsapp`, {
             method: 'POST',
             headers: { Authorization: auth(secondo), 'Content-Type': 'application/json' },
             body: JSON.stringify({ name: f.nome, category: 'UTILITY' }),
         });
         const testo = await r.text();
-        esiti.push({ nome: f.nome, http: r.status, risposta: testo.slice(0, 300) });
+        esiti.push({ nome: f.nome, passo: 'risottomissione', http: r.status, risposta: testo.slice(0, 300) });
     }
     return NextResponse.json({ ok: true, tentati: daFare.length, esiti });
 }
