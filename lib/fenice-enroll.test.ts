@@ -67,7 +67,7 @@ function makeSupabase(
         // nessuna riga, un numero su tutte le conversazioni) e il conteggio degli
         // outbound già partiti della guardia `apreSopraChatViva` (`head: true`, senza
         // finestra). Le ultime due si distinguono proprio dal `gte`.
-        const chain: any = { eq: () => chain, gte: () => chain, limit: async () => ({ data: [] }) };
+        const chain: any = { eq: () => chain, gte: () => chain, not: () => chain, limit: async () => ({ data: [] }) };
         return {
           select: (_colonne: string, opzioni?: { head?: boolean }) => {
             if (!opzioni?.head) return chain;
@@ -512,7 +512,7 @@ describe('enrollGdoLeadAsPostino — arruolamento in modalità postino', () => {
  * Fake Supabase che sa anche leggere: serve alla guardia anti-doppione, che prima di
  * inviare guarda il crm_lead_id della conv e se un outbound è già partito di recente.
  */
-function makeSupabaseLeggibile(opts: { crmLeadId?: string | null; outboundRecenti?: number; lastInboundAt?: string | null; benvenutiUltimaOra?: number }) {
+function makeSupabaseLeggibile(opts: { crmLeadId?: string | null; outboundRecenti?: number; /** Righe in uscita recenti FALLITE (senza `twilio_sid`): il `.not('twilio_sid','is',null)` della guardia le scarta. */ outboundFalliti?: number; lastInboundAt?: string | null; benvenutiUltimaOra?: number }) {
   const calls = { updates: [] as any[], events: [] as any[] };
   const supabase: any = {
     from(table: string) {
@@ -532,8 +532,14 @@ function makeSupabaseLeggibile(opts: { crmLeadId?: string | null; outboundRecent
         };
       }
       if (table === 'messages') {
-        const rows = Array.from({ length: opts.outboundRecenti ?? 0 }, (_, i) => ({ id: i }));
-        const chain: any = { eq: () => chain, gte: () => chain, limit: async () => ({ data: rows }) };
+        const partiti = Array.from({ length: opts.outboundRecenti ?? 0 }, (_, i) => ({ id: i, twilio_sid: `SM${i}` }));
+        const falliti = Array.from({ length: opts.outboundFalliti ?? 0 }, (_, i) => ({ id: 100 + i, twilio_sid: null }));
+        let soloPartiti = false;
+        const chain: any = {
+          eq: () => chain, gte: () => chain,
+          not: (col: string, op: string, val: unknown) => { if (col === 'twilio_sid' && op === 'is' && val === null) soloPartiti = true; return chain; },
+          limit: async () => ({ data: soloPartiti ? partiti : [...partiti, ...falliti] }),
+        };
         const conteggio: any = {
           eq: () => conteggio, gte: () => conteggio, not: () => conteggio,
           then: (r: any) => r({ count: opts.benvenutiUltimaOra ?? 0, error: null }),
@@ -603,6 +609,26 @@ describe('enrollLeadIntoMario — guardia anti-doppione sui ritenti del CRM', ()
     const res = await enrollLeadIntoMario(supabase, { phone: '+393330000006', crmLeadId: 'LEAD-2' });
     expect(res).not.toHaveProperty('duplicato');
     expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+  });
+
+  it('riga in uscita recente ma FALLITA (senza SID) → l apertura parte: il lead non ha ricevuto niente', async () => {
+    // 17/09/2026: 53 chat sul numero nuovo con la sola riga `failed` del presidio
+    // UTILITY_ONLY. La guardia le contava come "apertura recente" e riapri-mute
+    // dichiarava 53 aperture partite a ogni giro senza mandarne una.
+    vi.setSystemTime(MEZZOGIORNO);
+    const { supabase } = makeSupabaseLeggibile({ crmLeadId: 'LEAD-1', outboundRecenti: 0, outboundFalliti: 1 });
+    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000007', crmLeadId: 'LEAD-1' });
+    expect(res).not.toHaveProperty('duplicato');
+    expect(res).toMatchObject({ ok: true, sid: 'SM_TEST' });
+    expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+  });
+
+  it('riga fallita E riga partita nelle ultime 12 ore → resta duplicato', async () => {
+    vi.setSystemTime(MEZZOGIORNO);
+    const { supabase } = makeSupabaseLeggibile({ crmLeadId: 'LEAD-1', outboundRecenti: 1, outboundFalliti: 1 });
+    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000008', crmLeadId: 'LEAD-1' });
+    expect(res).toMatchObject({ ok: true, duplicato: true });
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
   });
 
   it('senza crmLeadId (arruolamento non CRM) la guardia non si attiva', async () => {

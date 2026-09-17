@@ -119,7 +119,11 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  let inviati = 0, falliti = 0, differiti = 0;
+  // `saltati`: l'arruolamento ha risposto ok senza mandare niente (`duplicato` o
+  // `aperturaSaltata`). Fino al 17/09 finivano dentro `inviati`, e la rotta dichiarava
+  // "53 aperture partite" a ogni giro mentre le chat restavano mute. Un invio e' tale
+  // solo se torna un SID.
+  let inviati = 0, falliti = 0, differiti = 0, saltati = 0;
   const errori: string[] = [];
   const esempi = mute.slice(0, 5).map((c: any) => ({ conv: c.id, lead: c.crm_lead_id, funnel: c.crm_funnel }));
 
@@ -137,7 +141,8 @@ export async function POST(req: NextRequest) {
           crmFunnel: c.crm_funnel,
         });
         if (res.deferred) differiti++;
-        else if (res.ok) inviati++;
+        else if (res.duplicato || res.aperturaSaltata) saltati++;
+        else if (res.ok && res.sid) inviati++;
         else { falliti++; if (errori.length < 5) errori.push(res.error ?? 'errore'); }
       } catch (e) {
         falliti++;
@@ -147,14 +152,14 @@ export async function POST(req: NextRequest) {
 
     await admin.from('event_log').insert({
       type: 'riapri_mute',
-      payload: { candidate: mute.length, inviati, falliti, differiti, dal } as never,
-      message: `[bot-fissatore] recupero conversazioni mute: ${inviati} aperture partite, ${falliti} fallite, ${differiti} differite fuori fascia`,
+      payload: { candidate: mute.length, inviati, falliti, differiti, saltati, dal } as never,
+      message: `[bot-fissatore] recupero conversazioni mute: ${inviati} aperture partite, ${falliti} fallite, ${differiti} differite fuori fascia, ${saltati} saltate dalla guardia`,
       level: falliti > 0 ? 'warn' : 'info',
     });
   }
 
   return NextResponse.json({
     ok: true, dal, candidate: mute.length, esaminate: convs.length,
-    inviati, falliti, differiti, esegui, errori, esempi,
+    inviati, falliti, differiti, saltati, esegui, errori, esempi,
   });
 }

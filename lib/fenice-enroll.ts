@@ -261,6 +261,14 @@ export async function enrollLeadIntoMario(
  * Il solo controllo sull'outbound recente ne avrebbe fermate circa metà: chi ci sta
  * parlando da giorni non deve sentirsi dire "ciao" da capo, e la distanza dall'ultimo
  * invio non lo dice.
+ *
+ * Conta solo l'outbound PARTITO, cioè con `twilio_sid`. Una riga in uscita senza SID è
+ * un invio fallito prima di Twilio (`sendTemplateAndLog` la scrive nel `catch`, e dal
+ * 01/09 le righe senza SID sono tutte e sole `failed`): il lead non ha ricevuto niente.
+ * Il 17/09 la guardia contava anche quelle, e `riapri-mute` — che esiste apposta per
+ * queste chat — chiamava questa funzione, si sentiva dire "apertura_recente" e
+ * dichiarava 53 aperture "partite" a ogni giro senza mandarne una. Stesso criterio di
+ * `apreSopraChatViva` e della rotta: l'unica prova che qualcosa sia uscito è il SID.
  */
 async function apertutaDaFermare(
   supabase: Supa,
@@ -272,6 +280,7 @@ async function apertutaDaFermare(
     .select('id')
     .eq('conversation_id', conversationId)
     .eq('direction', 'out')
+    .not('twilio_sid', 'is', null)
     .gte('created_at', soglia)
     .limit(1);
   if ((out?.length ?? 0) > 0) return 'apertura_recente';
