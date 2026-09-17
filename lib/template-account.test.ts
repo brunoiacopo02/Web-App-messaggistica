@@ -164,3 +164,57 @@ describe('traduciTemplate: dice se ha tradotto davvero', () => {
     expect(await traduciTemplate('HXoriginale', SECONDO)).toEqual({ sid: 'HXtradotto', tradotto: true });
   });
 });
+
+
+// Lo stesso template puo' avere categorie diverse sui due account: e' Meta a
+// deciderla alla sottomissione, e la copia sul secondo account e' stata
+// sottomessa a parte. `fenice_agenda_gdo_v3` e' UTILITY sull'account storico e
+// MARKETING su quello nuovo, con lo stesso identico testo.
+describe('presidio UTILITY_ONLY fra i due account', () => {
+  /** Finge le due API: categorie diverse per lo stesso template sui due account. */
+  function fingiCategorie(catSecondo: string, catOriginale: string) {
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: any) => {
+      const auth = String(init?.headers?.Authorization ?? '');
+      const eSecondo = auth.includes(Buffer.from('AC_secondo:tok_secondo').toString('base64'));
+      if (url.includes('/ApprovalRequests')) {
+        return { ok: true, status: 200, json: async () => ({ whatsapp: { category: eSecondo ? catSecondo : catOriginale } }) };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    }));
+  }
+
+  async function conPresidio(fn: () => Promise<void>) {
+    const salva = { u: process.env.UTILITY_ONLY, a: process.env.UTILITY_ONLY_ALLOW };
+    process.env.UTILITY_ONLY = '1';
+    process.env.UTILITY_ONLY_ALLOW = '';
+    try { await fn(); } finally {
+      if (salva.u === undefined) delete process.env.UTILITY_ONLY; else process.env.UTILITY_ONLY = salva.u;
+      if (salva.a === undefined) delete process.env.UTILITY_ONLY_ALLOW; else process.env.UTILITY_ONLY_ALLOW = salva.a;
+    }
+  }
+
+  it('MARKETING sul secondo ma UTILITY sull originale: PASSA, decide l originale', async () => {
+    const { assertTemplateSendable } = await import('./twilio');
+    fingiCategorie('MARKETING', 'UTILITY');
+    await conPresidio(async () => {
+      await expect(assertTemplateSendable('HXagendaDue', SECONDO, 'HXagendaUno')).resolves.toBeUndefined();
+    });
+  });
+
+  it('MARKETING su ENTRAMBI: resta bloccato, il presidio non si sfonda', async () => {
+    const { assertTemplateSendable } = await import('./twilio');
+    fingiCategorie('MARKETING', 'MARKETING');
+    await conPresidio(async () => {
+      await expect(assertTemplateSendable('HXapreDue', SECONDO, 'HXapreUno')).rejects.toThrow(/bloccato/);
+    });
+  });
+
+  it('senza traduzione (un solo account) la categoria originale non si consulta', async () => {
+    const { assertTemplateSendable } = await import('./twilio');
+    fingiCategorie('MARKETING', 'UTILITY');
+    await conPresidio(async () => {
+      // stesso SID: non c e stata traduzione, quindi niente seconda opinione.
+      await expect(assertTemplateSendable('HXuguale', SECONDO, 'HXuguale')).rejects.toThrow(/bloccato/);
+    });
+  });
+});

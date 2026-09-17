@@ -197,12 +197,31 @@ export async function assertTemplateSendable(
   if (sbloccati.includes(contentSid)) return;
   if (sidOriginale && sbloccati.includes(sidOriginale)) return;
   const cat = await getTemplateCategory(contentSid, from);
-  if (cat !== 'UTILITY') {
-    throw new Error(
-      `template ${contentSid} bloccato: categoria ${cat ?? 'sconosciuta'} con UTILITY_ONLY attivo. ` +
-      'Sostituirlo con una versione utility, oppure sbloccarlo per SID esteso in UTILITY_ONLY_ALLOW.',
-    );
+  if (cat === 'UTILITY') return;
+
+  // Lo STESSO template puo' avere categorie diverse sui due account: e' Meta a
+  // deciderla quando la copia viene sottomessa, e la copia sul secondo account
+  // e' stata sottomessa a parte. `fenice_agenda_gdo_v3` e' UTILITY approvato
+  // sull'account storico e MARKETING su quello nuovo — stesso identico testo.
+  //
+  // A decidere e' l'ORIGINALE, che e' la categoria che abbiamo curato noi e su
+  // cui il presidio e' stato costruito. Senza questa regola il numero nuovo non
+  // puo' mandare NESSUNA agenda e NESSUN video: il 17/09/2026 sono fallite
+  // tutte e tre le agende chieste, e cinque appuntamenti sono rimasti scoperti.
+  //
+  // Il presidio resta intero dove serve: un template MARKETING anche
+  // sull'originale (le aperture) continua a passare solo da UTILITY_ONLY_ALLOW.
+  if (sidOriginale && sidOriginale !== contentSid) {
+    // Senza `from`: la categoria dell'originale si chiede all'account storico,
+    // che e' quello che lo possiede.
+    const catOrigine = await getTemplateCategory(sidOriginale);
+    if (catOrigine === 'UTILITY') return;
   }
+
+  throw new Error(
+    `template ${contentSid} bloccato: categoria ${cat ?? 'sconosciuta'} con UTILITY_ONLY attivo. ` +
+    'Sostituirlo con una versione utility, oppure sbloccarlo per SID esteso in UTILITY_ONLY_ALLOW.',
+  );
 }
 
 // Cache del testo dei template (per mostrare il messaggio reale invece di "[template] X").
