@@ -451,7 +451,10 @@ describe('enrollGdoLeadAsPostino — arruolamento in modalità postino', () => {
     expect('gdo_noemi_reminded_at' in calls.updates[0]).toBe(false);
   });
 
-  it('offerta del mese → video Black Summer', async () => {
+  // Il video dell'offerta del mese è un'impostazione (`offerta_del_mese_link`), non più
+  // il Black Summer: chi chiama risolve il link e lo passa qui. Senza link non parte
+  // nessun video — meglio niente che un video vecchio spacciato per l'offerta del mese.
+  it('offerta del mese senza link risolto dal chiamante → nessun video, mai il Black Summer', async () => {
     const { supabase, calls } = makeSupabase();
 
     await enrollGdoLeadAsPostino(supabase, {
@@ -459,7 +462,30 @@ describe('enrollGdoLeadAsPostino — arruolamento in modalità postino', () => {
       variant: { lavora: true, haFamiglia: true, offertaDelMese: true },
     });
 
-    expect(calls.updates[0].gdo_video_url).toBe('https://corso.feniceacademy.it/conferenza-black-summer');
+    expect(calls.updates[0].gdo_video_url).toBeNull();
+  });
+
+  it('il video passato dal chiamante vince sul calcolo dalla variante', async () => {
+    const { supabase, calls } = makeSupabase();
+
+    await enrollGdoLeadAsPostino(supabase, {
+      ...PAYLOAD,
+      variant: { lavora: true, haFamiglia: true, offertaDelMese: true },
+      gdoVideoUrl: 'https://corso.feniceacademy.it/webdev-offerta',
+    });
+
+    expect(calls.updates[0].gdo_video_url).toBe('https://corso.feniceacademy.it/webdev-offerta');
+  });
+
+  it('senza `gdoVideoUrl` le quattro varianti classiche restano quelle di sempre', async () => {
+    const { supabase, calls } = makeSupabase();
+
+    await enrollGdoLeadAsPostino(supabase, {
+      ...PAYLOAD,
+      variant: { lavora: true, haFamiglia: true, offertaDelMese: false },
+    });
+
+    expect(calls.updates[0].gdo_video_url).toBe('https://corso.feniceacademy.it/conferenza-dx');
   });
 
   it('invio fallito → ok:false, esito fallito sulla riga (il GDO può ritentare), event send_error', async () => {

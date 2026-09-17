@@ -26,14 +26,26 @@ describe('videoLinkForVariant', () => {
   it('non lavora con famiglia → ex', () => {
     expect(videoLinkForVariant(V(false, true))).toBe('https://corso.feniceacademy.it/conferenza-ex');
   });
-  it('offertaDelMese prevale su lavora e famiglia', () => {
-    expect(videoLinkForVariant(V(true, true, true))).toBe(BLACK_SUMMER_LINK);
-    expect(videoLinkForVariant(V(false, false, true))).toBe(BLACK_SUMMER_LINK);
+  it('offertaDelMese prende il link dalle impostazioni e prevale su lavora e famiglia', () => {
+    const settings = { offertaDelMeseLink: 'https://corso.feniceacademy.it/webdev-offerta' };
+    expect(videoLinkForVariant(V(true, true, true), settings)).toBe('https://corso.feniceacademy.it/webdev-offerta');
+    expect(videoLinkForVariant(V(false, false, true), settings)).toBe('https://corso.feniceacademy.it/webdev-offerta');
   });
-  it('ogni link è nella whitelist: il bot non deve segnalarlo come inventato', () => {
-    for (const variant of [V(true, false), V(false, false), V(true, true), V(false, true), V(true, true, true)]) {
-      expect(KNOWN_LINKS as readonly string[]).toContain(videoLinkForVariant(variant));
+  it('offertaDelMese senza link impostato: null, mai il Black Summer né un link inventato', () => {
+    expect(videoLinkForVariant(V(true, false, true))).toBeNull();
+    expect(videoLinkForVariant(V(true, false, true), null)).toBeNull();
+    expect(videoLinkForVariant(V(true, false, true), { offertaDelMeseLink: null })).toBeNull();
+    expect(videoLinkForVariant(V(true, false, true), { offertaDelMeseLink: '   ' })).toBeNull();
+  });
+  it('l\'impostazione non tocca le quattro varianti lavora/famiglia, che restano nella whitelist', () => {
+    const settings = { offertaDelMeseLink: 'https://corso.feniceacademy.it/webdev-offerta' };
+    expect(videoLinkForVariant(V(true, false), settings)).toBe('https://corso.feniceacademy.it/conferenza-bx');
+    for (const variant of [V(true, false), V(false, false), V(true, true), V(false, true)]) {
+      expect(KNOWN_LINKS as readonly string[]).toContain(videoLinkForVariant(variant) as string);
     }
+  });
+  it('il Black Summer resta nella whitelist: le chat vecchie ce l\'hanno in cronologia', () => {
+    expect(KNOWN_LINKS as readonly string[]).toContain(BLACK_SUMMER_LINK);
   });
 });
 

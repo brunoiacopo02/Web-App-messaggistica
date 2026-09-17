@@ -634,13 +634,15 @@ export async function drainMarioReplies(
 
       // Link ufficiali "in piu'" per questa conversazione: il video della live (lancio).
       // `linkExtra` = link che non sono "inventati"; `videoExtra` = link che valgono
-      // come "video gia' uscito" per il blocco di conferma. Qui coincidono; il Task 8
-      // aggiunge il video del GDO SOLO a `linkExtra`, per non cambiare il blocco di
-      // conferma dei lead postino.
+      // come "video gia' uscito" per il blocco di conferma. Il video del GDO entra SOLO
+      // in `linkExtra`: dall'offerta del mese quel link arriva da un'impostazione e non
+      // sta nella whitelist statica (senza questo, ogni offerta finirebbe a log come
+      // link inventato). In `videoExtra` NO: allargarlo cambierebbe `videoGiaInviato` e
+      // il blocco di conferma dei lead postino, che questo task lascia com'erano.
       const lancioStandard = lancioStandardDrain(lancio);
       const videoLive = lancioStandard ? await leggiVideoLive() : null;
       const videoExtra: string[] = videoLive ? [videoLive] : [];
-      const linkExtra: string[] = [...videoExtra];
+      const linkExtra: string[] = [...videoExtra, ...(gdoVideoUrl ? [gdoVideoUrl] : [])];
       // Un link del video già uscito in questa chat: serve sia alla patch del blocco
       // conferma, sia alla rete di sicurezza sul FATTO qui sotto.
       const videoGiaInviato = rows.some((m) => m.direction === 'out' && containsVideoLink(m.body, videoExtra));

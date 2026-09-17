@@ -180,3 +180,14 @@ export const VIDEO_TEMPLATE_ENV_BY_LINK: Record<string, string> = {
   'https://corso.feniceacademy.it/conferenza-ex': 'VIDEO_GDO_NONLAVORA_FAMIGLIA_SID',
   [BLACK_SUMMER_LINK]: 'VIDEO_GDO_OFFERTA_SID',
 };
+
+/**
+ * Come la mappa sopra, ma col link dell'offerta del mese letto a runtime da
+ * `app_settings`: il link cambia dal pannello senza deploy, il template resta
+ * `VIDEO_GDO_OFFERTA_SID`. Fail-closed come la mappa statica: link ignoto = nessun template.
+ */
+export function videoTemplateEnvForLink(link: string | null, offertaDelMeseLink: string | null): string | undefined {
+  if (!link) return undefined;
+  if (offertaDelMeseLink && link === offertaDelMeseLink) return 'VIDEO_GDO_OFFERTA_SID';
+  return VIDEO_TEMPLATE_ENV_BY_LINK[link];
+}

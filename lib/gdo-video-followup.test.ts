@@ -5,6 +5,7 @@ import {
   inviaBolleSollecito,
   TURNO_RIPRESA_SOLLECITO,
   VIDEO_TEMPLATE_ENV_BY_LINK,
+  videoTemplateEnvForLink,
   type BolleDeps,
   type GdoFollowupInput,
 } from './gdo-video-followup';
@@ -340,5 +341,17 @@ describe('romeDaysBetween', () => {
     const notte = new Date('2026-08-01T22:30:00Z');
     expect(romeDaysBetween(sera, notte)).toBe(1);
     expect(romeDayKey(sera)).toBe('2026-08-01');
+  });
+});
+
+describe('videoTemplateEnvForLink — il link dell\'offerta è dinamico, il template no', () => {
+  const offerta = 'https://corso.feniceacademy.it/webdev-offerta';
+  it('il link impostato mappa sul template offerta; i quattro fissi sulla mappa statica; un link ignoto resta senza template', () => {
+    expect(videoTemplateEnvForLink(offerta, offerta)).toBe('VIDEO_GDO_OFFERTA_SID');
+    expect(videoTemplateEnvForLink('https://corso.feniceacademy.it/conferenza-bx', offerta)).toBe('VIDEO_GDO_LAVORA_SID');
+    expect(videoTemplateEnvForLink('https://corso.feniceacademy.it/conferenza-black-summer', offerta)).toBe('VIDEO_GDO_OFFERTA_SID');
+    expect(videoTemplateEnvForLink('https://corso.feniceacademy.it/boh', offerta)).toBeUndefined();
+    expect(videoTemplateEnvForLink(null, offerta)).toBeUndefined();
+    expect(videoTemplateEnvForLink(offerta, null)).toBeUndefined();
   });
 });

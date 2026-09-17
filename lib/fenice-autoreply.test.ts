@@ -875,6 +875,28 @@ describe('drainMarioReplies — modalità postino (lead dei GDO)', () => {
     expect(calls.messageInserts.map((m: any) => m.body)).toEqual(['Te lo spiega il tutor in call 🙂']);
   });
 
+  // Il video dell'offerta del mese arriva da `offerta_del_mese_link`: è un link
+  // ufficiale deciso dal pannello, che però NON sta nella whitelist statica. Senza
+  // dirlo al sanitizzatore ogni offerta del mese finirebbe a log come "link inventato
+  // dal modello", e il vero rumore si perderebbe in mezzo a quello finto.
+  it('il video dell\'offerta del mese non è un link inventato, pur non essendo in whitelist', async () => {
+    const OFFERTA = 'https://corso.feniceacademy.it/webdev-offerta';
+    const rows: FakeMsgRow[] = [
+      AGENDA, RISPOSTA,
+      { direction: 'in', body: 'ma quanto costa?', template_sid: null, created_at: '2026-07-29T10:10:00Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(postino({ gdo_video_url: OFFERTA }), rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Te lo spiega il tutor in call 🙂',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0);
+
+    expect(calls.messageInserts.some((m: any) => m.body.includes(OFFERTA))).toBe(true);
+    expect(calls.events.some((e: { type: string }) => e.type === 'unknown_fenice_link')).toBe(false);
+  });
+
   it('video già confermato: la nota non ripete il promemoria video (smaschera uno scambio sent/watched)', async () => {
     const rows: FakeMsgRow[] = [
       AGENDA, RISPOSTA,
