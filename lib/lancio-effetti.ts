@@ -1,11 +1,13 @@
 import type { getSupabaseAdmin } from './supabase/admin';
 import type { MarioTurn } from './mario';
-import { sendFreeText } from './twilio';
+import { sendFreeText, sendTemplate } from './twilio';
 import { sendOutcome } from './bot-outcome';
 import { impostaFaseLancio, marcaCongedo } from './lancio-db';
 import { TESTO_CONGEDO, TESTO_PASSAGGIO_UMANO, type RigaLancio } from './lancio-fase';
 import type { LancioSettings } from './lancio-settings';
 import type { TurnoLancioInput } from './lancio-turno';
+import type { ModoPostPitch } from './lancio-scelta';
+import { corpoSceltaPulsanti, sidSceltaPulsanti } from './lancio-pulsanti';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -57,6 +59,49 @@ export async function inviaBollaLancio(supabase: Supa, c: ContestoTurno, body: s
     twilio_sid: sent.sid, twilio_status: sent.status, sender: 'bot',
   });
   await supabase.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', c.conversationId);
+}
+
+/** L'esito dell'invio della scelta: `motivo` c'e' solo quando i pulsanti NON sono partiti. */
+export type EsitoSceltaPulsanti = { inviato: boolean; motivo?: string };
+
+/**
+ * La domanda della scelta, chiesta con i due pulsanti di WhatsApp (delibera PO 17/09).
+ *
+ * Si manda in sessione (il lead ha appena scritto: siamo dentro le 24h), ma resta un
+ * Content template, quindi passa dallo stesso presidio categoria di tutti gli altri:
+ * `sendTemplate` chiama `assertTemplateSendable`, e con `UTILITY_ONLY=1` un template non
+ * UTILITY non parte. Qui quel blocco non deve MAI far fallire il turno: senza env, con il
+ * template bloccato o con Twilio che risponde male, il lead riceve la stessa domanda
+ * scritta di prima. Peggio dei pulsanti c'e' solo il silenzio nel mezzo della scelta.
+ *
+ * Il corpo salvato in `messages` e' quello del template, non una parafrasi del modello:
+ * la cronologia che il turno dopo rilegge deve dire esattamente cosa ha letto il lead.
+ */
+export async function inviaSceltaLancio(
+  supabase: Supa,
+  c: ContestoTurno,
+  modo: ModoPostPitch,
+): Promise<EsitoSceltaPulsanti> {
+  const body = corpoSceltaPulsanti(modo);
+  const sid = sidSceltaPulsanti(modo);
+  if (!sid) {
+    await inviaBollaLancio(supabase, c, body);
+    return { inviato: false, motivo: 'env_mancante' };
+  }
+  try {
+    const sent = await sendTemplate({ to: c.phone, contentSid: sid, variables: {}, from: c.from });
+    await supabase.from('messages').insert({
+      conversation_id: c.conversationId, direction: 'out', body,
+      twilio_sid: sent.sid, twilio_status: sent.status, sender: 'bot',
+      template_sid: sid, is_template: true,
+    });
+    await supabase.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', c.conversationId);
+    return { inviato: true };
+  } catch (err) {
+    await inviaBollaLancio(supabase, c, body);
+    const msg = (err as { message?: string } | null)?.message;
+    return { inviato: false, motivo: (msg ?? 'errore_invio').slice(0, 200) };
+  }
 }
 
 export async function eventoLancio(

@@ -15,13 +15,15 @@ import {
   giorniLancio, modoPostPitch, modoEtichette, puoRispondere, validaAtLancio, oreProponibili, testoSlots, bloccoSlotPerPrompt,
   testoConfermaChiamata, testoConfermaPrenotazione, testoOraEsaurita, testoAtNonValido, raccogliRisposte,
   etichettaGiorno,
+  type LancioTag,
   TESTO_NESSUN_VENDITORE, TESTO_CHIAMATA_FUORI_ORARIO, TESTO_ERRORE_CRM, TESTO_DOPO_SCELTA, TESTO_CONGEDO_POST_PITCH,
   type OreProponibili, type GiorniLancio, type ModoEtichette,
 } from './lancio-scelta';
 import {
-  congedoLancio, contestoDi, historyDi, eventoAtDa, inviaBollaLancio, eventoLancio, tracciaTurnoLancio,
+  congedoLancio, contestoDi, historyDi, eventoAtDa, inviaBollaLancio, inviaSceltaLancio, eventoLancio, tracciaTurnoLancio,
   silenzioLancio, passaggioUmanoLancio, type StatoTurno, type ContestoTurno,
 } from './lancio-effetti';
+import { eDomandaScelta, tapPulsanteScelta } from './lancio-pulsanti';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -122,6 +124,12 @@ export async function turnoPostPitch(
   const info: LancioInfo = raccogliRisposte(i.lancioInfo ?? null, testi);
   const faseScelta = info.risposte.length >= RISPOSTE_RISCALDAMENTO || !!info.slotsMostratiAt;
 
+  // Il tocco di un pulsante non passa dal modello (delibera PO 17/09): il titolo del
+  // pulsante arriva come testo, e i quattro titoli sono quattro stringhe esatte. Vale solo
+  // nella fase della scelta, cioe' dove i pulsanti sono stati davvero mandati: durante il
+  // riscaldamento un "domani mattina" e' una frase del lead, e la legge il modello.
+  const tap = faseScelta ? tapPulsanteScelta(testoLead) : null;
+
   // Update diretto: la fase non cambia, e `impostaFaseLancio` è l'unico scrittore di
   // `lancio_fase`, non di `lancio_info`.
   const salvaInfo = async (dati: LancioInfo): Promise<void> => {
@@ -217,18 +225,29 @@ export async function turnoPostPitch(
     return sceltaFatta('gia_prenotato', { at: esito.appointmentAt, kind: esito.kind, tag });
   };
 
-  const bloccoSlot = faseScelta ? bloccoSlotPerPrompt(await leggiOre(), giorni, etichette, mattinaProponibile) : null;
-  const r = await genera(historyDi(i.rows), {
-    fase: 'post_pitch', nome: i.nome, eventoAt: ctx.settings.eventoAt, now,
-    modo, risposteRaccolte: info.risposte.length, bloccoSlot,
-  });
+  // Con un tocco la scelta e' gia' fatta: niente prompt, niente ore nel prompt, niente
+  // chiamata al modello. E' anche il turno piu' veloce della serata, che e' esattamente
+  // quando la coda dei post-pitch e' piu' lunga.
+  const bloccoSlot = faseScelta && !tap ? bloccoSlotPerPrompt(await leggiOre(), giorni, etichette, mattinaProponibile) : null;
+  const r = tap
+    ? null
+    : await genera(historyDi(i.rows), {
+        fase: 'post_pitch', nome: i.nome, eventoAt: ctx.settings.eventoAt, now,
+        modo, risposteRaccolte: info.risposte.length, bloccoSlot,
+      });
 
-  if (r.passToHuman) {
+  if (r?.passToHuman) {
     await salvaInfo(info);
     return passaggioUmanoLancio(supabase, c, r.visibleReply, testoLead);
   }
 
-  const tag = r.lancioTag;
+  if (tap) {
+    await eventoLancio(supabase, c, 'lancio_scelta_pulsante_tap', { titolo: testoLead, tag: tap, modo }, `[lancio] conv ${c.conversationId}: pulsante "${testoLead}" -> ${tap}`);
+  }
+  // Il tocco vale come il tag che il modello avrebbe scritto: da qui in giu' il flusso e'
+  // lo stesso di sempre, regole dure comprese (di giorno CHIAMA_ORA diventa il testo fisso
+  // "a quest'ora fissiamo la call" piu' le ore, come oggi).
+  const tag: LancioTag | null = tap ? (tap === 'CHIAMA_ORA' ? { tag: 'CHIAMA_ORA' } : { tag: 'SLOTS' }) : r!.lancioTag;
   switch (tag?.tag) {
     case 'CHIAMA_ORA': {
       // Regola dura: la chiamata immediata esiste solo la notte del webinar.
@@ -286,10 +305,18 @@ export async function turnoPostPitch(
     }
     default: {
       // Riscaldamento o risposta a una domanda: la bolla del modello, una sola.
-      const testo = r.visibleReply.trim();
+      const testo = (r?.visibleReply ?? '').trim();
       await salvaInfo(info);
       if (!testo) return silenzioLancio(supabase, c, 'risposta_vuota', true);
-      await inviaBollaLancio(supabase, c, testo);
+      if (faseScelta && eDomandaScelta(testo, modo)) {
+        // La domanda della scelta non la scrive piu' il modello: esce come template a
+        // pulsanti, col testo FISSO (di notte domanda + spinta). Il modello puo' averla
+        // parafrasata o aver perso la spinta: quello che il lead legge lo decide il codice.
+        const esito = await inviaSceltaLancio(supabase, c, modo);
+        await eventoLancio(supabase, c, 'lancio_scelta_pulsanti', { modo, inviato: esito.inviato, ...(esito.motivo ? { motivo: esito.motivo } : {}) }, `[lancio] conv ${c.conversationId}: scelta con pulsanti ${esito.inviato ? 'inviata' : `non inviata (${esito.motivo})`}`, esito.inviato ? 'info' : 'warn');
+      } else {
+        await inviaBollaLancio(supabase, c, testo);
+      }
       await eventoLancio(supabase, c, 'lancio_post_pitch_domanda', { risposte: info.risposte.length, faseScelta }, `[lancio] conv ${c.conversationId}: post-pitch, ${info.risposte.length} risposte`);
       await tracciaTurnoLancio(supabase, c, 'post_pitch');
       return 'active';

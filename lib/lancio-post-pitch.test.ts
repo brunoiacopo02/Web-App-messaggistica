@@ -1,6 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-vi.mock('./twilio', () => ({ sendFreeText: vi.fn(async () => ({ sid: 'SM_P', status: 'queued' })) }));
+vi.mock('./twilio', () => ({
+  sendFreeText: vi.fn(async () => ({ sid: 'SM_P', status: 'queued' })),
+  sendTemplate: vi.fn(async () => ({ sid: 'SM_T', status: 'queued' })),
+}));
 vi.mock('./bot-outcome', () => ({
   sendOutcome: vi.fn(async () => ({ sent: true })),
   sendCrmNota: vi.fn(async () => ({ sent: true })),
@@ -15,7 +18,7 @@ vi.mock('./lancio-crm', () => ({ lancioSlots: vi.fn(), lancioBook: vi.fn(), lanc
 vi.mock('./lead-entrante', () => ({ pushLeadEntrante: vi.fn(async () => ({ ok: true, leadId: 'crm-NEW' })) }));
 
 import { turnoPostPitch, turnoDopoScelta, NOTA_SCELTA, PROVENIENZA_LANCIO } from './lancio-post-pitch';
-import { sendFreeText } from './twilio';
+import { sendFreeText, sendTemplate } from './twilio';
 import { sendOutcome, sendCrmNota } from './bot-outcome';
 import { impostaFaseLancio, marcaCongedo } from './lancio-db';
 import { lancioSlots, lancioBook, lancioCallNow, type LancioSlots } from './lancio-crm';
@@ -24,6 +27,7 @@ import {
   TESTO_NESSUN_VENDITORE, TESTO_CHIAMATA_FUORI_ORARIO, TESTO_ERRORE_CRM, TESTO_DOPO_SCELTA, TESTO_CONGEDO_POST_PITCH,
 } from './lancio-scelta';
 import { TESTO_CONGEDO } from './lancio-fase';
+import { DOMANDA_SCELTA_GIORNO, testoScelta } from './lancio-prompt';
 import type { LancioSettings } from './lancio-settings';
 
 type Row = { direction: string; body: string | null; template_sid: string | null; created_at?: string | null };
@@ -579,5 +583,128 @@ describe('turnoDopoScelta — fase scelta_fatta', () => {
     expect(sendFreeText).not.toHaveBeenCalled();
     expect(eventi(calls, 'lancio_silenzio')[0].payload).toMatchObject({ motivo: 'fuori_orario', definitivo: false });
     expect(eventi(calls, 'fenice_ai_reply')).toHaveLength(0);
+  });
+});
+
+// ── La scelta a pulsanti (delibera PO 17/09) ──────────────────────────────────────────
+//
+// Il 14/09, in prova, il lead ha risposto "Adessi" alla domanda scritta. Da qui la domanda
+// esce come template a due quick reply, e il titolo che torna si classifica PRIMA del
+// modello. Se i pulsanti non possono partire (env assente, template bloccato da
+// UTILITY_ONLY, Twilio in errore) il turno non fallisce: esce la stessa domanda scritta.
+describe('turnoPostPitch — la scelta esce con i pulsanti', () => {
+  const templates = () => vi.mocked(sendTemplate).mock.calls.map((c) => c[0]);
+  /** Il modello ha appena scritto la domanda della scelta del modo. */
+  const chiedeLaScelta = (modo: 'notte' | 'giorno') =>
+    genera.mockResolvedValueOnce(modello({ visibleReply: testoScelta(modo) }));
+
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('di notte: parte il template della notte, nessuna bolla di testo, evento inviato', async () => {
+    vi.stubEnv('LANCIO_SCELTA_NOTTE_TEMPLATE_SID', 'HX_SCELTA_NOTTE');
+    chiedeLaScelta('notte');
+    const { supabase, calls } = makeSupabase();
+    const stato = await turnoPostPitch(supabase, scelta('il progetto finale'), ctx());
+    expect(stato).toBe('active');
+    expect(templates()).toHaveLength(1);
+    expect(templates()[0]).toMatchObject({ to: '+393331234567', contentSid: 'HX_SCELTA_NOTTE', variables: {} });
+    expect(bolle()).toEqual([]);
+    // In `messages` finisce il corpo del template, non una parafrasi del modello.
+    const riga = calls.messages.at(-1);
+    expect(riga).toMatchObject({ direction: 'out', body: testoScelta('notte'), template_sid: 'HX_SCELTA_NOTTE', is_template: true });
+    expect(eventi(calls, 'lancio_scelta_pulsanti')[0].payload).toMatchObject({ conversationId: 42, modo: 'notte', inviato: true });
+  });
+
+  it('di giorno: template del giorno, corpo senza la spinta', async () => {
+    vi.stubEnv('LANCIO_SCELTA_GIORNO_TEMPLATE_SID', 'HX_SCELTA_GIORNO');
+    chiedeLaScelta('giorno');
+    const { supabase, calls } = makeSupabase();
+    await turnoPostPitch(supabase, scelta('il progetto finale'), ctx(GIORNO6));
+    expect(templates()[0]).toMatchObject({ contentSid: 'HX_SCELTA_GIORNO' });
+    expect(calls.messages.at(-1).body).toBe(DOMANDA_SCELTA_GIORNO);
+    expect(eventi(calls, 'lancio_scelta_pulsanti')[0].payload).toMatchObject({ modo: 'giorno', inviato: true });
+  });
+
+  it('env mancante: si ripiega sul testo fisso (con la spinta), niente template, evento warn', async () => {
+    vi.stubEnv('LANCIO_SCELTA_NOTTE_TEMPLATE_SID', '');
+    chiedeLaScelta('notte');
+    const { supabase, calls } = makeSupabase();
+    expect(await turnoPostPitch(supabase, scelta('il progetto finale'), ctx())).toBe('active');
+    expect(sendTemplate).not.toHaveBeenCalled();
+    expect(bolle()).toEqual([testoScelta('notte')]);
+    const ev = eventi(calls, 'lancio_scelta_pulsanti')[0];
+    expect(ev.payload).toMatchObject({ modo: 'notte', inviato: false, motivo: 'env_mancante' });
+    expect(ev.level).toBe('warn');
+  });
+
+  it('template bloccato da UTILITY_ONLY: il turno NON fallisce, esce il testo fisso', async () => {
+    vi.stubEnv('LANCIO_SCELTA_NOTTE_TEMPLATE_SID', 'HX_SCELTA_NOTTE');
+    vi.mocked(sendTemplate).mockRejectedValueOnce(new Error('template HX_SCELTA_NOTTE bloccato: categoria MARKETING'));
+    chiedeLaScelta('notte');
+    const { supabase, calls } = makeSupabase();
+    expect(await turnoPostPitch(supabase, scelta('il progetto finale'), ctx())).toBe('active');
+    expect(bolle()).toEqual([testoScelta('notte')]);
+    expect(eventi(calls, 'lancio_scelta_pulsanti')[0].payload.motivo).toContain('bloccato');
+  });
+
+  it('una risposta qualunque del modello resta una bolla di testo: i pulsanti sono solo per la scelta', async () => {
+    vi.stubEnv('LANCIO_SCELTA_NOTTE_TEMPLATE_SID', 'HX_SCELTA_NOTTE');
+    genera.mockResolvedValueOnce(modello({ visibleReply: 'Bella domanda, te lo spiega il consulente!' }));
+    const { supabase, calls } = makeSupabase();
+    await turnoPostPitch(supabase, scelta('ma quanto dura?'), ctx());
+    expect(sendTemplate).not.toHaveBeenCalled();
+    expect(bolle()).toEqual(['Bella domanda, te lo spiega il consulente!']);
+    expect(eventi(calls, 'lancio_scelta_pulsanti')).toHaveLength(0);
+  });
+});
+
+describe('turnoPostPitch — il tocco di un pulsante si classifica prima del modello', () => {
+  it('di notte "Chiamami subito" = CHIAMA_ORA, senza passare dal modello', async () => {
+    vi.mocked(lancioCallNow).mockResolvedValueOnce({ ok: true, venditore: { id: 'u7', nome: 'Luca' } });
+    const { supabase, calls } = makeSupabase();
+    expect(await turnoPostPitch(supabase, scelta('Chiamami subito'), ctx())).toBe('closed');
+    expect(genera).not.toHaveBeenCalled();
+    expect(lancioCallNow).toHaveBeenCalledTimes(1);
+    expect(bolle()).toEqual(['Perfetto, ti chiama Luca tra pochissimo.']);
+    expect(eventi(calls, 'lancio_scelta_pulsante_tap')[0].payload).toMatchObject({ titolo: 'Chiamami subito', tag: 'CHIAMA_ORA', modo: 'notte' });
+  });
+
+  it.each(['Fissiamo domani', 'Domani mattina', 'Oggi pomeriggio'])(
+    'di notte "%s" = SLOTS, senza passare dal modello',
+    async (titolo) => {
+      const { supabase, calls } = makeSupabase();
+      expect(await turnoPostPitch(supabase, scelta(titolo), ctx())).toBe('active');
+      expect(genera).not.toHaveBeenCalled();
+      expect(bolle()).toEqual([SLOT_TEXT_NOTTE]);
+      expect(eventi(calls, 'lancio_scelta_pulsante_tap')[0].payload).toMatchObject({ tag: 'SLOTS', modo: 'notte' });
+    },
+  );
+
+  it('di giorno "Chiamami subito" non chiama: testo fuori orario piu le ore, come oggi', async () => {
+    const { supabase } = makeSupabase();
+    expect(await turnoPostPitch(supabase, scelta('Chiamami subito'), ctx(GIORNO6))).toBe('active');
+    expect(genera).not.toHaveBeenCalled();
+    expect(lancioCallNow).not.toHaveBeenCalled();
+    expect(bolle()[0].startsWith(TESTO_CHIAMATA_FUORI_ORARIO)).toBe(true);
+  });
+
+  it.each(['Fissiamo domani', 'Domani mattina', 'Oggi pomeriggio'])(
+    'di giorno "%s" = SLOTS con le ore diurne',
+    async (titolo) => {
+      const { supabase, calls } = makeSupabase();
+      expect(await turnoPostPitch(supabase, scelta(titolo), ctx(GIORNO6))).toBe('active');
+      expect(genera).not.toHaveBeenCalled();
+      expect(bolle()[0]).toMatch(/Per la call ho oggi pomeriggio dalle 15 alle 20/);
+      expect(eventi(calls, 'lancio_scelta_pulsante_tap')[0].payload).toMatchObject({ tag: 'SLOTS', modo: 'giorno' });
+    },
+  );
+
+  it('durante il riscaldamento lo stesso testo NON e un tocco: risponde il modello', async () => {
+    genera.mockResolvedValueOnce(modello({ visibleReply: 'Ricevuto!' }));
+    const { supabase, calls } = makeSupabase();
+    await turnoPostPitch(supabase, base({ rows: [LINK, PULSANTE, inb('Domani mattina')], inboundBody: 'Domani mattina' }), ctx());
+    expect(genera).toHaveBeenCalledTimes(1);
+    expect(bolle()).toEqual(['Ricevuto!']);
+    expect(eventi(calls, 'lancio_scelta_pulsante_tap')).toHaveLength(0);
   });
 });
