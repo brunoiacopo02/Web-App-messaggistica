@@ -80,7 +80,10 @@ export async function sendTemplate(
   // del secondo account chiederebbe un template che quell'account non ha — 404,
   // e con UTILITY_ONLY=1 il presidio fallisce chiuso ancora prima.
   const sidTemplate = await templatePerMittente(input.contentSid, mittente);
-  await assertTemplateSendable(sidTemplate, mittente);
+  // Si passa anche il SID di partenza: la lista di sblocco parla la lingua
+  // dell'account storico, e un template gia' autorizzato li' non va ribloccato
+  // solo perche' sul secondo account ha un altro identificativo.
+  await assertTemplateSendable(sidTemplate, mittente, input.contentSid);
   const client = getClient(mittente);
   return withRetry(async () => {
     const msg = await client.messages.create({
@@ -151,9 +154,23 @@ export async function getTemplateCategory(contentSid: string, from?: string | nu
 /** Lancia se il template non è spedibile con la policy corrente. Fail-closed: se la
  * categoria non è verificabile non si spedisce, perché è esattamente la condizione in
  * cui l'incidente si ripete. */
-export async function assertTemplateSendable(contentSid: string, from?: string | null): Promise<void> {
+/**
+ * `sidOriginale` e' il SID come sta nelle env, PRIMA della traduzione
+ * sull'account del mittente. Serve alla lista di sblocco: `UTILITY_ONLY_ALLOW`
+ * contiene i SID dell'account storico, e sul secondo account lo stesso template
+ * ha un SID diverso. Senza questo parametro le aperture dal secondo numero
+ * venivano bloccate tutte — 32 su 32 al primo giro del riscaldamento — pur
+ * essendo gli stessi identici messaggi gia' sbloccati sull'altro account.
+ */
+export async function assertTemplateSendable(
+  contentSid: string,
+  from?: string | null,
+  sidOriginale?: string,
+): Promise<void> {
   if (process.env.UTILITY_ONLY !== '1') return;
-  if ((process.env.UTILITY_ONLY_ALLOW ?? '').split(',').map((s) => s.trim()).includes(contentSid)) return;
+  const sbloccati = (process.env.UTILITY_ONLY_ALLOW ?? '').split(',').map((s) => s.trim());
+  if (sbloccati.includes(contentSid)) return;
+  if (sidOriginale && sbloccati.includes(sidOriginale)) return;
   const cat = await getTemplateCategory(contentSid, from);
   if (cat !== 'UTILITY') {
     throw new Error(

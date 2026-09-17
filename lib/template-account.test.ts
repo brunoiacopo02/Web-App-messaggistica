@@ -111,3 +111,23 @@ describe('templatePerMittente', () => {
     expect(spia).not.toHaveBeenCalled();
   });
 });
+
+// La lista di sblocco `UTILITY_ONLY_ALLOW` parla la lingua dell'account storico.
+// Se non valesse anche per il SID di partenza, ogni apertura dal secondo numero
+// verrebbe bloccata pur essendo lo stesso messaggio gia' autorizzato altrove:
+// e' successo davvero, 32 aperture su 32 al primo giro del riscaldamento.
+describe('lista di sblocco fra i due account', () => {
+  it('sblocca anche quando in lista c e solo il SID di partenza', async () => {
+    const { assertTemplateSendable } = await import('./twilio');
+    const salva = { u: process.env.UTILITY_ONLY, a: process.env.UTILITY_ONLY_ALLOW };
+    process.env.UTILITY_ONLY = '1';
+    process.env.UTILITY_ONLY_ALLOW = 'HXoriginale';
+    try {
+      // `HXtradotto` non e' in lista, ma `HXoriginale` si: non deve lanciare.
+      await expect(assertTemplateSendable('HXtradotto', '+393522070047', 'HXoriginale')).resolves.toBeUndefined();
+    } finally {
+      if (salva.u === undefined) delete process.env.UTILITY_ONLY; else process.env.UTILITY_ONLY = salva.u;
+      if (salva.a === undefined) delete process.env.UTILITY_ONLY_ALLOW; else process.env.UTILITY_ONLY_ALLOW = salva.a;
+    }
+  });
+});
