@@ -116,6 +116,7 @@ export async function POST(req: NextRequest) {
       crmFunnel: p.funnel,
       lancio: p.lancio ?? null,
       riscaldamento: p.riscaldamento === true,
+      numeroBot: p.numeroBot === 2 ? 2 : 1,
     });
     await supabase.from('event_log').insert({
       type: 'bot_intake',

@@ -26,6 +26,14 @@ export interface BotIntakePayload {
    * al numero nuovo *solo* i lead del riscaldamento e' che il CRM lo dica.
    */
   riscaldamento?: boolean;
+  /**
+   * Quale dei due numeri del bot deve aprire la chat: 1 = storico, 2 = nuovo.
+   *
+   * Il CRM lo decide perche' e' lui che conosce il volume della giornata. Qui
+   * resta comunque un tetto suo (`lib/bot2-tetto.ts`): due controlli
+   * indipendenti, perche' bruciare il numero nuovo costa mesi.
+   */
+  numeroBot?: 1 | 2;
 }
 
 /** Come e' arrivato il lead del lancio: dalla lista AC 132 o dal pulsante della live. */
@@ -184,6 +192,9 @@ export function parseIntakePayload(
       // ordinario. Nel dubbio si sceglie il numero storico, che e' il flusso di
       // sempre e non tocca il numero in riscaldamento.
       riscaldamento: o.riscaldamento === true,
+      // Solo un 2 esplicito manda al numero nuovo. Qualunque altra cosa — 1,
+      // assente, illeggibile — vale il numero storico, che regge il volume.
+      numeroBot: o.numeroBot === 2 ? 2 : 1,
     },
   };
 }

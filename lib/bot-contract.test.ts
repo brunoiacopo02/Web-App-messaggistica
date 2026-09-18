@@ -166,6 +166,7 @@ describe('parseSendAgendaPayload', () => {
         previousLeadIds: [],
         lancio: null,
         riscaldamento: false,
+        numeroBot: 1,
         variant: { lavora: true, haFamiglia: false, offertaDelMese: false },
       },
     });

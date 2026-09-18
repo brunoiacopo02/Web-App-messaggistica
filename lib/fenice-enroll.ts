@@ -11,6 +11,7 @@ import { lancioBenvenutoText } from './lancio-fase';
 import { leggiTettoOrario, sottoTettoOrario } from './lancio-tetto';
 import { contaBenvenutiUltimaOra } from './lancio-db';
 import { mittenteDiConversazione, numeroPrimario, numeroSecondo } from './mittente';
+import { puoAprireSuBot2 } from './bot2-tetto';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -25,6 +26,8 @@ export type EnrollArgs = {
   lancio?: LancioIntake | null;
   /** Lead del riscaldamento: la chat nasce sul numero nuovo, non su quello sorteggiato. */
   riscaldamento?: boolean;
+  /** Quale numero del bot apre la chat: 1 = storico, 2 = nuovo. */
+  numeroBot?: 1 | 2;
 };
 
 export type EnrollResult = {
@@ -104,8 +107,27 @@ export async function enrollLeadIntoMario(
   // numero nuovo soltanto i lead del test.
   // Se il secondo numero non e' configurato si ricade sul sorteggio: meglio un
   // lead che parte dal numero di sempre che un lead che non parte.
+  // Il numero che apre la chat e' una scelta esplicita, non un sorteggio: il
+  // CRM dice quale dei due, e qui si verifica che il numero nuovo non abbia
+  // gia' fatto il suo giorno. Il tetto e' l'ultimo controllo prima di Twilio, e
+  // nel dubbio dice no (vedi lib/bot2-tetto.ts).
   const secondo = numeroSecondo();
-  const mittenteImposto = args.riscaldamento && secondo ? secondo : undefined;
+  const vuoleSecondo = args.numeroBot === 2 || args.riscaldamento === true;
+  let mittenteImposto: string | undefined = primario;
+  if (vuoleSecondo) {
+    const tetto = await puoAprireSuBot2(supabase as never, secondo);
+    if (tetto.consentito && secondo) {
+      mittenteImposto = secondo;
+    } else {
+      mittenteImposto = primario;
+      await supabase.from('event_log').insert({
+        type: 'bot2_tetto',
+        payload: { phone: args.phone, crmLeadId: args.crmLeadId ?? null, ...tetto } as never,
+        message: `[bot2] ${args.phone} doveva aprire sul numero nuovo ma non si puo' (${tetto.motivo}, ${tetto.oggi}/${tetto.tetto}): apre dal numero storico`,
+        level: tetto.motivo === 'tetto_raggiunto' ? 'info' : 'warn',
+      });
+    }
+  }
   const { conversationId, waNumber } = await findOrCreateLeadConversation(supabase, {
     phone: args.phone,
     firstName,
@@ -349,9 +371,15 @@ export async function enrollGdoLeadAsPostino(
     firstName: args.name ?? undefined,
     email: args.email ?? undefined,
   });
-  // Una chat riaperta resta sul suo numero: il video e i solleciti che seguono
-  // l'agenda partiranno dallo stesso (vedi drainMarioReplies e gdo-video-followups).
-  const from = mittenteDiConversazione({ wa_number: waNumber }) ?? primario;
+  // Le agende partono SEMPRE dal numero storico, per decisione del PO
+  // (18/09/2026). Il numero nuovo deve fare solo le aperture dei suoi lead, e
+  // ogni altra cosa che parte da li' e' volume che non gli vogliamo dare.
+  //
+  // Conseguenza da conoscere: per un lead la cui chat vive sul numero nuovo,
+  // l'agenda arrivera' da un altro nostro numero. E' l'unica eccezione alla
+  // regola "un lead, un numero", ed e' voluta.
+  void waNumber;
+  const from = primario;
 
   const res = await sendTemplateAndLog(
     supabase,
@@ -436,8 +464,27 @@ async function enrollLancio(
   // numero nuovo soltanto i lead del test.
   // Se il secondo numero non e' configurato si ricade sul sorteggio: meglio un
   // lead che parte dal numero di sempre che un lead che non parte.
+  // Il numero che apre la chat e' una scelta esplicita, non un sorteggio: il
+  // CRM dice quale dei due, e qui si verifica che il numero nuovo non abbia
+  // gia' fatto il suo giorno. Il tetto e' l'ultimo controllo prima di Twilio, e
+  // nel dubbio dice no (vedi lib/bot2-tetto.ts).
   const secondo = numeroSecondo();
-  const mittenteImposto = args.riscaldamento && secondo ? secondo : undefined;
+  const vuoleSecondo = args.numeroBot === 2 || args.riscaldamento === true;
+  let mittenteImposto: string | undefined = primario;
+  if (vuoleSecondo) {
+    const tetto = await puoAprireSuBot2(supabase as never, secondo);
+    if (tetto.consentito && secondo) {
+      mittenteImposto = secondo;
+    } else {
+      mittenteImposto = primario;
+      await supabase.from('event_log').insert({
+        type: 'bot2_tetto',
+        payload: { phone: args.phone, crmLeadId: args.crmLeadId ?? null, ...tetto } as never,
+        message: `[bot2] ${args.phone} doveva aprire sul numero nuovo ma non si puo' (${tetto.motivo}, ${tetto.oggi}/${tetto.tetto}): apre dal numero storico`,
+        level: tetto.motivo === 'tetto_raggiunto' ? 'info' : 'warn',
+      });
+    }
+  }
   const { conversationId, waNumber } = await findOrCreateLeadConversation(supabase, {
     phone: args.phone,
     firstName,

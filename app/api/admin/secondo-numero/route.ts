@@ -164,7 +164,10 @@ export async function POST(req: Request) {
     if (!segreto || req.headers.get('authorization') !== `Bearer ${segreto}`) {
         return new NextResponse('Unauthorized', { status: 401 });
     }
-    let corpo: { nome?: string; modo?: string; nomi?: string[] } = {};
+    let corpo: {
+        nome?: string; modo?: string; nomi?: string[];
+        testo?: string; categoria?: string; variabili?: Record<string, string>;
+    } = {};
     try { corpo = await req.json(); } catch { /* corpo vuoto = tutti */ }
 
     const { primo, secondo } = credenziali();
@@ -219,6 +222,38 @@ export async function POST(req: Request) {
             esiti.push({ nome: u.nome!, passo: `richiesta ${u.catPrimo ?? 'UTILITY'}`, http: appr.status, risposta: (await appr.text()).slice(0, 300) });
         }
         return NextResponse.json({ ok: true, tentati: mancanti.length, esiti });
+    }
+
+    // Crea sul secondo account un template con un TESTO dato e chiede una
+    // categoria. Serve quando Meta ha classificato MARKETING una copia identica:
+    // l'unica leva rimasta e' riscrivere il testo perche' suoni transazionale.
+    if (corpo.modo === 'crea-testo') {
+        if (!corpo.nome || !corpo.testo) {
+            return NextResponse.json({ ok: false, error: 'servono nome e testo' }, { status: 400 });
+        }
+        const creaRes = await fetch('https://content.twilio.com/v1/Content', {
+            method: 'POST',
+            headers: { Authorization: auth(secondo), 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                friendly_name: corpo.nome,
+                language: 'it',
+                variables: corpo.variabili ?? { '1': 'Nome' },
+                types: { 'twilio/text': { body: corpo.testo } },
+            }),
+        });
+        const creato = await creaRes.json().catch(() => null);
+        if (!creaRes.ok || !creato?.sid) {
+            return NextResponse.json({ ok: false, passo: 'creazione', http: creaRes.status, risposta: creato });
+        }
+        const appr = await fetch(`https://content.twilio.com/v1/Content/${creato.sid}/ApprovalRequests/whatsapp`, {
+            method: 'POST',
+            headers: { Authorization: auth(secondo), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: corpo.nome, category: corpo.categoria ?? 'UTILITY' }),
+        });
+        return NextResponse.json({
+            ok: appr.ok, sid: creato.sid, nome: corpo.nome,
+            http: appr.status, risposta: (await appr.text()).slice(0, 400),
+        });
     }
 
     const { fuori } = await disallineati(primo, secondo);
