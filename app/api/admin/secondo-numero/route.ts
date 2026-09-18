@@ -164,7 +164,7 @@ export async function POST(req: Request) {
     if (!segreto || req.headers.get('authorization') !== `Bearer ${segreto}`) {
         return new NextResponse('Unauthorized', { status: 401 });
     }
-    let corpo: { nome?: string; modo?: string } = {};
+    let corpo: { nome?: string; modo?: string; nomi?: string[] } = {};
     try { corpo = await req.json(); } catch { /* corpo vuoto = tutti */ }
 
     const { primo, secondo } = credenziali();
@@ -177,7 +177,18 @@ export async function POST(req: Request) {
     // sbagliata che Meta rifiuterebbe o, peggio, accoglierebbe.
     if (corpo.modo === 'crea-mancanti') {
         const usati = await templateUsati(primo, secondo);
-        const mancanti = usati.filter((u) => u.nome && !u.suSecondo);
+        // `nomi` e' obbligatorio: fra i mancanti c'e' anche roba di un'altra
+        // azienda (`agendaserenamente`), che sull'account Fenice non ci deve
+        // stare. Si crea solo quello che si e' guardato e scelto.
+        if (!Array.isArray(corpo.nomi) || corpo.nomi.length === 0) {
+            return NextResponse.json({
+                ok: false,
+                error: 'servono i nomi da creare',
+                mancanti: usati.filter((u) => u.nome && !u.suSecondo).map((u) => u.nome),
+            }, { status: 400 });
+        }
+        const scelti = new Set(corpo.nomi);
+        const mancanti = usati.filter((u) => u.nome && !u.suSecondo && scelti.has(u.nome));
         const esiti: Array<{ nome: string; passo: string; http: number; risposta: string }> = [];
         for (const u of mancanti) {
             const originale = await chiedi(`https://content.twilio.com/v1/Content/${u.sid}`, primo);
