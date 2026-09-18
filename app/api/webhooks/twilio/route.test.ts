@@ -28,6 +28,8 @@ const stato = {
   eventi: [] as Riga[],
   /** Ogni update su `conversations`, coi filtri con cui e' partito. */
   updates: [] as { valori: Riga; filtri: Record<string, unknown> }[],
+  /** Il numero su cui vive la chat, null = non ancora scritto. */
+  waNumberChat: null as string | null,
 };
 
 function from(table: string) {
@@ -58,7 +60,9 @@ function from(table: string) {
       if ('is:ai_owner' in s.filtri) return { data: stato.adottate, error: null };
       return { data: null, error: null };
     }
-    if (s.colonne.includes('unread_count')) return { data: { unread_count: 0 }, error: null };
+    if (s.colonne.includes('unread_count')) {
+      return { data: { unread_count: 0, wa_number: stato.waNumberChat }, error: null };
+    }
     // La rilettura di `marcaCongedo`/`marcaNotaRestituzione`: solo `lancio_info`.
     if (s.colonne.trim() === 'lancio_info') return { data: { lancio_info: stato.conv.lancio_info }, error: null };
     if (s.colonne.includes('ai_owner')) return { data: stato.conv, error: null };
@@ -124,11 +128,11 @@ import { drainMarioReplies } from '@/lib/fenice-autoreply';
 
 const FENICE = 'whatsapp:+390000000000';
 
-async function inbound(body: string) {
+async function inbound(body: string, to: string = FENICE) {
   const form = new URLSearchParams({
     MessageSid: 'SM' + Math.random().toString(36).slice(2),
     From: 'whatsapp:+393331234567',
-    To: FENICE,
+    To: to,
     Body: body,
   }).toString();
   return POST(new NextRequest('https://x/api/webhooks/twilio', {
@@ -155,6 +159,7 @@ beforeEach(() => {
   stato.primoInbound = { body: 'ciao', created_at: '2026-10-05T21:00:00Z' };
   stato.eventi = [];
   stato.updates = [];
+  stato.waNumberChat = null;
   vi.mocked(pushLeadEntrante).mockClear();
 });
 
@@ -311,5 +316,38 @@ describe('nota al CRM ogni ora per chat restituita (C8)', () => {
     await inbound('mi richiamate?');
     expect(sendCrmNota).toHaveBeenCalledTimes(1);
     expect(String(vi.mocked(sendCrmNota).mock.calls[0][2])).toContain('mi richiamate?');
+  });
+});
+
+
+// Il 18/09/2026 un invio e' partito per errore da +393520158061 (su Meta si
+// presenta come "SerenaMente") e le chat dei lead che hanno risposto ci sono
+// MIGRATE sopra: quelle persone si sono ritrovate tre nostri numeri nella
+// stessa conversazione. La regola del PO e' che un lead senta sempre lo stesso
+// numero, e vale piu' della finestra 24h.
+describe('il numero della chat non si sposta', () => {
+  const ALTRO = 'whatsapp:+393520158061';
+
+  it('chat senza numero: lo scrive alla prima risposta', async () => {
+    stato.waNumberChat = null;
+    await inbound('ciao');
+    const u = stato.updates.find((x) => 'wa_number' in x.valori);
+    expect(u?.valori.wa_number).toBe(FENICE);
+  });
+
+  it('risposta sullo STESSO numero: nessuna riscrittura, nessun allarme', async () => {
+    stato.waNumberChat = FENICE;
+    await inbound('ciao');
+    expect(stato.updates.find((x) => 'wa_number' in x.valori)).toBeUndefined();
+    expect(eventi('inbound_su_altro_numero')).toHaveLength(0);
+  });
+
+  it('risposta su un ALTRO numero: la chat NON si sposta, e resta scritto nel registro', async () => {
+    stato.waNumberChat = FENICE;
+    await inbound('ciao', ALTRO);
+    expect(stato.updates.find((x) => 'wa_number' in x.valori)).toBeUndefined();
+    const avviso = eventi('inbound_su_altro_numero');
+    expect(avviso).toHaveLength(1);
+    expect(avviso[0].payload).toMatchObject({ numeroChat: FENICE, numeroEntrante: ALTRO });
   });
 });

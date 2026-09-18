@@ -165,14 +165,41 @@ export async function POST(req: NextRequest) {
     // Bump conversazione: 2 query (V1 — sufficiente, no RPC)
     const now = new Date().toISOString();
     const { data: cur } = await supabase
-      .from('conversations').select('unread_count').eq('id', conversationId).single();
+      .from('conversations').select('unread_count, wa_number').eq('id', conversationId).single();
+
+    // Il numero della chat si scrive UNA VOLTA e non cambia piu'.
+    //
+    // Prima qui si riscriveva con qualunque numero a cui il lead avesse
+    // risposto. Il ragionamento non era sbagliato (la finestra 24h vale per
+    // coppia numero/utente), ma l'effetto si': il 18/09/2026 un nostro invio e'
+    // partito per errore da +393520158061 — il numero che su Meta si presenta
+    // come "SerenaMente" — e le tre chat dei lead che hanno risposto ci sono
+    // MIGRATE sopra. Da quel momento quelle persone avevano tre nostri numeri
+    // nella stessa conversazione.
+    //
+    // La regola e' quella del PO, ed e' piu' forte della finestra: un lead che
+    // riceve un messaggio da un numero deve continuare a sentire quel numero.
+    // Se arriva un inbound su un numero diverso NON si sposta la chat: si
+    // lascia dov'e' e lo si scrive nel registro, perche' vuol dire che qualcosa
+    // ha mandato da dove non doveva ed e' un difetto da vedere, non da
+    // assorbire in silenzio.
+    const numeroEntrante = params.To?.startsWith('whatsapp:') ? params.To : null;
+    const numeroChat = (cur as { wa_number?: string | null } | null)?.wa_number ?? null;
+    const daScrivere = numeroEntrante && !numeroChat ? { wa_number: numeroEntrante } : {};
+    if (numeroEntrante && numeroChat && numeroEntrante !== numeroChat) {
+      await supabase.from('event_log').insert({
+        type: 'inbound_su_altro_numero',
+        payload: { conversationId, numeroChat, numeroEntrante, phone } as never,
+        message: `[inbound] la chat ${conversationId} vive su ${numeroChat} ma il lead ha risposto a ${numeroEntrante}: la chat NON si sposta`,
+        level: 'warn',
+      });
+    }
+
     await supabase.from('conversations').update({
       last_message_at: now,
       last_inbound_at: now,
       unread_count: (cur?.unread_count ?? 0) + 1,
-      // Numero aziendale su cui il lead ci scrive: le risposte devono partire
-      // dallo stesso numero (la finestra 24h vale per coppia numero/utente).
-      ...(params.To?.startsWith('whatsapp:') ? { wa_number: params.To } : {}),
+      ...daScrivere,
     }).eq('id', conversationId);
 
     await supabase.from('event_log').insert({

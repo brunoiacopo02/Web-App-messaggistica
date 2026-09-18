@@ -94,6 +94,51 @@ async function disallineati(primo: Cred, secondo: Cred) {
     return { fuori, soloSulPrimo, totalePrimo: n1.size, totaleSecondo: n2.size };
 }
 
+/**
+ * Le env che contengono un SID di template. Elencate a mano e non dedotte:
+ * questo referto serve a scoprire cosa manca sul secondo account, e una env
+ * dimenticata qui vorrebbe dire un template che sembra a posto e non lo e'.
+ */
+const ENV_TEMPLATE = [
+    'AGENDA_GDO_TEMPLATE_SID', 'AGENDA_TEMPLATE_SID', 'FENICE_OPENING_TEMPLATE_SID',
+    'LANCIO_FOLLOWUP_TEMPLATE_SID', 'LANCIO_WELCOME_TEMPLATE_SID', 'LANCIO_ZOOM_TEMPLATE_SID',
+    'MARTA_REENGAGE_TEMPLATE_SID', 'NR1_TEMPLATE_SID', 'NR3_TEMPLATE_SID',
+    'REMINDER_24H_NOVIDEO_TEMPLATE_SID', 'REMINDER_24H_TEMPLATE_SID', 'REMINDER_3H_TEMPLATE_SID',
+    'SEQ_TEMPLATE_SID_1', 'SEQ_TEMPLATE_SID_2', 'SEQ_TEMPLATE_SID_3', 'SEQ_TEMPLATE_SID_4',
+    'VIDEO_TEMPLATE_SID',
+] as const;
+
+type Usato = {
+    env: string; sid: string; nome: string | null;
+    catPrimo: string | null; suSecondo: string | null; catSecondo: string | null;
+};
+
+/**
+ * Per ogni template che il codice usa davvero: come sta sull'account storico e
+ * come sta su quello nuovo. Un template che il bot manda e che di la' non
+ * esiste e' un messaggio che dal numero nuovo non puo' partire.
+ */
+async function templateUsati(primo: Cred, secondo: Cred): Promise<Usato[]> {
+    const n1 = await templatePerNome(primo);
+    const n2 = await templatePerNome(secondo);
+    const perSid = new Map([...n1].map(([nome, sid]) => [sid, nome]));
+
+    const out: Usato[] = [];
+    for (const env of ENV_TEMPLATE) {
+        const sid = process.env[env]?.trim();
+        if (!sid) continue;
+        const nome = perSid.get(sid) ?? null;
+        const sidSecondo = nome ? n2.get(nome) ?? null : null;
+        out.push({
+            env, sid, nome,
+            catPrimo: nome ? await categoria(sid, primo) : null,
+            suSecondo: sidSecondo,
+            catSecondo: sidSecondo ? await categoria(sidSecondo, secondo) : null,
+        });
+    }
+    return out;
+}
+
 export async function GET(req: Request) {
     const segreto = process.env.ADMIN_TOOLS_SECRET;
     if (!segreto || req.headers.get('authorization') !== `Bearer ${segreto}`) {
@@ -102,6 +147,11 @@ export async function GET(req: Request) {
     const { primo, secondo } = credenziali();
     if (!primo) return NextResponse.json({ ok: false, error: 'credenziali account storico assenti' }, { status: 500 });
     if (!secondo) return NextResponse.json({ ok: false, error: 'secondo account non configurato' }, { status: 500 });
+
+    const modo = new URL(req.url).searchParams.get('modo');
+    if (modo === 'usati') {
+        return NextResponse.json({ ok: true, usati: await templateUsati(primo, secondo) });
+    }
 
     const [qualitaPrimo, qualitaSecondo, cat] = await Promise.all([
         mittenti(primo), mittenti(secondo), disallineati(primo, secondo),
@@ -119,6 +169,46 @@ export async function POST(req: Request) {
 
     const { primo, secondo } = credenziali();
     if (!primo || !secondo) return NextResponse.json({ ok: false, error: 'account non configurati' }, { status: 500 });
+
+    // Crea sul secondo account i template che il codice usa e che di la' non
+    // esistono. La categoria richiesta e' QUELLA DELL'ORIGINALE, non UTILITY a
+    // prescindere: le aperture sono MARKETING anche sull'account storico, e
+    // chiedere per loro una categoria che non hanno sarebbe una richiesta
+    // sbagliata che Meta rifiuterebbe o, peggio, accoglierebbe.
+    if (corpo.modo === 'crea-mancanti') {
+        const usati = await templateUsati(primo, secondo);
+        const mancanti = usati.filter((u) => u.nome && !u.suSecondo);
+        const esiti: Array<{ nome: string; passo: string; http: number; risposta: string }> = [];
+        for (const u of mancanti) {
+            const originale = await chiedi(`https://content.twilio.com/v1/Content/${u.sid}`, primo);
+            if (!originale?.types) {
+                esiti.push({ nome: u.nome!, passo: 'lettura originale', http: 0, risposta: 'non leggibile' });
+                continue;
+            }
+            const creaRes = await fetch('https://content.twilio.com/v1/Content', {
+                method: 'POST',
+                headers: { Authorization: auth(secondo), 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    friendly_name: u.nome,
+                    language: originale.language ?? 'it',
+                    variables: originale.variables ?? {},
+                    types: originale.types,
+                }),
+            });
+            const creato = await creaRes.json().catch(() => null);
+            if (!creaRes.ok || !creato?.sid) {
+                esiti.push({ nome: u.nome!, passo: 'creazione', http: creaRes.status, risposta: JSON.stringify(creato).slice(0, 300) });
+                continue;
+            }
+            const appr = await fetch(`https://content.twilio.com/v1/Content/${creato.sid}/ApprovalRequests/whatsapp`, {
+                method: 'POST',
+                headers: { Authorization: auth(secondo), 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: u.nome, category: u.catPrimo ?? 'UTILITY' }),
+            });
+            esiti.push({ nome: u.nome!, passo: `richiesta ${u.catPrimo ?? 'UTILITY'}`, http: appr.status, risposta: (await appr.text()).slice(0, 300) });
+        }
+        return NextResponse.json({ ok: true, tentati: mancanti.length, esiti });
+    }
 
     const { fuori } = await disallineati(primo, secondo);
     const daFare = corpo.nome ? fuori.filter((f) => f.nome === corpo.nome) : fuori;
