@@ -5,7 +5,7 @@ import {
   isLancioFase, lancioInCorso, decideLancioTurno, contaScambiDomande, lancioFaseLabel, lancioBenvenutoText,
   inboundDelLotto, ultimoTestoDelLotto, haCongedo, pulsanteRiportaInPostPitch, pulsanteScriveFase,
   pulsanteRiapreChat, serveNotaRestituzione, NOTA_RESTITUZIONE_OGNI_MS, lancioRestituito,
-  tagliaRigheDalLancio,
+  tagliaRigheDalLancio, lancioRipartePerRiarruolamento, LANCIO_FASE_RIPARTE_AL_RIARRUOLAMENTO,
 } from './lancio-fase';
 
 describe('costanti della spec §3.2 / §5.2', () => {
@@ -354,5 +354,33 @@ describe('lancioRestituito — il veto al re-drive di bot-followups (C8, difesa 
     const c = { lancio_slug: LANCIO_SLUG, lancio_fase: 'restituito' };
     expect(lancioInCorso(c)).toBe(false);
     expect(lancioRestituito(c)).toBe(true);
+  });
+});
+
+describe('lancioRipartePerRiarruolamento — chi riparte e chi si preserva', () => {
+  // Decisione del PO (19/09/2026): "se uno dice no e poi si registra per il lancio deve
+  // ripartire". Iscriversi di nuovo e' un atto nuovo di interesse e vale piu' del no.
+  it('le fasi terminali ripartono', () => {
+    for (const fase of LANCIO_FASI_TERMINALI) expect(lancioRipartePerRiarruolamento(fase)).toBe(true);
+  });
+
+  it("chi e' a meta' percorso si preserva: e' il bug del 19/09", () => {
+    for (const fase of LANCIO_FASI.filter((f) => !LANCIO_FASI_TERMINALI.includes(f))) {
+      expect(lancioRipartePerRiarruolamento(fase)).toBe(false);
+    }
+  });
+
+  // Riga anomala: con lo slug scritto e la fase illeggibile non c'e' nessun avanzamento
+  // da proteggere, e lasciarla com'e' vorrebbe dire una chat fuori da tutti i cron.
+  it('fase nulla o sconosciuta riparte', () => {
+    expect(lancioRipartePerRiarruolamento(null)).toBe(true);
+    expect(lancioRipartePerRiarruolamento(undefined)).toBe(true);
+    expect(lancioRipartePerRiarruolamento('fase_che_non_esiste')).toBe(true);
+  });
+
+  // La mappa e' esaustiva per costruzione (Record<LancioFase, boolean>): questo test e'
+  // la rete se qualcuno la allarga a `Partial` per far compilare una fase nuova.
+  it('ogni fase del lancio ha una voce decisa', () => {
+    for (const fase of LANCIO_FASI) expect(typeof LANCIO_FASE_RIPARTE_AL_RIARRUOLAMENTO[fase]).toBe('boolean');
   });
 });

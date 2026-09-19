@@ -7,7 +7,7 @@ import { firstNameOf, templateName } from './name';
 import type { GdoVariant, LancioIntake } from './bot-contract';
 import { gdoAgendaText, videoLinkForVariant } from './gdo-agenda';
 import { getLancioSettings } from './lancio-settings';
-import { lancioBenvenutoText } from './lancio-fase';
+import { lancioBenvenutoText, lancioRipartePerRiarruolamento } from './lancio-fase';
 import { leggiTettoOrario, sottoTettoOrario } from './lancio-tetto';
 import { contaBenvenutiUltimaOra } from './lancio-db';
 import { mittenteDiConversazione, numeroPrimario, numeroSecondo } from './mittente';
@@ -441,10 +441,13 @@ export async function enrollGdoLeadAsPostino(
  * - la guardia anti-doppione viene PRIMA della finestra: una chat gia' viva non riceve
  *   un secondo benvenuto nemmeno differito, ma entra comunque nel flusso lancio
  *   (`lancio_*` valorizzati) e la cronologia non si azzera;
- * - un ri-arruolamento su una chat GIA' in questo lancio (stesso `lancio_slug`) non ne
- *   tocca l'avanzamento: fase, esito e timbri restano dove sono, si aggiorna solo
- *   l'anagrafica, e resta un `lancio_riarruolamento_ignorato` in `event_log`. Chi entra
- *   adesso — nessun lancio, o un lancio diverso — viene inizializzato come sempre;
+ * - un ri-arruolamento su una chat GIA' in questo lancio (stesso `lancio_slug`) e a meta'
+ *   percorso non ne tocca l'avanzamento: fase, esito e timbri restano dove sono, si
+ *   aggiorna solo l'anagrafica, e resta un `lancio_riarruolamento_ignorato` in
+ *   `event_log`. Se invece la fase e' terminale (`chiuso`, `restituito`) la chat riparte
+ *   da capo — iscriversi di nuovo e' un atto nuovo di interesse — con l'evento
+ *   `lancio_riarruolamento_ripartito`. Chi entra adesso, o arriva da un lancio diverso,
+ *   viene inizializzato come sempre;
  * - fuori dalla fascia 07-23, con `lancio_attivo` spento, o oltre il tetto orario dei
  *   benvenuti (`LANCIO_WELCOME_MAX_PER_HOUR`, spec §11.3), il lead e' preso in carico
  *   senza outbound: lo riprende il cron `lancio-aperture`, NON `sequence-touches`.
@@ -526,11 +529,17 @@ async function enrollLancio(
   //    e' giusto che riparta da capo; lo stesso varrebbe per una chat di un lancio
   //    PASSATO che entra in uno nuovo — per questo il confronto e' sull'uguaglianza
   //    dello slug e non su "ha gia' un lancio".
-  //  - stesso `lancio_slug` = ci e' gia' dentro, e riscriverle la fase la riporterebbe
-  //    in coda: uno che la sera della live ha bloccato il posto tornerebbe ad 'attesa',
-  //    riceverebbe di nuovo il benvenuto e il 7 ottobre finirebbe fra i restituiti come
-  //    "non ha mai risposto". Un ri-arruolamento capita per poco (sync rifatto, intake
-  //    ritentato, doppio evento da ActiveCampaign) e non deve cancellare niente.
+  //  - stesso `lancio_slug` e fase NON terminale = ci e' gia' dentro a meta' percorso, e
+  //    riscriverle la fase la riporterebbe in coda: uno che la sera della live ha
+  //    bloccato il posto tornerebbe ad 'attesa', riceverebbe di nuovo il benvenuto e il 7
+  //    ottobre finirebbe fra i restituiti come "non ha mai risposto". Un ri-arruolamento
+  //    capita per poco (sync rifatto, intake ritentato, doppio evento da ActiveCampaign)
+  //    e non deve cancellare niente;
+  //  - stesso `lancio_slug` ma fase TERMINALE (`chiuso`, `restituito`) = riparte da capo.
+  //    Iscriversi di nuovo al lancio e' un atto nuovo di interesse — la persona e'
+  //    tornata sulla pagina e ha rilasciato il numero — e vale piu' del no di prima
+  //    (decisione del PO, 19/09). Il criterio sta in `lancioRipartePerRiarruolamento`,
+  //    su una mappa esaustiva delle fasi: vedi lib/lancio-fase.ts.
   const { data: rigaPrima, error: erroreStato } = await supabase
     .from('conversations')
     .select('lancio_slug, lancio_fase, lancio_benvenuto_at')
@@ -538,9 +547,12 @@ async function enrollLancio(
     .maybeSingle();
   const stato = rigaPrima as
     { lancio_slug?: string | null; lancio_fase?: string | null; lancio_benvenuto_at?: string | null } | null;
+  const fasePrima = stato?.lancio_fase ?? null;
   // Lettura fallita = non si sa: si ricade sul comportamento di sempre (inizializza), ma
   // con una riga `warn`, perche' e' l'unico caso in cui il reset puo' ancora succedere.
-  const giaInQuestoLancio = !erroreStato && (stato?.lancio_slug ?? null) === args.lancio.slug;
+  const stessoLancio = !erroreStato && (stato?.lancio_slug ?? null) === args.lancio.slug;
+  const ripartenza = stessoLancio && lancioRipartePerRiarruolamento(fasePrima);
+  const giaInQuestoLancio = stessoLancio && !ripartenza;
 
   const lancioFields = {
     lancio_slug: args.lancio.slug,
@@ -557,16 +569,33 @@ async function enrollLancio(
       bot_outcome: null,
       bot_outcome_at: null,
       bot_scheduled_at: null,
+      // Il timbro del giro precedente va via con la fase, o la ripartenza resta finta: il
+      // cron `lancio-aperture` pesca `lancio_fase='attesa' AND lancio_benvenuto_at IS
+      // NULL`, e con il timbro vecchio la chat tornerebbe in 'attesa' ma muta. Vale
+      // uguale per chi arriva da un lancio diverso: quel timbro e' di un'altra storia, e
+      // lasciarlo sarebbe anche un'ancora sbagliata per il follow-up. Su una riga appena
+      // nata e' gia' null. Se il benvenuto parte da qui, poche righe piu' sotto lo
+      // ritimbra ad adesso.
+      lancio_benvenuto_at: null,
     }),
   };
   const base = { phone: args.phone, conversationId, crmLeadId: args.crmLeadId ?? null, slug: args.lancio.slug, ingresso: args.lancio.ingresso };
 
-  // Quante volte succede davvero oggi non lo sa nessuno: da qui in poi si conta.
+  // Quante volte succede davvero oggi non lo sa nessuno: da qui in poi si conta. E si
+  // contano separate, perche' sono due storie diverse: "ho protetto uno a meta' strada"
+  // e "ho fatto ripartire uno che aveva chiuso".
   if (giaInQuestoLancio) {
     await supabase.from('event_log').insert({
       type: 'lancio_riarruolamento_ignorato',
-      payload: { ...base, fasePreservata: stato?.lancio_fase ?? null, benvenutoAt: stato?.lancio_benvenuto_at ?? null } as never,
-      message: `[lancio] conv ${conversationId} e' gia' in ${args.lancio.slug} (fase ${stato?.lancio_fase ?? 'nulla'}): il ri-arruolamento del lead ${args.crmLeadId ?? args.phone} (ingresso ${args.lancio.ingresso}) non tocca fase ne' esito`,
+      payload: { ...base, fasePreservata: fasePrima, benvenutoAt: stato?.lancio_benvenuto_at ?? null } as never,
+      message: `[lancio] conv ${conversationId} e' gia' in ${args.lancio.slug} (fase ${fasePrima ?? 'nulla'}): il ri-arruolamento del lead ${args.crmLeadId ?? args.phone} (ingresso ${args.lancio.ingresso}) non tocca fase ne' esito`,
+      level: 'info',
+    });
+  } else if (ripartenza) {
+    await supabase.from('event_log').insert({
+      type: 'lancio_riarruolamento_ripartito',
+      payload: { ...base, fasePrecedente: fasePrima, benvenutoAtPrecedente: stato?.lancio_benvenuto_at ?? null } as never,
+      message: `[lancio] conv ${conversationId} era ${fasePrima ?? 'senza fase'} in ${args.lancio.slug} e si e' riscritta: il lead ${args.crmLeadId ?? args.phone} (ingresso ${args.lancio.ingresso}) riparte da 'attesa'`,
       level: 'info',
     });
   } else if (erroreStato) {

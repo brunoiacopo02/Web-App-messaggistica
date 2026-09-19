@@ -13,6 +13,7 @@ import { apreSopraChatViva, enrollGdoLeadAsPostino, enrollLeadIntoMario } from '
 import { findOrCreateLeadConversation, sendTemplateAndLog } from './messaging';
 import { getLancioSettings } from './lancio-settings';
 import { lancioBenvenutoText } from './lancio-fase';
+import { decideAperturaLancio, riassumiOutboundLancio } from './lancio-aperture';
 import { openingBody } from './persona';
 
 /** Fake del client Supabase: traccia update su conversations ed insert su event_log.
@@ -724,14 +725,14 @@ describe('enrollLeadIntoMario — ramo lancio (B1)', () => {
     vi.mocked(sendTemplateAndLog).mockResolvedValueOnce({ ok: false, error: 'twilio boom' });
     const { supabase, calls } = makeSupabase();
     await enrollLeadIntoMario(supabase, ARGS);
-    expect(calls.updates[0].lancio_benvenuto_at).toBeUndefined();
+    expect(calls.updates[0].lancio_benvenuto_at).toBeNull(); // null, non assente: all'ingresso il timbro del giro precedente si azzera
   });
 
   it('differito (lancio spento): nessun timbro, il cron lo prende in carico', async () => {
     vi.mocked(getLancioSettings).mockResolvedValueOnce({ attivo: false } as never);
     const { supabase, calls } = makeSupabase();
     await enrollLeadIntoMario(supabase, ARGS);
-    expect(calls.updates[0].lancio_benvenuto_at).toBeUndefined();
+    expect(calls.updates[0].lancio_benvenuto_at).toBeNull(); // null, non assente: all'ingresso il timbro del giro precedente si azzera
   });
 
   it('con lancio_attivo spento prende in carico ma NON manda: differita, la riprende il cron lancio', async () => {
@@ -881,6 +882,132 @@ describe('enrollLeadIntoMario — ramo lancio (B1)', () => {
       expect(calls.events.find((e) => e.type === 'lancio_riarruolamento_ignorato').payload.fasePreservata).toBe('link_inviato');
     });
 
+    // Decisione del PO (19/09): "se uno dice no e poi si registra per il lancio deve
+    // ripartire". Iscriversi di nuovo e' un atto nuovo di interesse — e' tornato sulla
+    // pagina e ha rilasciato il numero — e vale piu' del no di prima.
+    describe('fase terminale: riparte da capo', () => {
+      const CHIUSO = { lancio_slug: 'webdev-2026-10', lancio_fase: 'chiuso', lancio_benvenuto_at: '2026-09-15T08:00:00.000Z' };
+      const RESTITUITO = { lancio_slug: 'webdev-2026-10', lancio_fase: 'restituito', lancio_benvenuto_at: '2026-09-15T08:00:00.000Z' };
+
+      it("chat 'chiuso': torna ad attesa, con ingresso ed esito riscritti", async () => {
+        const { supabase, calls } = makeSupabase(0, false, { lancioRow: CHIUSO });
+        await enrollLeadIntoMario(supabase, ARGS);
+        expect(calls.updates[0]).toMatchObject({
+          lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa', lancio_ingresso: 'lista',
+          bot_outcome: null, bot_outcome_at: null, bot_scheduled_at: null,
+        });
+        expect(calls.events.some((e) => e.type === 'lancio_riarruolamento_ignorato')).toBe(false);
+      });
+
+      it("chat 'restituito': riparte anche lei, il lead e' tornato da noi", async () => {
+        const { supabase, calls } = makeSupabase(0, false, { lancioRow: RESTITUITO });
+        await enrollLeadIntoMario(supabase, ARGS);
+        expect(calls.updates[0]).toMatchObject({ lancio_fase: 'attesa', lancio_ingresso: 'lista' });
+      });
+
+      it("evento lancio_riarruolamento_ripartito con la fase da cui e' ripartito", async () => {
+        const { supabase, calls } = makeSupabase(0, false, { lancioRow: CHIUSO });
+        await enrollLeadIntoMario(supabase, ARGS);
+        const evt = calls.events.find((e) => e.type === 'lancio_riarruolamento_ripartito');
+        expect(evt).toBeTruthy();
+        expect(evt.level).toBe('info');
+        expect(evt.payload).toMatchObject({
+          conversationId: 42, crmLeadId: 'crm-L1', slug: 'webdev-2026-10', ingresso: 'lista',
+          fasePrecedente: 'chiuso', benvenutoAtPrecedente: '2026-09-15T08:00:00.000Z',
+        });
+        // Le due storie restano distinte nel log: protetto a meta' strada ≠ ripartito.
+        expect(calls.events.some((e) => e.type === 'lancio_riarruolamento_ignorato')).toBe(false);
+      });
+
+      // Senza questo azzeramento la ripartenza e' finta: `lancio-aperture` pesca
+      // `lancio_fase='attesa' AND lancio_benvenuto_at IS NULL`, e col timbro vecchio la
+      // chat tornerebbe in 'attesa' ma muta.
+      it('il benvenuto differito riparte: il timbro del giro precedente si azzera', async () => {
+        vi.mocked(getLancioSettings).mockResolvedValueOnce({ attivo: false } as never);
+        const { supabase, calls } = makeSupabase(0, false, { lancioRow: CHIUSO });
+        const res = await enrollLeadIntoMario(supabase, ARGS);
+        expect(res.deferred).toBe(true);
+        expect(calls.updates[0]).toMatchObject({ lancio_fase: 'attesa', lancio_benvenuto_at: null });
+      });
+
+      it('se invece il benvenuto parte subito, il timbro e di adesso', async () => {
+        const { supabase, calls } = makeSupabase(0, false, { lancioRow: CHIUSO });
+        await enrollLeadIntoMario(supabase, ARGS);
+        expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+        expect(calls.updates[0].lancio_benvenuto_at).toEqual(expect.any(String));
+      });
+
+      // Il giro completo, con la decisione VERA del cron: chat chiusa → ri-arruolata e
+      // differita → la riga che ne esce e' candidata per `lancio-aperture` (fase attesa,
+      // timbro nullo, ai_status active) e il cron la manda.
+      it("giro completo: dopo la ripartenza il cron delle aperture la manda", async () => {
+        vi.mocked(getLancioSettings).mockResolvedValueOnce({ attivo: false } as never);
+        const { supabase, calls } = makeSupabase(0, false, { lancioRow: CHIUSO });
+        await enrollLeadIntoMario(supabase, ARGS);
+        const riga = calls.updates[0];
+        // I filtri della query dei candidati, uno per uno.
+        expect(riga.lancio_slug).toBe('webdev-2026-10');
+        expect(riga.lancio_fase).toBe('attesa');
+        expect(riga.lancio_benvenuto_at).toBeNull();
+        expect(riga.ai_status).toBe('active');
+        // E la decisione del cron sulla riga cosi' com'e'.
+        expect(decideAperturaLancio({
+          nowMs: Date.now(),
+          attivo: true,
+          fase: riga.lancio_fase,
+          benvenutoAt: riga.lancio_benvenuto_at,
+          benvenutiRiusciti: 0, benvenutiFalliti: 0,
+          ultimoOutboundMs: null, ultimoInboundMs: null,
+        })).toBe('invia');
+      });
+
+      // Il pezzo che rendeva finta la ripartenza differita: `decideAperturaLancio` conta
+      // i benvenuti riusciti, e chi riparte da `chiuso` quel benvenuto l'aveva avuto.
+      // Adesso il conteggio parte dall'ingresso nel giro corrente (`lancio_intake` piu'
+      // recente, che questo stesso arruolamento ha appena riscritto), quindi il benvenuto
+      // della vita precedente non blocca piu' niente. Qui si monta il giro vero: le
+      // righe in uscita della chat + l'ancora, e la decisione del cron.
+      it('il benvenuto della vita precedente non blocca la ripartenza differita', async () => {
+        vi.mocked(getLancioSettings).mockResolvedValueOnce({ attivo: false } as never);
+        const { supabase, calls } = makeSupabase(0, false, { lancioRow: CHIUSO });
+        await enrollLeadIntoMario(supabase, ARGS);
+        const riga = calls.updates[0];
+        const ingressoMs = Date.now(); // l'evento lancio_intake di questo arruolamento
+        const riassunto = riassumiOutboundLancio(
+          // Il benvenuto della vita precedente, due settimane prima di questo intake.
+          [{ template_sid: 'HX_LANCIO_WELCOME', twilio_status: 'delivered', twilio_error_code: null, created_at: new Date(ingressoMs - 14 * 24 * 3600_000).toISOString() }],
+          'HX_LANCIO_WELCOME',
+          ingressoMs,
+        );
+        expect(riassunto.benvenutiRiusciti).toBe(0);
+        expect(decideAperturaLancio({
+          nowMs: ingressoMs + 24 * 3600_000, // il giorno dopo, stessa ora: in fascia e fuori dalle 12h
+          attivo: true,
+          fase: riga.lancio_fase,
+          benvenutoAt: riga.lancio_benvenuto_at,
+          ...riassunto,
+          ultimoInboundMs: null,
+        })).toBe('invia');
+      });
+
+      // E la rete non si e' allentata: su una chat normale il benvenuto viene DOPO
+      // l'ingresso, quindi conta e il cron continua a saltarla.
+      it('su una chat normale il benvenuto gia\\u2019 partito continua a fermare il cron', () => {
+        const ingressoMs = Date.parse('2026-09-19T12:00:00Z');
+        const riassunto = riassumiOutboundLancio(
+          [{ template_sid: 'HX_LANCIO_WELCOME', twilio_status: 'delivered', twilio_error_code: null, created_at: '2026-09-19T12:01:00Z' }],
+          'HX_LANCIO_WELCOME',
+          ingressoMs,
+        );
+        expect(riassunto.benvenutiRiusciti).toBe(1);
+        expect(decideAperturaLancio({
+          nowMs: ingressoMs + 13 * 3600_000,
+          attivo: true, fase: 'attesa', benvenutoAt: null,
+          ...riassunto, ultimoInboundMs: null,
+        })).toBe('salta');
+      });
+    });
+
     // "Non lo so" non e' "non c'e'": con la rilettura fallita si ricade sul
     // comportamento di sempre, ma la riga warn dice che il reset e' ancora possibile.
     it('stato del lancio illeggibile: si inizializza come sempre, con un warn', async () => {
@@ -936,7 +1063,7 @@ describe('enrollLeadIntoMario — ramo lancio (B1)', () => {
         ai_owner: 'mario', ai_status: 'active', crm_lead_id: 'crm-L1',
         lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa', lancio_ingresso: 'lista',
       });
-      expect(calls.updates[0].lancio_benvenuto_at).toBeUndefined();
+      expect(calls.updates[0].lancio_benvenuto_at).toBeNull(); // null, non assente: all'ingresso il timbro del giro precedente si azzera
       const evt = calls.events.find((e) => e.type === 'lancio_intake');
       expect(evt.payload).toMatchObject({ differita: 'tetto_orario', inviatiUltimaOra: 200, cap: 200 });
       expect(calls.events.some((e) => e.type === 'send_error')).toBe(false);
@@ -965,7 +1092,7 @@ describe('enrollLeadIntoMario — ramo lancio (B1)', () => {
 
       expect(res).toMatchObject({ ok: true, conversationId: 42, deferred: true });
       expect(sendTemplateAndLog).not.toHaveBeenCalled();
-      expect(calls.updates[0].lancio_benvenuto_at).toBeUndefined();
+      expect(calls.updates[0].lancio_benvenuto_at).toBeNull(); // null, non assente: all'ingresso il timbro del giro precedente si azzera
       expect(calls.updates[0]).toMatchObject({ lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa' });
       expect(calls.events.find((e) => e.type === 'lancio_intake').payload)
         .toMatchObject({ differita: 'tetto_orario', motivo: 'conteggio_fallito', cap: 200 });

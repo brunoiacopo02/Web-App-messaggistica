@@ -28,6 +28,11 @@ export const GAP_MIN_INBOUND_MS = 7 * 24 * 60 * 60 * 1000;
  *  numero, e' un rinvio: non consuma il budget dei ritentativi. */
 export const CODICE_FREQUENCY_CAP = 63049;
 
+/** Scarto di tolleranza sull'ancora dell'ingresso nel lancio: l'intake manda il
+ *  benvenuto e SOLO DOPO scrive il proprio evento, quindi fra i due c'e' un attimo. E'
+ *  lo stesso buffer 5' dei cron che tagliano la cronologia su `ai_started_at`. */
+export const BUFFER_ANCORA_MS = 5 * 60_000;
+
 export type AperturaLancioAzione = 'invia' | 'attendi' | 'salta';
 
 /** Una riga `messages` in uscita, come serve qui. */
@@ -62,19 +67,45 @@ export type RiassuntoOutbound = {
 export function riassumiOutboundLancio(
   rows: RigaOutbound[],
   welcomeSid: string | null,
+  /**
+   * Quando questa chat e' entrata nel giro corrente del lancio (`lancio_intake` piu'
+   * recente, vedi `leggiIngressiLancioAt`). I benvenuti si contano solo da li' in avanti.
+   *
+   * Su una chat normale non cambia niente: l'ingresso viene prima del benvenuto, quindi
+   * la rete anti-doppione resta quella di sempre — nessun allentamento su un numero a
+   * qualita' LOW. Su una RIPARTENZA (chi aveva chiuso e si e' riscritto al lancio)
+   * l'ingresso e' nuovo, quindi i benvenuti della vita precedente smettono di contare: e'
+   * l'unico modo perche' il benvenuto riparta davvero anche quando l'intake lo differisce
+   * — di notte, a lancio spento o oltre il tetto orario. Senza, la ripartenza e' una chat
+   * muta con l'etichetta cambiata.
+   *
+   * `null` (nessun evento di ingresso: chi e' entrato dal pulsante della live, o le righe
+   * piu' vecchie) = si conta su tutta la cronologia, cioe' il comportamento di sempre.
+   */
+  ingressoMs: number | null = null,
 ): RiassuntoOutbound {
+  // L'intake manda il benvenuto PRIMA di scrivere il proprio evento, quindi il benvenuto
+  // di questo stesso giro puo' avere un `created_at` di poco precedente all'ancora. Senza
+  // lo scarto non verrebbe contato, e la rete dipenderebbe dall'ordine di due insert. E'
+  // lo stesso buffer 5' che usano sequence-touches, bot-followups e gdo-video-followups.
+  const taglio = ingressoMs === null ? null : ingressoMs - BUFFER_ANCORA_MS;
   let benvenutiRiusciti = 0;
   let benvenutiFalliti = 0;
   let ultimoOutboundMs: number | null = null;
   for (const r of rows) {
-    if (welcomeSid && r.template_sid === welcomeSid) {
+    const at = r.created_at ? Date.parse(r.created_at) : NaN;
+    // Data illeggibile: la riga conta comunque. Si sbaglia dalla parte del non mandare.
+    const dentroIlGiro = taglio === null || Number.isNaN(at) || at >= taglio;
+    if (welcomeSid && r.template_sid === welcomeSid && dentroIlGiro) {
       if (STATI_FALLITI.has((r.twilio_status ?? '').toLowerCase())) {
         // Il frequency cap non e' un tentativo bruciato: la riga resta (la scrive
         // l'intake) e pesa sulla guardia 12h, ma il budget non la conta.
         if (r.twilio_error_code !== CODICE_FREQUENCY_CAP) benvenutiFalliti++;
       } else benvenutiRiusciti++;
     }
-    const at = r.created_at ? Date.parse(r.created_at) : NaN;
+    // Il silenzio outbound NON si taglia sull'ingresso: serve a non scrivere sopra un
+    // messaggio recente, e un messaggio recente disturba anche se e' della vita
+    // precedente. Le 12 ore valgono su tutta la cronologia, come prima.
     if (!Number.isNaN(at) && (ultimoOutboundMs === null || at > ultimoOutboundMs)) {
       ultimoOutboundMs = at;
     }

@@ -5,6 +5,7 @@ import {
   MAX_TENTATIVI_BENVENUTO,
   GAP_MIN_OUTBOUND_MS,
   GAP_MIN_INBOUND_MS,
+  BUFFER_ANCORA_MS,
 } from './lancio-aperture';
 
 const GIORNO = Date.parse('2026-09-20T10:00:00Z'); // 12:00 Roma
@@ -159,5 +160,73 @@ describe('riassumiOutboundLancio', () => {
       { template_sid: null, twilio_status: 'sent', created_at: null, twilio_error_code: null },
     ], WELCOME);
     expect(r.ultimoOutboundMs).toBe(Date.parse('2026-09-20T06:00:00Z'));
+  });
+});
+
+describe("riassumiOutboundLancio — l'ancora dell'ingresso nel lancio", () => {
+  const riga = (sid: string | null, status: string | null, at: string, code: number | null = null) => ({
+    template_sid: sid, twilio_status: status, created_at: at, twilio_error_code: code,
+  });
+  const VITA_PRECEDENTE = '2026-09-15T08:00:00Z';
+  const INGRESSO = Date.parse('2026-09-19T12:49:00Z');
+
+  // La protezione non si allenta: su una chat normale l'ingresso viene PRIMA del
+  // benvenuto, quindi il conteggio e' identico a quello di sempre.
+  it('chat normale: il benvenuto e’ dopo l’ingresso e continua a contare', () => {
+    const r = riassumiOutboundLancio([riga(WELCOME, 'delivered', '2026-09-19T12:50:00Z')], WELCOME, INGRESSO);
+    expect(r.benvenutiRiusciti).toBe(1);
+    expect(decideAperturaLancio({ ...base, ...r })).toBe('salta');
+  });
+
+  // Ripartenza: il benvenuto e' di giorni prima, di un'altra vita della chat.
+  it('ripartenza: i benvenuti della vita precedente non contano piu’', () => {
+    const r = riassumiOutboundLancio([riga(WELCOME, 'delivered', VITA_PRECEDENTE)], WELCOME, INGRESSO);
+    expect(r.benvenutiRiusciti).toBe(0);
+    expect(decideAperturaLancio({ ...base, ...r, nowMs: INGRESSO + 2 * H })).toBe('invia');
+  });
+
+  it('ripartenza: anche i tentativi falliti di prima escono dal budget', () => {
+    const r = riassumiOutboundLancio([
+      riga(WELCOME, 'failed', VITA_PRECEDENTE),
+      riga(WELCOME, 'undelivered', '2026-09-15T09:00:00Z'),
+      riga(WELCOME, 'failed', '2026-09-15T10:00:00Z'),
+    ], WELCOME, INGRESSO);
+    expect(r.benvenutiFalliti).toBe(0);
+  });
+
+  // Senza ancora si conta su tutto: e' il ripiego esplicito per chi e' entrato dal
+  // pulsante della live (nessun evento di intake) e per le righe piu' vecchie.
+  it('ingresso nullo: si conta su tutta la cronologia, come si e’ sempre fatto', () => {
+    const r = riassumiOutboundLancio([riga(WELCOME, 'delivered', VITA_PRECEDENTE)], WELCOME, null);
+    expect(r.benvenutiRiusciti).toBe(1);
+    expect(decideAperturaLancio({ ...base, ...r })).toBe('salta');
+  });
+
+  // L'intake manda il benvenuto e SOLO DOPO scrive il proprio evento: senza lo scarto la
+  // rete dipenderebbe dall'ordine di due insert a pochi secondi l'uno dall'altro.
+  it('il benvenuto partito un attimo prima del suo stesso evento conta lo stesso', () => {
+    const unMinutoPrima = new Date(INGRESSO - 60_000).toISOString();
+    const r = riassumiOutboundLancio([riga(WELCOME, 'delivered', unMinutoPrima)], WELCOME, INGRESSO);
+    expect(r.benvenutiRiusciti).toBe(1);
+  });
+
+  it('oltre lo scarto invece e’ di un altro giro', () => {
+    const benOltre = new Date(INGRESSO - BUFFER_ANCORA_MS - 60_000).toISOString();
+    const r = riassumiOutboundLancio([riga(WELCOME, 'delivered', benOltre)], WELCOME, INGRESSO);
+    expect(r.benvenutiRiusciti).toBe(0);
+  });
+
+  // La guardia delle 12 ore non si allenta: serve a non scrivere sopra un messaggio
+  // recente, e un messaggio recente disturba anche se e' della vita precedente.
+  it('il silenzio outbound resta misurato su tutta la cronologia', () => {
+    const poco = new Date(INGRESSO - 60_000).toISOString();
+    const r = riassumiOutboundLancio([riga('HXapertura', 'delivered', poco)], WELCOME, INGRESSO);
+    expect(r.ultimoOutboundMs).toBe(Date.parse(poco));
+    expect(decideAperturaLancio({ ...base, ...r, nowMs: INGRESSO })).toBe('attendi');
+  });
+
+  it('data illeggibile: la riga conta comunque, si sbaglia dalla parte del non mandare', () => {
+    const r = riassumiOutboundLancio([riga(WELCOME, 'delivered', 'boh')], WELCOME, INGRESSO);
+    expect(r.benvenutiRiusciti).toBe(1);
   });
 });

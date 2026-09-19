@@ -52,6 +52,10 @@ const stato = {
   benvenutiUltimaOra: 0,
   /** Il conteggio del tetto orario fallisce: il run deve fermarsi, non tirare dritto. */
   conteggioError: null as { message: string } | null,
+  /** Quando ogni chat e' entrata nel giro corrente del lancio (evento `lancio_intake`):
+   *  e' l'ancora da cui si contano i benvenuti gia' partiti. Vuota = nessun evento, e si
+   *  conta su tutta la cronologia come si e' sempre fatto. */
+  ingressi: new Map<number, string>(),
 };
 
 const valore = (rec: Chiamata, colonna: string) => rec.filtri.find(([c]) => c === colonna)?.[1];
@@ -91,6 +95,15 @@ function esegui(rec: Chiamata): { data: unknown; error: unknown; count?: number 
     const pagina = (valore(rec, '__range') as number[] | undefined) ?? [0, 999];
     const liberi = stato.convs.filter((c) => !stato.timbrate.has(c.id));
     return { data: liberi.slice(pagina[0], pagina[1] + 1), error: null };
+  }
+  if (rec.table === 'event_log') {
+    // La lettura delle ancore (`leggiIngressiLancioAt`): solo gli intake del lancio.
+    if (valore(rec, 'type') !== 'lancio_intake') return { data: [], error: null };
+    const ids = ((valore(rec, '__in') as string[] | undefined) ?? []).map(Number);
+    const righe = ids
+      .filter((id) => stato.ingressi.has(id))
+      .map((id) => ({ created_at: stato.ingressi.get(id), payload: { conversationId: id } }));
+    return { data: righe, error: null };
   }
   if (rec.table === 'messages') {
     // `head: true` = la query di conteggio del tetto orario: nessuna riga, un numero.
@@ -200,6 +213,7 @@ beforeEach(() => {
   stato.convSelectError = null;
   stato.benvenutiUltimaOra = 0;
   stato.conteggioError = null;
+  stato.ingressi = new Map();
   sendTemplate.mockReset();
   sendTemplate.mockResolvedValue({ sid: 'SMtest', status: 'queued' });
   assertTemplateSendable.mockReset();
@@ -371,6 +385,49 @@ describe('GET /api/cron/lancio-aperture', () => {
     const body = await (await richiesta()).json();
     expect(sendTemplate).toHaveBeenCalledTimes(1);
     expect(body).toMatchObject({ inviati: 1, fermo: 'tetto_orario', tetto: 200 });
+  });
+
+  // Ripartenza (decisione del PO, 19/09): chi aveva chiuso e si e' riscritto al lancio
+  // deve ricevere di nuovo il benvenuto. Il benvenuto della vita precedente e' ancora in
+  // cronologia, e senza l'ancora dell'ingresso il cron lo leggerebbe come "gia' servito"
+  // e non manderebbe niente: una chat muta con l'etichetta cambiata.
+  describe("ripartenza: l'ancora dell'ingresso nel lancio", () => {
+    const VECCHIO = { template_sid: WELCOME, twilio_status: 'delivered', twilio_error_code: null, created_at: new Date(ADESSO.getTime() - 14 * G).toISOString() };
+
+    it('il benvenuto della vita precedente non ferma la ripartenza', async () => {
+      stato.convs = [conv(1)];
+      stato.outbound.set(1, [VECCHIO]);
+      // L'intake della ripartenza, di ieri: da li' in avanti non e' partito niente.
+      stato.ingressi.set(1, new Date(ADESSO.getTime() - 1 * G).toISOString());
+      const body = await (await richiesta()).json();
+      expect(sendTemplate).toHaveBeenCalledTimes(1);
+      expect(sendTemplate.mock.calls[0][0]).toMatchObject({ to: tel(1), contentSid: WELCOME });
+      expect(body).toMatchObject({ inviati: 1 });
+    });
+
+    it('senza ancora la rete resta quella di sempre: non si manda un secondo benvenuto', async () => {
+      stato.convs = [conv(1)];
+      stato.outbound.set(1, [VECCHIO]);
+      const body = await (await richiesta()).json();
+      expect(sendTemplate).not.toHaveBeenCalled();
+      expect(body).toMatchObject({ inviati: 0, saltati: 1 });
+    });
+
+    it('chat normale: il benvenuto di questo giro e’ dopo l’ingresso e ferma il cron', async () => {
+      stato.convs = [conv(1)];
+      stato.ingressi.set(1, new Date(ADESSO.getTime() - 2 * G).toISOString());
+      stato.outbound.set(1, [{ ...VECCHIO, created_at: new Date(ADESSO.getTime() - 2 * G + 60_000).toISOString() }]);
+      const body = await (await richiesta()).json();
+      expect(sendTemplate).not.toHaveBeenCalled();
+      expect(body).toMatchObject({ inviati: 0, saltati: 1 });
+    });
+
+    it('una query event_log per lotto, non una per conversazione', async () => {
+      stato.convs = [conv(1), conv(2), conv(3)];
+      for (const id of [1, 2, 3]) stato.ingressi.set(id, new Date(ADESSO.getTime() - 1 * G).toISOString());
+      await richiesta();
+      expect(selectSu('event_log')).toHaveLength(1);
+    });
   });
 
   it('un numero, un benvenuto: due chat sullo stesso telefono non si sommano', async () => {

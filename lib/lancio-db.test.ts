@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { impostaFaseLancio, marcaCongedo, marcaNotaRestituzione, contaBenvenutiUltimaOra } from './lancio-db';
+import { impostaFaseLancio, marcaCongedo, marcaNotaRestituzione, contaBenvenutiUltimaOra, leggiIngressiLancioAt } from './lancio-db';
 
 /**
  * Finto Supabase: registra gli update su `conversations`, gli insert su `event_log` e la
@@ -239,5 +239,70 @@ describe('contaBenvenutiUltimaOra', () => {
     const { supabase, calls } = makeSupabase({ count: 1 });
     await contaBenvenutiUltimaOra(supabase, 'HX_W', Date.parse('2026-10-05T20:30:00.000Z'));
     expect(calls.conteggi[0].filtri).toContainEqual(['gte', 'created_at', '2026-10-05T19:30:00.000Z']);
+  });
+});
+
+describe("leggiIngressiLancioAt — da quando la chat e' nel giro corrente del lancio", () => {
+  /** Finto `event_log` che registra i filtri: qui la forma della query e' meta' del test. */
+  function makeEventLog(righe: { created_at: string; payload: unknown }[]) {
+    const filtri: Filtro[] = [];
+    let colonne = '';
+    const supabase: any = {
+      from: () => ({
+        select: (c: string) => {
+          colonne = c;
+          const q: any = {
+            eq: (col: string, v: unknown) => { filtri.push(['eq', col, v]); return q; },
+            in: (col: string, v: unknown) => { filtri.push(['in', col, v]); return q; },
+            order: () => Promise.resolve({ data: righe, error: null }),
+          };
+          return q;
+        },
+      }),
+    };
+    return { supabase, filtri, colonne: () => colonne };
+  }
+
+  const riga = (id: number, at: string) => ({ created_at: at, payload: { conversationId: id } });
+
+  it("tiene l'ingresso piu' recente: e' quello del giro corrente", async () => {
+    // Ordine discendente come lo chiede la query: la ripartenza di oggi viene prima
+    // dell'ingresso di settembre, ed e' quella che deve vincere.
+    const { supabase } = makeEventLog([
+      riga(3292, '2026-09-19T12:49:53Z'),
+      riga(3292, '2026-09-14T09:00:00Z'),
+    ]);
+    const m = await leggiIngressiLancioAt(supabase, [3292]);
+    expect(m.get(3292)).toBe('2026-09-19T12:49:53Z');
+  });
+
+  it('una conversazione senza evento non compare: chi legge conta su tutta la cronologia', async () => {
+    const { supabase } = makeEventLog([riga(3292, '2026-09-19T12:49:53Z')]);
+    const m = await leggiIngressiLancioAt(supabase, [3292, 4000]);
+    expect(m.has(4000)).toBe(false);
+    expect(m.size).toBe(1);
+  });
+
+  it('lotto vuoto: nessuna query', async () => {
+    const { supabase, filtri } = makeEventLog([]);
+    expect((await leggiIngressiLancioAt(supabase, [])).size).toBe(0);
+    expect(filtri).toHaveLength(0);
+  });
+
+  it('payload senza conversationId leggibile: riga ignorata, non una chiave NaN', async () => {
+    const { supabase } = makeEventLog([
+      { created_at: '2026-09-19T12:00:00Z', payload: { phone: '+39333' } },
+      { created_at: '2026-09-19T12:49:53Z', payload: null },
+      riga(3292, '2026-09-19T12:49:53Z'),
+    ]);
+    const m = await leggiIngressiLancioAt(supabase, [3292]);
+    expect([...m.keys()]).toEqual([3292]);
+  });
+
+  it("chiede solo gli intake del lancio e solo le conversazioni del lotto", async () => {
+    const { supabase, filtri } = makeEventLog([]);
+    await leggiIngressiLancioAt(supabase, [1, 2]);
+    expect(filtri).toContainEqual(['eq', 'type', 'lancio_intake']);
+    expect(filtri).toContainEqual(['in', 'payload->>conversationId', ['1', '2']]);
   });
 });

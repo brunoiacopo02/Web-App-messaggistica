@@ -188,6 +188,40 @@ export async function leggiIngressoLancioAt(
 }
 
 /**
+ * Lo stesso ingresso, per un lotto di conversazioni: una query sola invece di N.
+ *
+ * Serve al cron `lancio-aperture`, che da qui sa da quando contare i benvenuti gia'
+ * partiti. Su una chat normale l'ingresso precede il benvenuto e non cambia niente; su
+ * una chat che ha RIPARTITO (era `chiuso`/`restituito` e la persona si e' riscritta al
+ * lancio) l'ingresso e' nuovo, e i benvenuti della vita precedente smettono di contare —
+ * altrimenti il cron la salterebbe per sempre e la ripartenza resterebbe muta.
+ *
+ * Si tiene il piu' RECENTE per conversazione: e' l'ingresso del giro corrente. Una
+ * conversazione senza evento — chi e' entrato dal pulsante della live, o le righe piu'
+ * vecchie — semplicemente non compare nella mappa, e chi legge conta su tutta la
+ * cronologia come si e' sempre fatto.
+ */
+export async function leggiIngressiLancioAt(
+  supabase: Supa,
+  conversationIds: number[],
+): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  if (conversationIds.length === 0) return out;
+  const { data } = await supabase
+    .from('event_log')
+    .select('created_at, payload')
+    .eq('type', 'lancio_intake')
+    .in('payload->>conversationId', conversationIds.map(String))
+    .order('created_at', { ascending: false });
+  for (const riga of (data ?? []) as unknown as { created_at: string; payload: { conversationId?: number | string } | null }[]) {
+    const id = Number(riga.payload?.conversationId);
+    // Ordine discendente: la prima riga per conversazione e' gia' la piu' recente.
+    if (Number.isFinite(id) && !out.has(id)) out.set(id, riga.created_at);
+  }
+  return out;
+}
+
+/**
  * Quanti benvenuti del lancio sono partiti nell'ultima ora, su TUTTE le conversazioni
  * (spec §11.3). E' il numeratore del tetto orario: il rischio e' del numero WhatsApp, non
  * della singola chat, quindi si conta per template e non per conversazione.

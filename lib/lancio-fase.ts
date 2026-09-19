@@ -140,6 +140,48 @@ export function faseGestitaB1(fase: string | null): boolean {
   return FASI_GESTITE_B1.has(fase ?? '');
 }
 
+/**
+ * Ri-arruolamento nello STESSO lancio: questa fase riparte da zero o si preserva?
+ *
+ * Iscriversi al lancio e' un atto NUOVO di interesse: la persona e' tornata sulla pagina
+ * e ha lasciato di nuovo il numero. Quel gesto vale piu' del "no" che aveva detto prima,
+ * e trattarlo come se non fosse successo vorrebbe dire ignorare un lead caldo che si e'
+ * rifatto vivo da solo (decisione del PO, 19/09/2026). Quindi:
+ *
+ *  - fase NON terminale (`attesa` → `followup_inviato`) = gente a meta' percorso: si
+ *    preserva tutto. Riscriverle la fase e' il bug del 19/09 — uno che la sera della live
+ *    aveva bloccato il posto tornava ad 'attesa' e il 7 ottobre finiva fra i restituiti
+ *    come "non ha mai risposto";
+ *  - fase TERMINALE (`chiuso`, `restituito`) = la storia precedente e' chiusa: si
+ *    reinizializza come un ingresso nuovo, fase ad 'attesa', esito azzerato e benvenuto
+ *    che puo' ripartire.
+ *
+ * Mappa ESAUSTIVA e non un elenco: aggiungere una fase a `LANCIO_FASI` senza deciderne
+ * qui la voce non compila. La prossima persona e' costretta a scegliere da che parte
+ * sta, invece di ereditare un comportamento per caso.
+ */
+export const LANCIO_FASE_RIPARTE_AL_RIARRUOLAMENTO: Readonly<Record<LancioFase, boolean>> = {
+  attesa: false,
+  posto_bloccato: false,
+  link_inviato: false,
+  post_pitch: false,
+  scelta_fatta: false,
+  followup_inviato: false,
+  restituito: true,
+  chiuso: true,
+};
+
+/**
+ * Il ri-arruolamento di una chat gia' in questo lancio deve farla ripartire da capo?
+ *
+ * Una fase nulla o sconosciuta riparte: non c'e' nessun avanzamento da proteggere, e
+ * lasciarla com'e' significherebbe una riga con lo slug scritto e la fase illeggibile,
+ * cioe' fuori da tutti i cron — del lancio e di Mario insieme.
+ */
+export function lancioRipartePerRiarruolamento(fase: string | null | undefined): boolean {
+  return !isLancioFase(fase) || LANCIO_FASE_RIPARTE_AL_RIARRUOLAMENTO[fase];
+}
+
 /** La chat è del lancio e il lancio non è finito: Mario e i suoi cron stanno fuori. */
 export function lancioInCorso(c: { lancio_slug?: string | null; lancio_fase?: string | null }): boolean {
   if (!c.lancio_slug) return false;

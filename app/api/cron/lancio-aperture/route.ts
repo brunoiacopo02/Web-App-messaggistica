@@ -12,7 +12,7 @@ import {
   type RigaOutbound,
 } from '@/lib/lancio-aperture';
 import { leggiTettoOrario, sottoTettoOrario } from '@/lib/lancio-tetto';
-import { contaBenvenutiUltimaOra } from '@/lib/lancio-db';
+import { contaBenvenutiUltimaOra, leggiIngressiLancioAt } from '@/lib/lancio-db';
 import { inOpeningWindow } from '@/lib/sequence';
 import { lancioBenvenutoText } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
@@ -228,6 +228,11 @@ export async function GET(req: NextRequest) {
       if (lista) lista.push(r);
       else perConv.set(r.conversation_id, [r]);
     }
+    // Da quando questa chat e' nel giro corrente del lancio. Una query per lotto, come
+    // quella dei messaggi. Serve alle RIPARTENZE: chi aveva chiuso e si e' riscritto al
+    // lancio ha un ingresso nuovo, e i benvenuti della vita precedente non devono piu'
+    // contare, o il cron lo salterebbe per sempre e la ripartenza sarebbe muta.
+    const ingressi = await leggiIngressiLancioAt(supabase, lotto.map((c) => c.id));
 
     for (const c of lotto) {
       if (tentati >= maxPerRun || fermo) break;
@@ -239,8 +244,13 @@ export async function GET(req: NextRequest) {
       try {
         // Tutta la cronologia in uscita, senza tagli sull'arruolamento: su una chat
         // riusata l'apertura di Mario e' proprio quella che deve trattenere il
-        // benvenuto per 12 ore (guardia `apertura_recente` dell'intake).
-        const riassunto = riassumiOutboundLancio(perConv.get(c.id) ?? [], templateSid);
+        // benvenuto per 12 ore (guardia `apertura_recente` dell'intake). Il taglio
+        // sull'ingresso vale SOLO per il conteggio dei benvenuti gia' partiti, e senza
+        // ingresso (nessun evento: pulsante della live, righe vecchie) si conta su tutto,
+        // cioe' il comportamento di sempre.
+        const ingressoAt = ingressi.get(c.id) ?? null;
+        const ingressoMs = ingressoAt ? Date.parse(ingressoAt) || null : null;
+        const riassunto = riassumiOutboundLancio(perConv.get(c.id) ?? [], templateSid, ingressoMs);
         const azione = decideAperturaLancio({
           nowMs: now,
           attivo: settings.attivo,
