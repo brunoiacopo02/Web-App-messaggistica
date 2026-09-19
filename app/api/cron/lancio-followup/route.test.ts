@@ -140,7 +140,7 @@ function query(table: string, op: Chiamata['op'], a: unknown, opzioni?: Chiamata
   const rec: Chiamata = { table, op, arg: a, filtri: [], opzioni };
   chiamate.push(rec);
   const q: Record<string, unknown> = {};
-  for (const m of ['eq', 'is', 'in', 'not', 'or', 'order', 'limit', 'range', 'gte', 'lte', 'select']) {
+  for (const m of ['eq', 'is', 'in', 'not', 'or', 'order', 'limit', 'range', 'gte', 'lte', 'select', 'contains']) {
     q[m] = (...args: unknown[]) => {
       rec.filtri.push({ m, args });
       return q;
@@ -298,6 +298,32 @@ describe('GET /api/cron/lancio-followup — cancelli', () => {
     await expect((await richiesta()).json()).resolves.toMatchObject({ skipped: 'fuori_finestra' });
     expect(sendTemplate).not.toHaveBeenCalled();
     expect((eventoRun()?.payload as Record<string, unknown>).motivo).toBe('fuori_finestra');
+  });
+
+  it('lancio_evento_at di un lancio vecchio (>14gg): evento error, e il run continua', async () => {
+    stato.settings.lancio_evento_at = '2026-09-01T21:00:00+02:00';
+    await richiesta();
+    const allarme = eventi().find((e) => e.type === 'lancio_evento_at_nel_passato');
+    expect(allarme?.level).toBe('error');
+    expect(allarme?.payload).toMatchObject({ cron: 'lancio-followup', evento_giorno: '2026-09-01', oggi: '2026-10-06', giorni_indietro: 35 });
+  });
+
+  // Questo cron gira per definizione il 6 e il 7, cioe' SEMPRE dopo l'evento: con la
+  // tolleranza zero avrebbe scritto un error a ogni run (uno ogni 5 minuti) a lancio
+  // perfetto, che e' esattamente il rumore che nasconde il guasto vero. Soglia 14 giorni.
+  it('il 6/10 con la data giusta l allarme NON suona: l evento appena passato e la norma', async () => {
+    await richiesta();
+    expect(tipiEvento()).not.toContain('lancio_evento_at_nel_passato');
+  });
+
+  it('a 14 giorni tace, a 15 suona', async () => {
+    stato.settings.lancio_evento_at = '2026-09-22T21:00:00+02:00'; // 14 giorni prima del 6/10
+    await richiesta();
+    expect(tipiEvento()).not.toContain('lancio_evento_at_nel_passato');
+    chiamate.length = 0;
+    stato.settings.lancio_evento_at = '2026-09-21T21:00:00+02:00'; // 15
+    await richiesta();
+    expect(tipiEvento()).toContain('lancio_evento_at_nel_passato');
   });
 
   it('a finestra chiusa il run conta chi e rimasto senza follow-up', async () => {

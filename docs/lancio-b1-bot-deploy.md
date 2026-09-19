@@ -109,6 +109,6 @@ Prima di accendere lato CRM:
 6. Verificare che dopo un'ora `bot_followups_run` NON abbia ri-drivato quella
    chat (nessun secondo messaggio) — è la garanzia che i lead del lancio
    restano fuori da sequenza/nudge/promemoria/solleciti finché non arrivano le
-   restituzioni (dall'8/10).
+   restituzioni (dal 7/10).
 
 Solo a questo punto il CRM può accendere `LANCIO_WEBDEV_INTAKE`.

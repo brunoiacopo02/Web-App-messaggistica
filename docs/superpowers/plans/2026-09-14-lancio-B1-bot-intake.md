@@ -1,5 +1,23 @@
 # Lancio Web Developer AI — Blocco B1 lato bot (intake, fase attesa/posto bloccato, esclusioni, badge) Implementation Plan
 
+> ## ⚠️ SUPERATO IL 19/09/2026 — leggere prima di usare questo piano
+>
+> Il codice e gli esempi qui sotto sono quelli **come furono scritti allora** e si lasciano
+> intatti perché questo è un piano eseguito, cioè un documento storico. Due regole delle
+> restituzioni del lancio sono però cambiate dopo, e **vince quanto segue**:
+>
+> 1. **Le restituzioni partono il 7/10, non l'8.** Il 6 ottobre è tutto del bot (risposte e
+>    follow-up); dal 7 si restituisce, così i GDO possono chiamare quei lead quel giorno
+>    stesso. In codice: `restituzioniAttive` usa `>= dopodomani`, e `vercel.json` dice
+>    `0 * 7-31 10 *`.
+> 2. **L'attesa è di 24 ore, non 48, e si misura sull'ultimo messaggio in qualunque
+>    direzione** (il follow-up mandato, o la risposta del lead se è arrivata dopo). Il
+>    motivo `attesa_48h` si chiama ora `attesa_24h`. Chi è in conversazione viva resta al
+>    bot (`ha_risposto`) e torna al pool più avanti, man mano che la chat si spegne — prima
+>    un inbound dopo il follow-up lo tratteneva al bot per sempre.
+>
+> Fonte operativa aggiornata: `docs/lancio-webdev-runbook-b6.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Il bot accetta dal CRM i lead della lista "Lancio Web Developer AI" con il campo `lancio`, manda loro il solo template di benvenuto, risponde nella fase `attesa` con un classificatore deterministico (sì → "posto bloccato", no → congedo + `DA_SCARTARE`, domanda → risposta secca del modello con prompt dedicato), e tiene queste conversazioni fuori da tutti gli automatismi di Mario (sequenza, nudge, classificazioni, promemoria, solleciti video), con badge e filtro "Lancio" nei pannelli.

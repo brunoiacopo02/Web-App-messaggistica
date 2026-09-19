@@ -24,6 +24,7 @@ import {
   leggiParametriCron,
   logEvento,
   leggiCoda,
+  allarmeEventoStantio,
   nuovoStatoRun,
   inviaTemplateTimbrato,
   eseguiLotti,
@@ -115,6 +116,10 @@ export async function GET(req: NextRequest) {
   const parametri = leggiParametriCron(req, { nowRichiedeSolo: false });
   if (!parametri.ok) return NextResponse.json({ ok: false, error: parametri.errore }, { status: 400 });
   const { now, forza, solo } = parametri;
+  // Allarme e basta (non ferma il run): se `lancio_evento_at` e' rimasto indietro, la
+  // finestra del blast e' gia' passata e questo cron uscirebbe "fuori_finestra" a
+  // livello info, cioe' in silenzio, proprio la sera del webinar.
+  await allarmeEventoStantio(supabase, 'lancio-zoom', now, evento);
 
   const sid = process.env.LANCIO_ZOOM_TEMPLATE_SID;
   const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;

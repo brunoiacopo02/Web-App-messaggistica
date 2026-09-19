@@ -2,7 +2,8 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import type { NextRequest } from 'next/server';
 import {
   leggiParametriCron, eRifiutoDiPolicy, eseguiLotti, nuovoStatoRun, timbroUpdate, timbroCampi, PASSO_FRENO,
-  inviaTemplateTimbrato, frenaLancio,
+  inviaTemplateTimbrato, frenaLancio, eventoStantio, allarmeEventoStantio, TIPO_EVENTO_NEL_PASSATO,
+  GIORNI_CONFIG_STANTIA, TOLLERANZA_GIORNI_EVENTO,
   type EsitoInvio,
 } from './lancio-blast-motore';
 
@@ -15,17 +16,36 @@ vi.mock('./lancio-db', () => ({ impostaFaseLancio: async () => {} }));
 const setLancioSetting = vi.fn(async (): Promise<{ ok: boolean; error?: string }> => ({ ok: true }));
 vi.mock('./lancio-settings', () => ({ setLancioSetting: () => setLancioSetting() }));
 
-type Chiamata = { table: string; op: 'insert' | 'update' | 'select'; arg: unknown };
+type Chiamata = { table: string; op: 'insert' | 'update' | 'select'; arg: unknown; filtri: { m: string; args: unknown[] }[] };
 const chiamate: Chiamata[] = [];
-/** Il claim (`update` su `conversations`) deve restituire una riga, o nessun invio parte. */
-const risultato = (rec: Chiamata) =>
-  rec.table === 'conversations' && rec.op === 'update' ? { data: [{ id: 1 }], error: null } : { data: [], error: null };
+const eventiScritti = () =>
+  chiamate.filter((c) => c.table === 'event_log' && c.op === 'insert').map((c) => c.arg as Record<string, unknown>);
+
+/**
+ * Il claim (`update` su `conversations`) deve restituire una riga, o nessun invio parte.
+ * La SELECT su `event_log` e' il dedup dell'allarme: la fixture rilegge davvero le righe
+ * gia' inserite, cosi' il "una volta al giorno" si prova end-to-end e non su un flag.
+ */
+const risultato = (rec: Chiamata) => {
+  if (rec.table === 'conversations' && rec.op === 'update') return { data: [{ id: 1 }], error: null };
+  if (rec.table === 'event_log' && rec.op === 'select') {
+    const cerca = rec.filtri.find((f) => f.m === 'contains')?.args[1] as Record<string, unknown> | undefined;
+    const trovate = eventiScritti().filter((e) => {
+      const payload = (e.payload ?? {}) as Record<string, unknown>;
+      return Object.entries(cerca ?? {}).every(([k, v]) => payload[k] === v);
+    });
+    return { data: trovate.map((_, i) => ({ id: i + 1 })), error: null };
+  }
+  return { data: [], error: null };
+};
 
 function builder(table: string, op: Chiamata['op'], arg: unknown) {
-  const rec: Chiamata = { table, op, arg };
+  const rec: Chiamata = { table, op, arg, filtri: [] };
   chiamate.push(rec);
   const q: Record<string, unknown> = {};
-  for (const m of ['eq', 'is', 'in', 'not', 'select', 'order', 'range']) q[m] = () => q;
+  for (const m of ['eq', 'is', 'in', 'not', 'select', 'order', 'range', 'contains', 'limit']) {
+    q[m] = (...args: unknown[]) => { rec.filtri.push({ m, args }); return q; };
+  }
   q.then = (ok: (v: unknown) => unknown, ko?: (e: unknown) => unknown) =>
     Promise.resolve().then(() => risultato(rec)).then(ok, ko);
   return q;
@@ -57,6 +77,100 @@ describe('leggiParametriCron', () => {
     const r = leggiParametriCron(req('now=ieri&dry=1'), { nowRichiedeSolo: false });
     expect(r.ok && Math.abs(r.now.getTime() - Date.now()) < 5_000).toBe(true);
     expect(r.ok && r.dry).toBe(true);
+  });
+});
+
+describe('eventoStantio — due regimi, perche i cron non vivono tutti prima dell evento', () => {
+  const EVENTO = new Date('2026-10-05T21:00:00+02:00');
+
+  it('aperture e zoom girano prima o il giorno dell evento: tolleranza zero', () => {
+    // Mezzanotte del 5: l'evento e' fra 21 ore, ma e' lo stesso giorno.
+    expect(eventoStantio(new Date('2026-10-05T00:10:00+02:00'), EVENTO, 'lancio-zoom')).toBe(false);
+    // Il blast parte 90' prima, la notte della scelta finisce alle 03:00 del 6: niente
+    // deve suonare mentre il lancio sta girando davvero.
+    expect(eventoStantio(new Date('2026-10-05T19:30:00+02:00'), EVENTO, 'lancio-zoom')).toBe(false);
+    expect(eventoStantio(new Date('2026-10-05T23:59:00+02:00'), EVENTO, 'lancio-zoom')).toBe(false);
+    // Il 6 alle 00:10 il giorno e' cambiato: per il blast la finestra e' persa.
+    expect(eventoStantio(new Date('2026-10-06T00:10:00+02:00'), EVENTO, 'lancio-zoom')).toBe(true);
+    expect(eventoStantio(new Date('2026-10-06T10:00:00+02:00'), EVENTO, 'lancio-aperture')).toBe(true);
+  });
+
+  it('follow-up e restituzioni girano DOPO l evento: il 6 e il 7 non suona niente', () => {
+    // Questo e' il punto della correzione: il follow-up gira il 6-7 ogni 5 minuti, e con
+    // la tolleranza zero avrebbe scritto un error a ogni run a lancio perfetto.
+    expect(eventoStantio(new Date('2026-10-06T12:10:00+02:00'), EVENTO, 'lancio-followup')).toBe(false);
+    expect(eventoStantio(new Date('2026-10-07T20:00:00+02:00'), EVENTO, 'lancio-followup')).toBe(false);
+    expect(eventoStantio(new Date('2026-10-07T09:00:00+02:00'), EVENTO, 'lancio-restituzioni')).toBe(false);
+    // Le restituzioni hanno coda fino al 15/11: a un mese dall'evento continuano a non
+    // suonare? No — dopo 14 giorni la data e' comunque da guardare.
+    expect(eventoStantio(new Date('2026-10-19T10:00:00+02:00'), EVENTO, 'lancio-restituzioni')).toBe(false);
+    expect(eventoStantio(new Date('2026-10-20T10:00:00+02:00'), EVENTO, 'lancio-restituzioni')).toBe(true);
+  });
+
+  it('il caso vero: la data di un lancio precedente suona su tutti e quattro', () => {
+    const vecchia = '2026-09-17T21:00:00+02:00';
+    const oggi = new Date('2026-10-05T19:30:00+02:00'); // 18 giorni dopo
+    for (const cron of ['lancio-aperture', 'lancio-zoom', 'lancio-followup', 'lancio-restituzioni'] as const) {
+      expect(eventoStantio(oggi, vecchia, cron)).toBe(true);
+    }
+  });
+
+  it('una data futura non suona mai; assente o illeggibile nemmeno (quello e config_error)', () => {
+    expect(eventoStantio(new Date('2026-09-19T10:00:00+02:00'), EVENTO, 'lancio-zoom')).toBe(false);
+    expect(eventoStantio(new Date('2026-10-06T10:00:00+02:00'), null, 'lancio-aperture')).toBe(false);
+    expect(eventoStantio(new Date('2026-10-06T10:00:00+02:00'), 'boh', 'lancio-zoom')).toBe(false);
+    expect(eventoStantio(new Date('2026-10-06T10:00:00+02:00'), new Date(NaN), 'lancio-zoom')).toBe(false);
+  });
+
+  it('le tolleranze sono quelle dichiarate e non si spostano per sbaglio', () => {
+    expect(GIORNI_CONFIG_STANTIA).toBe(14);
+    expect(TOLLERANZA_GIORNI_EVENTO).toEqual({
+      'lancio-aperture': 0, 'lancio-zoom': 0, 'lancio-followup': 14, 'lancio-restituzioni': 14,
+    });
+  });
+});
+
+describe('allarmeEventoStantio — urla in event_log, non ferma niente, una volta al giorno', () => {
+  beforeEach(() => { chiamate.length = 0; });
+
+  it('scrive un evento error con la data configurata, quella di oggi e i giorni di ritardo', async () => {
+    const scritto = await allarmeEventoStantio(supabase, 'lancio-zoom', new Date('2026-10-05T19:30:00+02:00'), '2026-09-17T21:00:00+02:00');
+    expect(scritto).toBe(true);
+    const eventi = eventiScritti();
+    expect(eventi).toHaveLength(1);
+    expect(eventi[0].type).toBe(TIPO_EVENTO_NEL_PASSATO);
+    expect(eventi[0].level).toBe('error');
+    expect(eventi[0].payload).toMatchObject({
+      cron: 'lancio-zoom', evento_giorno: '2026-09-17', oggi: '2026-10-05',
+      giorni_indietro: 18, chiave: 'lancio-zoom:2026-10-05',
+    });
+    expect(String(eventi[0].message)).toContain('lancio_evento_at');
+  });
+
+  it('data giusta (o assente): nessuna riga, e torna false', async () => {
+    expect(await allarmeEventoStantio(supabase, 'lancio-zoom', new Date('2026-10-05T19:30:00+02:00'), '2026-10-05T21:00:00+02:00')).toBe(false);
+    expect(await allarmeEventoStantio(supabase, 'lancio-aperture', new Date('2026-10-05T19:30:00+02:00'), null)).toBe(false);
+    expect(eventiScritti()).toHaveLength(0);
+  });
+
+  // `lancio-followup` gira ogni 5 minuti e `lancio-aperture` ogni 15: senza dedup un
+  // allarme legittimo diventa sessanta righe al giorno, cioe' di nuovo rumore.
+  it('lo stesso cron nello stesso giorno scrive una volta sola', async () => {
+    const vecchia = '2026-09-17T21:00:00+02:00';
+    expect(await allarmeEventoStantio(supabase, 'lancio-followup', new Date('2026-10-05T10:00:00+02:00'), vecchia)).toBe(true);
+    expect(await allarmeEventoStantio(supabase, 'lancio-followup', new Date('2026-10-05T10:05:00+02:00'), vecchia)).toBe(false);
+    expect(await allarmeEventoStantio(supabase, 'lancio-followup', new Date('2026-10-05T23:50:00+02:00'), vecchia)).toBe(false);
+    expect(eventiScritti()).toHaveLength(1);
+  });
+
+  it('il giorno dopo torna a suonare, e ogni cron ha la sua chiave', async () => {
+    const vecchia = '2026-09-17T21:00:00+02:00';
+    await allarmeEventoStantio(supabase, 'lancio-followup', new Date('2026-10-05T10:00:00+02:00'), vecchia);
+    await allarmeEventoStantio(supabase, 'lancio-followup', new Date('2026-10-06T10:00:00+02:00'), vecchia);
+    await allarmeEventoStantio(supabase, 'lancio-zoom', new Date('2026-10-05T10:00:00+02:00'), vecchia);
+    expect(eventiScritti().map((e) => (e.payload as Record<string, unknown>).chiave)).toEqual([
+      'lancio-followup:2026-10-05', 'lancio-followup:2026-10-06', 'lancio-zoom:2026-10-05',
+    ]);
   });
 });
 

@@ -40,7 +40,7 @@ function query(table: string, op: Chiamata['op'], a: unknown, opzioni?: Chiamata
   const rec: Chiamata = { table, op, arg: a, filtri: [], opzioni };
   chiamate.push(rec);
   const q: Record<string, unknown> = {};
-  for (const m of ['eq', 'is', 'in', 'not', 'gte', 'order', 'limit', 'range', 'select']) q[m] = (...args: unknown[]) => { rec.filtri.push({ m, args }); return q; };
+  for (const m of ['eq', 'is', 'in', 'not', 'gte', 'order', 'limit', 'range', 'select', 'contains']) q[m] = (...args: unknown[]) => { rec.filtri.push({ m, args }); return q; };
   q.then = (ok: (v: unknown) => unknown, ko?: (e: unknown) => unknown) => Promise.resolve().then(() => esegui(rec)).then(ok, ko);
   return q;
 }
@@ -117,11 +117,29 @@ afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers(); });
 
 describe('GET /api/cron/lancio-restituzioni — cancelli', () => {
   it('401 senza segreto', async () => { expect((await richiesta('', null)).status).toBe(401); });
-  it('prima dell 8/10 (Roma) non si restituisce nessuno, ma il run resta scritto', async () => {
-    vi.setSystemTime(new Date('2026-10-07T23:00:00+02:00'));
+  it('prima del 7/10 (Roma) non si restituisce nessuno, ma il run resta scritto', async () => {
+    // Il 6 e' tutto del bot (decisione PO 19/09): risposte e follow-up, niente ritorni.
+    vi.setSystemTime(new Date('2026-10-06T23:00:00+02:00'));
     await expect((await richiesta()).json()).resolves.toMatchObject({ skipped: 'prima_della_data' });
     expect(sendOutcome).not.toHaveBeenCalled();
     expect(eventoRun()).toBeTruthy();
+  });
+  it('il 7/10 (Roma) si restituisce gia: i GDO li possono chiamare quel giorno stesso', async () => {
+    vi.setSystemTime(new Date('2026-10-07T09:00:00+02:00'));
+    await expect((await richiesta()).json()).resolves.toMatchObject({ restituiti: 2 });
+  });
+  // Le restituzioni girano per definizione dopo l'evento: l'8/10 con l'evento del 5 e'
+  // il caso normale e non deve suonare niente, o l'allarme diventa rumore orario.
+  it('evento appena passato (il caso normale): nessun allarme', async () => {
+    await expect((await richiesta()).json()).resolves.toMatchObject({ restituiti: 2 });
+    expect(tipi()).not.toContain('lancio_evento_at_nel_passato');
+  });
+  it('lancio_evento_at di un lancio vecchio (>14gg): evento error, ma le restituzioni girano lo stesso', async () => {
+    stato.settings.lancio_evento_at = '2026-09-01T21:00:00+02:00';
+    await expect((await richiesta()).json()).resolves.toMatchObject({ restituiti: 2 });
+    const allarme = eventi().find((e) => e.type === 'lancio_evento_at_nel_passato');
+    expect(allarme?.level).toBe('error');
+    expect(allarme?.payload).toMatchObject({ cron: 'lancio-restituzioni', evento_giorno: '2026-09-01', oggi: '2026-10-08', giorni_indietro: 37 });
   });
   it('non dipende da lancio_attivo: spento, restituisce lo stesso', async () => {
     stato.settings.lancio_attivo = false;
@@ -137,7 +155,7 @@ describe('GET /api/cron/lancio-restituzioni — cancelli', () => {
     expect((await richiesta('now=2026-10-20T10:00:00%2B02:00')).status).toBe(400);
   });
   it('forza=1&solo=<id> prima della data: solo quella conversazione', async () => {
-    vi.setSystemTime(new Date('2026-10-07T23:00:00+02:00'));
+    vi.setSystemTime(new Date('2026-10-06T23:00:00+02:00'));
     await expect((await richiesta('forza=1&solo=2')).json()).resolves.toMatchObject({ restituiti: 1 });
     expect(sendOutcome).toHaveBeenCalledTimes(1);
     expect(sendOutcome).toHaveBeenCalledWith(expect.anything(), 2, expect.anything());
@@ -187,7 +205,7 @@ describe('GET /api/cron/lancio-restituzioni — decisioni e CRM', () => {
     await richiesta();
     expect(sendOutcome).toHaveBeenCalledWith(expect.anything(), 1, { outcome: 'NON_RISPOSTO', note: 'Lancio: follow-up non inviato' });
   });
-  it('silenzio 48h dopo il follow-up → "Lancio: silenzio dopo il follow-up"', async () => {
+  it('silenzio 24h dopo il follow-up → "Lancio: silenzio dopo il follow-up"', async () => {
     stato.convs = [conv(1, { lancio_fase: 'followup_inviato', lancio_followup_inviato_at: '2026-10-06T07:00:00Z', last_inbound_at: '2026-09-21T10:00:00Z' })];
     stato.messaggi.set(1, [welcome(1), inb(1, 'si', '2026-09-21T10:00:00Z')]);
     await richiesta();

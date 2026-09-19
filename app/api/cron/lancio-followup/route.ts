@@ -27,6 +27,7 @@ import {
   leggiParametriCron,
   logEvento,
   leggiCoda,
+  allarmeEventoStantio,
   nuovoStatoRun,
   inviaTemplateTimbrato,
   eseguiLotti,
@@ -172,6 +173,10 @@ export async function GET(req: NextRequest) {
   const eventoMs = settings.eventoAt ? Date.parse(settings.eventoAt) : NaN;
   if (Number.isNaN(eventoMs)) return configError(['lancio_evento_at']);
   const evento = new Date(eventoMs);
+  // Allarme e basta, non ferma il run. Questo cron gira il 6 e il 7, cioe' SEMPRE dopo
+  // l'evento: la soglia e' 14 giorni, cosi' il lancio configurato bene non fa suonare
+  // niente e resta solo il caso vero (data di un lancio vecchio). Una volta al giorno.
+  await allarmeEventoStantio(supabase, 'lancio-followup', now, evento);
   // Le 03:00 di Roma del 6: da li' in poi un `post_pitch` che scrive sta scegliendo, e il
   // follow-up non lo interrompe (`decideFollowup`, motivo `in_scelta`).
   const fineNotte = fineNotteLancio(evento);

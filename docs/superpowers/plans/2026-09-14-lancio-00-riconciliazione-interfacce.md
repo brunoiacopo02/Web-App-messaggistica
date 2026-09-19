@@ -1,5 +1,23 @@
 # Lancio Web Dev AI — nota di riconciliazione fra i piani (B1…B5)
 
+> ## ⚠️ SUPERATO IL 19/09/2026 — leggere prima di usare questo piano
+>
+> Il codice e gli esempi qui sotto sono quelli **come furono scritti allora** e si lasciano
+> intatti perché questo è un piano eseguito, cioè un documento storico. Due regole delle
+> restituzioni del lancio sono però cambiate dopo, e **vince quanto segue**:
+>
+> 1. **Le restituzioni partono il 7/10, non l'8.** Il 6 ottobre è tutto del bot (risposte e
+>    follow-up); dal 7 si restituisce, così i GDO possono chiamare quei lead quel giorno
+>    stesso. In codice: `restituzioniAttive` usa `>= dopodomani`, e `vercel.json` dice
+>    `0 * 7-31 10 *`.
+> 2. **L'attesa è di 24 ore, non 48, e si misura sull'ultimo messaggio in qualunque
+>    direzione** (il follow-up mandato, o la risposta del lead se è arrivata dopo). Il
+>    motivo `attesa_48h` si chiama ora `attesa_24h`. Chi è in conversazione viva resta al
+>    bot (`ha_risposto`) e torna al pool più avanti, man mano che la chat si spegne — prima
+>    un inbound dopo il follow-up lo tratteneva al bot per sempre.
+>
+> Fonte operativa aggiornata: `docs/lancio-webdev-runbook-b6.md`.
+
 I sei piani sono stati scritti in parallelo da agenti diversi e alcuni nomi divergono. **Questa nota vince sui singoli piani.** Chi esegue un task legge il proprio piano e questa nota; dove il piano usa un nome "vecchio" della tabella sotto, usa quello canonico. I piani B1 (CRM e bot) sono la fonte di verità perché si eseguono per primi.
 
 ## CRM (`C:\Users\bruno\Desktop\CRM GDO`)
@@ -49,4 +67,4 @@ Conseguenze, da rispettare senza eccezioni:
 B1-CRM ∥ B1-bot → B2 (bot prima, poi CRM) → B3 (CRM) ∥ B4 (bot) → B5 (bot e CRM) → B6 prova generale.
 
 ## Buco di spec chiuso qui (ritrovamento B5 #3)
-Chi ha interagito ma non ha mai ricevuto il follow-up entro la fine del 7/10 (cap 63049 per tutta la finestra, SID mancante) viene comunque restituito al pool dall'8/10 con nota "Lancio: follow-up non inviato" (`motivo='followup_non_inviato'`, stesso ramo di `mai_risposto` lato CRM). B5 Task 7 aggiunge questo caso a `decideRestituzione`.
+Chi ha interagito ma non ha mai ricevuto il follow-up entro la fine del 7/10 (cap 63049 per tutta la finestra, SID mancante) viene comunque restituito al pool dal 7/10 (aggiornato il 19/09; era l'8/10) con nota "Lancio: follow-up non inviato" (`motivo='followup_non_inviato'`, stesso ramo di `mai_risposto` lato CRM). B5 Task 7 aggiunge questo caso a `decideRestituzione`.

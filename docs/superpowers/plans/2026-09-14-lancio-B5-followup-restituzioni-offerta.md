@@ -1,5 +1,23 @@
 # Lancio Web Developer AI — Blocco B5 (parte bot): follow-up del 6, restituzioni, offerta del mese — Piano di implementazione
 
+> ## ⚠️ SUPERATO IL 19/09/2026 — leggere prima di usare questo piano
+>
+> Il codice e gli esempi qui sotto sono quelli **come furono scritti allora** e si lasciano
+> intatti perché questo è un piano eseguito, cioè un documento storico. Due regole delle
+> restituzioni del lancio sono però cambiate dopo, e **vince quanto segue**:
+>
+> 1. **Le restituzioni partono il 7/10, non l'8.** Il 6 ottobre è tutto del bot (risposte e
+>    follow-up); dal 7 si restituisce, così i GDO possono chiamare quei lead quel giorno
+>    stesso. In codice: `restituzioniAttive` usa `>= dopodomani`, e `vercel.json` dice
+>    `0 * 7-31 10 *`.
+> 2. **L'attesa è di 24 ore, non 48, e si misura sull'ultimo messaggio in qualunque
+>    direzione** (il follow-up mandato, o la risposta del lead se è arrivata dopo). Il
+>    motivo `attesa_48h` si chiama ora `attesa_24h`. Chi è in conversazione viva resta al
+>    bot (`ha_risposto`) e torna al pool più avanti, man mano che la chat si spegne — prima
+>    un inbound dopo il follow-up lo tratteneva al bot per sempre.
+>
+> Fonte operativa aggiornata: `docs/lancio-webdev-runbook-b6.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **Riscritto il 16/09 notte e ribasato il 17/09** contro il codice reale di `feat/lancio-webdev` @ **`f5c8ad6`** (= `main`; B1+B2+B4 completi, compresi i fix finali del B4: `impostaFaseLancio` con `soloDaFasi`, il ramo lancio del drain a giri `MAX_GIRI_LANCIO` con `rileggiRigaLancio`, `congedoEsplicito`, `modoEtichette`, e l'invio dall'account che possiede il numero `lib/twilio-account.ts`) e contro i rulings del controller (`.superpowers/sdd/2026-09-14-lancio-B5-followup-restituzioni-offerta/progress.md`, "Rulings del 16/09 notte" + i 5 rulings della seconda passata del 17/09). Le due versioni precedenti (`preflight-proposto.md`, `preflight-piano-nuovo.md`) sono superate. La parte CRM del B5 è **già in produzione** (vedi la sezione "Già in produzione") e qui non si esegue. Ogni `file:riga` citato sotto è di `f5c8ad6`.

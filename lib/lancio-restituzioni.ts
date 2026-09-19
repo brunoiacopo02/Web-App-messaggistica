@@ -3,14 +3,23 @@ import { giorniLancio } from './lancio-scelta';
 import { haCongedo } from './lancio-fase';
 
 /**
- * Restituzione al pool (spec §5.8, §4.6; riconciliazione "buco di spec"): dal giorno
- * dopo dopodomani (8/10 per l'evento del 5) chi non ha mai risposto, chi tace 48 ore dopo
- * il follow-up e chi il follow-up non l'ha mai ricevuto tornano al CRM come
- * `NON_RISPOSTO` con una nota fissa; il CRM li rimette nel pool di /import. Qui la sola
- * decisione; il cron `/api/cron/lancio-restituzioni` la applica.
+ * Restituzione al pool (spec §5.8, §4.6; riconciliazione "buco di spec"): da dopodomani
+ * (7/10 per l'evento del 5) chi non ha mai risposto, chi ha la chat ferma da piu' di 24
+ * ore e chi il follow-up non l'ha mai ricevuto tornano al CRM come `NON_RISPOSTO` con
+ * una nota fissa; il CRM li rimette nel pool di /import. Qui la sola decisione; il cron
+ * `/api/cron/lancio-restituzioni` la applica.
+ *
+ * Decisione PO del 19/09: il 6 ottobre e' tutto del bot (risposte e follow-up), dal 7 si
+ * restituisce, cosi' i GDO possono chiamare quei lead gia' il 7. Prima era l'8.
  */
 
-export const RESTITUZIONE_ATTESA_MS = 48 * 3600_000;
+/**
+ * Quanto deve stare ferma una chat prima di tornare al pool: 24 ore (era 48), misurate
+ * sull'ULTIMO messaggio in qualunque direzione — il follow-up che abbiamo mandato, o la
+ * risposta del lead se e' arrivata dopo. Chi e' in conversazione viva resta al bot e
+ * torna al pool piu' avanti, man mano che la chat si spegne.
+ */
+export const RESTITUZIONE_ATTESA_MS = 24 * 3600_000;
 
 export type MotivoRestituzione = 'mai_risposto' | 'silenzio_dopo_followup' | 'followup_non_inviato';
 
@@ -40,13 +49,16 @@ const FASI_PRIMA_DEL_FOLLOWUP: readonly string[] = ['attesa', 'posto_bloccato', 
  */
 export const RESTITUZIONI_MAX_DEFAULT = 500;
 
-/** Dal giorno dopo dopodomani (regola a data, derivata dall'evento: nessuno stato). */
+/**
+ * Da dopodomani compreso (regola a data, derivata dall'evento: nessuno stato). Per
+ * l'evento del 5/10: il 6 e' del bot, il 7 si restituisce.
+ */
 export function restituzioniAttive(now: Date, eventoAt: Date): boolean {
-  return romeDayKey(now) > giorniLancio(eventoAt).dopodomani;
+  return romeDayKey(now) >= giorniLancio(eventoAt).dopodomani;
 }
 
 /**
- * Le date del cron in `vercel.json` sono scritte a mano (8-31 ottobre, 1-15 novembre) e
+ * Le date del cron in `vercel.json` sono scritte a mano (7-31 ottobre, 1-15 novembre) e
  * NON si derivano dall'evento: Vercel non legge i nostri setting. Se qualcuno sposta
  * `lancio_evento_at` senza toccare `vercel.json`, le restituzioni diventano attive in un
  * giorno in cui il cron non gira piu' — e non succede niente, in silenzio. Questa e' la
@@ -55,7 +67,7 @@ export function restituzioniAttive(now: Date, eventoAt: Date): boolean {
 export function dentroFinestraCron(now: Date): boolean {
   const mese = now.getUTCMonth() + 1;
   const giorno = now.getUTCDate();
-  return (mese === 10 && giorno >= 8) || (mese === 11 && giorno <= 15);
+  return (mese === 10 && giorno >= 7) || (mese === 11 && giorno <= 15);
 }
 
 /** Le restituzioni sarebbero attive ma il calendario del cron non le copre: bandierina
@@ -64,7 +76,7 @@ export function fuoriFinestraCron(now: Date, eventoAt: Date): boolean {
   return restituzioniAttive(now, eventoAt) && !dentroFinestraCron(now);
 }
 
-export type MotivoNiente = 'senza_crm' | 'esito_presente' | 'fase' | 'ancora_ignota' | 'incoerente' | 'attesa_48h' | 'ha_risposto';
+export type MotivoNiente = 'senza_crm' | 'esito_presente' | 'fase' | 'ancora_ignota' | 'incoerente' | 'attesa_24h' | 'ha_risposto';
 export type DecisioneRestituzione =
   | { kind: 'restituisci'; motivo: MotivoRestituzione }
   | { kind: 'ritenta_scarto' }
@@ -104,9 +116,14 @@ export function decideRestituzione(c: CandidataRestituzione, nowMs: number): Dec
   if (!timbro) return { kind: 'niente', motivo: 'incoerente' };
   const fuMs = Date.parse(timbro);
   if (Number.isNaN(fuMs)) return { kind: 'niente', motivo: 'incoerente' };
-  if (nowMs < fuMs + RESTITUZIONE_ATTESA_MS) return { kind: 'niente', motivo: 'attesa_48h' };
+  // L'attesa si misura sull'ULTIMO messaggio, in qualunque direzione (regola PO del
+  // 19/09): il follow-up che abbiamo mandato, o la risposta del lead se e' arrivata dopo.
+  // Una risposta fresca tiene il lead al bot (`ha_risposto`); quando anche quella chat si
+  // spegne per 24 ore torna al pool "man mano", invece di restare al bot per sempre.
   const inboundMs = c.last_inbound_at ? Date.parse(c.last_inbound_at) : NaN;
-  if (!Number.isNaN(inboundMs) && inboundMs > fuMs) return { kind: 'niente', motivo: 'ha_risposto' };
+  const haRisposto = !Number.isNaN(inboundMs) && inboundMs > fuMs;
+  const ultimoMs = haRisposto ? inboundMs : fuMs;
+  if (nowMs < ultimoMs + RESTITUZIONE_ATTESA_MS) return { kind: 'niente', motivo: haRisposto ? 'ha_risposto' : 'attesa_24h' };
   return { kind: 'restituisci', motivo: 'silenzio_dopo_followup' };
 }
 

@@ -29,11 +29,22 @@ Nessuna sessione, nessun cron e nessuno script li accende da solo.
 |---|---|---|
 | `/api/cron/lancio-zoom` | `*/5 17-18 5 10 *` | 5/10, ogni 5', copre le 19:00-20:55; il blast vero è 19:30-20:45 (finestra fine nel codice) |
 | `/api/cron/lancio-followup` | `*/5 10-11,15-17 6-7 10 *` | 6 e 7/10, ogni 5', copre 12:00-13:55 e 17:00-19:55; le fasce vere sono 12:00-14:00 e 17:30-19:30 |
-| `/api/cron/lancio-restituzioni` | `0 * 8-31 10 *` + `0 * 1-15 11 *` | ogni ora, dall'8/10 al 15/11 |
+| `/api/cron/lancio-restituzioni` | `0 * 7-31 10 *` + `0 * 1-15 11 *` | ogni ora, **dal 7/10** al 15/11 |
 
 Le **finestre vere** le derivano i moduli da `app_settings.lancio_evento_at`
 (`inFinestraFollowup`, `restituzioniAttive`, il blast Zoom): la data scritta nel cron è
 solo il giorno in cui Vercel sveglia la funzione, e i run in più girano a vuoto.
+
+> **Se `lancio_evento_at` resta indietro non parte niente, in silenzio.** È già successo:
+> dopo una prova generale era rimasta al 17/09. Tutti e quattro i cron del lancio ora lo
+> controllano da soli (`allarmeEventoStantio`, `lib/lancio-blast-motore.ts`) e scrivono un
+> **`lancio_evento_at_nel_passato`** di livello `error` in `event_log`, **una volta al
+> giorno per cron**. Non blocca nessun run: urla e basta. La soglia non è uguale per tutti,
+> perché non tutti i cron vivono prima dell'evento:
+> `lancio-aperture` e `lancio-zoom` girano prima o il giorno stesso → suonano se la data è
+> di **ieri**; `lancio-followup` (6-7/10) e `lancio-restituzioni` (dal 7/10) girano per
+> definizione dopo → suonano solo se la data è vecchia di **più di 14 giorni**, cioè se è
+> il residuo di un lancio precedente.
 
 > **Spostare l'evento = aggiornare `vercel.json`.** Se `lancio_evento_at` cambia senza
 > toccare le tre voci qui sopra, il blast, il follow-up e le restituzioni diventano attivi
@@ -164,7 +175,7 @@ Come si prova lo stesso — tre strade, in ordine di preferenza:
 
 ---
 
-## 3. Timeline 4/10 → 8/10
+## 3. Timeline 4/10 → 7/10
 
 Gli interruttori sono chiavi di `app_settings` (valore `jsonb`). Si cambiano da
 **`/fenice/impostazioni`** (pagina admin, scrive via `POST /api/fenice/lancio-settings` e
@@ -220,7 +231,7 @@ Da guardare in `event_log`:
 > tirato**. Se la sera del 5 il blast si è fermato da solo, `lancio_attivo` è `false`, e
 > alle 12:00 il follow-up **non parte** — senza che niente si rompa. Si accorge solo chi
 > guarda: nei log c'è un `lancio_followup_fermo` (warn) a ogni run, e il danno si vede
-> l'8/10, quando quelle persone tornano nel pool con la nota `Lancio: follow-up non inviato`.
+> il 7/10, quando quelle persone tornano nel pool con la nota `Lancio: follow-up non inviato`.
 
 - [ ] **Alle 11:30 del 6/10 una persona apre `/fenice/impostazioni` e guarda
       `lancio_attivo`.** Se è `false`: capire perché (§4), decidere, e riaccenderlo **prima
@@ -230,7 +241,7 @@ Da guardare in `event_log`:
       volta per chat**: se lo vedi una volta sola non vuol dire che sia successo una volta
       sola).
 - [ ] `lancio_pulsante_attivo`: finché resta acceso, chi preme il pulsante il 6 entra in
-      `post_pitch`. Non è un buco — il follow-up non interrompe chi sta scrivendo e dall'8
+      `post_pitch`. Non è un buco — il follow-up non interrompe chi sta scrivendo e dal 7
       quei lead tornano al pool — ma è una decisione da prendere, non da dimenticare.
 
 ### 6/10 12:00-14:00 e 17:30-19:30 (sconfina al 7/10) — follow-up
@@ -250,7 +261,11 @@ a ogni run se `lancio_attivo` è spento) · `lancio_followup_config_error` ·
 - [ ] Chi risponde al follow-up torna al flusso standard di Mario, col video della live.
 - [ ] Chi risponde "no" dopo il follow-up lo gestisce Mario standard (`DA_SCARTARE`).
 
-### 8/10 in poi — restituzioni al pool
+### 7/10 in poi — restituzioni al pool
+
+> **Il 6/10 è tutto del bot** (risposte e follow-up): non si restituisce nessuno. Le
+> restituzioni partono il **7/10**, così i GDO possono chiamare quei lead quel giorno
+> stesso (decisione PO del 19/09; prima partivano l'8).
 Da guardare: `lancio_restituzioni_run` (con `restituiti`, `rifiutati`, `errori`,
 `niente.ancora_ignota`, `scartiRitentati`/`scartiChiusi`, `fuori_finestra_cron`) ·
 `lancio_restituito` · `lancio_restituito_terminale` · `lancio_restituzione_rifiutata` (warn) ·
@@ -262,7 +277,9 @@ Da guardare: `lancio_restituzioni_run` (con `restituiti`, `rifiutati`, `errori`,
 `lancio_nota_restituzione_non_marcata`.
 
 - [ ] Tre motivi, con note **verbatim** che il CRM riconosce: `Lancio: mai risposto`,
-      `Lancio: silenzio dopo il follow-up` (48 ore dopo il follow-up),
+      `Lancio: silenzio dopo il follow-up` (**24 ore** di chat ferma, misurate
+      sull'ultimo messaggio in qualunque direzione: il follow-up che abbiamo mandato, o la
+      risposta del lead se è arrivata dopo),
       `Lancio: follow-up non inviato`. Non si cambia una virgola.
 - [ ] I lead restituiti compaiono nel pool `LANCIO_WEBDEV_2026` di `/import` sul CRM.
 - [ ] `lancio_restituzione_rifiutata` (il CRM ha risposto 200 ma `returnedToPool: false`,
@@ -274,7 +291,10 @@ Da guardare: `lancio_restituzioni_run` (con `restituiti`, `rifiutati`, `errori`,
       numero non è zero.
 - [ ] Tornano al pool anche i **`post_pitch`** rimasti a metà. Restano fuori solo le chat in
       `scelta_fatta`: quel lead ce l'ha in mano il CRM.
-- [ ] `offerta_del_mese_link` **non** si aspetta l'8/10: va impostato il giorno del deploy
+- [ ] Chi è **in conversazione viva** resta al bot e torna al pool più avanti, man mano che
+      la chat si spegne: nel riepilogo è `niente.ha_risposto` finché l'ultimo messaggio ha
+      meno di 24 ore, poi `niente.attesa_24h` non lo trattiene più.
+- [ ] `offerta_del_mese_link` **non** si aspetta il 7/10: va impostato il giorno del deploy
       (§0-bis). Se dopo la live cambia l'offerta, si aggiorna da `/fenice/impostazioni`.
 
 ---
@@ -301,7 +321,7 @@ morti o Meta che rifiuta), poi `lancio_attivo` = true dal pannello. Il run succe
 tengono i già serviti fuori dalla coda.
 
 > **Il freno della sera del 5 blocca anche il follow-up del 6.** Se non si riaccende prima
-> delle 12:00 del 6, il follow-up non parte, e chi aveva interagito torna al pool dall'8/10
+> delle 12:00 del 6, il follow-up non parte, e chi aveva interagito torna al pool dal 7/10
 > con la nota `Lancio: follow-up non inviato`. La decisione va presa la mattina del 6.
 
 ---

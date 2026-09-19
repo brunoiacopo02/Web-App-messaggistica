@@ -122,7 +122,7 @@ function query(table: string, op: Chiamata['op'], a: unknown, opzioni?: Chiamata
   const rec: Chiamata = { table, op, arg: a, filtri: [], opzioni };
   chiamate.push(rec);
   const q: Record<string, unknown> = {};
-  for (const m of ['eq', 'is', 'in', 'not', 'order', 'limit', 'range', 'gte', 'lte', 'select']) {
+  for (const m of ['eq', 'is', 'in', 'not', 'order', 'limit', 'range', 'gte', 'lte', 'select', 'contains']) {
     q[m] = (...args: unknown[]) => {
       rec.filtri.push({ m, args });
       return q;
@@ -261,6 +261,22 @@ describe('GET /api/cron/lancio-zoom — cancelli', () => {
     expect(sendTemplate).not.toHaveBeenCalled();
     expect(selectConv()).toBeUndefined();
     expect(eventoRun()).toMatchObject({ type: 'lancio_zoom_run' });
+  });
+
+  // Il caso vero: dopo la prova generale `lancio_evento_at` era rimasta al 17/09. La
+  // finestra del blast e' quindi gia' passata, il cron esce "fuori_finestra" a livello
+  // info e nessuno riceve il link. L'allarme e' l'unica cosa che lo fa vedere.
+  it('lancio_evento_at nel passato: evento error accanto al fuori_finestra', async () => {
+    stato.settings.lancio_evento_at = '2026-09-17T21:00:00+02:00';
+    await richiesta(DENTRO);
+    const allarme = eventi().find((e) => e.type === 'lancio_evento_at_nel_passato');
+    expect(allarme?.level).toBe('error');
+    expect(allarme?.payload).toMatchObject({ cron: 'lancio-zoom', evento_giorno: '2026-09-17', oggi: '2026-10-05' });
+  });
+
+  it('la sera dell evento (data giusta) l allarme non suona', async () => {
+    await richiesta(DENTRO);
+    expect(tipiEvento()).not.toContain('lancio_evento_at_nel_passato');
   });
 
   it('fuori dalla finestra di Roma: skip, e il run lo dice', async () => {

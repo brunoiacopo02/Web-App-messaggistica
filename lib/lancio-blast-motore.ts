@@ -8,6 +8,7 @@ import { runPool } from './run-pool';
 import { decideFreno } from './lancio-zoom-blast';
 import { CODICE_FREQUENCY_CAP } from './lancio-aperture';
 import { logCronQueryError } from './cron-query-error';
+import { romeDayKey, romeDaysBetween } from './rome-time';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -101,6 +102,112 @@ export async function logEvento(
   level: 'info' | 'warn' | 'error' = 'info',
 ): Promise<void> {
   await supabase.from('event_log').insert({ type, payload: payload as never, message, level });
+}
+
+/**
+ * Il tipo dell'evento che urla: cercarlo in `event_log` e' il primo controllo del 5/10.
+ * Il nome dice "nel passato" perche' e' cosi' che lo si cerca, ma la domanda vera e'
+ * "la configurazione e' STANTIA?" — e non e' la stessa per tutti i cron (vedi sotto).
+ */
+export const TIPO_EVENTO_NEL_PASSATO = 'lancio_evento_at_nel_passato';
+
+/**
+ * Da quanti giorni una data passata smette di essere normale e diventa il residuo di un
+ * altro lancio. Due settimane: il lancio del 5/10 ha coda fino al 15/11 sulle
+ * restituzioni, ma una data vecchia di 14 giorni mentre i cron lavorano vuol dire una
+ * cosa sola — nessuno l'ha aggiornata.
+ */
+export const GIORNI_CONFIG_STANTIA = 14;
+
+/**
+ * Quanti giorni di ritardo sono ammessi, per cron. Non e' un dettaglio di stile: e' la
+ * differenza fra un allarme e del rumore.
+ *
+ *  - `lancio-aperture` e `lancio-zoom` girano PRIMA o IL GIORNO dell'evento. Li' una data
+ *    di ieri e' gia' il guasto: la finestra del blast e' passata, il cron esce
+ *    `fuori_finestra` a livello `info` e nessuno riceve il link. Tolleranza zero.
+ *  - `lancio-followup` (6-7/10) e `lancio-restituzioni` (dal 7/10) girano PER DEFINIZIONE
+ *    dopo l'evento: per loro "evento passato" e' la normalita' e suonare a ogni run
+ *    sarebbe esattamente il rumore che ha fatto passare inosservato il problema vero.
+ *    Li' si suona solo se la data e' vecchia di piu' di due settimane.
+ */
+export const TOLLERANZA_GIORNI_EVENTO = {
+  'lancio-aperture': 0,
+  'lancio-zoom': 0,
+  'lancio-followup': GIORNI_CONFIG_STANTIA,
+  'lancio-restituzioni': GIORNI_CONFIG_STANTIA,
+} as const;
+export type CronLancio = keyof typeof TOLLERANZA_GIORNI_EVENTO;
+
+/**
+ * `lancio_evento_at` e' rimasta indietro piu' di quanto quel cron possa sopportare.
+ * Tutte le finestre del lancio (blast Zoom, follow-up, restituzioni, le etichette dei
+ * giorni) si derivano da quella data: se punta a un lancio vecchio, i cron escono con
+ * `motivo: 'fuori_finestra'` scritto a livello `info` e migliaia di persone non ricevono
+ * niente, in silenzio. E' gia' successo: dopo la prova generale la data era rimasta al
+ * 17/09.
+ *
+ * Il conto e' in GIORNI italiani, non in ore: per tutto il 5 ottobre l'evento delle 21:00
+ * e' "oggi" — il blast delle 19:30 e la notte della scelta devono poter girare senza far
+ * suonare niente.
+ *
+ * Una data assente o illeggibile non e' questo problema (ogni cron ha gia' il suo
+ * `config_error`): qui torna `false`.
+ */
+export function eventoStantio(now: Date, eventoAt: Date | string | null, cron: CronLancio): boolean {
+  const ms = eventoAt instanceof Date ? eventoAt.getTime() : eventoAt ? Date.parse(eventoAt) : NaN;
+  if (Number.isNaN(ms)) return false;
+  return romeDaysBetween(new Date(ms), now) > TOLLERANZA_GIORNI_EVENTO[cron];
+}
+
+/** La chiave del dedup: un allarme per cron e per giorno italiano. */
+export function chiaveAllarmeEvento(cron: CronLancio, now: Date): string {
+  return `${cron}:${romeDayKey(now)}`;
+}
+
+/**
+ * Lo stesso controllo, ma che lascia traccia: un evento `error` in `event_log`. NON ferma
+ * niente — le restituzioni con l'evento passato sono il loro caso normale, e il blast
+ * fuori finestra ha gia' le sue guardie: questa funzione urla soltanto. Torna `true` se
+ * ha scritto davvero.
+ *
+ * Una volta al giorno per cron, non a ogni run: `lancio-followup` gira ogni 5 minuti e
+ * `lancio-aperture` ogni 15, e un allarme ripetuto sessanta volte al giorno e' rumore,
+ * non un allarme (stessa lezione di `alertUnaVolta`, lib/alert-una-volta.ts, 25/08: 105
+ * righe per 2 conversazioni). Il dedup e' lo stesso meccanismo — si rilegge `event_log`
+ * cercando la chiave nel payload — ma la chiave qui e' `cron:giorno` invece del
+ * `conversationId` di quella funzione, quindi non la si puo' riusare tale e quale.
+ * Se la rilettura fallisce si scrive lo stesso: meglio un doppione che un silenzio.
+ */
+export async function allarmeEventoStantio(
+  supabase: Supa,
+  cron: CronLancio,
+  now: Date,
+  eventoAt: Date | string | null,
+): Promise<boolean> {
+  if (!eventoStantio(now, eventoAt, cron)) return false;
+  const chiave = chiaveAllarmeEvento(cron, now);
+  const { data: gia } = await supabase
+    .from('event_log')
+    .select('id')
+    .eq('type', TIPO_EVENTO_NEL_PASSATO)
+    .contains('payload', { chiave })
+    .limit(1);
+  if (((gia ?? []) as unknown[]).length > 0) return false;
+
+  const ms = eventoAt instanceof Date ? eventoAt.getTime() : Date.parse(String(eventoAt));
+  const configurata = new Date(ms);
+  const giornoEvento = romeDayKey(configurata);
+  const oggi = romeDayKey(now);
+  const giorni = romeDaysBetween(configurata, now);
+  await logEvento(
+    supabase,
+    TIPO_EVENTO_NEL_PASSATO,
+    { chiave, cron, evento_at: configurata.toISOString(), evento_giorno: giornoEvento, oggi, giorni_indietro: giorni },
+    `[lancio] ${cron}: lancio_evento_at e' vecchia di ${giorni} giorni (${giornoEvento}, oggi e' ${oggi}). Le finestre del lancio si derivano da questa data: finche' resta indietro i cron escono "fuori_finestra" e non parte niente. Correggerla dal pannello /fenice/impostazioni.`,
+    'error',
+  );
+  return true;
 }
 
 /**

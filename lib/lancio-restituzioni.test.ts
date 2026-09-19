@@ -21,23 +21,26 @@ const c = (over: Partial<CandidataRestituzione> = {}): CandidataRestituzione => 
   ...over,
 });
 
-describe('restituzioniAttive — dal giorno dopo dopodomani (8/10 per l evento del 5)', () => {
-  it('7/10 23:59 Roma no, 8/10 00:00 Roma si, e segue l evento', () => {
-    expect(restituzioniAttive(new Date('2026-10-07T23:59:00+02:00'), EVENTO)).toBe(false);
-    expect(restituzioniAttive(new Date('2026-10-08T00:00:00+02:00'), EVENTO)).toBe(true);
+describe('restituzioniAttive — da dopodomani compreso (7/10 per l evento del 5)', () => {
+  it('6/10 23:59 Roma no (il 6 e tutto del bot), 7/10 00:00 Roma si, e segue l evento', () => {
+    expect(restituzioniAttive(new Date('2026-10-06T23:59:00+02:00'), EVENTO)).toBe(false);
+    expect(restituzioniAttive(new Date('2026-10-07T00:00:00+02:00'), EVENTO)).toBe(true);
+    expect(restituzioniAttive(new Date('2026-10-07T23:59:00+02:00'), EVENTO)).toBe(true);
     expect(restituzioniAttive(new Date('2026-10-20T10:00:00+02:00'), EVENTO)).toBe(true);
     expect(restituzioniAttive(new Date('2026-10-08T10:00:00+02:00'), new Date('2026-10-12T21:00:00+02:00'))).toBe(false);
   });
 });
 
 describe('fuoriFinestraCron — l evento spostato fuori dalle date scritte a mano in vercel.json', () => {
-  it('dentro 8/10-15/11 no; dopo il 15/11 si; prima della data delle restituzioni mai', () => {
+  it('dentro 7/10-15/11 no; dopo il 15/11 si; prima della data delle restituzioni mai', () => {
+    // Il cron di vercel.json parte dal 7: il primo giorno delle restituzioni e coperto.
+    expect(fuoriFinestraCron(new Date('2026-10-07T10:00:00+02:00'), EVENTO)).toBe(false);
     expect(fuoriFinestraCron(new Date('2026-10-08T10:00:00+02:00'), EVENTO)).toBe(false);
     expect(fuoriFinestraCron(new Date('2026-11-15T10:00:00+01:00'), EVENTO)).toBe(false);
     expect(fuoriFinestraCron(new Date('2026-11-16T10:00:00+01:00'), EVENTO)).toBe(true);
     expect(fuoriFinestraCron(new Date('2026-12-01T10:00:00+01:00'), EVENTO)).toBe(true);
     // Restituzioni non ancora attive: non c'e' niente da segnalare.
-    expect(fuoriFinestraCron(new Date('2026-10-07T10:00:00+02:00'), EVENTO)).toBe(false);
+    expect(fuoriFinestraCron(new Date('2026-10-06T10:00:00+02:00'), EVENTO)).toBe(false);
     // Evento spostato a fine novembre: le restituzioni partirebbero il 1/12, quando il
     // cron non gira piu'.
     expect(fuoriFinestraCron(new Date('2026-12-02T10:00:00+01:00'), new Date('2026-11-29T21:00:00+01:00'))).toBe(true);
@@ -71,11 +74,11 @@ describe('decideRestituzione', () => {
   it('post_pitch senza nessun inbound dopo l ancora: mai_risposto', () => {
     expect(decideRestituzione(c({ lancio_fase: 'post_pitch' }), NOW)).toEqual({ kind: 'restituisci', motivo: 'mai_risposto' });
   });
-  it('post_pitch col timbro del follow-up: valgono le 48 ore, come per followup_inviato', () => {
+  it('post_pitch col timbro del follow-up: valgono le 24 ore, come per followup_inviato', () => {
     const fu = new Date(NOW - RESTITUZIONE_ATTESA_MS - H).toISOString();
     expect(decideRestituzione(c({ lancio_fase: 'post_pitch', haInteragito: true, lancio_followup_inviato_at: fu }), NOW)).toEqual({ kind: 'restituisci', motivo: 'silenzio_dopo_followup' });
     const recente = new Date(NOW - RESTITUZIONE_ATTESA_MS + H).toISOString();
-    expect(decideRestituzione(c({ lancio_fase: 'post_pitch', haInteragito: true, lancio_followup_inviato_at: recente }), NOW)).toEqual({ kind: 'niente', motivo: 'attesa_48h' });
+    expect(decideRestituzione(c({ lancio_fase: 'post_pitch', haInteragito: true, lancio_followup_inviato_at: recente }), NOW)).toEqual({ kind: 'niente', motivo: 'attesa_24h' });
   });
   it('ancora ignota: si lascia a una persona', () => {
     expect(decideRestituzione(c({ ancora: null }), NOW)).toEqual({ kind: 'niente', motivo: 'ancora_ignota' });
@@ -93,13 +96,27 @@ describe('decideRestituzione', () => {
     const fu = new Date(NOW - RESTITUZIONE_ATTESA_MS - H).toISOString();
     expect(decideRestituzione(c({ lancio_fase: 'link_inviato', haInteragito: true, lancio_followup_inviato_at: fu }), NOW)).toEqual({ kind: 'restituisci', motivo: 'silenzio_dopo_followup' });
   });
-  it('followup_inviato: silenzio dopo 48h → silenzio_dopo_followup; prima no; con risposta no', () => {
+  it('followup_inviato: silenzio dopo 24h → silenzio_dopo_followup; prima no; con risposta fresca no', () => {
     const fu = new Date(NOW - RESTITUZIONE_ATTESA_MS - H).toISOString();
     expect(decideRestituzione(c({ lancio_fase: 'followup_inviato', haInteragito: true, lancio_followup_inviato_at: fu, last_inbound_at: '2026-10-05T20:00:00Z' }), NOW)).toEqual({ kind: 'restituisci', motivo: 'silenzio_dopo_followup' });
     const recente = new Date(NOW - RESTITUZIONE_ATTESA_MS + H).toISOString();
-    expect(decideRestituzione(c({ lancio_fase: 'followup_inviato', haInteragito: true, lancio_followup_inviato_at: recente }), NOW)).toEqual({ kind: 'niente', motivo: 'attesa_48h' });
+    expect(decideRestituzione(c({ lancio_fase: 'followup_inviato', haInteragito: true, lancio_followup_inviato_at: recente }), NOW)).toEqual({ kind: 'niente', motivo: 'attesa_24h' });
     expect(decideRestituzione(c({ lancio_fase: 'followup_inviato', haInteragito: true, lancio_followup_inviato_at: fu, last_inbound_at: new Date(NOW - H).toISOString() }), NOW)).toEqual({ kind: 'niente', motivo: 'ha_risposto' });
     expect(decideRestituzione(c({ lancio_fase: 'followup_inviato', haInteragito: true }), NOW)).toEqual({ kind: 'niente', motivo: 'incoerente' });
+  });
+  // Regola PO 19/09: l'attesa si misura sull'ULTIMO messaggio in qualunque direzione.
+  // Chi risponde resta al bot finche' la chat e' viva, poi torna al pool "man mano".
+  it('chi ha risposto e poi e sparito da 24h torna al pool; se la risposta e fresca no', () => {
+    const fu = new Date(NOW - 5 * 24 * H).toISOString();
+    const rispostaVecchia = new Date(NOW - 25 * H).toISOString();
+    expect(decideRestituzione(c({ lancio_fase: 'followup_inviato', haInteragito: true, lancio_followup_inviato_at: fu, last_inbound_at: rispostaVecchia }), NOW))
+      .toEqual({ kind: 'restituisci', motivo: 'silenzio_dopo_followup' });
+    const rispostaFresca = new Date(NOW - 23 * H).toISOString();
+    expect(decideRestituzione(c({ lancio_fase: 'followup_inviato', haInteragito: true, lancio_followup_inviato_at: fu, last_inbound_at: rispostaFresca }), NOW))
+      .toEqual({ kind: 'niente', motivo: 'ha_risposto' });
+  });
+  it('la soglia e 24 ore, non piu 48', () => {
+    expect(RESTITUZIONE_ATTESA_MS).toBe(24 * H);
   });
   it('le note al CRM sono esattamente quelle che il CRM riconosce', () => {
     expect(NOTA_RESTITUZIONE).toEqual({

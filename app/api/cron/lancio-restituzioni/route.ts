@@ -15,13 +15,14 @@ import {
   FASI_RESTITUIBILI, RESTITUZIONI_MAX_DEFAULT,
   type MotivoNiente, type MotivoRestituzione,
 } from '@/lib/lancio-restituzioni';
-import { autorizzatoCron, leggiParametriCron, logEvento, leggiCoda, TEMPO_MASSIMO_MS } from '@/lib/lancio-blast-motore';
+import { autorizzatoCron, leggiParametriCron, logEvento, leggiCoda, allarmeEventoStantio, TEMPO_MASSIMO_MS } from '@/lib/lancio-blast-motore';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
-// Restituzioni al pool (spec §5.8): ogni ora dal giorno dopo dopodomani. NON_RISPOSTO
+// Restituzioni al pool (spec §5.8): ogni ora da dopodomani (7/10, decisione PO del
+// 19/09: il 6 e' tutto del bot, dal 7 i GDO possono chiamare). NON_RISPOSTO
 // al CRM con la nota fissa, poi `restituito` + `closed`. Pre-passo (C2): gli scarti
 // rifiutati dal CRM dopo un congedo si ritentano senza bolla. NON dipende da
 // `lancio_attivo`: spegnere il lancio non deve lasciare lead appesi al bot.
@@ -53,7 +54,7 @@ const GIORNI_STORICO = 30;
 export const NOTA_SCARTO_RITENTATO = 'Lancio Web Dev AI: aveva detto di no e il congedo era gia\' uscito; esito ritentato dal cron.';
 
 const contatoreNiente = (): Record<MotivoNiente, number> =>
-  ({ senza_crm: 0, esito_presente: 0, fase: 0, ancora_ignota: 0, incoerente: 0, attesa_48h: 0, ha_risposto: 0 });
+  ({ senza_crm: 0, esito_presente: 0, fase: 0, ancora_ignota: 0, incoerente: 0, attesa_24h: 0, ha_risposto: 0 });
 
 export async function GET(req: NextRequest) {
   if (!autorizzatoCron(req)) return new NextResponse('unauthorized', { status: 401 });
@@ -77,6 +78,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, skipped: 'config', missing: ['lancio_evento_at'] });
   }
   const evento = new Date(eventoMs);
+  // Allarme e basta, non ferma il run. Qui l'evento passato e' il caso NORMALE (le
+  // restituzioni girano proprio dopo), quindi la soglia e' 14 giorni: si suona solo se la
+  // data e' il residuo di un lancio precedente. Una volta al giorno, non a ogni run.
+  await allarmeEventoStantio(supabase, 'lancio-restituzioni', now, evento);
   contesto = { ...contesto, fuori_finestra_cron: fuoriFinestraCron(now, evento) };
   const tagliaStorico = new Date(eventoMs - GIORNI_STORICO * 24 * 60 * 60 * 1000).toISOString();
   const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE ?? '';

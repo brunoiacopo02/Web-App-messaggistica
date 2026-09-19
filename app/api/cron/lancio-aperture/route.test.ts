@@ -34,6 +34,8 @@ const stato = {
   convs: [] as ConvFinta[],
   outbound: new Map<number, OutFinto[]>(),
   attivo: '1' as string,
+  /** `lancio_evento_at`: serve all'allarme sulla data rimasta indietro. */
+  eventoAt: null as string | null,
   /** Chat già timbrate: l'update del claim non le restituisce. */
   timbrate: new Set<number>(),
   /** Il VALORE del timbro, per conv: il rilascio è ancorato a quello che ha scritto
@@ -76,7 +78,11 @@ function esegui(rec: Chiamata): { data: unknown; error: unknown; count?: number 
     throw new Error('insert messages KO');
   }
   if (rec.op !== 'select') return { data: null, error: null };
-  if (rec.table === 'app_settings') return { data: [{ key: 'lancio_attivo', value: stato.attivo }], error: null };
+  if (rec.table === 'app_settings') {
+    const righe: { key: string; value: unknown }[] = [{ key: 'lancio_attivo', value: stato.attivo }];
+    if (stato.eventoAt !== null) righe.push({ key: 'lancio_evento_at', value: stato.eventoAt });
+    return { data: righe, error: null };
+  }
   if (rec.table === 'conversations') {
     if (stato.convSelectError) return { data: null, error: stato.convSelectError };
     // La paginazione del route: la seconda pagina è sempre vuota (fixture piccole).
@@ -103,7 +109,7 @@ function query(table: string, op: Chiamata['op'], arg: unknown, opzioni?: { head
   const rec: Chiamata = { table, op, arg, filtri: [], opzioni };
   chiamate.push(rec);
   const q: Record<string, unknown> = {};
-  for (const m of ['is', 'or', 'gte', 'lte', 'not', 'order', 'limit', 'single', 'maybeSingle', 'select']) {
+  for (const m of ['is', 'or', 'gte', 'lte', 'not', 'order', 'limit', 'single', 'maybeSingle', 'select', 'contains']) {
     q[m] = () => q;
   }
   q.eq = (colonna: string, v: unknown) => { rec.filtri.push([colonna, v]); return q; };
@@ -184,6 +190,7 @@ beforeEach(() => {
   stato.convs = [];
   stato.outbound = new Map();
   stato.attivo = '1';
+  stato.eventoAt = null;
   stato.timbrate = new Set();
   stato.timbri = new Map();
   stato.messagesInsertKo = false;
@@ -210,6 +217,33 @@ describe('GET /api/cron/lancio-aperture', () => {
     const res = await richiesta(null);
     expect(res.status).toBe(401);
     expect(sendTemplate).not.toHaveBeenCalled();
+  });
+
+  // `lancio_evento_at` rimasto indietro: tutte le finestre del lancio si derivano da
+  // quella data, e senza questo allarme i cron escono "fuori_finestra" a livello info.
+  it('lancio_evento_at nel passato: evento error, e il run continua', async () => {
+    stato.eventoAt = '2026-09-17T21:00:00+02:00';
+    stato.convs = [conv(1)];
+    await richiesta();
+    const allarme = eventi().find((e) => e.type === 'lancio_evento_at_nel_passato');
+    expect(allarme?.level).toBe('error');
+    expect(allarme?.payload).toMatchObject({ cron: 'lancio-aperture', evento_giorno: '2026-09-17', oggi: '2026-09-20' });
+    // Non blocca: il benvenuto parte lo stesso.
+    expect(sendTemplate).toHaveBeenCalledTimes(1);
+  });
+
+  it('data dell evento nel futuro: nessun allarme', async () => {
+    stato.eventoAt = '2026-10-05T21:00:00+02:00';
+    stato.convs = [conv(1)];
+    await richiesta();
+    expect(tipiEvento()).not.toContain('lancio_evento_at_nel_passato');
+  });
+
+  it('lancio spento: l allarme non suona (il cron gira tutto l anno ogni 15 minuti)', async () => {
+    stato.attivo = '0';
+    stato.eventoAt = '2026-09-17T21:00:00+02:00';
+    await richiesta();
+    expect(tipiEvento()).not.toContain('lancio_evento_at_nel_passato');
   });
 
   it('manda il benvenuto alle chat in attesa e lascia traccia', async () => {

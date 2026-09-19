@@ -17,7 +17,7 @@ import { inOpeningWindow } from '@/lib/sequence';
 import { lancioBenvenutoText } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
 import { templateName } from '@/lib/name';
-import { eRifiutoDiPolicy } from '@/lib/lancio-blast-motore';
+import { eRifiutoDiPolicy, allarmeEventoStantio } from '@/lib/lancio-blast-motore';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -116,6 +116,12 @@ export async function GET(req: NextRequest) {
     );
     return NextResponse.json({ ok: true, inviati: 0, attesi: 0, saltati: 0, capped: 0, falliti: 0, motivo: motivoFermo, attivo: settings.attivo });
   }
+
+  // Allarme e basta (non ferma il run): `lancio_evento_at` rimasto indietro spegne in
+  // silenzio le finestre di blast, follow-up e restituzioni. Sta DOPO il kill-switch di
+  // proposito: questo e' l'unico dei quattro cron del lancio che gira tutto l'anno ogni
+  // 15', e a lancio spento un evento passato e' solo un lancio finito, non un guasto.
+  await allarmeEventoStantio(supabase, 'lancio-aperture', new Date(now), settings.eventoAt);
 
   // Tetto orario (spec §11.3): lo stesso dell'intake, contato sulle stesse righe. Senza,
   // questo cron sarebbe proprio il modo di rifare il picco che il tetto dell'intake
