@@ -441,6 +441,10 @@ export async function enrollGdoLeadAsPostino(
  * - la guardia anti-doppione viene PRIMA della finestra: una chat gia' viva non riceve
  *   un secondo benvenuto nemmeno differito, ma entra comunque nel flusso lancio
  *   (`lancio_*` valorizzati) e la cronologia non si azzera;
+ * - un ri-arruolamento su una chat GIA' in questo lancio (stesso `lancio_slug`) non ne
+ *   tocca l'avanzamento: fase, esito e timbri restano dove sono, si aggiorna solo
+ *   l'anagrafica, e resta un `lancio_riarruolamento_ignorato` in `event_log`. Chi entra
+ *   adesso — nessun lancio, o un lancio diverso — viene inizializzato come sempre;
  * - fuori dalla fascia 07-23, con `lancio_attivo` spento, o oltre il tetto orario dei
  *   benvenuti (`LANCIO_WELCOME_MAX_PER_HOUR`, spec §11.3), il lead e' preso in carico
  *   senza outbound: lo riprende il cron `lancio-aperture`, NON `sequence-touches`.
@@ -515,20 +519,64 @@ async function enrollLancio(
   // il cron `lancio-aperture` lo rilegge da `wa_number`.
   const from = mittenteDiConversazione({ wa_number: waNumber }) ?? primario;
 
+  // Entra ADESSO nel lancio, o c'e' gia' dentro? E' la domanda da cui dipende tutto
+  // quello che si scrive qui sotto, e la si fa PRIMA di ogni update.
+  //  - `lancio_slug` diverso (o assente) = la chat entra adesso: si inizializza tutto,
+  //    fase compresa. E' il caso di chi il bot aveva gia' contattato per altri funnel, ed
+  //    e' giusto che riparta da capo; lo stesso varrebbe per una chat di un lancio
+  //    PASSATO che entra in uno nuovo — per questo il confronto e' sull'uguaglianza
+  //    dello slug e non su "ha gia' un lancio".
+  //  - stesso `lancio_slug` = ci e' gia' dentro, e riscriverle la fase la riporterebbe
+  //    in coda: uno che la sera della live ha bloccato il posto tornerebbe ad 'attesa',
+  //    riceverebbe di nuovo il benvenuto e il 7 ottobre finirebbe fra i restituiti come
+  //    "non ha mai risposto". Un ri-arruolamento capita per poco (sync rifatto, intake
+  //    ritentato, doppio evento da ActiveCampaign) e non deve cancellare niente.
+  const { data: rigaPrima, error: erroreStato } = await supabase
+    .from('conversations')
+    .select('lancio_slug, lancio_fase, lancio_benvenuto_at')
+    .eq('id', conversationId)
+    .maybeSingle();
+  const stato = rigaPrima as
+    { lancio_slug?: string | null; lancio_fase?: string | null; lancio_benvenuto_at?: string | null } | null;
+  // Lettura fallita = non si sa: si ricade sul comportamento di sempre (inizializza), ma
+  // con una riga `warn`, perche' e' l'unico caso in cui il reset puo' ancora succedere.
+  const giaInQuestoLancio = !erroreStato && (stato?.lancio_slug ?? null) === args.lancio.slug;
+
   const lancioFields = {
     lancio_slug: args.lancio.slug,
-    lancio_fase: 'attesa',
-    lancio_ingresso: args.lancio.ingresso,
-    // Chat riusata: l'esito del giro precedente resta scritto sulla riga. Va azzerato
-    // qui, all'ingresso nel lancio, o la restituzione di fine lancio (NON_RISPOSTO) si
-    // troverebbe davanti un APPUNTAMENTO vecchio e `resolveOutcomeAction` la
-    // declasserebbe a NOTA — su un lead che con questo lancio non c'entra niente.
-    // Su una conversazione appena creata sono gia' null: scriverli non cambia nulla.
-    bot_outcome: null,
-    bot_outcome_at: null,
-    bot_scheduled_at: null,
+    // Su una chat gia' in questo lancio si fermano qui: `lancio_fase`, `lancio_ingresso`
+    // e l'esito registrano cose GIA' successe, e riscriverle sarebbe cancellarle.
+    ...(giaInQuestoLancio ? {} : {
+      lancio_fase: 'attesa',
+      lancio_ingresso: args.lancio.ingresso,
+      // Chat riusata: l'esito del giro precedente resta scritto sulla riga. Va azzerato
+      // qui, all'ingresso nel lancio, o la restituzione di fine lancio (NON_RISPOSTO) si
+      // troverebbe davanti un APPUNTAMENTO vecchio e `resolveOutcomeAction` la
+      // declasserebbe a NOTA — su un lead che con questo lancio non c'entra niente.
+      // Su una conversazione appena creata sono gia' null: scriverli non cambia nulla.
+      bot_outcome: null,
+      bot_outcome_at: null,
+      bot_scheduled_at: null,
+    }),
   };
   const base = { phone: args.phone, conversationId, crmLeadId: args.crmLeadId ?? null, slug: args.lancio.slug, ingresso: args.lancio.ingresso };
+
+  // Quante volte succede davvero oggi non lo sa nessuno: da qui in poi si conta.
+  if (giaInQuestoLancio) {
+    await supabase.from('event_log').insert({
+      type: 'lancio_riarruolamento_ignorato',
+      payload: { ...base, fasePreservata: stato?.lancio_fase ?? null, benvenutoAt: stato?.lancio_benvenuto_at ?? null } as never,
+      message: `[lancio] conv ${conversationId} e' gia' in ${args.lancio.slug} (fase ${stato?.lancio_fase ?? 'nulla'}): il ri-arruolamento del lead ${args.crmLeadId ?? args.phone} (ingresso ${args.lancio.ingresso}) non tocca fase ne' esito`,
+      level: 'info',
+    });
+  } else if (erroreStato) {
+    await supabase.from('event_log').insert({
+      type: 'lancio_stato_non_letto',
+      payload: { ...base, errore: erroreStato.message } as never,
+      message: `[lancio] conv ${conversationId}: stato del lancio illeggibile (${erroreStato.message}), si inizializza come un ingresso nuovo`,
+      level: 'warn',
+    });
+  }
   const evento = (extra: Record<string, unknown>, message: string) =>
     supabase.from('event_log').insert({
       type: 'lancio_intake',
@@ -608,9 +656,13 @@ async function enrollLancio(
   // Il benvenuto e' partito: si timbra `lancio_benvenuto_at`, che e' il lucchetto letto
   // dal cron `lancio-aperture` (una riga timbrata non e' nemmeno candidata). Se l'invio
   // e' fallito NON si timbra: il cron deve poterci riprovare.
+  // Su una chat gia' in questo lancio che il timbro ce l'ha, invece, resta quello di
+  // allora: e' l'ancora da cui il follow-up misura il silenzio del lead, e riportarla ad
+  // oggi gli farebbe ricominciare il conto.
+  const timbraBenvenuto = res.ok && !(giaInQuestoLancio && stato?.lancio_benvenuto_at);
   await supabase
     .from('conversations')
-    .update(res.ok ? { ...convUpdate, lancio_benvenuto_at: new Date().toISOString() } : convUpdate)
+    .update(timbraBenvenuto ? { ...convUpdate, lancio_benvenuto_at: new Date().toISOString() } : convUpdate)
     .eq('id', conversationId);
 
   if (!res.ok) {

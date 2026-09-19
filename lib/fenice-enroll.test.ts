@@ -30,6 +30,11 @@ function makeSupabase(
     convErrore?: boolean;
     /** Quante chat sono gia' nate oggi sul numero nuovo (tetto `puoAprireSuBot2`). */
     aperturaOggiSulSecondo?: number;
+    /** Lo stato del lancio gia' scritto sulla riga, come lo rilegge `enrollLancio`.
+     *  Assente = chat mai entrata in nessun lancio. */
+    lancioRow?: { lancio_slug: string | null; lancio_fase: string | null; lancio_benvenuto_at?: string | null };
+    /** La rilettura dello stato del lancio va in errore: "non lo so", non "non c'e'". */
+    lancioErrore?: boolean;
   } = {},
 ) {
   const calls = { updates: [] as any[], events: [] as any[], conteggi: 0 };
@@ -54,17 +59,25 @@ function makeSupabase(
           // `apreSopraChatViva`, `maybeSingle()` quella della guardia anti-doppione, e
           // con `head: true` e' il conteggio del tetto giornaliero del numero nuovo
           // (`puoAprireSuBot2`), che chiude su `.eq(...).gte(...)`.
-          select(_colonne?: string, opzioni?: { head?: boolean }) {
+          // Le `maybeSingle()` sulla stessa select sono due e si distinguono dalle
+          // colonne chieste: `lancio_slug...` e' la rilettura dello stato del lancio
+          // (ri-arruolamento), il resto e' la guardia anti-doppione.
+          select(colonne?: string, opzioni?: { head?: boolean }) {
             if (opzioni?.head) {
               return { eq: () => ({ gte: async () => ({ count: aperturaOggiSulSecondo, error: null }) }) };
             }
+            const chiedeIlLancio = (colonne ?? '').includes('lancio_slug');
             return {
               eq() {
                 return {
                   single: async () => (convErrore
                     ? { data: null, error: { message: 'connessione persa' } }
                     : { data: convRow }),
-                  maybeSingle: async () => ({ data: null }),
+                  maybeSingle: async () => {
+                    if (!chiedeIlLancio) return { data: null };
+                    if (guardia.lancioErrore) return { data: null, error: { message: 'connessione persa' } };
+                    return { data: guardia.lancioRow ?? null };
+                  },
                 };
               },
             };
@@ -522,7 +535,7 @@ describe('enrollGdoLeadAsPostino — arruolamento in modalità postino', () => {
  * Fake Supabase che sa anche leggere: serve alla guardia anti-doppione, che prima di
  * inviare guarda il crm_lead_id della conv e se un outbound è già partito di recente.
  */
-function makeSupabaseLeggibile(opts: { crmLeadId?: string | null; outboundRecenti?: number; /** Righe in uscita recenti FALLITE (senza `twilio_sid`): il `.not('twilio_sid','is',null)` della guardia le scarta. */ outboundFalliti?: number; lastInboundAt?: string | null; benvenutiUltimaOra?: number }) {
+function makeSupabaseLeggibile(opts: { crmLeadId?: string | null; outboundRecenti?: number; /** Righe in uscita recenti FALLITE (senza `twilio_sid`): il `.not('twilio_sid','is',null)` della guardia le scarta. */ outboundFalliti?: number; lastInboundAt?: string | null; benvenutiUltimaOra?: number; /** Lo stato del lancio gia' scritto sulla riga (ri-arruolamento). */ lancioRow?: { lancio_slug: string | null; lancio_fase: string | null; lancio_benvenuto_at?: string | null } }) {
   const calls = { updates: [] as any[], events: [] as any[] };
   const supabase: any = {
     from(table: string) {
@@ -533,11 +546,14 @@ function makeSupabaseLeggibile(opts: { crmLeadId?: string | null; outboundRecent
             const chain: any = { eq: () => chain, or: () => chain, then: (r: any) => r({}) };
             return chain;
           },
-          select() {
+          select(colonne?: string) {
             const riga = { ai_owner: null, ai_status: null, crm_lead_id: opts.crmLeadId ?? null, last_inbound_at: opts.lastInboundAt ?? null };
             // `single()` è la lettura della guardia `apreSopraChatViva`: qui la chat non
             // è di Mario, quindi quella guardia non scatta e resta in scena l'anti-doppione.
-            return { eq() { return { single: async () => ({ data: riga }), maybeSingle: async () => ({ data: riga }) }; } };
+            // La `maybeSingle()` che chiede `lancio_slug` è invece la rilettura dello
+            // stato del lancio dentro `enrollLancio`.
+            const lancio = (colonne ?? '').includes('lancio_slug');
+            return { eq() { return { single: async () => ({ data: riga }), maybeSingle: async () => ({ data: lancio ? (opts.lancioRow ?? null) : riga }) }; } };
           },
         };
       }
@@ -763,6 +779,118 @@ describe('enrollLeadIntoMario — ramo lancio (B1)', () => {
     const viva = makeSupabaseLeggibile({ crmLeadId: 'crm-VECCHIO', outboundRecenti: 0, lastInboundAt: treGiorniFa });
     await enrollLeadIntoMario(viva.supabase, ARGS);
     expect(viva.calls.updates[0]).toMatchObject({ bot_outcome: null, bot_outcome_at: null, bot_scheduled_at: null });
+  });
+
+  // Bug visto dal vivo il 19/09/2026. `lancioFields` portava `lancio_fase: 'attesa'` e
+  // `bot_outcome: null` e veniva scritto anche su una chat che nel lancio c'era gia': la
+  // conv 3292 era in `link_inviato` (link Zoom della prova generale del 17/09) e un
+  // intake delle 12:49 l'ha riportata ad 'attesa', senza lasciare un evento. Lo stesso
+  // colpo su un `posto_bloccato` la sera della live la farebbe restituire al pool il 7
+  // ottobre come "non ha mai risposto", su uno che aveva gia' detto di si'.
+  describe("ri-arruolamento di una chat gia' nel lancio", () => {
+    const GIA_DENTRO = {
+      lancio_slug: 'webdev-2026-10',
+      lancio_fase: 'posto_bloccato',
+      lancio_benvenuto_at: '2026-09-17T14:52:45.356Z',
+    };
+
+    it("chat mai entrata in un lancio: si inizializza come sempre (fase attesa, esito azzerato)", async () => {
+      const { supabase, calls } = makeSupabase();
+      await enrollLeadIntoMario(supabase, ARGS);
+      expect(calls.updates[0]).toMatchObject({
+        lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa', lancio_ingresso: 'lista',
+        bot_outcome: null, bot_outcome_at: null, bot_scheduled_at: null,
+      });
+      expect(calls.events.some((e) => e.type === 'lancio_riarruolamento_ignorato')).toBe(false);
+    });
+
+    it("gia' in questo lancio: nessuna update tocca fase, ingresso o esito", async () => {
+      const { supabase, calls } = makeSupabase(0, false, { lancioRow: GIA_DENTRO });
+      await enrollLeadIntoMario(supabase, ARGS);
+      expect(calls.updates.length).toBeGreaterThan(0);
+      // Il campo non deve comparire affatto: scriverci sopra il valore di partenza
+      // sarebbe comunque una riscrittura alla cieca di quello che la chat ha gia' fatto.
+      const scritti = calls.updates.flatMap((u) => Object.keys(u));
+      expect(scritti.filter((k) => ['lancio_fase', 'lancio_ingresso', 'bot_outcome', 'bot_outcome_at', 'bot_scheduled_at'].includes(k))).toEqual([]);
+    });
+
+    it("gia' in questo lancio: resta l'evento lancio_riarruolamento_ignorato con la fase preservata", async () => {
+      const { supabase, calls } = makeSupabase(0, false, { lancioRow: GIA_DENTRO });
+      await enrollLeadIntoMario(supabase, ARGS);
+      const evt = calls.events.find((e) => e.type === 'lancio_riarruolamento_ignorato');
+      expect(evt).toBeTruthy();
+      expect(evt.level).toBe('info');
+      expect(evt.payload).toMatchObject({
+        conversationId: 42, crmLeadId: 'crm-L1', slug: 'webdev-2026-10', ingresso: 'lista',
+        fasePreservata: 'posto_bloccato',
+      });
+    });
+
+    // Cautela: la condizione e' sull'UGUAGLIANZA dello slug. Una chat del lancio vecchio
+    // che entra in un lancio nuovo deve ripartire da capo, o si porterebbe dietro la
+    // fase e l'esito di un lancio che non c'entra piu' niente.
+    it('chat di un lancio DIVERSO: si reinizializza da capo', async () => {
+      const { supabase, calls } = makeSupabase(0, false, {
+        lancioRow: { lancio_slug: 'webdev-2026-04', lancio_fase: 'scelta_fatta', lancio_benvenuto_at: '2026-04-02T09:00:00.000Z' },
+      });
+      await enrollLeadIntoMario(supabase, ARGS);
+      expect(calls.updates[0]).toMatchObject({
+        lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa', lancio_ingresso: 'lista', bot_outcome: null,
+      });
+      expect(calls.events.some((e) => e.type === 'lancio_riarruolamento_ignorato')).toBe(false);
+    });
+
+    it("gia' in questo lancio: l'anagrafica e il lead del CRM si aggiornano comunque", async () => {
+      const { supabase, calls } = makeSupabase(0, false, { lancioRow: GIA_DENTRO });
+      await enrollLeadIntoMario(supabase, ARGS);
+      expect(calls.updates[0]).toMatchObject({
+        ai_owner: 'mario', ai_status: 'active', crm_lead_id: 'crm-L1', crm_funnel: 'Lancio Web Dev AI',
+        lancio_slug: 'webdev-2026-10',
+      });
+      expect(vi.mocked(findOrCreateLeadConversation).mock.calls[0][1]).toMatchObject({ phone: '+393331234567', firstName: 'ANNA BIANCHI' });
+    });
+
+    it("gia' in questo lancio e gia' timbrata: il benvenuto del 17/09 resta l'ancora", async () => {
+      const { supabase, calls } = makeSupabase(0, false, { lancioRow: GIA_DENTRO });
+      await enrollLeadIntoMario(supabase, ARGS);
+      for (const u of calls.updates) expect('lancio_benvenuto_at' in u).toBe(false);
+    });
+
+    it("gia' in questo lancio ma senza timbro: il benvenuto partito si timbra", async () => {
+      const { supabase, calls } = makeSupabase(0, false, {
+        lancioRow: { lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa', lancio_benvenuto_at: null },
+      });
+      await enrollLeadIntoMario(supabase, ARGS);
+      expect(calls.updates[0].lancio_benvenuto_at).toEqual(expect.any(String));
+    });
+
+    // Il caso della conv 3292: chat viva, quindi ramo duplicato. Prima di questa
+    // correzione era proprio qui che la fase tornava ad 'attesa'.
+    it('chat viva e gia nel lancio: duplicato, nessun benvenuto e fase intatta', async () => {
+      const treGiorniFa = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+      const { supabase, calls } = makeSupabaseLeggibile({
+        crmLeadId: 'crm-VECCHIO', outboundRecenti: 0, lastInboundAt: treGiorniFa,
+        lancioRow: { lancio_slug: 'webdev-2026-10', lancio_fase: 'link_inviato', lancio_benvenuto_at: '2026-09-17T14:52:45.356Z' },
+      });
+      const res = await enrollLeadIntoMario(supabase, ARGS);
+      expect(res).toMatchObject({ ok: true, duplicato: true });
+      expect(sendTemplateAndLog).not.toHaveBeenCalled();
+      expect(calls.updates[0]).toMatchObject({ lancio_slug: 'webdev-2026-10', crm_lead_id: 'crm-L1' });
+      expect('lancio_fase' in calls.updates[0]).toBe(false);
+      expect('bot_outcome' in calls.updates[0]).toBe(false);
+      expect(calls.events.find((e) => e.type === 'lancio_riarruolamento_ignorato').payload.fasePreservata).toBe('link_inviato');
+    });
+
+    // "Non lo so" non e' "non c'e'": con la rilettura fallita si ricade sul
+    // comportamento di sempre, ma la riga warn dice che il reset e' ancora possibile.
+    it('stato del lancio illeggibile: si inizializza come sempre, con un warn', async () => {
+      const { supabase, calls } = makeSupabase(0, false, { lancioErrore: true });
+      await enrollLeadIntoMario(supabase, ARGS);
+      expect(calls.updates[0]).toMatchObject({ lancio_fase: 'attesa' });
+      const evt = calls.events.find((e) => e.type === 'lancio_stato_non_letto');
+      expect(evt).toBeTruthy();
+      expect(evt.level).toBe('warn');
+    });
   });
 
   it('template non configurato → errore esplicito, nessun invio', async () => {
