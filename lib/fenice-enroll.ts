@@ -12,6 +12,7 @@ import { leggiTettoOrario, sottoTettoOrario } from './lancio-tetto';
 import { contaBenvenutiUltimaOra } from './lancio-db';
 import { mittenteDiConversazione, numeroPrimario, numeroSecondo } from './mittente';
 import { puoAprireSuBot2 } from './bot2-tetto';
+import { mittenteBenvenutoLancio } from './lancio-mittente';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -470,6 +471,10 @@ async function enrollLancio(
   // nel dubbio dice no (vedi lib/bot2-tetto.ts).
   const secondo = numeroSecondo();
   const vuoleSecondo = args.numeroBot === 2 || args.riscaldamento === true;
+  // Le impostazioni si leggono PRIMA della nascita della chat: da `lancio_sender` e
+  // `lancio_quota_secondario` dipende il numero che finisce in `conversations.wa_number`,
+  // e quel numero si scrive una volta sola, nell'INSERT.
+  const settings = await getLancioSettings(supabase);
   let mittenteImposto: string | undefined = primario;
   if (vuoleSecondo) {
     const tetto = await puoAprireSuBot2(supabase as never, secondo);
@@ -484,6 +489,21 @@ async function enrollLancio(
         level: tetto.motivo === 'tetto_raggiunto' ? 'info' : 'warn',
       });
     }
+  } else {
+    // Nessuna richiesta esplicita del CRM: decide il lancio. `lancio_sender` vince, e
+    // sotto c'e' il rivolo di riscaldamento (1 benvenuto su ~10 dal numero nuovo).
+    // La scelta e' deterministica sul telefono e verifica prima che il benvenuto sia
+    // davvero spedibile dal numero nuovo: se non lo e', si ripiega sul numero storico e
+    // resta un `lancio_mittente_ripiego` in `event_log` (vedi lib/lancio-mittente.ts).
+    const scelta = await mittenteBenvenutoLancio(supabase, {
+      settings,
+      chiave: args.phone,
+      templateSid,
+      primario,
+      secondo,
+      crmLeadId: args.crmLeadId ?? null,
+    });
+    mittenteImposto = scelta.from;
   }
   const { conversationId, waNumber } = await findOrCreateLeadConversation(supabase, {
     phone: args.phone,
@@ -544,7 +564,6 @@ async function enrollLancio(
     ...lancioFields,
   };
 
-  const settings = await getLancioSettings(supabase);
   let differita: 'lancio_spento' | 'fuori_fascia' | 'tetto_orario' | null = !settings.attivo
     ? 'lancio_spento'
     : !inOpeningWindow(Date.now())

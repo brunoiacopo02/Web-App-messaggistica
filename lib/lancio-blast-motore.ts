@@ -9,6 +9,8 @@ import { decideFreno } from './lancio-zoom-blast';
 import { CODICE_FREQUENCY_CAP } from './lancio-aperture';
 import { logCronQueryError } from './cron-query-error';
 import { romeDayKey, romeDaysBetween } from './rome-time';
+import { numeroPrimario } from './mittente';
+import { spedibileDa } from './lancio-mittente';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -306,6 +308,12 @@ export type InvioTimbrato = {
  * un'eccezione: `runPool` le mette in un `Promise.all`, e una sola farebbe cadere tutto
  * il blocco di invii in corso — compresi quelli gia' partiti su WhatsApp.
  */
+/** `whatsapp:+39…` e `+39…` sono lo stesso numero. */
+function stessoNumero(a: string, b: string): boolean {
+  const n = (x: string) => x.trim().replace(/^whatsapp:/i, '');
+  return n(a) === n(b);
+}
+
 export async function inviaTemplateTimbrato(supabase: Supa, stato: StatoRun, p: InvioTimbrato): Promise<EsitoInvio> {
   const { id, phone, crm_lead_id: crmLeadId } = p.conv;
   try {
@@ -357,10 +365,47 @@ export async function inviaTemplateTimbrato(supabase: Supa, stato: StatoRun, p: 
     const liberaTimbro = () =>
       supabase.from('conversations').update(timbroUpdate(p.colonna, null)).eq('id', id).eq(p.colonna, timbro);
 
+    // ── Il mittente, un attimo prima di Twilio ────────────────────────────────────
+    // Se questa chat non parla dal numero storico, si verifica che il template sia
+    // davvero spedibile da quell'account: i Content template vivono DENTRO un account,
+    // e una copia che di la' non esiste (404) o che `UTILITY_ONLY` rifiuta e' una riga
+    // `failed` senza SID — cioe' un lead che non riceve niente e nessuno che se ne
+    // accorge. Il 5 ottobre alle 19:30, su un blast da 3.000, sarebbe il guasto che
+    // tutto questo doveva evitare.
+    //
+    // Il ripiego e' PER CONVERSAZIONE e non ferma il run: le altre chat continuano. Ed
+    // e' un ripiego, non un blocco — meglio un link che parte dal numero sbagliato che
+    // un link che non parte. `wa_number` non si tocca: lo riallinea da solo il webhook
+    // in ingresso alla prima risposta del lead.
+    let mittente = p.from;
+    const storico = numeroPrimario();
+    if (storico && !stessoNumero(mittente, storico)) {
+      const spedibile = await spedibileDa(p.sid, mittente);
+      if (!spedibile.ok) {
+        await logEvento(
+          supabase,
+          'lancio_mittente_ripiego',
+          {
+            conversationId: id,
+            crmLeadId,
+            origine: p.prefisso,
+            motivo: spedibile.motivo,
+            numero: mittente,
+            templateSid: p.sid,
+            sidTradotto: spedibile.sidTradotto,
+            errore: spedibile.errore,
+          },
+          `[lancio] ${p.etichetta} non spedibile da ${mittente} su conv ${id} (${spedibile.motivo}, sid ${spedibile.sidTradotto}): parte dal numero storico — ${spedibile.errore ?? 'senza dettaglio'}`,
+          'warn',
+        );
+        mittente = storico;
+      }
+    }
+
     stato.tentati++;
     let spedito = false;
     try {
-      const res = await sendTemplate({ to: phone, contentSid: p.sid, variables: vars, from: p.from });
+      const res = await sendTemplate({ to: phone, contentSid: p.sid, variables: vars, from: mittente });
       // Il messaggio e' su WhatsApp: da qui in poi il timbro non si tocca piu'. Liberarlo
       // rimetterebbe la chat fra i candidati, e al run dopo il lead lo riceverebbe due volte.
       spedito = true;

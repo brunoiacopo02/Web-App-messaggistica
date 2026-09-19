@@ -194,6 +194,13 @@ update app_settings set value = '"https://…"'::jsonb    where key = 'lancio_vi
 - [ ] Tutta la sezione 2 spuntata.
 - [ ] `lancio_attivo` = **false** (si accende domani), `lancio_pulsante_attivo` = **false**.
 - [ ] `lancio_blast_perimetro` = `tutti`, `lancio_sender` = `principale`.
+- [ ] `lancio_quota_secondario` = **0**, salvo decisione di Bruno. E' la quota di
+      riscaldamento del numero nuovo sui **benvenuti** del lancio: 9 vuol dire uno dal
+      numero nuovo ogni dieci dal vecchio. Si spegne rimettendola a 0 dal pannello (o
+      `update app_settings set value='0'::jsonb where key='lancio_quota_secondario';`).
+      Lo stesso lead finisce sempre sullo stesso numero, e se il benvenuto non e'
+      spedibile dal numero nuovo parte comunque dal vecchio con un
+      `lancio_mittente_ripiego` (warn) in `event_log`.
 
 ### 5/10 ore 18:00 — go / no-go
 - [ ] Qualità del numero ≥ MEDIUM e limite ≥ 10K (`node scripts/qualita-numero.mjs`).
@@ -209,7 +216,8 @@ Da guardare in `event_log`:
 `lancio_zoom_run` (riepilogo di ogni run) · `lancio_zoom_config_error` · `lancio_zoom_query_error`
 · `lancio_zoom_messages_query_error` · `lancio_zoom_messaggio_non_costruito` · `lancio_zoom_freno`
 (error) · `lancio_zoom_freno_non_applicato` (error) · `lancio_sender_secondario_non_disponibile`
-(warn) · `lancio_apertura_freq_capped` · `lancio_fase_non_cambiata` · `lancio_fase_non_scritta`.
+(warn) · `lancio_mittente_ripiego` (warn: un benvenuto che doveva partire dal numero nuovo
+e' partito da quello storico) · `lancio_apertura_freq_capped` · `lancio_fase_non_cambiata` · `lancio_fase_non_scritta`.
 
 - [ ] Il primo `lancio_zoom_run` fuori finestra (le 19:00) verifica la configurazione senza
       mandare: se manca qualcosa esce `lancio_zoom_config_error`.

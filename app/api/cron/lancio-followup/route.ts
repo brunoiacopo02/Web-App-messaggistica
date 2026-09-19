@@ -8,6 +8,7 @@ import { fineNotteLancio } from '@/lib/lancio-scelta';
 import { marcaCongedo, leggiIngressoLancioAt } from '@/lib/lancio-db';
 import { congedoLancio } from '@/lib/lancio-effetti';
 import { logCronQueryError } from '@/lib/cron-query-error';
+import { mittenteDiConversazione } from '@/lib/mittente';
 import { batchMax, LANCIO_BLAST_CONCURRENCY } from '@/lib/lancio-zoom-blast';
 import type { RigaLancio } from '@/lib/lancio-fase';
 import {
@@ -56,6 +57,8 @@ type Supa = ReturnType<typeof getSupabaseAdmin>;
 type Candidata = {
   id: number;
   crm_lead_id: string | null;
+  /** Il numero con cui la chat e' nata: il follow-up deve uscire di li'. */
+  wa_number: string | null;
   lancio_fase: string | null;
   lancio_info: unknown;
   lancio_benvenuto_at: string | null;
@@ -258,7 +261,7 @@ export async function GET(req: NextRequest) {
   // Una coda letta a meta' e una coda vuota danno lo stesso numero: `queryKo` dice quale
   // delle due e' successa, o "0 inviati" a finestra chiusa non si sa interpretare.
   const { righe: coda, queryKo } = await leggiCoda<Candidata>(supabase, 'lancio_followup_query_error', (da, a) =>
-    bersaglio('id, crm_lead_id, lancio_fase, lancio_info, lancio_benvenuto_at, lancio_followup_inviato_at, last_inbound_at, leads(phone_e164, first_name)')
+    bersaglio('id, crm_lead_id, wa_number, lancio_fase, lancio_info, lancio_benvenuto_at, lancio_followup_inviato_at, last_inbound_at, leads(phone_e164, first_name)')
       .order('id', { ascending: true })
       .range(da, a),
   );
@@ -382,7 +385,10 @@ export async function GET(req: NextRequest) {
     await marcaCongedo(supabase, c.id);
     const esitoCongedo = await congedoLancio(
       supabase,
-      { conversationId: c.id, phone, from, crmLeadId: c.crm_lead_id, fase: c.lancio_fase },
+      // `giaInviato: true` non manda niente, quindi questo mittente oggi non viene usato:
+      // si passa comunque quello della chat, per non lasciare un valore sbagliato pronto
+      // per il giorno in cui il congedo tornera' a scrivere al lead.
+      { conversationId: c.id, phone, from: mittenteDiConversazione(c) ?? from, crmLeadId: c.crm_lead_id, fase: c.lancio_fase },
       leadWords,
       NOTA_CONGEDO_FOLLOWUP,
       { giaInviato: true },
@@ -417,11 +423,18 @@ export async function GET(req: NextRequest) {
     const phone = c.leads?.phone_e164 ?? null;
     if (stato.fermo || !phone) return Promise.resolve('skip');
     return inviaTemplateTimbrato(supabase, stato, {
-      conv: { id: c.id, crm_lead_id: c.crm_lead_id, phone, nome: c.leads?.first_name ?? null },
+      conv: { id: c.id, crm_lead_id: c.crm_lead_id, phone, nome: c.leads?.first_name ?? null, wa_number: c.wa_number },
       colonna: 'lancio_followup_inviato_at',
       faseDopo: 'followup_inviato',
       sid,
-      from,
+      // Il numero della CHAT, non quello del run. Dal 17/09 una conversazione puo'
+      // nascere sul secondo numero: il follow-up mandato dall'altro arriverebbe, sul
+      // telefono del lead, in un thread NUOVO e muto — una chat da un numero che non ha
+      // mai visto, con dentro un messaggio che dice "come richiesto durante la live".
+      // Sembra un'altra azienda o un errore, e succede proprio mentre gli si chiede di
+      // fissare la call. Se da quel numero il template non e' spedibile, il motore
+      // ripiega sullo storico e lascia `lancio_mittente_ripiego` (lib/lancio-blast-motore).
+      from: mittenteDiConversazione(c) ?? from,
       // L'unica variabile del template ({{1}} nome) e il corpo reso. Li costruisce il
       // motore, dentro il suo try/catch: un nome che facesse saltare il render e' un
       // destinatario saltato, non il blocco di 25 perso. Senza il body da Twilio si usa

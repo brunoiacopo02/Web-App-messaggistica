@@ -32,6 +32,8 @@ export const LANCIO_SETTING_KEYS = [
   // §11 (delibera 16/09): le due manopole della sera del 5, da girare senza deploy.
   'lancio_blast_perimetro',
   'lancio_sender',
+  // Delibera 19/09: il rivolo verso il numero nuovo, in percentuale. Vedi sotto.
+  'lancio_quota_secondario',
 ] as const;
 export type LancioSettingKey = (typeof LANCIO_SETTING_KEYS)[number];
 
@@ -47,6 +49,25 @@ export function parseSender(raw: unknown): LancioSender {
   return normalizza(raw) === 'secondario' ? 'secondario' : 'principale';
 }
 
+/**
+ * La quota dei benvenuti del lancio che parte dal numero NUOVO, in percentuale (0-100).
+ *
+ * E' il rapporto 1 a 10 chiesto dal PO (9 = uno dal nuovo ogni dieci dal vecchio):
+ * scalda il numero nuovo senza esporlo, finche' non e' accertata la sua capacita'.
+ * Non c'entra col riscaldamento ordinario del bot (`FENICE_NUMERO2_QUOTA` e il tetto
+ * `BOT2_DAILY_CAP`), che e' un'altra regola e non si tocca.
+ *
+ * Fail-closed, come tutte le manopole che spostano traffico su un numero che potrebbe
+ * non essere pronto: assente, vuota, non intera o fuori da 0-100 vale **0**, cioe' tutto
+ * dal numero storico. Sbagliare in quella direzione costa un riscaldamento piu' lento;
+ * nell'altra costa il numero.
+ */
+export function parseQuotaSecondario(raw: unknown): number {
+  const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw.trim() || NaN) : NaN;
+  if (!Number.isInteger(n) || n < 0 || n > 100) return 0;
+  return n;
+}
+
 export type LancioSettings = {
   attivo: boolean;
   /** Il pulsante del webinar e' riconosciuto? Spento = marker trattato come assente. */
@@ -57,6 +78,8 @@ export type LancioSettings = {
   eventoAt: string | null;
   blastPerimetro: PerimetroBlast;
   sender: LancioSender;
+  /** % dei benvenuti del lancio dal numero nuovo (0-100). 0 = tutti dal numero storico. */
+  quotaSecondario: number;
 };
 
 export const LANCIO_SETTINGS_DEFAULT: LancioSettings = {
@@ -68,6 +91,7 @@ export const LANCIO_SETTINGS_DEFAULT: LancioSettings = {
   eventoAt: null,
   blastPerimetro: 'tutti',
   sender: 'principale',
+  quotaSecondario: 0,
 };
 
 /** La spec dice `0/1`; il pannello scrivera' un booleano. Si accettano entrambi. */
@@ -100,6 +124,7 @@ export function parseLancioSettings(rows: { key: string; value: unknown }[]): La
     eventoAt: stringaOrNull(byKey.get('lancio_evento_at')),
     blastPerimetro: parsePerimetroBlast(normalizza(byKey.get('lancio_blast_perimetro'))),
     sender: parseSender(byKey.get('lancio_sender')),
+    quotaSecondario: parseQuotaSecondario(byKey.get('lancio_quota_secondario')),
   };
 }
 
@@ -170,6 +195,18 @@ export function validateLancioSettingInput(key: string, raw: unknown): SettingVa
     if (s === null || s === 'principale') return { ok: true, value: 'principale' };
     if (s === 'secondario') return { ok: true, value: 'secondario' };
     return { ok: false, reason: 'valore_non_valido' };
+  }
+  if (k === 'lancio_quota_secondario') {
+    // Vuoto = 0 (il default fail-closed), non "valore non valido": azzerare la quota e'
+    // il gesto d'emergenza, e deve funzionare anche svuotando il campo.
+    if (raw === null || raw === undefined || (typeof raw === 'string' && raw.trim() === '')) {
+      return { ok: true, value: '0' };
+    }
+    const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw.trim()) : NaN;
+    if (!Number.isInteger(n) || n < 0 || n > 100) return { ok: false, reason: 'valore_non_valido' };
+    // Si scrive come stringa: `setLancioSetting` accetta stringhe e booleani, e
+    // `parseQuotaSecondario` rilegge indifferentemente numero o stringa.
+    return { ok: true, value: String(n) };
   }
   const v = stringaOrNull(raw);
   if (k === 'lancio_evento_at') {

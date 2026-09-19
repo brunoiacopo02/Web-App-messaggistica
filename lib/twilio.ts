@@ -81,6 +81,19 @@ export async function sendTemplate(
   // e con UTILITY_ONLY=1 il presidio fallisce chiuso ancora prima.
   const traduzione = await traduciTemplate(input.contentSid, mittente);
 
+  // TODO (aperto, 19/09/2026) — QUI si perde un messaggio in silenzio.
+  // `traduzione.tradotto` dice "il template su quell'account NON c'e'" e nessuno lo
+  // guarda: si va avanti col SID dell'account di partenza, Twilio risponde 404 e resta
+  // una riga `failed` senza SID. Il chiamante riceve un'eccezione senza `code`, che per
+  // quasi tutti i cron vale "esito incerto": il lead risulta servito e non lo e'.
+  // Riguarda TUTTI gli invii dal secondo numero — agende, NR, sequenza, riscaldamento —
+  // non solo il lancio. E' la stessa classe del rilievo §3 ("Errori ingoiati nel bot")
+  // dell'audit del 18/09: "CRM GDO/docs/2026-09-18-audit-crm-bot.md", sezione 3.
+  // Il lancio se ne difende per conto suo con `spedibileDa` (lib/lancio-mittente.ts),
+  // che controlla `tradotto` e ripiega sul numero storico. Qui dentro non si e' toccato
+  // niente di proposito: un `throw` in `sendTemplate` cambierebbe il comportamento di
+  // una ventina di chiamanti in una volta sola, e va deciso, non fatto di passaggio.
+
   // NIENTE RIPIEGO SU UN ALTRO NUMERO. C'e' stato per poche ore il 17/09/2026 e
   // ha fatto danno: mandava dal numero in `TWILIO_WHATSAPP_NUMBER`, che NON e'
   // il numero Fenice (`TWILIO_WHATSAPP_NUMBER_FENICE`) ma +393520158061, quello

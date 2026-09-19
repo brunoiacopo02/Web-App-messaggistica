@@ -17,6 +17,8 @@ const chiamate: Chiamata[] = [];
 type ConvFinta = {
   id: number;
   crm_lead_id: string | null;
+  /** Il numero con cui la chat e' nata: il benvenuto differito deve uscire di li'. */
+  wa_number?: string | null;
   lancio_fase: string | null;
   lancio_benvenuto_at: string | null;
   last_inbound_at: string | null;
@@ -160,6 +162,7 @@ const tel = (id: number) => `+39333000${String(id).padStart(4, '0')}`;
 const conv = (id: number, extra: Partial<ConvFinta> = {}): ConvFinta => ({
   id,
   crm_lead_id: `crm-${id}`,
+  wa_number: null,
   lancio_fase: 'attesa',
   lancio_benvenuto_at: null,
   last_inbound_at: null,
@@ -563,5 +566,67 @@ describe('GET /api/cron/lancio-aperture', () => {
     expect(body).toMatchObject({ ok: true, candidati: 0, inviati: 0 });
     expect(spia).toHaveBeenCalled();
     spia.mockRestore();
+  });
+});
+
+// Il benvenuto differito esce dal numero della CHAT. Ma prima si verifica che il
+// template sia davvero spedibile da quel numero: i Content template vivono dentro un
+// account Twilio, e una copia che di la' non esiste (o che `UTILITY_ONLY` rifiuta) e'
+// una riga `failed` senza SID e un lead che non riceve niente.
+describe('GET /api/cron/lancio-aperture — mittente del secondo numero', () => {
+  const PRIMARIO = 'whatsapp:+390000000';
+  const SECONDO = 'whatsapp:+393522070047';
+
+  beforeEach(() => {
+    process.env.TWILIO_WHATSAPP_NUMBER_FENICE_2 = SECONDO;
+  });
+  afterEach(() => {
+    delete process.env.TWILIO_WHATSAPP_NUMBER_FENICE_2;
+  });
+
+  it('chat nata sul numero nuovo: il benvenuto parte da li, non dal numero del run', async () => {
+    stato.convs = [conv(1, { wa_number: SECONDO })];
+    await richiesta();
+    expect(sendTemplate).toHaveBeenCalledTimes(1);
+    expect(sendTemplate.mock.calls[0][0]).toMatchObject({ from: SECONDO });
+    expect(tipiEvento()).not.toContain('lancio_mittente_ripiego');
+  });
+
+  it('template bloccato su quel numero: parte dal numero storico e resta scritto', async () => {
+    stato.convs = [conv(1, { wa_number: SECONDO })];
+    assertTemplateSendable.mockRejectedValue(
+      new Error('template bloccato: categoria MARKETING con UTILITY_ONLY attivo.'),
+    );
+    const res = await richiesta();
+
+    // Il messaggio parte comunque: meglio dal numero sbagliato che mai.
+    expect(sendTemplate).toHaveBeenCalledTimes(1);
+    expect(sendTemplate.mock.calls[0][0]).toMatchObject({ from: PRIMARIO });
+    expect(await res.json()).toMatchObject({ inviati: 1, fermo: null });
+
+    const ripiego = eventi().find((e) => e.type === 'lancio_mittente_ripiego');
+    expect(ripiego).toBeTruthy();
+    expect(ripiego!.level).toBe('warn');
+    expect(ripiego!.payload).toMatchObject({
+      conversationId: 1, motivo: 'template_bloccato', numero: SECONDO, origine: 'lancio-aperture',
+    });
+  });
+
+  it('il ripiego di una chat non ferma la coda delle altre', async () => {
+    stato.convs = [conv(1, { wa_number: SECONDO }), conv(2), conv(3)];
+    assertTemplateSendable.mockImplementation(async (_sid: unknown, from: unknown) => {
+      if (from === SECONDO) throw new Error('template bloccato su questo account');
+    });
+    const res = await richiesta();
+    expect(await res.json()).toMatchObject({ inviati: 3, fermo: null });
+    expect(sendTemplate.mock.calls.every((c) => c[0].from === PRIMARIO)).toBe(true);
+  });
+
+  it('chat sul numero storico: nessuna verifica in piu, come prima', async () => {
+    stato.convs = [conv(1), conv(2, { wa_number: PRIMARIO })];
+    await richiesta();
+    expect(sendTemplate).toHaveBeenCalledTimes(2);
+    expect(sendTemplate.mock.calls.every((c) => c[0].from === PRIMARIO)).toBe(true);
+    expect(tipiEvento()).not.toContain('lancio_mittente_ripiego');
   });
 });

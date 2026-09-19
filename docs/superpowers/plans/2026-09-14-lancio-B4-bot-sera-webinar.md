@@ -3505,6 +3505,29 @@ Nel report di chiusura del blocco: esito dei punti 1-9 dello Step 8 (con i testi
 
 ### Task 11: Mittente secondario (costruito, spento di default)
 
+> ⛔ **SUPERATO IL 19/09/2026 — NON ESEGUIRE QUESTO TASK COSÌ COM'È.**
+> Il mittente secondario è stato fatto, ma con un'architettura diversa: **traduzione dei
+> template a runtime** (`lib/template-account.ts`: si aggancia il `friendly_name` e si
+> trova il SID gemello sull'altro account), non con la mappa di env `LANCIO2_*` descritta
+> qui sotto. Una mappa scritta a mano è giusta il giorno che la scrivi e sbagliata la
+> settimana dopo, e sbagliata qui vuol dire un messaggio che non parte.
+> Stato reale al 19/09/2026:
+> - credenziali per numero → `lib/twilio-account.ts` (non `TWILIO2_*` dentro `twilio.ts`);
+> - da quale numero nasce una chat → `lib/mittente.ts` (`FENICE_NUMERO2_QUOTA`) e il tetto
+>   giornaliero `lib/bot2-tetto.ts` (`BOT2_DAILY_CAP`, 150/g), **non** i 50/giorno di
+>   `LANCIO_WELCOME_MAX_PER_DAY_SECONDARIO`, che non esiste;
+> - mittente dei benvenuti del lancio → `lib/lancio-mittente.ts`, con la chiave
+>   `app_settings.lancio_quota_secondario` (rapporto 1 a 10, deterministico sul telefono)
+>   e la verifica pre-invio che ripiega sul numero storico invece di perdere il messaggio;
+> - `lancio_sender='secondario'` (l'interruttore globale) è eseguibile **sui benvenuti**;
+>   blast Zoom e follow-up continuano a scrivere `lancio_sender_secondario_non_disponibile`
+>   e a NON spostare l'intero invio sul secondario (il "Verify, non toccare" qui sotto vale
+>   ancora). Diverso è il **numero della singola chat**: quello lo rispettano tutti e tre i
+>   cron (`mittenteDiConversazione`), perché cambiarlo a chat aperta la spezza in due
+>   thread — e dal 19/09 il follow-up lo rispetta come gli altri.
+> Quello che resta valido di questo task: l'inbound instradato per `To` e la risposta dal
+> numero della chat, entrambi già in produzione.
+
 **Files:**
 - Create: `lib/wa-mittente.ts`
 - Test: `lib/wa-mittente.test.ts`

@@ -24,6 +24,8 @@ const chiamate: Chiamata[] = [];
 type ConvFinta = {
   id: number;
   crm_lead_id: string | null;
+  /** Il numero con cui la chat e' nata: il link deve uscire di li'. */
+  wa_number?: string | null;
   lancio_fase: string | null;
   lancio_info: Record<string, unknown> | null;
   last_inbound_at: string | null;
@@ -149,8 +151,10 @@ vi.mock('@/lib/supabase/admin', () => ({
 
 // ─────────────────────────── finto Twilio ───────────────────────────
 const sendTemplate = vi.fn();
+const assertTemplateSendable = vi.fn();
 vi.mock('@/lib/twilio', () => ({
   sendTemplate: (...a: unknown[]) => sendTemplate(...a),
+  assertTemplateSendable: (...a: unknown[]) => assertTemplateSendable(...a),
   getTemplateBody: async () => 'Ciao {{1}}, link: {{2}}',
 }));
 
@@ -193,6 +197,7 @@ const tel = (id: number) => `+39333000${String(id).padStart(4, '0')}`;
 const conv = (id: number, extra: Partial<ConvFinta> = {}): ConvFinta => ({
   id,
   crm_lead_id: `crm-${id}`,
+  wa_number: null,
   lancio_fase: 'attesa',
   lancio_info: null,
   last_inbound_at: null,
@@ -237,6 +242,7 @@ beforeEach(() => {
     stato.timbrateAllInvio.push([...stato.timbrate]);
     return { sid: 'SMtest', status: 'queued' };
   });
+  assertTemplateSendable.mockReset().mockResolvedValue(undefined);
   impostaFaseLancio.mockClear();
   vi.stubEnv('CRON_SECRET', SEGRETO);
   vi.stubEnv('LANCIO_ZOOM_TEMPLATE_SID', SID);
@@ -685,5 +691,64 @@ describe('GET /api/cron/lancio-zoom — il run scritto', () => {
     stato.convs = [];
     await expect((await richiesta()).json()).resolves.toMatchObject({ candidati: 0, sent: 0 });
     expect(eventoRun()).toBeTruthy();
+  });
+});
+
+
+// Il link Zoom esce dal numero della CHAT (dal 17/09 una conversazione puo' nascere sul
+// secondo numero). Ma prima si verifica che il template sia spedibile da quell'account:
+// alle 19:30 del 5 ottobre un template che di la' non parte sarebbe il 9% dei lead senza
+// il link, e nessuno che se ne accorge fino a serata finita.
+describe('GET /api/cron/lancio-zoom — mittente del secondo numero', () => {
+  const PRIMARIO = 'whatsapp:+390000000000';
+  const SECONDO = 'whatsapp:+393522070047';
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE_2', SECONDO);
+  });
+
+  it('chat nata sul numero nuovo: il link parte da li', async () => {
+    stato.convs = [conv(1, { wa_number: SECONDO })];
+    await richiesta();
+    expect(sendTemplate).toHaveBeenCalledTimes(1);
+    expect(sendTemplate.mock.calls[0][0]).toMatchObject({ from: SECONDO });
+    expect(tipiEvento()).not.toContain('lancio_mittente_ripiego');
+  });
+
+  it('template non spedibile da quel numero: il link parte dal numero storico, non si perde', async () => {
+    stato.convs = [conv(1, { wa_number: SECONDO })];
+    assertTemplateSendable.mockRejectedValue(
+      new Error('template bloccato: categoria MARKETING con UTILITY_ONLY attivo.'),
+    );
+    const res = await (await richiesta()).json();
+
+    expect(sendTemplate).toHaveBeenCalledTimes(1);
+    expect(sendTemplate.mock.calls[0][0]).toMatchObject({ from: PRIMARIO });
+    expect(res).toMatchObject({ sent: 1, fermo: null });
+
+    const ripiego = eventi().find((e) => e.type === 'lancio_mittente_ripiego');
+    expect(ripiego).toBeTruthy();
+    expect(ripiego!.level).toBe('warn');
+    // Quale cron, quale conversazione, quale SID: la serata si legge in dieci secondi.
+    expect(ripiego!.payload).toMatchObject({
+      origine: 'lancio_zoom', conversationId: 1, numero: SECONDO, templateSid: SID,
+      motivo: 'template_bloccato',
+    });
+  });
+
+  it('il ripiego di una chat non ferma il blast delle altre', async () => {
+    stato.convs = [conv(1, { wa_number: SECONDO }), conv(2), conv(3)];
+    assertTemplateSendable.mockRejectedValue(new Error('bloccato su questo account'));
+    const res = await (await richiesta()).json();
+    expect(res).toMatchObject({ sent: 3, fermo: null });
+    expect(sendTemplate.mock.calls.every((c) => c[0].from === PRIMARIO)).toBe(true);
+    expect(eventi().filter((e) => e.type === 'lancio_mittente_ripiego')).toHaveLength(1);
+  });
+
+  it('chat sul numero storico: nessuna verifica in piu, come prima', async () => {
+    stato.convs = [conv(1), conv(2, { wa_number: PRIMARIO })];
+    await richiesta();
+    expect(assertTemplateSendable).not.toHaveBeenCalled();
+    expect(sendTemplate.mock.calls.every((c) => c[0].from === PRIMARIO)).toBe(true);
   });
 });

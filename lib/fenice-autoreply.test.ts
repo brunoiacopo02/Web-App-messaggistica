@@ -16,7 +16,7 @@ vi.mock('./lancio-settings', () => ({
   getLancioSettings: vi.fn(async () => ({
     attivo: true, pulsanteAttivo: false, zoomLink: null,
     videoLiveLink: 'https://corso.feniceacademy.it/live-webdev-2026', offertaDelMeseLink: null,
-    eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti', sender: 'principale',
+    eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti', sender: 'principale', quotaSecondario: 0,
   })),
 }));
 
@@ -2361,7 +2361,7 @@ describe('drainMarioReplies — dopo il follow-up la chat passa a Mario nello ST
   it('senza lancio_video_live_link: Mario risponde coi video classici (nessuna contextNote) e resta un warn', async () => {
     vi.mocked(getLancioSettings).mockResolvedValueOnce({
       attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null,
-      eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti', sender: 'principale',
+      eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti', sender: 'principale', quotaSecondario: 0,
     });
     vi.mocked(eseguiTurnoLancio).mockResolvedValueOnce('handed_to_mario');
     vi.mocked(generateMarioReply).mockResolvedValueOnce(rispostaMario('Ciao! Raccontami: lavori al momento?'));
@@ -2380,7 +2380,7 @@ describe('drainMarioReplies — dopo il follow-up la chat passa a Mario nello ST
   it('senza lancio_video_live_link il warn si scrive UNA volta per chat, non a ogni drain', async () => {
     const senzaLink = {
       attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null,
-      eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti' as const, sender: 'principale' as const,
+      eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti' as const, sender: 'principale' as const, quotaSecondario: 0,
     };
     vi.mocked(getLancioSettings).mockResolvedValueOnce(senzaLink).mockResolvedValueOnce(senzaLink);
     vi.mocked(eseguiTurnoLancio).mockResolvedValueOnce('handed_to_mario').mockResolvedValueOnce('handed_to_mario');

@@ -25,6 +25,8 @@ type Riga = { direction: string; body: string | null; template_sid: string | nul
 type ConvFinta = {
   id: number;
   crm_lead_id: string | null;
+  /** Il numero con cui la chat e' nata: il follow-up deve uscire di li'. */
+  wa_number?: string | null;
   lancio_fase: string | null;
   lancio_info: Record<string, unknown> | null;
   lancio_benvenuto_at: string | null;
@@ -170,8 +172,10 @@ vi.mock('@/lib/supabase/admin', () => ({
 
 // ─────────────────────────── finto Twilio ───────────────────────────
 const sendTemplate = vi.fn();
+const assertTemplateSendable = vi.fn();
 vi.mock('@/lib/twilio', () => ({
   sendTemplate: (...a: unknown[]) => sendTemplate(...a),
+  assertTemplateSendable: (...a: unknown[]) => assertTemplateSendable(...a),
   getTemplateBody: async () => 'Ciao {{1}}, ieri sera alla live...',
 }));
 
@@ -217,6 +221,7 @@ const tel = (id: number) => `+39333000${String(id).padStart(4, '0')}`;
 const conv = (id: number, extra: Partial<ConvFinta> = {}): ConvFinta => ({
   id,
   crm_lead_id: `crm-${id}`,
+  wa_number: null,
   lancio_fase: 'attesa',
   lancio_info: null,
   lancio_benvenuto_at: ANCORA,
@@ -270,6 +275,7 @@ beforeEach(() => {
     stato.timbrateAllInvio.push([...stato.timbrate]);
     return { sid: 'SMtest', status: 'queued' };
   });
+  assertTemplateSendable.mockReset().mockResolvedValue(undefined);
   impostaFaseLancio.mockClear();
   marcaCongedo.mockClear();
   congedoLancio.mockClear();
@@ -681,5 +687,69 @@ describe('GET /api/cron/lancio-followup — invio col motore', () => {
     stato.convs = [];
     await expect((await richiesta()).json()).resolves.toMatchObject({ candidati: 0, sent: 0 });
     expect(eventoRun()).toBeTruthy();
+  });
+});
+
+
+// Il follow-up esce dal numero della CHAT, come il blast della sera prima. Mandarlo
+// dall'altro lo farebbe arrivare, sul telefono del lead, in un thread NUOVO e muto: una
+// chat da un numero mai visto, con dentro un messaggio che dice "come richiesto durante
+// la live". Sembra un'altra azienda o un errore, e succede proprio mentre gli si chiede
+// di fissare la call.
+describe('GET /api/cron/lancio-followup — mittente del secondo numero', () => {
+  const PRIMARIO = 'whatsapp:+390000000000';
+  const SECONDO = 'whatsapp:+393522070047';
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE_2', SECONDO);
+  });
+
+  it('la coda legge wa_number: senza, il numero della chat non si saprebbe nemmeno', async () => {
+    stato.convs = [conv(1)];
+    await richiesta();
+    expect(String(selectConv()?.arg)).toContain('wa_number');
+  });
+
+  it('chat nata sul numero nuovo: il follow-up parte da li', async () => {
+    stato.convs = [conv(1, { wa_number: SECONDO })];
+    await expect((await richiesta()).json()).resolves.toMatchObject({ sent: 1 });
+    expect(sendTemplate).toHaveBeenCalledWith(expect.objectContaining({ from: SECONDO }));
+    expect(tipiEvento()).not.toContain('lancio_mittente_ripiego');
+  });
+
+  it('template non spedibile da quel numero: parte dallo storico e lascia l evento', async () => {
+    stato.convs = [conv(1, { wa_number: SECONDO })];
+    assertTemplateSendable.mockRejectedValue(
+      new Error('template bloccato: categoria MARKETING con UTILITY_ONLY attivo.'),
+    );
+    const res = await (await richiesta()).json();
+
+    expect(res).toMatchObject({ sent: 1, fermo: null });
+    expect(sendTemplate).toHaveBeenCalledTimes(1);
+    expect(sendTemplate).toHaveBeenCalledWith(expect.objectContaining({ from: PRIMARIO }));
+
+    const ripiego = eventi().find((e) => e.type === 'lancio_mittente_ripiego');
+    expect(ripiego).toBeTruthy();
+    expect(ripiego!.level).toBe('warn');
+    expect(ripiego!.payload).toMatchObject({
+      origine: 'lancio_followup', conversationId: 1, numero: SECONDO, templateSid: SID,
+      motivo: 'template_bloccato',
+    });
+  });
+
+  it('il ripiego di una chat non ferma il follow-up delle altre', async () => {
+    // La fixture ha la cronologia di 1 e 2: chi non ha mai scritto non e' un bersaglio.
+    stato.convs = [conv(1, { wa_number: SECONDO }), conv(2)];
+    assertTemplateSendable.mockRejectedValue(new Error('bloccato su questo account'));
+    await expect((await richiesta()).json()).resolves.toMatchObject({ sent: 2, fermo: null });
+    expect(eventi().filter((e) => e.type === 'lancio_mittente_ripiego')).toHaveLength(1);
+    expect(sendTemplate.mock.calls.every((c) => c[0].from === PRIMARIO)).toBe(true);
+  });
+
+  it('chat sul numero storico: nessuna verifica in piu, come prima', async () => {
+    stato.convs = [conv(1), conv(2, { wa_number: PRIMARIO })];
+    await richiesta();
+    expect(assertTemplateSendable).not.toHaveBeenCalled();
+    expect(sendTemplate.mock.calls.every((c) => c[0].from === PRIMARIO)).toBe(true);
   });
 });

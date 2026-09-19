@@ -18,6 +18,7 @@ import { lancioBenvenutoText } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
 import { templateName } from '@/lib/name';
 import { eRifiutoDiPolicy, allarmeEventoStantio } from '@/lib/lancio-blast-motore';
+import { spedibileDa } from '@/lib/lancio-mittente';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -45,6 +46,12 @@ const LOTTO = 100;
 const MAX_RIGHE_LOTTO = LOTTO * 20;
 /** Paracadute sulla paginazione: 20.000 candidati sono gia' un'anomalia da guardare. */
 const MAX_PAGINE = 20;
+
+/** `whatsapp:+39…` e `+39…` sono lo stesso numero. */
+function stessoNumero(a: string, b: string): boolean {
+  const n = (x: string) => x.trim().replace(/^whatsapp:/i, '');
+  return n(a) === n(b);
+}
 
 function authorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -286,6 +293,39 @@ export async function GET(req: NextRequest) {
 
         const nome = c.leads?.first_name ?? null;
         const corpo = lancioBenvenutoText(nome);
+
+        // Il numero della CHAT, non quello del run: una conversazione nata sul secondo
+        // numero deve ricevere anche il benvenuto differito da li', o il lead si ritrova
+        // due thread e la finestra 24h si chiude.
+        let mittente = mittenteDiConversazione(c) ?? from;
+        // ...ma prima si verifica che il benvenuto sia davvero spedibile da quel numero.
+        // I Content template vivono dentro un account, e la copia sul secondo puo' non
+        // esserci o avere una categoria che `UTILITY_ONLY` rifiuta: mandare lo stesso
+        // vorrebbe dire una riga `failed` senza SID e un lead che non riceve niente. In
+        // quel caso si parte dal numero storico — `wa_number` non si tocca, lo riallinea
+        // da solo il webhook in ingresso alla prima risposta del lead.
+        if (!stessoNumero(mittente, from)) {
+          const spedibile = await spedibileDa(templateSid, mittente);
+          if (!spedibile.ok) {
+            await logEvento(
+              supabase,
+              'lancio_mittente_ripiego',
+              {
+                conversationId: c.id,
+                crmLeadId: c.crm_lead_id,
+                origine: 'lancio-aperture',
+                motivo: spedibile.motivo,
+                numero: mittente,
+                templateSid,
+                sidTradotto: spedibile.sidTradotto,
+                errore: spedibile.errore,
+              },
+              `[lancio] benvenuto differito non spedibile da ${mittente} (${spedibile.motivo}): parte dal numero storico — ${spedibile.errore ?? 'senza dettaglio'}`,
+              'warn',
+            );
+            mittente = from;
+          }
+        }
         tentati++;
         numeriServiti.add(phone);
         // Il messaggio e' su WhatsApp: da qui in poi il timbro non si tocca piu'.
@@ -299,10 +339,7 @@ export async function GET(req: NextRequest) {
             to: phone,
             contentSid: templateSid,
             variables: { '1': templateName(nome) },
-            // Il numero della CHAT, non quello del run: una conversazione nata
-            // sul secondo numero deve ricevere anche il benvenuto differito da
-            // li', o il lead si ritrova due thread e la finestra 24h si chiude.
-            from: mittenteDiConversazione(c) ?? from,
+            from: mittente,
           });
           spedito = true;
           await supabase.from('messages').insert({

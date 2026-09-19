@@ -6,7 +6,7 @@ vi.mock('./messaging', () => ({
 }));
 
 vi.mock('./lancio-settings', () => ({
-  getLancioSettings: vi.fn(async () => ({ attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null, eventoAt: null, blastPerimetro: 'tutti', sender: 'principale' })),
+  getLancioSettings: vi.fn(async () => ({ attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null, eventoAt: null, blastPerimetro: 'tutti', sender: 'principale', quotaSecondario: 0 })),
 }));
 
 import { apreSopraChatViva, enrollGdoLeadAsPostino, enrollLeadIntoMario } from './fenice-enroll';
@@ -28,12 +28,15 @@ function makeSupabase(
     outboundCount?: number;
     /** La select su `conversations` va in errore: "non lo so", non "e' nullo". */
     convErrore?: boolean;
+    /** Quante chat sono gia' nate oggi sul numero nuovo (tetto `puoAprireSuBot2`). */
+    aperturaOggiSulSecondo?: number;
   } = {},
 ) {
   const calls = { updates: [] as any[], events: [] as any[], conteggi: 0 };
   const convRow = guardia.convRow ?? { ai_owner: null, ai_status: null, crm_lead_id: null };
   const outboundCount = guardia.outboundCount ?? 0;
   const convErrore = guardia.convErrore === true;
+  const aperturaOggiSulSecondo = guardia.aperturaOggiSulSecondo ?? 0;
   const supabase: any = {
     from(table: string) {
       if (table === 'conversations') {
@@ -47,7 +50,14 @@ function makeSupabase(
           // Due letture sulla stessa select: `single()` è quella della guardia
           // `apreSopraChatViva`, `maybeSingle()` quella della guardia anti-doppione
           // (chat senza un leadId già registrato: lascia passare).
-          select() {
+          // Tre letture sulla stessa select: `single()` e' quella della guardia
+          // `apreSopraChatViva`, `maybeSingle()` quella della guardia anti-doppione, e
+          // con `head: true` e' il conteggio del tetto giornaliero del numero nuovo
+          // (`puoAprireSuBot2`), che chiude su `.eq(...).gte(...)`.
+          select(_colonne?: string, opzioni?: { head?: boolean }) {
+            if (opzioni?.head) {
+              return { eq: () => ({ gte: async () => ({ count: aperturaOggiSulSecondo, error: null }) }) };
+            }
             return {
               eq() {
                 return {
@@ -647,7 +657,7 @@ describe('enrollLeadIntoMario — ramo lancio (B1)', () => {
     vi.setSystemTime(MEZZOGIORNO);
     vi.stubEnv('LANCIO_WELCOME_TEMPLATE_SID', 'HX_LANCIO_WELCOME');
     vi.stubEnv('NEW_OPENING_ENABLED', '1'); // anche col flag A/B acceso il lancio non passa dalle aperture C/T/J
-    vi.mocked(getLancioSettings).mockResolvedValue({ attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null, eventoAt: null, blastPerimetro: 'tutti', sender: 'principale' });
+    vi.mocked(getLancioSettings).mockResolvedValue({ attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null, eventoAt: null, blastPerimetro: 'tutti', sender: 'principale', quotaSecondario: 0 });
   });
 
   it("manda il template di benvenuto del lancio, non un'apertura di Mario/Marta", async () => {
@@ -709,7 +719,7 @@ describe('enrollLeadIntoMario — ramo lancio (B1)', () => {
   });
 
   it('con lancio_attivo spento prende in carico ma NON manda: differita, la riprende il cron lancio', async () => {
-    vi.mocked(getLancioSettings).mockResolvedValueOnce({ attivo: false, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null, eventoAt: null, blastPerimetro: 'tutti', sender: 'principale' });
+    vi.mocked(getLancioSettings).mockResolvedValueOnce({ attivo: false, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null, eventoAt: null, blastPerimetro: 'tutti', sender: 'principale', quotaSecondario: 0 });
     const { supabase, calls } = makeSupabase();
     const res = await enrollLeadIntoMario(supabase, ARGS);
     expect(res).toMatchObject({ ok: true, conversationId: 42, deferred: true });
@@ -849,6 +859,86 @@ describe('enrollLeadIntoMario — ramo lancio (B1)', () => {
       await enrollLeadIntoMario(supabase, { phone: '+393331234567', firstName: 'Anna', crmFunnel: 'CORSO 10 ORE' });
       expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
       expect(calls.conteggi).toBe(0);
+    });
+  });
+
+  // ── Quota di riscaldamento del numero nuovo (delibera PO 19/09) ───────────────────
+  // Vale SOLO sui benvenuti del lancio, e SOLO sulla prima apertura: il numero si sceglie
+  // qui e vive in `conversations.wa_number`.
+  describe('mittente del benvenuto: la quota verso il numero nuovo', () => {
+    const SECONDO = 'whatsapp:+393522070047';
+    const impostazioni = (quotaSecondario: number, sender: 'principale' | 'secondario' = 'principale') =>
+      vi.mocked(getLancioSettings).mockResolvedValue({
+        attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null,
+        offertaDelMeseLink: null, eventoAt: null, blastPerimetro: 'tutti', sender, quotaSecondario,
+      });
+    /** Il numero passato a `sendTemplateAndLog`. */
+    const mittenteUsato = () => vi.mocked(sendTemplateAndLog).mock.calls[0][5];
+    /** Il numero scritto in `conversations.wa_number` alla nascita della chat. */
+    const mittenteAllaNascita = () =>
+      (vi.mocked(findOrCreateLeadConversation).mock.calls[0][2] as { mittente?: string | null })?.mittente;
+
+    beforeEach(() => {
+      vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE_2', SECONDO);
+      // Come la funzione vera: il numero scelto alla nascita finisce in `wa_number`, ed
+      // e' da li' che ogni invio successivo lo rilegge.
+      vi.mocked(findOrCreateLeadConversation).mockImplementation(
+        async (_s: unknown, _i: unknown, nascita?: { mittente?: string | null }) =>
+          ({ leadId: 7, conversationId: 42, waNumber: nascita?.mittente ?? null }) as never,
+      );
+    });
+
+    it('quota 0: tutti dal numero storico, come prima', async () => {
+      impostazioni(0);
+      const { supabase } = makeSupabase();
+      await enrollLeadIntoMario(supabase, ARGS);
+      expect(mittenteAllaNascita()).toBe('whatsapp:+390000000000');
+      expect(mittenteUsato()).toBe('whatsapp:+390000000000');
+    });
+
+    it('quota 100: la chat nasce sul numero nuovo e il benvenuto parte di li', async () => {
+      impostazioni(100);
+      const { supabase } = makeSupabase();
+      await enrollLeadIntoMario(supabase, ARGS);
+      expect(mittenteAllaNascita()).toBe(SECONDO);
+      expect(mittenteUsato()).toBe(SECONDO);
+    });
+
+    it('quota 100 ma tetto giornaliero del numero nuovo esaurito: numero storico + avviso', async () => {
+      impostazioni(100);
+      const { supabase, calls } = makeSupabase(0, false, { aperturaOggiSulSecondo: 150 });
+      await enrollLeadIntoMario(supabase, ARGS);
+      expect(mittenteUsato()).toBe('whatsapp:+390000000000');
+      expect(calls.events.some((e) => e.type === 'lancio_mittente_ripiego')).toBe(true);
+    });
+
+    it('lancio_sender=secondario manda tutto dal numero nuovo, quota o non quota', async () => {
+      impostazioni(0, 'secondario');
+      const { supabase } = makeSupabase();
+      await enrollLeadIntoMario(supabase, ARGS);
+      expect(mittenteUsato()).toBe(SECONDO);
+    });
+
+    // La regola che non si tocca: il numero di una chat si sceglie alla nascita e non
+    // cambia piu'. Qui la conversazione esiste gia' ed e' nata sul numero storico.
+    it('chat che esiste gia: resta sul suo numero anche con la quota al 100%', async () => {
+      impostazioni(100);
+      vi.mocked(findOrCreateLeadConversation).mockResolvedValueOnce(
+        { leadId: 7, conversationId: 42, waNumber: 'whatsapp:+390000000000' } as never,
+      );
+      const { supabase } = makeSupabase();
+      await enrollLeadIntoMario(supabase, ARGS);
+      expect(mittenteUsato()).toBe('whatsapp:+390000000000');
+    });
+
+    it('chat nata sul numero nuovo: ci resta anche con la quota a zero', async () => {
+      impostazioni(0);
+      vi.mocked(findOrCreateLeadConversation).mockResolvedValueOnce(
+        { leadId: 7, conversationId: 42, waNumber: SECONDO } as never,
+      );
+      const { supabase } = makeSupabase();
+      await enrollLeadIntoMario(supabase, ARGS);
+      expect(mittenteUsato()).toBe(SECONDO);
     });
   });
 

@@ -62,6 +62,7 @@ const SETTINGS: LancioSettings = {
   eventoAt: '2026-10-05T21:00:00+02:00',
   blastPerimetro: 'tutti',
   sender: 'principale',
+  quotaSecondario: 0,
 };
 const NOTTE = new Date('2026-10-05T22:40:00+02:00');
 const GIORNO6 = new Date('2026-10-06T10:00:00+02:00');

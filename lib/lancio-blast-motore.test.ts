@@ -10,7 +10,11 @@ import {
 // Twilio e la scrittura della fase hanno i loro test: qui interessa solo che il motore
 // non perda il blocco di invii quando la costruzione del messaggio di UNO esplode.
 const sendTemplate = vi.fn(async () => ({ sid: 'SMtest', status: 'queued' }));
-vi.mock('./twilio', () => ({ sendTemplate: (...a: unknown[]) => sendTemplate(...(a as [])) }));
+const assertTemplateSendable = vi.fn(async () => undefined);
+vi.mock('./twilio', () => ({
+  sendTemplate: (...a: unknown[]) => sendTemplate(...(a as [])),
+  assertTemplateSendable: (...a: unknown[]) => assertTemplateSendable(...(a as [])),
+}));
 vi.mock('./lancio-db', () => ({ impostaFaseLancio: async () => {} }));
 // Il freno spegne `lancio_attivo`: qui serve poter far fallire quella scrittura.
 const setLancioSetting = vi.fn(async (): Promise<{ ok: boolean; error?: string }> => ({ ok: true }));
@@ -353,5 +357,77 @@ describe('frenaLancio — quando nemmeno lo spegnimento riesce', () => {
 
     const eventi = chiamate.filter((c) => c.table === 'event_log').map((c) => (c.arg as { type: string }).type);
     expect(eventi).toEqual(['lancio_zoom_freno']);
+  });
+});
+
+
+// La verifica del mittente vive nel MOTORE, quindi vale identica per il blast Zoom e per
+// il follow-up del giorno dopo: stessa guardia, stesso ripiego, stesso evento — cambia
+// solo `origine`, che dice quale dei due cron l'ha scritto.
+describe('inviaTemplateTimbrato: il mittente si verifica prima di Twilio', () => {
+  const PRIMARIO = 'whatsapp:+390000000000';
+  const SECONDO = 'whatsapp:+393522070047';
+
+  const manda = (from: string, prefisso = 'lancio_followup', etichetta = 'follow-up') => {
+    const stato = nuovoStatoRun();
+    return inviaTemplateTimbrato(supabase, stato, {
+      conv: { id: 42, crm_lead_id: 'crm-42', phone: '+393331234567', nome: 'mario rossi' },
+      colonna: 'lancio_followup_inviato_at',
+      faseDopo: 'followup_inviato',
+      sid: 'HX_FOLLOWUP',
+      from,
+      costruisci: () => ({ vars: { '1': 'Mario' }, body: 'Ciao Mario' }),
+      giaSpedito: false,
+      soloDaFasi: ['link_inviato'],
+      prefisso,
+      etichetta,
+    }).then((esito) => ({ esito, stato }));
+  };
+  const ripiego = () => eventiScritti().find((e) => e.type === 'lancio_mittente_ripiego');
+  /** Il mittente con cui e' partito l'invio: il mock e' tipato senza argomenti. */
+  const mittenteUsato = () =>
+    ((sendTemplate.mock.calls[0] ?? []) as unknown[])[0] as { from?: string } | undefined;
+
+  beforeEach(() => {
+    chiamate.length = 0;
+    sendTemplate.mockClear();
+    assertTemplateSendable.mockReset().mockResolvedValue(undefined);
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', PRIMARIO);
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE_2', SECONDO);
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('numero storico: nessuna verifica in piu, si manda e basta', async () => {
+    const { esito } = await manda(PRIMARIO);
+    expect(esito).toBe('sent');
+    expect(assertTemplateSendable).not.toHaveBeenCalled();
+    expect(mittenteUsato()).toMatchObject({ from: PRIMARIO });
+  });
+
+  it('numero nuovo con template spedibile: si manda di li', async () => {
+    const { esito } = await manda(SECONDO);
+    expect(esito).toBe('sent');
+    expect(mittenteUsato()).toMatchObject({ from: SECONDO });
+    expect(ripiego()).toBeUndefined();
+  });
+
+  it('numero nuovo con template bloccato: si manda dal numero storico, e il run NON si ferma', async () => {
+    assertTemplateSendable.mockRejectedValue(new Error('categoria MARKETING con UTILITY_ONLY attivo'));
+    const { esito, stato } = await manda(SECONDO);
+    expect(esito).toBe('sent');
+    expect(stato.fermo).toBeNull();
+    expect(mittenteUsato()).toMatchObject({ from: PRIMARIO });
+    // Quale cron, quale conversazione, quale SID.
+    expect(ripiego()).toMatchObject({ type: 'lancio_mittente_ripiego', level: 'warn' });
+    expect(ripiego()!.payload).toMatchObject({
+      origine: 'lancio_followup', conversationId: 42, numero: SECONDO,
+      templateSid: 'HX_FOLLOWUP', motivo: 'template_bloccato',
+    });
+  });
+
+  it("l'evento porta il nome del cron che l'ha scritto", async () => {
+    assertTemplateSendable.mockRejectedValue(new Error('bloccato'));
+    await manda(SECONDO, 'lancio_zoom', 'link Zoom');
+    expect(ripiego()!.payload).toMatchObject({ origine: 'lancio_zoom' });
   });
 });

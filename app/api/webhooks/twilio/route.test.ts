@@ -99,7 +99,7 @@ vi.mock('@/lib/lancio-settings', async (originale) => ({
   ...(await originale<Record<string, unknown>>()),
   getLancioSettings: vi.fn(async () => ({
     attivo: false, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null,
-    offertaDelMeseLink: null, eventoAt: null, blastPerimetro: 'tutti', sender: 'principale',
+    offertaDelMeseLink: null, eventoAt: null, blastPerimetro: 'tutti', sender: 'principale', quotaSecondario: 0,
   })),
 }));
 vi.mock('@/lib/lead-entrante', () => ({ pushLeadEntrante: vi.fn(async () => ({ ok: true, leadId: 'L1' })) }));
@@ -199,7 +199,7 @@ describe('pulsante del webinar — interruttore lancio_pulsante_attivo', () => {
   it('acceso su una chat di Mario libera: slug, ingresso e post_pitch', async () => {
     vi.mocked(getLancioSettings).mockResolvedValueOnce({
       attivo: true, pulsanteAttivo: true, zoomLink: null, videoLiveLink: null,
-      offertaDelMeseLink: null, eventoAt: null, blastPerimetro: 'tutti', sender: 'principale',
+      offertaDelMeseLink: null, eventoAt: null, blastPerimetro: 'tutti', sender: 'principale', quotaSecondario: 0,
     });
     stato.conv.ai_owner = 'mario';
     stato.conv.ai_status = 'active';
@@ -218,7 +218,7 @@ describe('pulsante del webinar — interruttore lancio_pulsante_attivo', () => {
   it('acceso su una chat che nessuno possiede: adottata, e ci entra col pulsante', async () => {
     vi.mocked(getLancioSettings).mockResolvedValueOnce({
       attivo: true, pulsanteAttivo: true, zoomLink: null, videoLiveLink: null,
-      offertaDelMeseLink: null, eventoAt: null, blastPerimetro: 'tutti', sender: 'principale',
+      offertaDelMeseLink: null, eventoAt: null, blastPerimetro: 'tutti', sender: 'principale', quotaSecondario: 0,
     });
     await inbound(TESTO_PULSANTE_WEBINAR);
     expect(updateConSlug()[0].valori).toMatchObject({
@@ -262,7 +262,7 @@ describe('pulsante del webinar su una chat restituita (C8)', () => {
   beforeEach(() => {
     vi.mocked(getLancioSettings).mockResolvedValue({
       attivo: true, pulsanteAttivo: true, zoomLink: null, videoLiveLink: null,
-      offertaDelMeseLink: null, eventoAt: null, blastPerimetro: 'tutti', sender: 'principale',
+      offertaDelMeseLink: null, eventoAt: null, blastPerimetro: 'tutti', sender: 'principale', quotaSecondario: 0,
     });
     stato.conv = {
       ai_owner: 'mario', ai_status: 'closed', ai_paused_at: null, handed_off_at: null,

@@ -29,6 +29,7 @@ describe('parseLancioSettings', () => {
       { key: 'lancio_evento_at', value: '2026-10-05T21:00:00+02:00' },
       { key: 'lancio_blast_perimetro', value: 'risposto' },
       { key: 'lancio_sender', value: 'secondario' },
+      { key: 'lancio_quota_secondario', value: 9 },
     ]);
     expect(s).toEqual({
       attivo: true,
@@ -39,6 +40,7 @@ describe('parseLancioSettings', () => {
       eventoAt: '2026-10-05T21:00:00+02:00',
       blastPerimetro: 'risposto',
       sender: 'secondario',
+      quotaSecondario: 9,
     });
   });
 
@@ -77,10 +79,11 @@ describe('parseLancioSettings', () => {
     expect(parseLancioSettings([{ key: 'fenice_ai_autoreply', value: true }]).attivo).toBe(false);
   });
 
-  it('le chiavi sono esattamente quelle della spec §3.2 + §11 e del pulsante (B2)', () => {
+  it('le chiavi sono esattamente quelle della spec §3.2 + §11, del pulsante (B2) e della quota', () => {
     expect([...LANCIO_SETTING_KEYS].sort()).toEqual([
       'lancio_attivo', 'lancio_blast_perimetro', 'lancio_evento_at', 'lancio_pulsante_attivo',
-      'lancio_sender', 'lancio_video_live_link', 'lancio_zoom_link', 'offerta_del_mese_link',
+      'lancio_quota_secondario', 'lancio_sender', 'lancio_video_live_link', 'lancio_zoom_link',
+      'offerta_del_mese_link',
     ]);
   });
 
@@ -89,6 +92,43 @@ describe('parseLancioSettings', () => {
     expect(sql).toContain("'lancio_blast_perimetro'");
     expect(sql).toContain("'lancio_sender'");
     expect(sql).toContain('on conflict (key) do nothing');
+    const quota = readFileSync('supabase/migrations/20260919000001_lancio_quota_secondario.sql', 'utf8');
+    expect(quota).toContain("'lancio_quota_secondario'");
+    expect(quota).toContain('on conflict (key) do nothing');
+  });
+
+  describe('lancio_quota_secondario (rapporto 1 a 10 sul numero nuovo)', () => {
+    it('assente vale 0: fail-closed, tutto dal numero storico', () => {
+      expect(parseLancioSettings([]).quotaSecondario).toBe(0);
+      expect(LANCIO_SETTINGS_DEFAULT.quotaSecondario).toBe(0);
+    });
+
+    it('legge un intero, scritto come numero o come stringa', () => {
+      expect(parseLancioSettings([{ key: 'lancio_quota_secondario', value: 9 }]).quotaSecondario).toBe(9);
+      expect(parseLancioSettings([{ key: 'lancio_quota_secondario', value: ' 9 ' }]).quotaSecondario).toBe(9);
+      expect(parseLancioSettings([{ key: 'lancio_quota_secondario', value: '100' }]).quotaSecondario).toBe(100);
+    });
+
+    it('storta o fuori da 0-100 vale 0, non un valore a caso', () => {
+      for (const v of ['abc', '9%', -1, 101, 9.5, null, true, '', '  ']) {
+        expect(
+          parseLancioSettings([{ key: 'lancio_quota_secondario', value: v }]).quotaSecondario,
+          `quota ${JSON.stringify(v)}`,
+        ).toBe(0);
+      }
+    });
+
+    it('dal pannello: interi 0-100 passano, il resto no, il vuoto azzera', () => {
+      expect(validateLancioSettingInput('lancio_quota_secondario', '9')).toEqual({ ok: true, value: '9' });
+      expect(validateLancioSettingInput('lancio_quota_secondario', 0)).toEqual({ ok: true, value: '0' });
+      expect(validateLancioSettingInput('lancio_quota_secondario', 100)).toEqual({ ok: true, value: '100' });
+      expect(validateLancioSettingInput('lancio_quota_secondario', '')).toEqual({ ok: true, value: '0' });
+      for (const v of ['abc', '101', -1, 9.5, true]) {
+        expect(validateLancioSettingInput('lancio_quota_secondario', v)).toEqual(
+          { ok: false, reason: 'valore_non_valido' },
+        );
+      }
+    });
   });
 
   it('il pulsante e spento se la chiave manca o e scritta storta: si sbaglia verso il silenzio', () => {

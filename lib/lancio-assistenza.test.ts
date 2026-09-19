@@ -43,6 +43,7 @@ const SETTINGS: LancioSettings = {
   eventoAt: '2026-10-05T21:00:00+02:00',
   blastPerimetro: 'tutti',
   sender: 'principale',
+  quotaSecondario: 0,
 };
 const NOTTE5 = new Date('2026-10-05T21:30:00+02:00');
 const genera = vi.fn();

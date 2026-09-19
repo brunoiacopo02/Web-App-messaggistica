@@ -60,6 +60,12 @@ const CAMPI_TESTO: Array<{ key: LancioSettingKey; label: string; hint: string; p
     placeholder: 'https://us06web.zoom.us/j/...',
   },
   {
+    key: 'lancio_quota_secondario',
+    label: 'Benvenuti dal numero nuovo (%)',
+    hint: 'Quota di riscaldamento del numero nuovo, solo sui benvenuti del lancio: 9 vuol dire uno dal nuovo ogni dieci dal vecchio. 0 (o vuoto) = tutti dal numero storico. Lo stesso lead finisce sempre sullo stesso numero, e se il template non e’ spedibile dal nuovo parte comunque dal vecchio.',
+    placeholder: '0',
+  },
+  {
     key: 'lancio_evento_at',
     label: 'Inizio della live (ISO con fuso)',
     hint: 'Da qui derivano blast, finestre del follow-up e data delle restituzioni. Non si azzera.',
@@ -77,7 +83,7 @@ const CAMPI_SCELTA: Array<{ key: LancioSettingKey; label: string; hint: string; 
   {
     key: 'lancio_sender',
     label: 'Mittente del lancio',
-    hint: 'Il secondario non è ancora disponibile: sceglierlo lascia un avviso nei log e si parte comunque dal principale.',
+    hint: 'Vale sui benvenuti: “secondario” li manda tutti dal numero nuovo e batte la quota qui sotto. Blast Zoom e follow-up non sanno ancora partire dal secondario: lasciano un avviso nei log e partono dal principale.',
     opzioni: [{ value: 'principale', label: 'Numero principale' }, { value: 'secondario', label: 'Numero secondario' }],
   },
 ];
@@ -92,6 +98,7 @@ function valoriIniziali(s: LancioSettings): Record<LancioSettingKey, string> {
     lancio_evento_at: s.eventoAt ?? '',
     lancio_blast_perimetro: s.blastPerimetro,
     lancio_sender: s.sender,
+    lancio_quota_secondario: String(s.quotaSecondario),
   };
 }
 
