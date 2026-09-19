@@ -8,7 +8,7 @@ vi.mock('@anthropic-ai/sdk', () => ({
 }));
 
 import { parseMarioReply, generateMarioReply, GDO_CONTEXT_NOTE } from './mario';
-import { MARIO_SYSTEM_PROMPT } from './mario-prompt';
+import { MARIO_SYSTEM_PROMPT, buildMarioSystem } from './mario-prompt';
 
 beforeEach(() => {
   messagesCreate.mockReset();
@@ -42,6 +42,11 @@ describe('parseMarioReply', () => {
   });
 });
 
+/** Il system viaggia in due blocchi (il primo in cache): qui si rilegge come un testo
+ *  solo, che e' quello che il modello vede davvero. */
+const systemDi = (call = 0): string =>
+  (messagesCreate.mock.calls[call][0].system as Array<{ text: string }>).map((b) => b.text).join('');
+
 describe('generateMarioReply', () => {
   it('chiama Claude con system prompt + history e ritorna il testo pulito', async () => {
     messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'Ciao! Sono Mario 😊' }] });
@@ -50,7 +55,24 @@ describe('generateMarioReply', () => {
     const arg = messagesCreate.mock.calls[0][0];
     expect(arg.model).toBe('claude-sonnet-4-6');
     expect(arg.messages).toEqual([{ role: 'user', content: 'ciao' }]);
-    expect(typeof arg.system).toBe('string');
+    expect(Array.isArray(arg.system)).toBe(true);
+  });
+
+  // Il caching non deve cambiare una virgola di cio' che il modello legge: la prova e'
+  // che i due blocchi concatenati diano il manuale seguito dal contesto, e che la
+  // cache stia SOLO sul primo (il secondo cambia a ogni turno).
+  it('spezza il system in manuale (in cache) + contesto, senza alterare il testo', async () => {
+    messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'ok' }] });
+    await generateMarioReply([{ role: 'user', content: 'ciao' }], { personaName: 'Marta' });
+
+    const blocchi = messagesCreate.mock.calls[0][0].system as Array<Record<string, unknown>>;
+    expect(blocchi).toHaveLength(2);
+    expect(blocchi[0].cache_control).toEqual({ type: 'ephemeral' });
+    expect(blocchi[1].cache_control).toBeUndefined();
+    // il manuale sta tutto nel primo blocco, il secondo si aggancia con i due a capo
+    expect(blocchi[0].text as string).toBe(buildMarioSystem('Marta'));
+    expect((blocchi[1].text as string).startsWith('\n\n')).toBe(true);
+    expect(systemDi(0)).toBe(`${blocchi[0].text}${blocchi[1].text}`);
   });
 
   // Il client nasce con `timeout: 60_000, maxRetries: 5`: dentro una funzione con un
@@ -214,14 +236,14 @@ describe('generateMarioReply — contesto extra (lead con appuntamento già fiss
     await generateMarioReply([{ role: 'user', content: 'ok' }], { contextNote: 'CONTESTO: appuntamento già fissato.' });
 
     const arg = messagesCreate.mock.calls[0][0];
-    expect(arg.system).toContain('CONTESTO: appuntamento già fissato.');
+    expect(systemDi(0)).toContain('CONTESTO: appuntamento già fissato.');
     expect(arg.messages).toEqual([{ role: 'user', content: 'ok' }]);
   });
 
   it('senza contesto il system prompt resta quello di sempre', async () => {
     messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'Ok!' }] });
     await generateMarioReply([{ role: 'user', content: 'ok' }]);
-    expect(messagesCreate.mock.calls[0][0].system).not.toContain('CONTESTO:');
+    expect(systemDi(0)).not.toContain('CONTESTO:');
   });
 });
 
@@ -249,7 +271,7 @@ describe('generateMarioReply — i giorni prenotabili escono col risultato', () 
     const r = await generateMarioReply([{ role: 'user', content: 'ok' }], { now });
 
     expect(r.bookingDays).toEqual(['2026-09-11', '2026-09-12']);
-    const system = messagesCreate.mock.calls[0][0].system as string;
+    const system = systemDi(0);
     for (const g of r.bookingDays!) expect(system).toContain(g);
   });
 

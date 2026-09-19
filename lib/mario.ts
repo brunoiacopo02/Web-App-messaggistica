@@ -27,6 +27,11 @@ export type MarioResult = {
    *  scartare la call che il bot ha appena promesso al lead. Lo riempie solo
    *  `generateMarioReply`: `parseMarioReply`, che vede solo il testo, non lo conosce. */
   bookingDays?: readonly string[];
+  /** Token del prompt ripresi dalla cache di Anthropic (`letti`) e messi in cache
+   *  (`scritti`) in questo turno. Serve solo a controllare che il caching lavori:
+   *  `letti` a zero su tutte le risposte significa che il prefisso non e' stabile.
+   *  Lo riempie solo `generateMarioReply`. */
+  cache?: { letti: number; scritti: number };
 };
 
 const ESITO_RE = /\[ESITO:(APPUNTAMENTO|RICHIAMO|SCARTO|INTERROTTO)\|([^\]]*)\]/i;
@@ -173,7 +178,13 @@ export async function generateMarioReply(
   // loro a dover arrivare fino alla guardia sull'esito, non un secondo calcolo fatto
   // qualche minuto dopo (alle 20:00 l'ancora ruota e la finestra cambia sotto i piedi).
   const giorni = computeBookingDays(now);
-  const system = `${buildMarioSystem(opts?.personaName ?? 'Mario')}\n\n${romeNowContext(now)}\n\n${bookingSlotsContext(now, { days: giorni })}${contextNote}`;
+  // Il prompt e' spezzato in due SOLO per la cache di Anthropic: il primo blocco e'
+  // il manuale, identico per ogni lead (varia solo col nome persona, quindi due sole
+  // voci in cache), il secondo e' cio' che cambia a ogni turno. Concatenati danno la
+  // stessa identica stringa di prima — i `\n\n` di giunzione stanno in testa al
+  // secondo blocco — quindi il modello legge esattamente gli stessi byte.
+  const systemStabile = buildMarioSystem(opts?.personaName ?? 'Mario');
+  const systemVariabile = `\n\n${romeNowContext(now)}\n\n${bookingSlotsContext(now, { days: giorni })}${contextNote}`;
 
   const requestOptions = {
     ...(opts?.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : {}),
@@ -185,7 +196,10 @@ export async function generateMarioReply(
       model: MARIO_MODEL,
       max_tokens: 1024,
       thinking: { type: 'disabled' },
-      system,
+      system: [
+        { type: 'text', text: systemStabile, cache_control: { type: 'ephemeral' } },
+        { type: 'text', text: systemVariabile },
+      ],
       messages,
     } as Anthropic.MessageCreateParamsNonStreaming,
     Object.keys(requestOptions).length > 0 ? requestOptions : undefined,
@@ -193,5 +207,10 @@ export async function generateMarioReply(
 
   const textBlock = response.content.find((b) => b.type === 'text');
   const raw = textBlock && 'text' in textBlock ? textBlock.text : '';
-  return { ...parseMarioReply(raw), bookingDays: [giorni.day1.date, giorni.day2.date] };
+  // Serve a verificare che la cache stia davvero lavorando: se `letti` resta 0 su
+  // tutte le risposte, il prefisso non e' stabile e la modifica va tolta, non lasciata
+  // a meta'. Si legge dall'evento `fenice_ai_reply`.
+  const u = response.usage as { cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
+  const cache = { letti: u?.cache_read_input_tokens ?? 0, scritti: u?.cache_creation_input_tokens ?? 0 };
+  return { ...parseMarioReply(raw), bookingDays: [giorni.day1.date, giorni.day2.date], cache };
 }

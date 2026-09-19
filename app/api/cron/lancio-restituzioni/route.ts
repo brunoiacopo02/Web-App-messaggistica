@@ -6,6 +6,7 @@ import { impostaFaseLancio, leggiIngressoLancioAt } from '@/lib/lancio-db';
 import { congedoLancio } from '@/lib/lancio-effetti';
 import { paroleDelCongedo, type RigaLancio } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
+import { fetchAllRows } from '@/lib/supabase/paginate';
 import { runPool } from '@/lib/run-pool';
 import { batchMax, LANCIO_BLAST_CONCURRENCY } from '@/lib/lancio-zoom-blast';
 import { ancoraLancio, haInteragito } from '@/lib/lancio-followup';
@@ -113,20 +114,30 @@ export async function GET(req: NextRequest) {
   for (let i = 0; i < coda.length && daRestituire.length < max; i += BLOCCO_VALUTAZIONE) {
     if (Date.now() - t0 > TEMPO_MASSIMO_MS) break;
     const blocco = coda.slice(i, i + BLOCCO_VALUTAZIONE);
-    const { data, error } = await supabase
-      .from('messages')
-      .select('conversation_id, direction, body, template_sid, created_at')
-      .in('conversation_id', blocco.map((c) => c.id))
-      // Prima del lancio non c'e' niente che serva a decidere: il taglio tiene le chat
-      // riusate dentro il tetto righe.
-      .gte('created_at', tagliaStorico)
-      .order('created_at', { ascending: true })
-      .limit(MAX_RIGHE_BLOCCO);
-    if (error) {
-      await logCronQueryError(supabase, 'lancio_restituzioni_messages_query_error', error);
+    // Si PAGINA, non si mette un `.limit()`: PostgREST taglia comunque a 1.000 righe
+    // qualunque numero gli si chieda, quindi con `.limit(8000)` la guardia qui sotto
+    // non poteva scattare mai e si decideva su una storia monca. Con `fetchAllRows` le
+    // righe arrivano tutte, e il tetto torna a essere quello che voleva essere: una
+    // rete di sicurezza per i blocchi davvero enormi.
+    let righeBlocco: RigaMessaggio[];
+    try {
+      righeBlocco = await fetchAllRows<RigaMessaggio>(
+        (da, a) =>
+          supabase
+            .from('messages')
+            .select('conversation_id, direction, body, template_sid, created_at')
+            .in('conversation_id', blocco.map((c) => c.id))
+            // Prima del lancio non c'e' niente che serva a decidere: il taglio tiene le
+            // chat riusate dentro il tetto righe.
+            .gte('created_at', tagliaStorico)
+            .order('created_at', { ascending: true })
+            .range(da, a) as unknown as PromiseLike<{ data: RigaMessaggio[] | null; error: { message: string } | null }>,
+        { max: MAX_RIGHE_BLOCCO },
+      );
+    } catch (e) {
+      await logCronQueryError(supabase, 'lancio_restituzioni_messages_query_error', { message: e instanceof Error ? e.message : String(e) });
       break;
     }
-    const righeBlocco = (data ?? []) as unknown as RigaMessaggio[];
     // Il troncamento non e' innocuo (stessa difesa del cron del follow-up, commit
     // dec4428): l'ordine e' crescente, quindi a cadere sono le righe PIU' NUOVE di tutte
     // le chat del blocco. Una chat letta a meta' sembra "non ha mai scritto" — e qui non
