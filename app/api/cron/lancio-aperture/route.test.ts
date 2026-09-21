@@ -38,6 +38,8 @@ const stato = {
   attivo: '1' as string,
   /** `lancio_evento_at`: serve all'allarme sulla data rimasta indietro. */
   eventoAt: null as string | null,
+  /** `lancio_zoom_link`: la seconda variabile del benvenuto nuovo. Null = chiave vuota. */
+  zoomLink: null as string | null,
   /** Chat già timbrate: l'update del claim non le restituisce. */
   timbrate: new Set<number>(),
   /** Il VALORE del timbro, per conv: il rilascio è ancorato a quello che ha scritto
@@ -87,6 +89,7 @@ function esegui(rec: Chiamata): { data: unknown; error: unknown; count?: number 
   if (rec.table === 'app_settings') {
     const righe: { key: string; value: unknown }[] = [{ key: 'lancio_attivo', value: stato.attivo }];
     if (stato.eventoAt !== null) righe.push({ key: 'lancio_evento_at', value: stato.eventoAt });
+    if (stato.zoomLink !== null) righe.push({ key: 'lancio_zoom_link', value: stato.zoomLink });
     return { data: righe, error: null };
   }
   if (rec.table === 'conversations') {
@@ -207,6 +210,7 @@ beforeEach(() => {
   stato.outbound = new Map();
   stato.attivo = '1';
   stato.eventoAt = null;
+  stato.zoomLink = null;
   stato.timbrate = new Set();
   stato.timbri = new Map();
   stato.messagesInsertKo = false;
@@ -685,5 +689,65 @@ describe('GET /api/cron/lancio-aperture — mittente del secondo numero', () => 
     expect(sendTemplate).toHaveBeenCalledTimes(2);
     expect(sendTemplate.mock.calls.every((c) => c[0].from === PRIMARIO)).toBe(true);
     expect(tipiEvento()).not.toContain('lancio_mittente_ripiego');
+  });
+});
+
+// ─────────────── benvenuto a due variabili (il link della live) ───────────────
+// `fenice_lancio_benvenuto_v2`, approvato UTILITY il 20/09, chiede nome E link Zoom.
+// Quante variabili vuole lo dice il template: la env si scambia senza toccare il codice.
+// Qui `getTemplateBody` è mockata a null, quindi il conteggio arriva dalla rete di
+// sicurezza per SID di `lib/lancio-benvenuto.ts` — il caso "Content API muta".
+describe('GET /api/cron/lancio-aperture — benvenuto a due variabili', () => {
+  const V2 = 'HXcf2f16a2afbdafda977f188507599566';
+  const ZOOM = 'https://us06web.zoom.us/j/89845223337';
+
+  it('col link configurato manda nome e link, e la riga messages porta il testo del v2', async () => {
+    process.env.LANCIO_WELCOME_TEMPLATE_SID = V2;
+    stato.zoomLink = ZOOM;
+    stato.convs = [conv(1)];
+    const res = await richiesta();
+
+    expect(await res.json()).toMatchObject({ inviati: 1, fermo: null });
+    expect(sendTemplate.mock.calls[0][0]).toMatchObject({
+      contentSid: V2,
+      variables: { '1': 'Mario', '2': ZOOM },
+    });
+    const riga = insertIn('messages')[0];
+    expect(riga.body).toContain(ZOOM);
+    expect(riga.body).not.toContain('{{');
+  });
+
+  // Il caso che non deve succedere: la coda intera con un buco al posto del link.
+  it('senza link non parte niente: run fermo, evento error, nessun timbro', async () => {
+    process.env.LANCIO_WELCOME_TEMPLATE_SID = V2;
+    stato.zoomLink = null;
+    stato.convs = [conv(1), conv(2)];
+    const res = await richiesta();
+
+    expect(sendTemplate).not.toHaveBeenCalled();
+    expect(await res.json()).toMatchObject({ inviati: 0, fermo: 'benvenuto_non_componibile' });
+    const allarme = eventi().find((e) => e.type === 'lancio_benvenuto_senza_link');
+    expect(allarme!.level).toBe('error');
+    expect(allarme!.payload).toMatchObject({
+      conversationId: 1, motivo: 'link_mancante', templateSid: V2, variabili: 2, inCoda: 2,
+    });
+    // Un solo allarme per run, non uno per chat: la causa è del lancio, non della chat.
+    expect(eventi().filter((e) => e.type === 'lancio_benvenuto_senza_link')).toHaveLength(1);
+    // Nessuna chat consumata: il timbro non è stato messo, la coda resta intera.
+    expect(stato.timbrate.size).toBe(0);
+  });
+
+  // Il ritorno indietro: rimessa la env vecchia, il comportamento è quello di sempre.
+  it('template a una variabile: il link non entra, nemmeno se configurato', async () => {
+    stato.zoomLink = ZOOM;
+    stato.convs = [conv(1)];
+    const res = await richiesta();
+
+    expect(await res.json()).toMatchObject({ inviati: 1, fermo: null });
+    expect(sendTemplate.mock.calls[0][0]).toMatchObject({
+      contentSid: WELCOME,
+      variables: { '1': 'Mario' },
+    });
+    expect(insertIn('messages')[0].body).not.toContain(ZOOM);
   });
 });

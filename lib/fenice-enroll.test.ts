@@ -1036,6 +1036,69 @@ describe('enrollLeadIntoMario — ramo lancio (B1)', () => {
     expect(calls.events.find((e) => e.type === 'lancio_intake').payload.ok).toBe(false);
   });
 
+  // Il benvenuto approvato UTILITY il 20/09 (`fenice_lancio_benvenuto_v2`) ha DUE
+  // variabili: nome e link della live. Quante ne vuole lo dice il template, non questo
+  // codice — così la env si scambia (e si torna indietro) senza toccare niente.
+  describe('benvenuto a due variabili (il link della live)', () => {
+    /** Il SID vero del v2: senza credenziali Twilio il conteggio arriva dalla rete di
+     *  sicurezza di `lancio-benvenuto.ts`, che è esattamente il caso da coprire. */
+    const V2 = 'HXcf2f16a2afbdafda977f188507599566';
+    const ZOOM = 'https://us06web.zoom.us/j/89845223337';
+    const impostazioni = (zoomLink: string | null) => {
+      vi.mocked(getLancioSettings).mockResolvedValue({
+        attivo: true, pulsanteAttivo: false, zoomLink, videoLiveLink: null, offertaDelMeseLink: null,
+        eventoAt: null, blastPerimetro: 'tutti', sender: 'principale', quotaSecondario: 0,
+      });
+    };
+
+    it('col link configurato manda nome E link, e la riga messages porta il testo del v2', async () => {
+      vi.stubEnv('LANCIO_WELCOME_TEMPLATE_SID', V2);
+      impostazioni(ZOOM);
+      const { supabase } = makeSupabase();
+      const res = await enrollLeadIntoMario(supabase, ARGS);
+
+      expect(res).toMatchObject({ ok: true, sid: 'SM_TEST' });
+      const call = vi.mocked(sendTemplateAndLog).mock.calls[0];
+      expect(call[3]).toBe(V2);
+      expect(call[6]).toEqual({ '1': 'Anna', '2': ZOOM });
+      // Il corpo è quello del template approvato, coi segnaposto risolti: i pannelli
+      // devono mostrare quello che il lead ha ricevuto davvero, non il testo del v1.
+      expect(call[7]).toMatch(/^Ciao Anna, confermo la tua iscrizione alla live Web Developer AI/);
+      expect(call[7]).toContain(ZOOM);
+      expect(call[7]).not.toContain('{{');
+    });
+
+    // Il caso che non deve succedere: 342 persone con un buco al posto del link.
+    it('senza link NON manda: evento error, lead preso in carico, nessun timbro', async () => {
+      vi.stubEnv('LANCIO_WELCOME_TEMPLATE_SID', V2);
+      impostazioni(null);
+      const { supabase, calls } = makeSupabase();
+      const res = await enrollLeadIntoMario(supabase, ARGS);
+
+      expect(res).toMatchObject({ ok: true, conversationId: 42, deferred: true });
+      expect(sendTemplateAndLog).not.toHaveBeenCalled();
+      const evt = calls.events.find((e) => e.type === 'lancio_benvenuto_senza_link');
+      expect(evt.level).toBe('error');
+      expect(evt.payload).toMatchObject({ conversationId: 42, motivo: 'link_mancante', templateSid: V2, variabili: 2 });
+      // Senza timbro il cron `lancio-aperture` lo riprende appena il link c'è.
+      expect(calls.updates[0].lancio_benvenuto_at).toBeNull();
+      expect(calls.events.find((e) => e.type === 'lancio_intake').payload)
+        .toMatchObject({ differita: 'benvenuto_non_componibile', motivo: 'link_mancante' });
+    });
+
+    // Il ritorno indietro: rimessa la env vecchia, il comportamento è quello di sempre.
+    it('template a una variabile: il link non entra, nemmeno se configurato', async () => {
+      impostazioni(ZOOM); // il SID resta 'HX_LANCIO_WELCOME' del beforeEach
+      const { supabase } = makeSupabase();
+      const res = await enrollLeadIntoMario(supabase, ARGS);
+
+      expect(res).toMatchObject({ ok: true, sid: 'SM_TEST' });
+      const call = vi.mocked(sendTemplateAndLog).mock.calls[0];
+      expect(call[6]).toEqual({ '1': 'Anna' });
+      expect(call[7]).toBe(lancioBenvenutoText('ANNA BIANCHI'));
+    });
+  });
+
   // Spec §11.3. Il 15/09 il numero ha incassato 7.882 intake in un giorno ed è uscito a
   // qualità LOW: il benvenuto realtime, senza tetto, rifarebbe lo stesso picco.
   describe('tetto orario dei benvenuti (LANCIO_WELCOME_MAX_PER_HOUR)', () => {

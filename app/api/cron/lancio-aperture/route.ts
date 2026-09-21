@@ -14,9 +14,8 @@ import {
 import { leggiTettoOrario, sottoTettoOrario } from '@/lib/lancio-tetto';
 import { contaBenvenutiUltimaOra, leggiIngressiLancioAt } from '@/lib/lancio-db';
 import { inOpeningWindow } from '@/lib/sequence';
-import { lancioBenvenutoText } from '@/lib/lancio-fase';
+import { componiBenvenutoLancio, messaggioBenvenutoNonComponibile } from '@/lib/lancio-benvenuto';
 import { logCronQueryError } from '@/lib/cron-query-error';
-import { templateName } from '@/lib/name';
 import { eRifiutoDiPolicy, allarmeEventoStantio } from '@/lib/lancio-blast-motore';
 import { spedibileDa } from '@/lib/lancio-mittente';
 
@@ -276,6 +275,37 @@ export async function GET(req: NextRequest) {
           break;
         }
 
+        const nome = c.leads?.first_name ?? null;
+        // Le variabili del benvenuto le detta il TEMPLATE, non questo codice: quello
+        // nuovo (`fenice_lancio_benvenuto_v2`) ne vuole due, e la seconda e' il link
+        // della live. Se il template le chiede e `lancio_zoom_link` e' vuoto NON si
+        // manda: partirebbe un messaggio col buco al posto del link, a tutta la coda.
+        // Sta PRIMA del timbro, cosi' nessuna chat viene consumata, e ferma il run come
+        // fa il presidio dei template: la causa e' del lancio, non di questa chat, e
+        // ripeterla per 100 candidati sarebbe cento volte lo stesso allarme.
+        const benvenuto = await componiBenvenutoLancio({ templateSid, nome, zoomLink: settings.zoomLink });
+        if (!benvenuto.ok) {
+          fermo = 'benvenuto_non_componibile';
+          await logEvento(
+            supabase,
+            'lancio_benvenuto_senza_link',
+            {
+              conversationId: c.id,
+              crmLeadId: c.crm_lead_id,
+              origine: 'lancio-aperture',
+              motivo: benvenuto.motivo,
+              templateSid,
+              variabili: benvenuto.variabili,
+              inCoda: convs.length,
+            },
+            messaggioBenvenutoNonComponibile(benvenuto.motivo, c.id, templateSid) +
+              ` Run fermato: ${convs.length} chat restano in coda.`,
+            'error',
+          );
+          break;
+        }
+        const corpo = benvenuto.corpo;
+
         // Il timbro PRIMA dell'invio: se due run si accavallano (il cron gira ogni 15'
         // e un run lento non e' un'ipotesi di scuola), il secondo trova la riga gia'
         // presa e passa oltre. `is('lancio_benvenuto_at', null)` rende l'update un
@@ -300,9 +330,6 @@ export async function GET(req: NextRequest) {
             .update({ lancio_benvenuto_at: null })
             .eq('id', c.id)
             .eq('lancio_benvenuto_at', timbro);
-
-        const nome = c.leads?.first_name ?? null;
-        const corpo = lancioBenvenutoText(nome);
 
         // Il numero della CHAT, non quello del run: una conversazione nata sul secondo
         // numero deve ricevere anche il benvenuto differito da li', o il lead si ritrova
@@ -348,7 +375,7 @@ export async function GET(req: NextRequest) {
           const res = await sendTemplate({
             to: phone,
             contentSid: templateSid,
-            variables: { '1': templateName(nome) },
+            variables: benvenuto.variables,
             from: mittente,
           });
           spedito = true;

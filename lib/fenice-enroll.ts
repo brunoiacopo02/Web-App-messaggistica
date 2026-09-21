@@ -7,7 +7,8 @@ import { firstNameOf, templateName } from './name';
 import type { GdoVariant, LancioIntake } from './bot-contract';
 import { gdoAgendaText, videoLinkForVariant } from './gdo-agenda';
 import { getLancioSettings } from './lancio-settings';
-import { lancioBenvenutoText, lancioRipartePerRiarruolamento } from './lancio-fase';
+import { lancioRipartePerRiarruolamento } from './lancio-fase';
+import { componiBenvenutoLancio, messaggioBenvenutoNonComponibile } from './lancio-benvenuto';
 import { leggiTettoOrario, sottoTettoOrario } from './lancio-tetto';
 import { contaBenvenutiUltimaOra } from './lancio-db';
 import { mittenteDiConversazione, numeroPrimario, numeroSecondo } from './mittente';
@@ -641,7 +642,7 @@ async function enrollLancio(
     ...lancioFields,
   };
 
-  let differita: 'lancio_spento' | 'fuori_fascia' | 'tetto_orario' | null = !settings.attivo
+  let differita: 'lancio_spento' | 'fuori_fascia' | 'tetto_orario' | 'benvenuto_non_componibile' | null = !settings.attivo
     ? 'lancio_spento'
     : !inOpeningWindow(Date.now())
       ? 'fuori_fascia'
@@ -665,14 +666,38 @@ async function enrollLancio(
     }
   }
 
-  if (differita) {
+  // Le variabili del benvenuto le detta il TEMPLATE, non questo codice: quello nuovo
+  // (`fenice_lancio_benvenuto_v2`) ne vuole due, e la seconda e' il link della live. Se
+  // il template le chiede e `lancio_zoom_link` e' vuoto NON si manda: partirebbe un
+  // messaggio col buco al posto del link. Il lead resta preso in carico e senza timbro,
+  // quindi il cron `lancio-aperture` lo manda appena il link c'e'. Vedi
+  // lib/lancio-benvenuto.ts.
+  const benvenuto = !differita
+    ? await componiBenvenutoLancio({ templateSid, nome: firstName, zoomLink: settings.zoomLink })
+    : null;
+  if (benvenuto && !benvenuto.ok) differita = 'benvenuto_non_componibile';
+
+  // `!benvenuto?.ok` e' la stessa condizione di sopra: sta qui perche' e' cosi' che
+  // TypeScript sa, dopo il `return`, che il benvenuto c'e' ed e' componibile.
+  if (differita || !benvenuto?.ok) {
     await supabase.from('conversations').update(convUpdate).eq('id', conversationId);
+    if (benvenuto && !benvenuto.ok) {
+      // L'allarme: senza questo, un link vuoto sarebbe solo del silenzio.
+      await supabase.from('event_log').insert({
+        type: 'lancio_benvenuto_senza_link',
+        payload: { ...base, motivo: benvenuto.motivo, templateSid, variabili: benvenuto.variabili } as never,
+        message: messaggioBenvenutoNonComponibile(benvenuto.motivo, conversationId, templateSid),
+        level: 'error',
+      });
+    }
     await evento(
-      differita !== 'tetto_orario'
-        ? { differita }
-        : inviatiUltimaOra === null
-          ? { differita, motivo: 'conteggio_fallito', cap }
-          : { differita, inviatiUltimaOra, cap },
+      differita === 'benvenuto_non_componibile'
+        ? { differita, motivo: benvenuto && !benvenuto.ok ? benvenuto.motivo : null, templateSid }
+        : differita !== 'tetto_orario'
+          ? { differita }
+          : inviatiUltimaOra === null
+            ? { differita, motivo: 'conteggio_fallito', cap }
+            : { differita, inviatiUltimaOra, cap },
       `[lancio] lead ${args.crmLeadId ?? args.phone} preso in carico, benvenuto differito (${differita})`,
     );
     return { ok: true, conversationId, deferred: true };
@@ -680,7 +705,7 @@ async function enrollLancio(
 
   const res = await sendTemplateAndLog(
     supabase, conversationId, args.phone, templateSid, 'Lancio benvenuto', from,
-    { '1': templateName(firstName) }, lancioBenvenutoText(firstName),
+    benvenuto.variables, benvenuto.corpo,
   );
   // Il benvenuto e' partito: si timbra `lancio_benvenuto_at`, che e' il lucchetto letto
   // dal cron `lancio-aperture` (una riga timbrata non e' nemmeno candidata). Se l'invio
