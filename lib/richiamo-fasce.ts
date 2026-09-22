@@ -28,10 +28,12 @@ export const RICHIAMO_FASCIA_RESTITUZIONE_GG = 7;
 
 export type FasciaRichiamo = 'tieni_aperta' | 'restituisci' | 'scarta';
 
-/** Un periodo a parole che può stare dentro i 7 giorni. Tutto il resto è più lontano.
- *  "tra N giorni/settimane/mesi" si guarda il numero e l'unità; "settimana prossima"
- *  può essere 3 come 10 giorni e si sceglie la lettura che NON butta via il lead
- *  (la restituzione). */
+/** I numeri a parole che il lead può usare in "tra N giorni/settimane/mesi", da "un"
+ *  a "venti". Le espressioni senza un numero preciso ("qualche X", "un paio di X",
+ *  "settimana prossima") non passano da questa mappa: le assegna direttamente
+ *  `fasciaPeriodoVago`, senza fingere di conoscere un numero di giorni che non c'è
+ *  (fix round 2, Minor: prima "settimana prossima" restituiva la SOGLIA
+ *  `RICHIAMO_FASCIA_RESTITUZIONE_GG` spacciata per un numero di giorni). */
 const NUMERO_A_PAROLE: Record<string, number> = {
   un: 1, una: 1, uno: 1, due: 2, tre: 3, quattro: 4, cinque: 5,
   sei: 6, sette: 7, otto: 8, nove: 9, dieci: 10,
@@ -39,45 +41,64 @@ const NUMERO_A_PAROLE: Record<string, number> = {
   sedici: 16, diciassette: 17, diciotto: 18, diciannove: 19, venti: 20,
 };
 
-/** Giorni civili che vale ciascuna unità del periodo, per confrontarla contro
- *  `RICHIAMO_FASCIA_RESTITUZIONE_GG` senza avere quel numero ripetuto altrove. */
+/** Giorni civili che vale ciascuna unità del periodo, per confrontarla contro le
+ *  soglie delle fasce (`fasciaDaGiorni`, sotto) senza avere questi numeri ripetuti
+ *  altrove. */
 function giorniPerUnita(unita: string): number {
   if (unita.startsWith('giorn')) return 1;
   if (unita.startsWith('settiman')) return 7;
   return 30; // mese/mesi
 }
 
-/** Converte un periodo a parole ("tra N giorni/settimane/mesi", o "settimana
- *  prossima") nel numero di giorni civili che rappresenta, o `null` se non si
- *  riesce a leggerlo come un numero di giorni preciso (es. "a settembre", "dopo
- *  le ferie"). Estratta apposta perché il risultato va confrontato con TUTTE E
- *  DUE le soglie (fix round 1, C-1: prima si guardava solo se stava entro
- *  `RICHIAMO_FASCIA_RESTITUZIONE_GG`, e il percorso a parole non aveva nessuna
- *  fascia "tieni_aperta" — un "fra due giorni" veniva restituito a un GDO e la
- *  chat si chiudeva, anche se il codice promette che entro
- *  `RICHIAMO_FASCIA_APERTA_GG` giorni resta aperta e la ripesca la sequenza). */
+/** Converte un periodo a parole con un numero preciso ("tra N giorni/settimane/
+ *  mesi", "tra un paio di X") nel numero di giorni civili che rappresenta, o
+ *  `null` se non c'è un numero da leggere (es. "a settembre", "dopo le ferie",
+ *  o un'espressione vaga come "qualche settimana" — quelle le assegna
+ *  `fasciaPeriodoVago`, PRIMA di arrivare qui: vedi `classificaRichiamo`).
+ *  "un paio di" vale sempre 2, con la stessa precisione di "due": non è
+ *  un'espressione vaga, è solo scritta in tre parole invece di una. */
 function periodoInGiorni(periodo: string): number | null {
   const t = periodo.toLowerCase();
+  const paio = t.match(/\b(?:tra|fra)\s+un\s+paio\s+di\s+(giorn[oi]|settiman[ae]|mes[ei])\b/);
+  if (paio) return 2 * giorniPerUnita(paio[1]);
   const m = t.match(/\b(?:tra|fra)\s+([a-zà-ù]+|\d{1,3})\s+(giorn[oi]|settiman[ae]|mes[ei])\b/);
   if (m) {
     const grezzo = m[1];
     const n = /^\d+$/.test(grezzo) ? Number(grezzo) : NUMERO_A_PAROLE[grezzo];
-    if (typeof n !== 'number') return null;
-    return n * giorniPerUnita(m[2]);
+    if (typeof n === 'number') return n * giorniPerUnita(m[2]);
   }
-  // "la settimana prossima" / "settimana prossima": l'unica espressione vaga che può
-  // cadere dentro la settimana. Non è un numero preciso di giorni: la trattiamo come
-  // il bordo della restituzione (7), mai come "tieni_aperta" — non sappiamo se sono 3
-  // o 10 giorni, e sbagliare verso "aperta" chiuderebbe la sequenza troppo presto.
-  // "mese", "anno" e le stagioni no.
-  if (/\b(?:l[ao]\s+)?(?:prossima\s+settimana|settimana\s+prossima)\b/.test(t)) return RICHIAMO_FASCIA_RESTITUZIONE_GG;
+  return null;
+}
+
+/** Espressioni a parole SENZA un numero di giorni preciso ("settimana
+ *  prossima", "qualche X"): la fascia si assegna direttamente, invece di far
+ *  finta di conoscere un numero di giorni che non c'è (fix round 2, Minor: la
+ *  versione precedente faceva tornare a `periodoInGiorni` la SOGLIA
+ *  `RICHIAMO_FASCIA_RESTITUZIONE_GG` spacciata per un conteggio di giorni — un
+ *  numero che dichiara di essere un conteggio ma in realtà è una soglia presa
+ *  in prestito si rompe in silenzio se le due costanti smettono di stare alla
+ *  stessa distanza). La scelta è sempre quella che NON sovrapromette una chat
+ *  che resta aperta quando l'espressione potrebbe benissimo superare i 3
+ *  giorni: mai `tieni_aperta` per un "quando" che non sappiamo quantificare. */
+function fasciaPeriodoVago(periodo: string): FasciaRichiamo | null {
+  const t = periodo.toLowerCase();
+  // "la settimana prossima" / "settimana prossima": può essere 3 come 10 giorni
+  // a seconda di che giorno è oggi.
+  if (/\b(?:l[ao]\s+)?(?:prossima\s+settimana|settimana\s+prossima)\b/.test(t)) return 'restituisci';
+  // "qualche giorno": in pratica 2-6 giorni, può benissimo superare i 3.
+  if (/\bqualche\s+giorno\b/.test(t)) return 'restituisci';
+  // "qualche settimana" / "qualche mese": sempre oltre la settimana.
+  if (/\bqualche\s+(?:settimana|mese)\b/.test(t)) return 'scarta';
   return null;
 }
 
 /** Le stesse due soglie della fascia calcolata sulla data ISO (righe sopra),
- *  applicate a un numero di giorni già ricavato dal periodo a parole. Un
- *  periodo non leggibile come giorni ("a settembre") si tratta come "oltre
- *  la finestra": si scarta, come già faceva il codice prima di questo fix. */
+ *  applicate a un numero di giorni già ricavato dal periodo a parole (fix round
+ *  2, I-1: prima il percorso con la data aveva la STESSA scala riscritta a
+ *  mano — due copie della stessa regola, condannate a divergere in silenzio.
+ *  Ora `classificaRichiamo` chiama questa funzione da entrambi i percorsi). Un
+ *  periodo non leggibile come giorni ("a settembre") si tratta come "oltre la
+ *  finestra": si scarta, come già faceva il codice prima di questo fix. */
 function fasciaDaGiorni(giorni: number | null): FasciaRichiamo {
   if (giorni === null) return 'scarta';
   if (giorni <= RICHIAMO_FASCIA_APERTA_GG) return 'tieni_aperta';
@@ -117,9 +138,7 @@ export function classificaRichiamo(input: {
     // sul calendario cade esattamente al confine (es. 7 giorni dopo diventa 7,04).
     const giorni = romeDaysBetween(new Date(input.nowMs), new Date(t));
     const quando = formatRomeDateTime(input.date!);
-    if (giorni <= RICHIAMO_FASCIA_APERTA_GG) return { fascia: 'tieni_aperta', quando };
-    if (giorni <= RICHIAMO_FASCIA_RESTITUZIONE_GG) return { fascia: 'restituisci', quando };
-    return { fascia: 'scarta', quando };
+    return { fascia: fasciaDaGiorni(giorni), quando };
   }
 
   // `periodoWords` prima, `leadWords` come ripiego: vedi il commento sui campi qui
@@ -127,7 +146,9 @@ export function classificaRichiamo(input: {
   const periodo = estraiPeriodo(input.periodoWords) ?? estraiPeriodo(input.leadWords);
   if (!periodo) return { fascia: 'tieni_aperta', quando: null };
   return {
-    fascia: fasciaDaGiorni(periodoInGiorni(periodo)),
+    // Le espressioni vaghe (senza un numero di giorni preciso) si classificano
+    // da sole, PRIMA di provare a leggerle come un numero: vedi `fasciaPeriodoVago`.
+    fascia: fasciaPeriodoVago(periodo) ?? fasciaDaGiorni(periodoInGiorni(periodo)),
     quando: periodo,
   };
 }

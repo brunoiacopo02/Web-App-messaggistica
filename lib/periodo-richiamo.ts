@@ -13,7 +13,14 @@
 const MESI =
   'gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre';
 
-const NUMERI = "un|una|uno|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|quindici|venti|\\d{1,3}";
+// Fix round 2 (I-2): mancavano undici-diciannove — "tra undici giorni" non veniva
+// riconosciuto e il chiamante restava su `tieni_aperta` anche quando il lead aveva
+// chiaramente detto un "quando" lontano (vedi `lib/richiamo-fasce.ts`, che con quel
+// "quando" avrebbe dovuto restituire o scartare, non tenere la chat aperta).
+const NUMERI =
+  'un|una|uno|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|' +
+  'undici|dodici|tredici|quattordici|quindici|sedici|diciassette|diciotto|diciannove|venti|' +
+  '\\d{1,3}';
 
 /**
  * I pattern sono in ordine di precisione: il primo che aggancia vince. Ognuno cattura
@@ -29,8 +36,10 @@ const PATTERN: RegExp[] = [
   /\b(?:l[ao]|il)\s+(?:prossim[ao]\s+(?:settimana|mese|anno)|(?:settimana|mese|anno)\s+prossim[ao])\b/,
   // "settimana prossima" senza articolo
   /\b(?:settimana|mese|anno)\s+prossim[ao]\b/,
-  // "tra due settimane", "fra 10 giorni"
-  new RegExp(`\\b(?:tra|fra)\\s+(?:${NUMERI})\\s+(?:giorn[oi]|settiman[ae]|mes[ei])\\b`),
+  // "tra due settimane", "fra 10 giorni", "tra un paio di mesi", "fra qualche
+  // settimana" (fix round 2, I-2: "un paio di" e "qualche" non erano agganciati,
+  // stessa classe di buco delle cifre in lettere qui sopra).
+  new RegExp(`\\b(?:tra|fra)\\s+(?:${NUMERI}|un\\s+paio\\s+di|qualche)\\s+(?:giorn[oi]|settiman[ae]|mes[ei])\\b`),
   // "dopo le ferie", "dopo l'estate", "dopo Natale"
   /\bdopo\s+(?:le\s+ferie|l'estate|le\s+vacanze|natale|pasqua|ferragosto|l'estate)\b/,
   // "in autunno", "in primavera"

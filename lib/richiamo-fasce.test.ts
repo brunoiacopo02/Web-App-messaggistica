@@ -60,8 +60,8 @@ describe('classificaRichiamo, periodoWords contro leadWords (fix round 1, I-4)',
       leadWords: 'va bene, ci sentiamo tra 2 giorni',
       nowMs: NOW,
     });
-    // Letto solo su leadWords sarebbe stato "restituisci" (tra 2 giorni): periodoWords
-    // deve vincere e portare a "scarta".
+    // Letto solo su leadWords sarebbe stato "tieni_aperta" (tra 2 giorni, dentro i 3):
+    // periodoWords deve vincere e portare a "scarta".
     expect(r.fascia).toBe('scarta');
     expect(r.quando).toBe('a settembre');
   });
@@ -174,14 +174,58 @@ describe('classificaRichiamo, senza una data usabile', () => {
     expect(classificaRichiamo({ leadWords: 'tra 11 giorni', nowMs: NOW }).fascia).toBe('scarta');
   });
 
-  it('"tra undici giorni" (a parole): resta senza esito, e non è un difetto di questo modulo', () => {
-    // NUMERO_A_PAROLE qui è stata completata fino a venti, ma "undici" non arriva mai
-    // fin qui: `estraiPeriodo` (lib/periodo-richiamo.ts, costante NUMERI) non lo
-    // riconosce come numero e non estrae alcun periodo dalla frase — la nostra mappa
-    // resta pronta per quando (e se) quel file verrà esteso, ma oggi è inerte per gli
-    // undici-diciannove scritti a lettere. periodo-richiamo.ts è fuori dal perimetro
-    // di questo task.
-    expect(classificaRichiamo({ leadWords: 'tra undici giorni', nowMs: NOW }).fascia).toBe('tieni_aperta');
+  // Fix round 2, I-2 (era il peggior difetto rimasto): fino a qui "tra undici giorni"
+  // tornava `tieni_aperta` perché `estraiPeriodo` (lib/periodo-richiamo.ts, costante
+  // NUMERI) non riconosceva "undici" come numero — con la conseguenza che il prompt,
+  // avendo capito che il "quando" era oltre una settimana, congedava il lead ("da qui
+  // non ti scrivo più io"), e la sequenza di follow-up gli riscriveva comunque entro
+  // 4 giorni: un congedo seguito da un messaggio, la promessa rotta che questo intero
+  // piano esiste per chiudere. `NUMERI` ora copre undici-diciannove, quindi il periodo
+  // si estrae e la fascia si calcola per davvero.
+  it('"tra undici giorni" (a parole): ora si riconosce, ed è oltre la settimana', () => {
+    expect(classificaRichiamo({ leadWords: 'tra undici giorni', nowMs: NOW }).fascia).toBe('scarta');
+  });
+
+  it('gli altri numeri a lettere prima mancanti (dodici, tredici, quattordici, sedici, diciassette, diciotto, diciannove) si riconoscono tutti', () => {
+    expect(classificaRichiamo({ leadWords: 'tra dodici giorni', nowMs: NOW }).fascia).toBe('scarta');
+    expect(classificaRichiamo({ leadWords: 'fra tredici giorni', nowMs: NOW }).fascia).toBe('scarta');
+    expect(classificaRichiamo({ leadWords: 'tra quattordici giorni', nowMs: NOW }).fascia).toBe('scarta');
+    expect(classificaRichiamo({ leadWords: 'tra sedici giorni', nowMs: NOW }).fascia).toBe('scarta');
+    expect(classificaRichiamo({ leadWords: 'tra diciassette giorni', nowMs: NOW }).fascia).toBe('scarta');
+    expect(classificaRichiamo({ leadWords: 'tra diciotto giorni', nowMs: NOW }).fascia).toBe('scarta');
+    expect(classificaRichiamo({ leadWords: 'tra diciannove giorni', nowMs: NOW }).fascia).toBe('scarta');
+  });
+
+  // "quindici" era già in NUMERI prima di questo fix (non era fra i mancanti): questo
+  // test conferma solo che la catena estrazione→conversione funzionava già per lui.
+  it('"tra quindici giorni" (a parole): già riconosciuto prima di questo fix, resta scarto', () => {
+    expect(classificaRichiamo({ leadWords: 'tra quindici giorni', nowMs: NOW }).fascia).toBe('scarta');
+  });
+
+  describe('fix round 2 (I-2): "un paio di" e "qualche" non finiscono più su tieni_aperta di default', () => {
+    it('"tra un paio di giorni": paio vale 2, dentro i 3 giorni, tieni_aperta', () => {
+      expect(classificaRichiamo({ leadWords: 'tra un paio di giorni', nowMs: NOW }).fascia).toBe('tieni_aperta');
+    });
+
+    it('"fra un paio di settimane": 14 giorni, scarto', () => {
+      expect(classificaRichiamo({ leadWords: 'fra un paio di settimane', nowMs: NOW }).fascia).toBe('scarta');
+    });
+
+    it('"tra un paio di mesi": 60 giorni, scarto', () => {
+      expect(classificaRichiamo({ leadWords: 'tra un paio di mesi', nowMs: NOW }).fascia).toBe('scarta');
+    });
+
+    it('"tra qualche giorno": vago ma può superare i 3 giorni, mai tieni_aperta: restituzione', () => {
+      expect(classificaRichiamo({ leadWords: 'tra qualche giorno', nowMs: NOW }).fascia).toBe('restituisci');
+    });
+
+    it('"fra qualche settimana": scarto', () => {
+      expect(classificaRichiamo({ leadWords: 'fra qualche settimana', nowMs: NOW }).fascia).toBe('scarta');
+    });
+
+    it('"tra qualche mese": scarto', () => {
+      expect(classificaRichiamo({ leadWords: 'tra qualche mese', nowMs: NOW }).fascia).toBe('scarta');
+    });
   });
 });
 

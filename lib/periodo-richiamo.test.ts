@@ -52,4 +52,43 @@ describe('estraiPeriodo', () => {
     expect(p).toBe('tra tre settimane');
     expect((p ?? '').length).toBeLessThanOrEqual(60);
   });
+
+  // Fix round 2 (I-2): undici-diciannove non erano nella costante NUMERI. Un lead
+  // che scriveva "tra undici giorni" restava senza periodo riconosciuto, e a valle
+  // (lib/richiamo-fasce.ts) la conversazione restava `tieni_aperta` anche quando il
+  // "quando" era chiaramente oltre la settimana — vedi il test corrispondente in
+  // richiamo-fasce.test.ts per l'effetto end-to-end.
+  it('prende i numeri a lettere da undici a diciannove, prima mancanti', () => {
+    expect(estraiPeriodo('mi richiami tra undici giorni')).toBe('tra undici giorni');
+    expect(estraiPeriodo('tra dodici giorni')).toBe('tra dodici giorni');
+    expect(estraiPeriodo('fra tredici giorni')).toBe('fra tredici giorni');
+    expect(estraiPeriodo('tra quattordici giorni')).toBe('tra quattordici giorni');
+    expect(estraiPeriodo('tra sedici giorni')).toBe('tra sedici giorni');
+    expect(estraiPeriodo('tra diciassette giorni')).toBe('tra diciassette giorni');
+    expect(estraiPeriodo('tra diciotto giorni')).toBe('tra diciotto giorni');
+    expect(estraiPeriodo('tra diciannove giorni')).toBe('tra diciannove giorni');
+  });
+
+  it('"quindici" e "venti" erano già riconosciuti prima di questo fix', () => {
+    expect(estraiPeriodo('tra quindici giorni')).toBe('tra quindici giorni');
+    expect(estraiPeriodo('tra venti giorni')).toBe('tra venti giorni');
+  });
+
+  it('prende "un paio di" e "qualche" davanti a giorni/settimane/mesi', () => {
+    expect(estraiPeriodo('richiamami tra un paio di giorni')).toBe('tra un paio di giorni');
+    expect(estraiPeriodo('fra un paio di settimane ci sentiamo')).toBe('fra un paio di settimane');
+    expect(estraiPeriodo('tra un paio di mesi')).toBe('tra un paio di mesi');
+    expect(estraiPeriodo('ci vediamo fra qualche giorno')).toBe('fra qualche giorno');
+    expect(estraiPeriodo('tra qualche settimana')).toBe('tra qualche settimana');
+    expect(estraiPeriodo('tra qualche mese')).toBe('tra qualche mese');
+  });
+
+  it('non scambia un orario per un periodo, anche dopo l\'estensione dei pattern', () => {
+    // Stesso test di prima (riga sopra), ripetuto qui apposta a valle dell'estensione
+    // di NUMERI e dei nuovi pattern "un paio di"/"qualche": un'estensione dei pattern
+    // di riconoscimento è il punto più a rischio di un falso positivo nuovo.
+    expect(estraiPeriodo('Richiamami alle 15')).toBeNull();
+    expect(estraiPeriodo('ho un paio di cose da sistemare prima')).toBeNull();
+    expect(estraiPeriodo('qualche volta ci penso')).toBeNull();
+  });
 });

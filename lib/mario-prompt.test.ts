@@ -728,6 +728,16 @@ describe('SE RIMANDA LA CALL — il rimando prima del fissaggio', () => {
     expect(p).toMatch(/PRIMA GUARDO IL CORSO[\s\S]{0,400}Non lasciarlo a "scrivimi tu/);
   });
 
+  // Fix round 2, Minor: "Così mi faccio sentire dopo e ne parliamo" era una promessa
+  // di un messaggio futuro del bot non coperta dal divieto del tag RICHIAMO (che
+  // vietava solo le promesse "a una data precisa"): onesta se il lead rispondeva
+  // "stasera o domani", falsa se rispondeva con un orizzonte di 4-7 giorni, perché lì
+  // la chat si chiude (restituzione a un GDO) e il bot non scrive più.
+  it('sul rinvio al materiale non promette più un messaggio futuro del bot', () => {
+    expect(p).not.toContain('Così mi faccio sentire dopo e ne parliamo');
+    expect(p).toMatch(/PRIMA GUARDO IL CORSO[\s\S]{0,400}vale la regola del RICHIAMO in ogni fascia/);
+  });
+
   it('vieta esplicitamente fretta, scarsità e senso di colpa', () => {
     expect(p).toContain('Non usare mai la fretta, la scarsità o il senso di colpa');
   });
