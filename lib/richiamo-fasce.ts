@@ -16,7 +16,7 @@
 
 import { estraiPeriodo } from './periodo-richiamo';
 import { paroleDelLead } from './bot-outcome-rules';
-import { formatRomeDateTime } from './rome-time';
+import { formatRomeDateTime, romeDaysBetween } from './rome-time';
 
 /** Entro questi giorni non si chiude niente: la sequenza di follow-up (SEQUENCE_END_DAYS
  *  = 4) lo ripesca da sola, quindi il lead viene davvero riseguito. */
@@ -28,23 +28,33 @@ export const RICHIAMO_FASCIA_RESTITUZIONE_GG = 7;
 
 export type FasciaRichiamo = 'tieni_aperta' | 'restituisci' | 'scarta';
 
-const GIORNO_MS = 24 * 3600_000;
-
 /** Un periodo a parole che può stare dentro i 7 giorni. Tutto il resto è più lontano.
- *  "tra N giorni" si guarda il numero; "settimana prossima" può essere 3 come 10 giorni
- *  e si sceglie la lettura che NON butta via il lead (la restituzione). */
+ *  "tra N giorni/settimane/mesi" si guarda il numero e l'unità; "settimana prossima"
+ *  può essere 3 come 10 giorni e si sceglie la lettura che NON butta via il lead
+ *  (la restituzione). */
 const NUMERO_A_PAROLE: Record<string, number> = {
   un: 1, una: 1, uno: 1, due: 2, tre: 3, quattro: 4, cinque: 5,
-  sei: 6, sette: 7, otto: 8, nove: 9, dieci: 10, quindici: 15, venti: 20,
+  sei: 6, sette: 7, otto: 8, nove: 9, dieci: 10,
+  undici: 11, dodici: 12, tredici: 13, quattordici: 14, quindici: 15,
+  sedici: 16, diciassette: 17, diciotto: 18, diciannove: 19, venti: 20,
 };
+
+/** Giorni civili che vale ciascuna unità del periodo, per confrontarla contro
+ *  `RICHIAMO_FASCIA_RESTITUZIONE_GG` senza avere quel numero ripetuto altrove. */
+function giorniPerUnita(unita: string): number {
+  if (unita.startsWith('giorn')) return 1;
+  if (unita.startsWith('settiman')) return 7;
+  return 30; // mese/mesi
+}
 
 function periodoEntroSetteGiorni(periodo: string): boolean {
   const t = periodo.toLowerCase();
-  const giorni = t.match(/\b(?:tra|fra)\s+([a-zà-ù]+|\d{1,3})\s+giorn[oi]\b/);
-  if (giorni) {
-    const grezzo = giorni[1];
+  const m = t.match(/\b(?:tra|fra)\s+([a-zà-ù]+|\d{1,3})\s+(giorn[oi]|settiman[ae]|mes[ei])\b/);
+  if (m) {
+    const grezzo = m[1];
     const n = /^\d+$/.test(grezzo) ? Number(grezzo) : NUMERO_A_PAROLE[grezzo];
-    return typeof n === 'number' && n <= RICHIAMO_FASCIA_RESTITUZIONE_GG;
+    if (typeof n !== 'number') return false;
+    return n * giorniPerUnita(m[2]) <= RICHIAMO_FASCIA_RESTITUZIONE_GG;
   }
   // "la settimana prossima" / "settimana prossima": l'unica espressione vaga che può
   // cadere dentro la settimana. "mese", "anno" e le stagioni no.
@@ -69,7 +79,10 @@ export function classificaRichiamo(input: {
 }): { fascia: FasciaRichiamo; quando: string | null } {
   const t = input.date ? Date.parse(input.date) : NaN;
   if (!Number.isNaN(t) && t >= input.nowMs) {
-    const giorni = (t - input.nowMs) / GIORNO_MS;
+    // Giorni di CALENDARIO a Roma, non ore/24: sull'aritmetica in millisecondi il
+    // cambio dell'ora legale (25/10/2026, notte di 25h) sposta di fascia una data che
+    // sul calendario cade esattamente al confine (es. 7 giorni dopo diventa 7,04).
+    const giorni = romeDaysBetween(new Date(input.nowMs), new Date(t));
     const quando = formatRomeDateTime(input.date!);
     if (giorni <= RICHIAMO_FASCIA_APERTA_GG) return { fascia: 'tieni_aperta', quando };
     if (giorni <= RICHIAMO_FASCIA_RESTITUZIONE_GG) return { fascia: 'restituisci', quando };
