@@ -4,6 +4,7 @@ import { sendOutcome } from '@/lib/bot-outcome';
 import { decideFollowupAction, serveCronologia, ultimaAttivitaMs } from '@/lib/bot-followups';
 import { classifyInterrupted } from '@/lib/interrotto-note';
 import { buildConfermaPersaNote } from '@/lib/bot-outcome-rules';
+import { haConfermatoIlForm } from '@/lib/conferma-form';
 import type { MarioTurn } from '@/lib/mario';
 import { drainMarioReplies, lastIsUnansweredInbound, isOrphanedReplyingLock, isLockStale, LOCK_TTL_MS, serveRedrive } from '@/lib/fenice-autoreply';
 import { runAgendaFollowups } from '@/lib/agenda-followup';
@@ -281,12 +282,19 @@ export async function GET(req: NextRequest) {
           content: r.body ?? '',
         }));
         const v = await classifyInterrupted(history);
-        // Il lead aveva detto sì a un giorno e un'ora, o aveva compilato il form, e
-        // l'appuntamento non è mai partito: restituirlo come "chat interrotta" e basta
-        // butta via un sì già dato. In agosto è successo 49 volte. La segnalazione parte
-        // PRIMA dell'esito, perché l'esito chiude la conversazione; e si aggiunge, non
-        // sostituisce: il lead torna comunque al CRM come sempre.
-        if (v.confermato && c.crm_lead_id) {
+
+        // Il lead aveva confermato di aver compilato il form di prenotazione: quello è
+        // un appuntamento già preso, non una chat morta. Fino al 22/09/2026 qui
+        // partivano DUE cose — la segnalazione E la restituzione — e la seconda
+        // rimandava a un GDO, come lead freddo da ricominciare, qualcuno che aveva già
+        // scelto giorno e ora (54 lead così, 53 solo a settembre).
+        //
+        // La prova la dà `haConfermatoIlForm`, deterministica, non `v.confermato`, che
+        // è un modello: su questa decisione non si può sbagliare a caso. `v.confermato`
+        // resta come seconda rete — copre le conferme dette a parole ("ho prenotato per
+        // giovedì") che la regex non vede.
+        const confermaForm = haConfermatoIlForm(rows);
+        if ((confermaForm || v.confermato) && c.crm_lead_id) {
           const ultimoDelLead = [...rows].reverse().find((r) => r.direction === 'in')?.body ?? undefined;
           await sendOutcome(supabase, c.id, {
             outcome: 'CONTATTO_UMANO',
@@ -300,6 +308,21 @@ export async function GET(req: NextRequest) {
             notaContattoUmano: buildConfermaPersaNote({ leadWords: ultimoDelLead, stage: v.note }),
           });
         }
+
+        // E qui la differenza: chi ha confermato NON viene restituito né scartato. La
+        // conversazione resta aperta, così se riscrive il bot può ancora fissare, e il
+        // lead resta dov'è invece di ripartire da zero nella pipeline di un GDO.
+        if (confermaForm) {
+          await supabase.from('event_log').insert({
+            type: 'restituzione_bloccata_conferma_form',
+            payload: { conversationId: c.id, crmLeadId: c.crm_lead_id } as never,
+            message: `[bot-fissatore] conv ${c.id}: conferma del form presente, restituzione bloccata`,
+            level: 'warn',
+          });
+          report.push({ id: c.id, action, trattenuto: true });
+          continue;
+        }
+
         if (v.discard) {
           await sendOutcome(supabase, c.id, {
             outcome: 'DA_SCARTARE',
