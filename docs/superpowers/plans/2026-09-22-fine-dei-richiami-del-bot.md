@@ -30,10 +30,10 @@
 
 Le misure che hanno fatto aprire il cantiere, dal DB del bot al 22/09/2026:
 
-- **650** conversazioni in cui il lead ha risposto alla verifica del form (ha scritto "Noemi", il nome della pagina di ringraziamento di JotForm = prova che ha prenotato).
-- **567 (87%)** sono diventate appuntamento. **83 (13%) no**: 44 `INTERROTTO`, 8 `DA_SCARTARE`, 2 `NON_RISPOSTO`, 29 ancora aperte. I 54 chiusi sono stati **restituiti o scartati dopo che il lead aveva prenotato**.
+- **803** conversazioni in cui il lead ha confermato di aver compilato il form (ha nominato "Noemi", il nome della pagina di ringraziamento di JotForm, rispondendo alla domanda di verifica del bot). Misura del rilevatore della Task 1 sui dati di produzione al 22/09/2026.
+- **701 (87%)** sono diventate appuntamento. **102 (13%) no**: 52 `INTERROTTO`, 12 `DA_SCARTARE`, 2 `NON_RISPOSTO`, 1 `RICHIAMO`, 35 ancora aperte. I **67 chiusi** sono stati **restituiti o scartati dopo che il lead aveva prenotato**.
 - Andamento: luglio 6% → agosto 12% → **settembre 14% (53 appuntamenti persi in 22 giorni)**.
-- Nei persi il bot **aveva già detto il giorno** in 65 casi su 83 (78%) e **giorno e ora** in 37 (44%).
+- Nei persi il bot **aveva già detto il giorno** in 78% dei casi e **giorno e ora** nel 44%.
 - Il bot **non è muto** (risponde in 649 casi su 650) e i messaggi **arrivano** (`delivered`/`read`/`sent`, nessun fallito). La domanda di riconferma la fa in tutti e due i gruppi. L'unica differenza fra vinti e persi è che nei persi **il lead non risponde a quell'ultima domanda**.
 - Il form **non scrive da nessuna parte**: nessun webhook JotForm in nessuno dei due repo. L'appuntamento esiste solo se il bot emette `[ESITO:APPUNTAMENTO|<data>]`. Il PO ha deciso di **non** toccare questo pezzo ora.
 
