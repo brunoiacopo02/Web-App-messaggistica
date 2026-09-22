@@ -357,6 +357,7 @@ describe('sendOutcome — RICHIAMO su trattativa aperta: instradato dalle tre fa
     const body = bodyInviato();
     expect(body.outcome).toBe('DA_SCARTARE');
     expect(body.discardReason).toContain('a settembre');
+    expect(body.date).toBeUndefined();
     expect(res.sent).toBe(true);
   });
 
@@ -394,7 +395,10 @@ describe('sendOutcome — RICHIAMO su trattativa aperta: instradato dalle tre fa
     const { supabase } = makeSupabase(attivo);
     const fra2anni = new Date(Date.now() + 730 * 86400_000).toISOString();
     await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: fra2anni });
-    expect(bodyInviato().outcome).toBe('DA_SCARTARE');
+    const body = bodyInviato();
+    expect(body.outcome).toBe('DA_SCARTARE');
+    expect(body.date).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain(fra2anni);
   });
 
   it('non tocca bot_outcome né ai_status quando la chat resta aperta ("più avanti" senza periodo riconoscibile)', async () => {
@@ -404,6 +408,7 @@ describe('sendOutcome — RICHIAMO su trattativa aperta: instradato dalle tre fa
       expect(u).not.toHaveProperty('bot_outcome');
       expect(u).not.toHaveProperty('ai_status');
     }
+    expect(calls.updates).toHaveLength(0);
   });
 
   it('una data a 7 giorni cade nella fascia di restituzione: non resta un RICHIAMO', async () => {
@@ -1463,5 +1468,91 @@ describe('RICHIAMO su trattativa aperta: le tre fasce (dal 22/09/2026)', () => {
     });
     // resolveOutcomeAction lo traduce in NOTA: l'appuntamento non si declassa mai.
     expect(corpiPostAlCrm().map((c) => c.outcome)).toEqual(['NOTA']);
+  });
+});
+
+describe('RICHIAMO restituito: nota onesta e idempotenza sul retry (fix round 1, 22/09/2026)', () => {
+  it('se la nota di restituzione non parte, l\'evento lo dice invece di affermare che è partita', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, text: async () => 'boom' })));
+    const { supabase, calls } = makeSupabase({ crm_lead_id: 'lead-5', bot_outcome: null, bot_scheduled_at: null });
+    await sendOutcome(supabase, 5, { outcome: 'RICHIAMO', date: isoFraGiorni(5), leadWords: 'richiamami sabato' });
+
+    const fallita = calls.events.find((e: { type: string }) => e.type === 'richiamo_restituito_nota_fallita');
+    expect(fallita).toBeTruthy();
+    expect(fallita.level).toBe('warn');
+    expect(fallita.message).toContain('NON è partita');
+    // Non deve comparire l'evento "di successo" quando in realtà è fallita.
+    expect(calls.events.some((e: { type: string }) => e.type === 'richiamo_restituito')).toBe(false);
+  });
+
+  it('un retry dopo un INTERROTTO fallito non rimanda la nota già partita (idempotenza)', async () => {
+    const conv = { crm_lead_id: 'lead-6', bot_outcome: null, bot_scheduled_at: null };
+    const args = { outcome: 'RICHIAMO' as const, date: isoFraGiorni(5), leadWords: 'richiamami sabato' };
+
+    // Primo giro: la nota parte (200), l'INTERROTTO che la segue fallisce (rete giù).
+    vi.stubGlobal('fetch', vi.fn()
+      .mockImplementationOnce(async () => ({ ok: true, status: 200, text: async () => '' }))
+      .mockImplementationOnce(async () => ({ ok: false, status: 500, text: async () => 'boom' })));
+    const { supabase: s1, calls: c1 } = makeSupabase(conv);
+    const primo = await sendOutcome(s1, 6, args);
+    expect(primo.sent).toBe(false);
+    const notaEvento = { id: 1, ...c1.events.find((e: { type: string }) => e.type === 'richiamo_restituito') };
+    expect(notaEvento.type).toBe('richiamo_restituito');
+
+    // Il turno successivo del lead rigira lo stesso blocco (fenice-autoreply non ha
+    // chiuso la conversazione): il CRM ora risponde sempre 2xx, ma la nota non deve
+    // ripartire una seconda volta — solo l'esito va ritentato.
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, text: async () => '' })));
+    const { supabase: s2, calls: c2 } = makeSupabase(conv, { eventLogRows: [notaEvento] });
+    const secondo = await sendOutcome(s2, 6, args);
+
+    const chiamate = vi.mocked(globalThis.fetch).mock.calls;
+    expect(chiamate).toHaveLength(1); // solo il retry dell'INTERROTTO, non una seconda NOTA
+    expect(JSON.parse(chiamate[0][1]!.body as string).outcome).toBe('INTERROTTO');
+    expect(c2.events.some((e: { type: string }) => e.type === 'richiamo_restituito')).toBe(false);
+    expect(secondo.sent).toBe(true);
+  });
+
+  it('il report non viaggia due volte: solo la nota lo porta, non anche l\'INTERROTTO che segue', async () => {
+    const { supabase } = makeSupabase({ crm_lead_id: 'lead-7', bot_outcome: null, bot_scheduled_at: null });
+    await sendOutcome(supabase, 7, {
+      outcome: 'RICHIAMO',
+      date: isoFraGiorni(5),
+      leadWords: 'richiamami sabato',
+      report: { summary: 'riassunto della chat' },
+    });
+    const postAlCrm = corpiPostAlCrm();
+    expect(postAlCrm.map((c) => c.outcome)).toEqual(['NOTA', 'INTERROTTO']);
+    expect(postAlCrm[0].report).toBeTruthy();
+    expect(postAlCrm[1].report).toBeUndefined();
+  });
+});
+
+describe('RICHIAMO: la classificazione prova prima le parole del modello sul "quando" (fix round 1, I-4)', () => {
+  it('leadWords discorde da note ("ok va bene" dopo aver detto "a novembre"): vince note, si scarta', async () => {
+    const { supabase } = makeSupabase({ crm_lead_id: 'lead-8', bot_outcome: null, bot_scheduled_at: null });
+    await sendOutcome(supabase, 8, {
+      outcome: 'RICHIAMO',
+      note: 'ci risentiamo a novembre',
+      leadWords: 'ok va bene',
+    });
+    const postAlCrm = corpiPostAlCrm();
+    expect(postAlCrm).toHaveLength(1);
+    expect(postAlCrm[0].outcome).toBe('DA_SCARTARE');
+    expect(postAlCrm[0].discardReason).toContain('a novembre');
+  });
+
+  it('la citazione nella nota di restituzione riporta le parole vere del lead, non il riassunto del modello', async () => {
+    const { supabase } = makeSupabase({ crm_lead_id: 'lead-9', bot_outcome: null, bot_scheduled_at: null });
+    await sendOutcome(supabase, 9, {
+      outcome: 'RICHIAMO',
+      note: 'la settimana prossima',
+      leadWords: 'va bene, richiamatemi voi la settimana prossima che sono impegnato',
+    });
+    const postAlCrm = corpiPostAlCrm();
+    expect(postAlCrm[0].outcome).toBe('NOTA');
+    expect(postAlCrm[0].note).toContain('Parole del lead');
+    expect(postAlCrm[0].note).toContain('richiamatemi voi la settimana prossima che sono impegnato');
+    expect(postAlCrm[0].note).not.toContain('"la settimana prossima"');
   });
 });

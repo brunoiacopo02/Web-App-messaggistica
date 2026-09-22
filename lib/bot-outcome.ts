@@ -706,7 +706,14 @@ export async function sendOutcome(
   if (args.outcome === 'RICHIAMO' && !interim && !holdsAppointment) {
     const { fascia, quando } = classificaRichiamo({
       date: args.date,
-      leadWords: args.leadWords ?? args.note,
+      // `note` è il campo che il modello cura apposta per il "quando" di un RICHIAMO
+      // (vedi `mario.ts`): prova PRIMA lì, perché `leadWords` è solo l'ultimo turno
+      // verbatim e può non contenere più la data se il lead l'ha detta due turni
+      // prima e ora ha scritto solo "ok va bene". Nell'unico call site di produzione
+      // (`fenice-autoreply.ts`) `leadWords` è sempre valorizzato, quindi senza questo
+      // ordine `note` non veniva MAI consultato.
+      periodoWords: args.note,
+      leadWords: args.leadWords,
       nowMs: Date.now(),
     });
 
@@ -726,21 +733,45 @@ export async function sendOutcome(
       // Prima la nota (così il GDO che lo riceve legge il "quando" che il lead ha
       // detto), poi la restituzione vera. Stesso ordine del ramo
       // `conferma_senza_appuntamento` in bot-followups: l'esito chiude la chat, la
-      // segnalazione deve precederlo.
-      const nota = buildRichiamoRestituitoNote({ quando, leadWords: args.leadWords ?? args.note });
-      await inviaNotaAlCrm(supabase, conversationId, crmLeadId, nota, args.report, secret);
-      await supabase.from('event_log').insert({
-        type: 'richiamo_restituito',
-        payload: { conversationId, crmLeadId, quando } as never,
-        message: `[bot-fissatore] richiamo oltre ${RICHIAMO_FASCIA_APERTA_GG} giorni per lead ${crmLeadId}: lead restituito a un GDO con nota`,
-        level: 'info',
-      });
+      // segnalazione deve precederlo. La citazione riporta le parole VERE del lead
+      // (`leadWords`), mai la sintesi del modello: per quella c'è `quando`.
+      const nota = buildRichiamoRestituitoNote({ quando, leadWords: args.leadWords });
+      const notaFp = noteFingerprint(nota);
+      // Idempotenza: se l'INTERROTTO che segue fallisce (rete giù, 5xx), sendOutcome
+      // torna sent:false e fenice-autoreply NON chiude la conversazione — al prossimo
+      // messaggio del lead questo blocco rigira da capo. Senza questa guardia
+      // rimanderebbe la stessa nota, e `inviaNotaAlCrm` scavalca apposta la deduplica
+      // di 15' del CRM (per non far perdere una campanella vera) — qui invece serve
+      // l'opposto: non farla arrivare due volte per un retry nostro. Il fingerprint si
+      // scrive SOLO quando la nota è partita: se è fallita, il turno dopo deve poterla
+      // ritentare, non saltarla convinto che sia già arrivata.
+      const notaGiaPartita = await notaGiaInviata(supabase, 'richiamo_restituito', conversationId, notaFp);
+      if (!notaGiaPartita) {
+        const esitoNota = await inviaNotaAlCrm(supabase, conversationId, crmLeadId, nota, args.report, secret);
+        await supabase.from('event_log').insert({
+          type: esitoNota.sent ? 'richiamo_restituito' : 'richiamo_restituito_nota_fallita',
+          payload: {
+            conversationId, crmLeadId, quando,
+            ...(esitoNota.sent
+              ? { noteFingerprint: notaFp }
+              : { notaError: esitoNota.error ?? null, notaStatus: esitoNota.status ?? null }),
+          } as never,
+          message: esitoNota.sent
+            ? `[bot-fissatore] richiamo oltre ${RICHIAMO_FASCIA_APERTA_GG} giorni per lead ${crmLeadId}: lead restituito a un GDO con nota`
+            : `[bot-fissatore] richiamo oltre ${RICHIAMO_FASCIA_APERTA_GG} giorni per lead ${crmLeadId}: la nota di restituzione NON è partita al CRM (${esitoNota.error ?? esitoNota.status ?? 'errore sconosciuto'})`,
+          level: esitoNota.sent ? 'info' : 'warn',
+        });
+      }
+      // Ritenta solo l'esito, mai la nota già partita (idempotenza sopra). `report`
+      // non viaggia qui: se la nota è passata lo portava già lei, e rimandarlo
+      // sull'INTERROTTO scriverebbe la stessa riga due volte sul CRM.
       return sendOutcome(supabase, conversationId, {
         ...args,
         outcome: 'INTERROTTO',
         date: undefined,
         note: nota,
-      });
+        report: undefined,
+      }, opts);
     }
 
     // fascia === 'scarta'
@@ -755,7 +786,7 @@ export async function sendOutcome(
       outcome: 'DA_SCARTARE',
       date: undefined,
       discardReason: buildRichiamoScartatoReason({ quando }),
-    });
+    }, opts);
   }
 
   // Un RICHIAMO senza una data che regga non è un richiamo: è un'ora inventata che

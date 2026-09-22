@@ -53,6 +53,36 @@ describe('classificaRichiamo, con una data', () => {
   });
 });
 
+describe('classificaRichiamo, periodoWords contro leadWords (fix round 1, I-4)', () => {
+  it('entrambi presenti e discordi: vince periodoWords, il campo curato dal modello', () => {
+    const r = classificaRichiamo({
+      periodoWords: 'ci risentiamo a settembre',
+      leadWords: 'va bene, ci sentiamo tra 2 giorni',
+      nowMs: NOW,
+    });
+    // Letto solo su leadWords sarebbe stato "restituisci" (tra 2 giorni): periodoWords
+    // deve vincere e portare a "scarta".
+    expect(r.fascia).toBe('scarta');
+    expect(r.quando).toBe('a settembre');
+  });
+
+  it('periodoWords senza un periodo riconoscibile: si prova leadWords come ripiego', () => {
+    const r = classificaRichiamo({
+      periodoWords: 'ok va bene',
+      leadWords: 'allora ci sentiamo tra 5 giorni',
+      nowMs: NOW,
+    });
+    expect(r.fascia).toBe('restituisci');
+    expect(r.quando).toBe('tra 5 giorni');
+  });
+
+  it('solo leadWords (comportamento di prima, invariato)', () => {
+    const r = classificaRichiamo({ leadWords: 'ci risentiamo a settembre', nowMs: NOW });
+    expect(r.fascia).toBe('scarta');
+    expect(r.quando).toBe('a settembre');
+  });
+});
+
 describe('classificaRichiamo, senza una data usabile', () => {
   it('una data nel passato non è un esito: si tiene la chat aperta', () => {
     expect(classificaRichiamo({ date: fra(-2), nowMs: NOW }).fascia).toBe('tieni_aperta');

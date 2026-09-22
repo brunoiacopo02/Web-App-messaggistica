@@ -68,12 +68,22 @@ function periodoEntroSetteGiorni(periodo: string): boolean {
  * `quando` è la cosa da mostrare a un umano: la data formattata in ora di Roma se il
  * lead l'ha detta, altrimenti le sue parole sul periodo, altrimenti `null`.
  *
- * Una data assente, illeggibile o nel passato NON è un esito: torna `tieni_aperta`, e
- * il chiamante manda al CRM la nota "giorno e ora da concordare" che già esiste. Non si
- * deduce mai una data da niente: è esattamente il bug chiuso il 06/08.
+ * Una data assente, illeggibile o nel passato NON è un esito: torna `tieni_aperta`. Il
+ * chiamante (`sendOutcome`) in quel caso non manda NIENTE al CRM — nessuna nota, nessun
+ * esito: la sequenza di follow-up ripesca da sola la conversazione entro
+ * `RICHIAMO_FASCIA_APERTA_GG` giorni. Non si deduce mai una data da niente: è esattamente
+ * il bug chiuso il 06/08.
  */
 export function classificaRichiamo(input: {
   date?: string;
+  /** Le parole del lead sul "quando", sintetizzate dal modello (per un RICHIAMO è il
+   *  campo `note` del contratto: vedi `mario.ts`, tag `[RICHIAMO|...]`). Si prova QUI
+   *  per primo: è il campo curato apposta per portare l'espressione temporale, e resta
+   *  valido anche quando l'ultimo messaggio del lead non ne parla più ("ok va bene"
+   *  due turni dopo aver detto "a novembre"). */
+  periodoWords?: string;
+  /** L'ultimo turno testuale del lead, verbatim. Si prova SOLO se `periodoWords` non
+   *  contiene un periodo riconoscibile: è un ripiego, non la fonte primaria. */
   leadWords?: string;
   nowMs: number;
 }): { fascia: FasciaRichiamo; quando: string | null } {
@@ -89,7 +99,9 @@ export function classificaRichiamo(input: {
     return { fascia: 'scarta', quando };
   }
 
-  const periodo = estraiPeriodo(input.leadWords);
+  // `periodoWords` prima, `leadWords` come ripiego: vedi il commento sui campi qui
+  // sopra. Il primo dei due che produce un periodo vince.
+  const periodo = estraiPeriodo(input.periodoWords) ?? estraiPeriodo(input.leadWords);
   if (!periodo) return { fascia: 'tieni_aperta', quando: null };
   return {
     fascia: periodoEntroSetteGiorni(periodo) ? 'restituisci' : 'scarta',
