@@ -4,7 +4,7 @@ import { sendOutcome } from '@/lib/bot-outcome';
 import { decideFollowupAction, serveCronologia, ultimaAttivitaMs } from '@/lib/bot-followups';
 import { classifyInterrupted } from '@/lib/interrotto-note';
 import { buildConfermaPersaNote } from '@/lib/bot-outcome-rules';
-import { haConfermatoIlForm } from '@/lib/conferma-form';
+import { haConfermatoIlForm, decidiSuConfermaForm } from '@/lib/conferma-form';
 import type { MarioTurn } from '@/lib/mario';
 import { drainMarioReplies, lastIsUnansweredInbound, isOrphanedReplyingLock, isLockStale, LOCK_TTL_MS, serveRedrive } from '@/lib/fenice-autoreply';
 import { runAgendaFollowups } from '@/lib/agenda-followup';
@@ -39,6 +39,24 @@ function authorized(req: NextRequest): boolean {
   if (req.headers.get('authorization') === `Bearer ${secret}`) return true;
   if (req.nextUrl.searchParams.get('secret') === secret) return true;
   return false;
+}
+
+/** Questa conversazione ha già una riga `restituzione_bloccata_conferma_form`, scritta
+ *  in un run precedente? Stesso controllo di `alertUnaVolta` (tipo + conversationId nel
+ *  payload), tenuto qui a parte perché va fatto PRIMA di chiamare `classifyInterrupted`
+ *  — a differenza di `alertUnaVolta`, che controllo e scrittura li fa insieme, e qui la
+ *  scrittura deve restare dopo l'invio del `CONTATTO_UMANO`, non prima. */
+async function formGiaTrattenuto(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+  conversationId: number,
+): Promise<boolean> {
+  const { data } = await supabase
+    .from('event_log')
+    .select('id')
+    .eq('type', 'restituzione_bloccata_conferma_form')
+    .contains('payload', { conversationId })
+    .limit(1);
+  return (data ?? []).length > 0;
 }
 
 export async function GET(req: NextRequest) {
@@ -277,12 +295,6 @@ export async function GET(req: NextRequest) {
         });
         report.push({ id: c.id, action });
       } else if (action === 'interrotto_classify') {
-        const history: MarioTurn[] = rows.slice(-40).map((r) => ({
-          role: r.direction === 'in' ? ('user' as const) : ('assistant' as const),
-          content: r.body ?? '',
-        }));
-        const v = await classifyInterrupted(history);
-
         // Il lead aveva confermato di aver compilato il form di prenotazione: quello è
         // un appuntamento già preso, non una chat morta. Fino al 22/09/2026 qui
         // partivano DUE cose — la segnalazione E la restituzione — e la seconda
@@ -293,8 +305,30 @@ export async function GET(req: NextRequest) {
         // è un modello: su questa decisione non si può sbagliare a caso. `v.confermato`
         // resta come seconda rete — copre le conferme dette a parole ("ho prenotato per
         // giovedì") che la regex non vede.
+        //
+        // La guardia sotto (`decidiSuConfermaForm`) va calcolata PRIMA di chiamare
+        // `classifyInterrupted`: trattenere la conversazione non tocca né `ai_status` né
+        // `bot_outcome`, quindi senza guardia resterebbe idonea allo stesso ramo a ogni
+        // giro del cron — e richiamerebbe una chiamata a pagamento a Claude senza
+        // limite, per sempre, invece che una volta sola per conversazione.
         const confermaForm = haConfermatoIlForm(rows);
-        if ((confermaForm || v.confermato) && c.crm_lead_id) {
+        const giaTrattenuta = confermaForm ? await formGiaTrattenuto(supabase, c.id) : false;
+        const azioneForm = decidiSuConfermaForm({ confermaForm, giaTrattenuta });
+
+        if (azioneForm === 'salta') {
+          // Già segnalata e trattenuta in un run precedente: niente classificatore,
+          // niente nuova riga, niente nuovo CONTATTO_UMANO.
+          report.push({ id: c.id, action, trattenuto: true, giaSegnalato: true });
+          continue;
+        }
+
+        const history: MarioTurn[] = rows.slice(-40).map((r) => ({
+          role: r.direction === 'in' ? ('user' as const) : ('assistant' as const),
+          content: r.body ?? '',
+        }));
+        const v = await classifyInterrupted(history);
+
+        if ((azioneForm === 'segnala_e_trattieni' || v.confermato) && c.crm_lead_id) {
           const ultimoDelLead = [...rows].reverse().find((r) => r.direction === 'in')?.body ?? undefined;
           await sendOutcome(supabase, c.id, {
             outcome: 'CONTATTO_UMANO',
@@ -311,8 +345,10 @@ export async function GET(req: NextRequest) {
 
         // E qui la differenza: chi ha confermato NON viene restituito né scartato. La
         // conversazione resta aperta, così se riscrive il bot può ancora fissare, e il
-        // lead resta dov'è invece di ripartire da zero nella pipeline di un GDO.
-        if (confermaForm) {
+        // lead resta dov'è invece di ripartire da zero nella pipeline di un GDO. La riga
+        // di guardia si scrive DOPO l'invio del CONTATTO_UMANO (non prima): è quella che
+        // il run successivo legge per non richiamare più il classificatore.
+        if (azioneForm === 'segnala_e_trattieni') {
           await supabase.from('event_log').insert({
             type: 'restituzione_bloccata_conferma_form',
             payload: { conversationId: c.id, crmLeadId: c.crm_lead_id } as never,

@@ -94,3 +94,32 @@ export function haConfermatoIlForm(
   }
   return false;
 }
+
+/**
+ * Cosa fare del ramo `interrotto_classify` del cron rispetto alla conferma del form —
+ * decisione pura, senza I/O, per poterla testare senza un Supabase finto.
+ *
+ * `giaTrattenuta` arriva da fuori (una riga `event_log` di tipo
+ * `restituzione_bloccata_conferma_form` già scritta per questa conversazione in un run
+ * precedente): senza quella guardia il cron richiamerebbe `classifyInterrupted` — una
+ * chiamata a pagamento a Claude — a ogni giro, per sempre, perché una conversazione
+ * trattenuta non tocca né `ai_status` né `bot_outcome` e quindi resta idonea allo stesso
+ * ramo al giro successivo (vedi `decideTrackB` in `lib/sequence.ts`).
+ *
+ * - `'salta'`: già segnalata e trattenuta prima. Niente classificatore, niente nuova
+ *   riga, niente nuovo `CONTATTO_UMANO` — il chiamante deve fare `continue` subito, PRIMA
+ *   di chiamare `classifyInterrupted`.
+ * - `'segnala_e_trattieni'`: prima volta che si vede la conferma del form su questa
+ *   conversazione. Il chiamante manda `CONTATTO_UMANO`, scrive la riga di guardia e fa
+ *   `continue` — niente restituzione.
+ * - `'prosegui'`: nessuna conferma del form. Tutto come prima di questa guardia.
+ */
+export type AzioneConfermaForm = 'salta' | 'segnala_e_trattieni' | 'prosegui';
+
+export function decidiSuConfermaForm(input: {
+  confermaForm: boolean;
+  giaTrattenuta: boolean;
+}): AzioneConfermaForm {
+  if (!input.confermaForm) return 'prosegui';
+  return input.giaTrattenuta ? 'salta' : 'segnala_e_trattieni';
+}

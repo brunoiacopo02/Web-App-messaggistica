@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { rispostaAllaVerificaForm, haConfermatoIlForm } from './conferma-form';
+import { rispostaAllaVerificaForm, haConfermatoIlForm, decidiSuConfermaForm } from './conferma-form';
 
 // Il bot chiede: "quando hai cliccato su invia, che nome ti è comparso?".
 // La pagina di ringraziamento di JotForm mostra "Noemi": il lead lo ricopia.
@@ -84,5 +84,23 @@ describe('haConfermatoIlForm col contesto della domanda', () => {
       { direction: 'in', body: 'scusa un attimo che sono al lavoro' },
       { direction: 'in', body: 'comunque chi è Noemi?' },
     ])).toBe(false);
+  });
+});
+
+// Guardia contro le chiamate ripetute a `classifyInterrupted` (a pagamento) sulle
+// conversazioni già trattenute per la conferma del form: vedi il commento su
+// `decidiSuConfermaForm` in conferma-form.ts.
+describe('decidiSuConfermaForm', () => {
+  it('senza conferma del form prosegue come prima, a prescindere da giaTrattenuta', () => {
+    expect(decidiSuConfermaForm({ confermaForm: false, giaTrattenuta: false })).toBe('prosegui');
+    expect(decidiSuConfermaForm({ confermaForm: false, giaTrattenuta: true })).toBe('prosegui');
+  });
+
+  it('prima volta che si vede la conferma del form: segnala e trattiene', () => {
+    expect(decidiSuConfermaForm({ confermaForm: true, giaTrattenuta: false })).toBe('segnala_e_trattieni');
+  });
+
+  it('conferma del form già trattenuta in un run precedente: salta, niente classificatore', () => {
+    expect(decidiSuConfermaForm({ confermaForm: true, giaTrattenuta: true })).toBe('salta');
   });
 });
