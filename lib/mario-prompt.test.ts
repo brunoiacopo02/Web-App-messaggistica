@@ -100,6 +100,39 @@ describe('conferme: anticipo e micro-impegni', () => {
     expect(p).toContain('Quel messaggio va da solo');
   });
 
+  // Fix round 1 (C-1, Critical): la prima stesura instradava un orario diverso dichiarato
+  // dal lead verso "uno spostamento normale", che in fondo al prompt (SE INSISTE PER
+  // SPOSTARE) fa proporre al bot due slot SUOI e chiudere su un orario che il lead non ha
+  // mai detto — l'opposto di "LA DATA DI UNA CALL GIÀ FISSATA NON SI CORREGGE". Tolta la
+  // riconferma, questo è l'unico canale rimasto da cui la data vera del form può emergere.
+  it('CASO 1: se il lead dice poi un orario diverso da quello concordato, prende per buona la sua e non lo tratta come uno spostamento da slot', () => {
+    expect(p).toContain('quella è la sua call: prendi per buona la sua e richiudi con [ESITO:APPUNTAMENTO|<la data che ti dice lui>]');
+    expect(p).toContain('non correggerla coi tuoi slot');
+    expect(p).not.toContain('lo gestisci come uno spostamento normale');
+  });
+
+  // M-6: la riga più importante del blocco nuovo non aveva nessuna asserzione.
+  it('vieta esplicitamente di scegliere tu un\'ora che il lead non ha detto, anche per chiudere prima', () => {
+    expect(p).toContain("MAI scegliere tu un'ora che il lead non ti ha detto, nemmeno per chiudere prima");
+  });
+
+  // M-5: la vecchia riga "non scriverlo mai da solo, senza altro testo visibile" (sul tag
+  // legacy) proteggeva una regola vera — un tag da solo significa visibleReply vuoto,
+  // niente bolle inviate, appuntamento registrato ma lead senza messaggio — ed era sparita
+  // insieme al testo che la portava. Rimessa al nuovo trigger.
+  it('il tag [ESITO:APPUNTAMENTO|...] non esce mai da solo, in nessuno dei due casi', () => {
+    expect(p).toContain('non esce mai da solo, né in CASO 1 né in CASO 2');
+    expect(p).toContain('mai il tag come unico contenuto della bolla');
+  });
+
+  // I-2: "che ti ha appena confermato lui" non è vero in CASO 1 (la data l'ha affermata
+  // il bot, non il lead), e sommato a "aspetta che te li confermi" nel blocco Noemi dava
+  // al modello un appiglio per far ripartire la domanda che il task doveva eliminare.
+  it('il calcolo di quando chiama Noemi non presume più una "conferma" appena data dal lead', () => {
+    expect(p).toContain("calcolandolo dal giorno e dall'ora della call e con la regola del blocco CHI È NOEMI E QUANDO CHIAMA");
+    expect(p).not.toContain('che ti ha appena confermato lui');
+  });
+
   it('sul video usa la scelta attiva invece del divieto', () => {
     expect(p).toContain('Quando riesci a vederlo, stasera o domani?');
     expect(p).not.toContain('Non è facoltativo');
@@ -187,6 +220,17 @@ describe('C1: i passaggi 2, 3 e 4 della conferma post-appuntamento escono sempre
     expect(p).not.toContain('Quando risponde, scrivi: [APPUNTAMENTO_FISSATO]');
   });
 
+  // I-4 (fix round 1): il tag legacy restava elencato fra quelli "da non mostrare mai al
+  // lead" senza che nessuna istruzione dicesse più quando usarlo — un token nel
+  // vocabolario senza regola d'uso è un invito a emetterlo al posto di [ESITO:...], e il
+  // parser lo accetta (mario.ts) impostando appointmentFixed=true SENZA data: riapre
+  // 'booked_without_outcome', il bug che questa task chiude.
+  it('[APPUNTAMENTO_FISSATO] non è più nell\'elenco dei tag da usare: una riga esplicita dice di non usarlo più', () => {
+    expect(p).not.toMatch(/\[APPUNTAMENTO_FISSATO\],\s*\[PASSAGGIO_UMANO\]/);
+    expect(p).toContain('Il tag [APPUNTAMENTO_FISSATO] non si usa più');
+    expect(p).toContain('per un appuntamento, in qualunque punto del flusso, usa sempre [ESITO:APPUNTAMENTO|<data ISO 8601 con fuso>]');
+  });
+
   it('la riga introduttiva della CONFERMA dichiara di essere l\'unica eccezione alla regola dell\'attesa fra un messaggio e l\'altro', () => {
     expect(p).toContain(
       "È l'unico punto del flusso in cui non vale la regola dell'attesa fra un messaggio e l'altro."
@@ -194,14 +238,16 @@ describe('C1: i passaggi 2, 3 e 4 della conferma post-appuntamento escono sempre
   });
 
   it('REGOLE TASSATIVE, punto 4 (UNA SOLA DOMANDA): nomina esplicitamente l\'eccezione della CONFERMA POST-APPUNTAMENTO', () => {
-    // Senza questa eccezione una regola "non violarle MAI" ("aspetta sempre la
-    // risposta prima di continuare") confligge con l'istruzione di mandare i passaggi
-    // 2, 3 e 4 della conferma nello stesso turno: il modello risolverebbe il conflitto
-    // fermandosi dopo il primo, riaprendo il bug di C1. Da task 4 l'eccezione è ristretta
-    // ai soli passaggi 2-4 (non più "i quattro passaggi"): il passaggio 1 (giorno e ora)
-    // in CASO 2 aspetta davvero la risposta, di proposito.
+    // I-3 (fix round 1): la prima stesura restringeva l'eccezione ai soli passaggi 2-4,
+    // lasciando la riga di conferma del CASO 1 (che parte nello stesso turno dei passaggi
+    // 2-4, per il blocco CONFERMA POST-APPUNTAMENTO poco sotto) senza nessuna eccezione a
+    // una regola marcata "non violarle MAI": letta alla lettera, il bot si fermava dopo la
+    // conferma e Noemi/video/FATTO non uscivano mai (ensureConfirmationBlock non li
+    // aggiunge da sola: patcha solo un video link già presente). L'eccezione ora copre
+    // esplicitamente anche la conferma del CASO 1, e nomina esplicitamente che la domanda
+    // del CASO 2 NON ne fa parte — resta soggetta alla regola base, di proposito.
     expect(p).toContain(
-      "Aspetta sempre la risposta prima di continuare. Unica eccezione: i passaggi 2, 3 e 4 della CONFERMA POST-APPUNTAMENTO, che escono sempre insieme nello stesso turno."
+      "Aspetta sempre la risposta prima di continuare. Unica eccezione: la conferma di giorno e ora del CASO 1 e i passaggi 2, 3 e 4 della CONFERMA POST-APPUNTAMENTO, che escono insieme nello stesso turno. In CASO 2 la domanda sull'ora NON è coperta da questa eccezione: aspetta la risposta."
     );
   });
 });
