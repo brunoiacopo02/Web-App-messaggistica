@@ -1506,7 +1506,7 @@ Rimisura poi il tasso di perdita con `quanti_noemi.py` (scratchpad di sessione):
 E sul DB del bot, che le tre fasce si vedano:
 
 ```
-event_log?type=in.(richiamo_tenuto_aperto,richiamo_restituito,richiamo_scartato)&created_at=gte.<ieri>
+event_log?type=in.(richiamo_tenuto_aperto,richiamo_restituito,richiamo_restituito_nota_fallita,richiamo_restituito_nota_saltata,richiamo_scartato)&created_at=gte.<ieri>
 ```
 
 Atteso: righe nei tre tipi, e **zero** `richiamo_con_periodo` nuovi.
