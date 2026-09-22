@@ -633,6 +633,54 @@ describe('date del richiamo — mai dedotte', () => {
   });
 });
 
+// Task 8, fix round 1 (2026-09-22): questa regola non aveva NESSUNA asserzione
+// in 790 righe di test — l'unica del blocco esiti che cambia cosa legge un
+// cliente vero. Copre: il divieto di promettere un richiamo o un messaggio
+// futuro (in ogni fascia, non solo quella lontana), il congedo oltre una
+// settimana, l'assenza delle vecchie promesse false ("ti fai vivo tu", "ti fai
+// sentire qui su WhatsApp" per un "quando" vicino), e l'eccezione per
+// l'appuntamento già fissato.
+describe('RICHIAMO: mai una promessa di richiamo o di un messaggio futuro del bot', () => {
+  const p = buildMarioSystem('Marta');
+
+  it('vieta esplicitamente, in forma di divieto, di promettere un richiamo o un messaggio futuro, in ogni fascia', () => {
+    expect(p).toMatch(/NON PROMETTERE MAI un richiamo né un tuo messaggio futuro/);
+    expect(p).toContain('in nessuna fascia');
+  });
+
+  it('dice che il tag comunica solo il "quando", non chi farà cosa', () => {
+    expect(p).toContain('questo tag dice solo QUANDO lui vorrebbe, e a cosa farne ci pensa il sistema, non tu');
+  });
+
+  it('oltre una settimana congeda il lead invece di promettere di farsi vivo', () => {
+    expect(p).toContain('oltre una settimana');
+    expect(p).toContain('da qui non gli scrivi più tu');
+    expect(p).toContain('può scrivere lui su questa chat');
+  });
+
+  // Fix round 1, C-1 (Critical): il codice applicava il congedo solo entro la
+  // finestra "restituisci vs scarta" ma il prompt prometteva "ti fai vivo tu"
+  // per QUALUNQUE "quando" vicino, anche quello che finiva restituito a un GDO
+  // (chat chiusa, il bot non scrive più). Ora il prompt non fa più nessuna
+  // promessa sul "quando" vicino: tace, e basta.
+  it('per un "quando" entro la settimana non promette più di farsi vivo lui', () => {
+    expect(p).not.toContain('ti fai vivo tu');
+    expect(p).not.toMatch(/Il massimo che puoi dire è che ti fai sentire qui su WhatsApp/);
+    expect(p).toContain('non aggiungere nient\'altro su chi scrive a chi');
+  });
+
+  it('non promette mai una telefonata o un messaggio a data precisa, in nessuna fascia', () => {
+    expect(p).toMatch(/NON PROMETTERE MAI UNA TELEFONATA[\s\S]{0,80}né un tuo messaggio a una data precisa[\s\S]{0,60}in nessuna fascia/);
+  });
+
+  // Important: senza questa eccezione il congedo dice "non ti scriverò più" a
+  // un lead che vuole solo spostare una call che ha già fissata (RICHIAMO ha un
+  // significato diverso lì: vedi SE L'APPUNTAMENTO È GIÀ FISSATO).
+  it('non si applica quando l\'appuntamento è già fissato', () => {
+    expect(p).toMatch(/ECCEZIONE: se l'appuntamento è GIÀ FISSATO[\s\S]{0,250}va congedato/);
+  });
+});
+
 describe('FASE 6 — un giorno alla volta', () => {
   const p = buildMarioSystem('Marta');
 
@@ -692,6 +740,27 @@ describe('SE RIMANDA LA CALL — il rimando prima del fissaggio', () => {
 
   it('INTERROTTO non esce alla prima frase di rimando', () => {
     expect(p).toMatch(/\[ESITO:INTERROTTO\|<motivo breve>\][^\n]*NON alla prima frase/);
+  });
+
+  // Fix round 1, C-2 (Critical): "non chiudere TU la porta" e il congedo del
+  // RICHIAMO oltre una settimana erano in contraddizione diretta (il congedo È
+  // "scrivimi quando vuoi"), senza che nessuna delle due regole si facesse da
+  // parte per l'altra. Serve un'eccezione esplicita qui, dentro la stessa
+  // sezione che vieta di chiudere la porta.
+  it('C-2: fa eccezione esplicita per il congedo del RICHIAMO oltre una settimana', () => {
+    const sezione = p.slice(p.indexOf('SE RIMANDA LA CALL'), p.indexOf('SE IL LEAD NON PUÒ'));
+    expect(sezione).toMatch(/ECCEZIONE[\s\S]{0,80}\[ESITO:RICHIAMO\|/);
+    expect(sezione).toContain('oltre una settimana');
+    expect(sezione).toContain('non conta come chiudere la porta');
+  });
+
+  // Fix round 1, "Important": la voce "CI PENSO / TI FACCIO SAPERE IO" prendeva
+  // "quell'appuntamento a parola" come un impegno del bot — esattamente ciò che
+  // la voce RICHIAMO del glossario vieta. Deve rimandare al tag, non a una
+  // promessa propria.
+  it('"CI PENSO / TI FACCIO SAPERE IO" non prende più un impegno a parola: rimanda al tag RICHIAMO', () => {
+    expect(p).not.toContain("prendi quell'appuntamento a parola");
+    expect(p).toMatch(/CI PENSO \/ TI FACCIO SAPERE IO[\s\S]{0,400}\[ESITO:RICHIAMO\|/);
   });
 });
 

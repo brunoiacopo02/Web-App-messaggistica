@@ -129,6 +129,35 @@ describe('classificaRichiamo, senza una data usabile', () => {
     expect(classificaRichiamo({ leadWords: 'tra 1 settimana', nowMs: NOW }).fascia).toBe('restituisci');
   });
 
+  // Fix round 1, C-1 (Critical): il percorso a parole aveva SOLO due esiti
+  // (restituisci/scarta), senza la fascia "tieni_aperta" che invece esiste sul
+  // percorso con la data ISO. Un "fra due giorni" o "tra 3 giorni" veniva
+  // restituito a un GDO e la chat si chiudeva (INTERROTTO), mentre il prompt
+  // prometteva al lead che entro pochi giorni la chat sarebbe rimasta aperta.
+  // Questi test coprono i confini richiesti dalla review sul percorso a parole,
+  // simmetrici a quelli già esistenti sul percorso con la data ISO.
+  describe('fix round 1 (C-1): la fascia "tieni_aperta" esiste anche sul percorso a parole', () => {
+    it('"fra due giorni": dentro i 3 giorni, chat tenuta aperta', () => {
+      expect(classificaRichiamo({ leadWords: 'fra due giorni', nowMs: NOW }).fascia).toBe('tieni_aperta');
+    });
+
+    it('"tra 3 giorni": esattamente al bordo, ancora tenuta aperta', () => {
+      expect(classificaRichiamo({ leadWords: 'tra 3 giorni', nowMs: NOW }).fascia).toBe('tieni_aperta');
+    });
+
+    it('"fra 4 giorni": appena fuori dai 3 giorni, restituzione', () => {
+      expect(classificaRichiamo({ leadWords: 'fra 4 giorni', nowMs: NOW }).fascia).toBe('restituisci');
+    });
+
+    it('"tra una settimana": restano 7 giorni, restituzione (non tieni_aperta)', () => {
+      expect(classificaRichiamo({ leadWords: 'tra una settimana', nowMs: NOW }).fascia).toBe('restituisci');
+    });
+
+    it('"tra due settimane": oltre i 7 giorni, scarto', () => {
+      expect(classificaRichiamo({ leadWords: 'tra due settimane', nowMs: NOW }).fascia).toBe('scarta');
+    });
+  });
+
   it('"tra due settimane": scarto per il motivo giusto (14 giorni > 7, non unità ignota)', () => {
     // Prova indiretta che l'unità è riconosciuta e moltiplicata, non che il pattern
     // fallisce a monte: "tra 14 giorni" (stessa distanza, unità già supportata prima
@@ -185,13 +214,16 @@ describe('i testi', () => {
     expect(n).toContain('non ha detto quando');
   });
 
-  it('il motivo di scarto dice che riscriverà lui', () => {
+  // Fix round 1, "Important": il congedo dipende dal giudizio del modello sul
+  // turno, non da questa funzione: il motivo non può più affermare come fatto
+  // compiuto ("gli è stato detto") qualcosa che il codice non ha controllato.
+  it('il motivo di scarto riporta l\'istruzione data al bot, non un fatto compiuto', () => {
     expect(buildRichiamoScartatoReason({ quando: 'a settembre' }))
-      .toBe('vuole essere risentito a settembre: gli è stato detto di riscrivere quando sarà il momento');
+      .toBe("vuole essere risentito a settembre: il bot aveva l'istruzione di dirgli che può riscrivere lui quando sarà il momento");
   });
 
   it('il motivo di scarto regge senza un quando', () => {
     expect(buildRichiamoScartatoReason({ quando: null }))
-      .toBe('vuole essere risentito più avanti: gli è stato detto di riscrivere quando sarà il momento');
+      .toBe("vuole essere risentito più avanti: il bot aveva l'istruzione di dirgli che può riscrivere lui quando sarà il momento");
   });
 });

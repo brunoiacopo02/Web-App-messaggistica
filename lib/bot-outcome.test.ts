@@ -1479,7 +1479,10 @@ describe('RICHIAMO su trattativa aperta: le tre fasce (dal 22/09/2026)', () => {
     const postAlCrm = corpiPostAlCrm();
     expect(postAlCrm).toHaveLength(1);
     expect(postAlCrm[0].outcome).toBe('DA_SCARTARE');
-    expect(postAlCrm[0].discardReason).toContain('riscrivere quando sarà il momento');
+    // Fix round 1 Task 8 ("Important"): il motivo non afferma più come fatto
+    // compiuto che il congedo è stato detto (dipende dal giudizio del modello sul
+    // turno, non da questa soglia) — vedi buildRichiamoScartatoReason.
+    expect(postAlCrm[0].discardReason).toContain("il bot aveva l'istruzione di dirgli che può riscrivere lui quando sarà il momento");
   });
 
   it('su un appuntamento GIÀ fissato il RICHIAMO resta uno spostamento: nessuna fascia', async () => {
