@@ -71,24 +71,44 @@ function periodoInGiorni(periodo: string): number | null {
 }
 
 /** Espressioni a parole SENZA un numero di giorni preciso ("settimana
- *  prossima", "qualche X"): la fascia si assegna direttamente, invece di far
- *  finta di conoscere un numero di giorni che non c'è (fix round 2, Minor: la
- *  versione precedente faceva tornare a `periodoInGiorni` la SOGLIA
- *  `RICHIAMO_FASCIA_RESTITUZIONE_GG` spacciata per un conteggio di giorni — un
- *  numero che dichiara di essere un conteggio ma in realtà è una soglia presa
- *  in prestito si rompe in silenzio se le due costanti smettono di stare alla
- *  stessa distanza). La scelta è sempre quella che NON sovrapromette una chat
- *  che resta aperta quando l'espressione potrebbe benissimo superare i 3
- *  giorni: mai `tieni_aperta` per un "quando" che non sappiamo quantificare. */
+ *  prossima", "qualche X", "pochi X", "una decina/ventina di X"): la fascia si
+ *  assegna direttamente, invece di far finta di conoscere un numero di giorni
+ *  che non c'è (fix round 2, Minor: la versione precedente faceva tornare a
+ *  `periodoInGiorni` la SOGLIA `RICHIAMO_FASCIA_RESTITUZIONE_GG` spacciata per
+ *  un conteggio di giorni — un numero che dichiara di essere un conteggio ma
+ *  in realtà è una soglia presa in prestito si rompe in silenzio se le due
+ *  costanti smettono di stare alla stessa distanza).
+ *
+ *  La scelta è sempre quella che NON sovrapromette una chat che resta aperta:
+ *  mai `tieni_aperta` per un "quando" che non sappiamo quantificare (fix round
+ *  3: regola esplicita, non più un giudizio lasciato al lettore). Il
+ *  ragionamento è asimmetrico apposta:
+ *  - se classifichiamo `restituisci` un "quando" che in realtà era vicino, il
+ *    lead va comunque a un GDO umano che lo richiama: costo basso, il lead
+ *    non si perde;
+ *  - se classifichiamo `tieni_aperta` un "quando" che in realtà era lontano,
+ *    il bot ha appena detto al lead (nel prompt, per un "quando" oltre la
+ *    settimana) "da qui non ti scrivo più io", e poi la sequenza di
+ *    follow-up gli riscrive lo stesso entro 4 giorni: è una promessa rotta a
+ *    una persona vera, non un dettaglio interno.
+ *  Nel dubbio si sbaglia dalla parte che non tradisce nessuno: mai
+ *  `tieni_aperta` da qui in giù. */
 function fasciaPeriodoVago(periodo: string): FasciaRichiamo | null {
   const t = periodo.toLowerCase();
   // "la settimana prossima" / "settimana prossima": può essere 3 come 10 giorni
   // a seconda di che giorno è oggi.
   if (/\b(?:l[ao]\s+)?(?:prossima\s+settimana|settimana\s+prossima)\b/.test(t)) return 'restituisci';
-  // "qualche giorno": in pratica 2-6 giorni, può benissimo superare i 3.
-  if (/\bqualche\s+giorno\b/.test(t)) return 'restituisci';
-  // "qualche settimana" / "qualche mese": sempre oltre la settimana.
-  if (/\bqualche\s+(?:settimana|mese)\b/.test(t)) return 'scarta';
+  // "qualche giorno" / "pochi giorni" (fix round 3: stesso trattamento di "qualche",
+  // colloquiale quanto lui): in pratica 2-6 giorni, può benissimo superare i 3.
+  if (/\b(?:qualche|poch[ei])\s+giorn[oi]\b/.test(t)) return 'restituisci';
+  // "qualche settimana/mese" / "poche settimane" / "pochi mesi": sempre oltre la
+  // settimana.
+  if (/\b(?:qualche|poch[ei])\s+(?:settiman[ae]|mes[ei])\b/.test(t)) return 'scarta';
+  // "una decina di X" / "una ventina di X" (fix round 3): un ordine di grandezza
+  // già oltre i 7 giorni qualunque sia l'unità — anche la lettura più bassa,
+  // "una decina di giorni", sono già 10: non serve calcolarlo per unità, è
+  // sempre oltre la finestra.
+  if (/\buna\s+(?:decina|ventina)\s+di\s+(?:giorn[oi]|settiman[ae]|mes[ei])\b/.test(t)) return 'scarta';
   return null;
 }
 

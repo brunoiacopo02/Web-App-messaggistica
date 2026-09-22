@@ -91,4 +91,26 @@ describe('estraiPeriodo', () => {
     expect(estraiPeriodo('ho un paio di cose da sistemare prima')).toBeNull();
     expect(estraiPeriodo('qualche volta ci penso')).toBeNull();
   });
+
+  // Fix round 3: i due gap dichiarati nel report del fix round 2 ("tra pochi
+  // giorni"/"poche settimane", "una decina/ventina di") ora sono coperti, stesso
+  // trattamento di "un paio di"/"qualche".
+  it('prende "pochi/poche" davanti a giorni/settimane/mesi', () => {
+    expect(estraiPeriodo('ci sentiamo tra pochi giorni')).toBe('tra pochi giorni');
+    expect(estraiPeriodo('fra poche settimane dovrei essere libero')).toBe('fra poche settimane');
+    expect(estraiPeriodo('tra pochi mesi')).toBe('tra pochi mesi');
+  });
+
+  it('prende "una decina di" e "una ventina di" davanti a giorni/settimane/mesi', () => {
+    expect(estraiPeriodo('fra una decina di giorni')).toBe('fra una decina di giorni');
+    expect(estraiPeriodo('tra una decina di settimane')).toBe('tra una decina di settimane');
+    expect(estraiPeriodo('tra una ventina di giorni')).toBe('tra una ventina di giorni');
+    expect(estraiPeriodo('tra una ventina di mesi')).toBe('tra una ventina di mesi');
+  });
+
+  it('non scambia altre frasi con "pochi/poche" o "decina/ventina" per un periodo', () => {
+    expect(estraiPeriodo('pochi minuti fa mi hai scritto')).toBeNull();
+    expect(estraiPeriodo('ho poche cose da fare oggi')).toBeNull();
+    expect(estraiPeriodo('una decina di persone erano in sala')).toBeNull();
+  });
 });

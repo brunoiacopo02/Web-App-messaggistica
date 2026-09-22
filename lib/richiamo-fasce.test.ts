@@ -227,6 +227,41 @@ describe('classificaRichiamo, senza una data usabile', () => {
       expect(classificaRichiamo({ leadWords: 'tra qualche mese', nowMs: NOW }).fascia).toBe('scarta');
     });
   });
+
+  // Fix round 3: i due gap dichiarati nel report del fix round 2 ("tra pochi
+  // giorni"/"poche settimane", "una decina/ventina di") chiusi con lo stesso
+  // trattamento di "qualche" e "un paio di": mai `tieni_aperta` per un'espressione
+  // che non sappiamo quantificare con precisione (vedi il commento su
+  // `fasciaPeriodoVago` per il perché l'asimmetria è voluta).
+  describe('fix round 3: "pochi/poche" e "una decina/ventina di" non finiscono più su tieni_aperta di default', () => {
+    it('"tra pochi giorni": vago come "qualche giorno", mai tieni_aperta: restituzione', () => {
+      expect(classificaRichiamo({ leadWords: 'tra pochi giorni', nowMs: NOW }).fascia).toBe('restituisci');
+    });
+
+    it('"fra poche settimane": scarto', () => {
+      expect(classificaRichiamo({ leadWords: 'fra poche settimane', nowMs: NOW }).fascia).toBe('scarta');
+    });
+
+    it('"tra pochi mesi": scarto', () => {
+      expect(classificaRichiamo({ leadWords: 'tra pochi mesi', nowMs: NOW }).fascia).toBe('scarta');
+    });
+
+    it('"fra una decina di giorni": un ordine di grandezza già oltre i 7 giorni, scarto', () => {
+      expect(classificaRichiamo({ leadWords: 'fra una decina di giorni', nowMs: NOW }).fascia).toBe('scarta');
+    });
+
+    it('"tra una decina di settimane": scarto', () => {
+      expect(classificaRichiamo({ leadWords: 'tra una decina di settimane', nowMs: NOW }).fascia).toBe('scarta');
+    });
+
+    it('"tra una ventina di giorni": scarto', () => {
+      expect(classificaRichiamo({ leadWords: 'tra una ventina di giorni', nowMs: NOW }).fascia).toBe('scarta');
+    });
+
+    it('"tra una ventina di mesi": scarto', () => {
+      expect(classificaRichiamo({ leadWords: 'tra una ventina di mesi', nowMs: NOW }).fascia).toBe('scarta');
+    });
+  });
 });
 
 describe('classificaRichiamo, cambio dell\'ora legale', () => {

@@ -37,9 +37,13 @@ const PATTERN: RegExp[] = [
   // "settimana prossima" senza articolo
   /\b(?:settimana|mese|anno)\s+prossim[ao]\b/,
   // "tra due settimane", "fra 10 giorni", "tra un paio di mesi", "fra qualche
-  // settimana" (fix round 2, I-2: "un paio di" e "qualche" non erano agganciati,
-  // stessa classe di buco delle cifre in lettere qui sopra).
-  new RegExp(`\\b(?:tra|fra)\\s+(?:${NUMERI}|un\\s+paio\\s+di|qualche)\\s+(?:giorn[oi]|settiman[ae]|mes[ei])\\b`),
+  // settimana", "tra pochi giorni", "fra una decina di giorni" (fix round 2 I-2 e
+  // round 3: "un paio di"/"qualche" prima, "pochi/poche" e "una decina/ventina di"
+  // adesso — stessa classe di buco delle cifre in lettere qui sopra).
+  new RegExp(
+    `\\b(?:tra|fra)\\s+(?:${NUMERI}|un\\s+paio\\s+di|una\\s+(?:decina|ventina)\\s+di|qualche|poch[ei])` +
+      `\\s+(?:giorn[oi]|settiman[ae]|mes[ei])\\b`,
+  ),
   // "dopo le ferie", "dopo l'estate", "dopo Natale"
   /\bdopo\s+(?:le\s+ferie|l'estate|le\s+vacanze|natale|pasqua|ferragosto|l'estate)\b/,
   // "in autunno", "in primavera"
