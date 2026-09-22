@@ -102,6 +102,35 @@ async function notaGiaInviata(
   return (data ?? []).length > 0;
 }
 
+/**
+ * La restituzione di un RICHIAMO (ramo `restituisci` delle tre fasce) è già partita
+ * per questa conversazione?
+ *
+ * Niente impronta sul contenuto apposta: una restituzione è una-per-conversazione per
+ * costruzione (la manda `sendOutcome` una volta sola, e l'`INTERROTTO` che la chiude
+ * chiude anche la chat), quindi la domanda è solo "è già successa qui?", non "è già
+ * successa QUESTA esatta nota?". Un fingerprint sul testo (round 1) o su `quando`
+ * (round 2) sono entrambi fragili, perché entrambi dipendono da un input che
+ * `classificaRichiamo`/il modello rigenerano ad ogni turno — `quando` cambia da solo
+ * fra un turno e l'altro della STESSA restituzione (un'ora inventata diversa per
+ * "sabato" senza ora, una data che attraversa la mezzanotte per "fra 5 giorni"),
+ * quindi una chiave su `quando` può mancare l'aggancio esattamente nel caso che deve
+ * coprire. Stesso pattern di `formGiaTrattenuto` in
+ * `app/api/cron/bot-followups/route.ts`: tipo + conversazione, e basta. Chiude anche
+ * la finestra di deploy: le righe scritte con l'impronta delle versioni precedenti di
+ * questa guardia hanno comunque lo stesso `type` e lo stesso `conversationId`, quindi
+ * restano agganciate da questo filtro.
+ */
+async function richiamoGiaRestituito(supabase: Supa, conversationId: number): Promise<boolean> {
+  const { data } = await supabase
+    .from('event_log')
+    .select('id')
+    .eq('type', 'richiamo_restituito')
+    .eq('payload->>conversationId', String(conversationId))
+    .limit(1);
+  return (data ?? []).length > 0;
+}
+
 /** Finestra di dedup del CRM: due note con la stessa chiave, sullo stesso lead, entro
  *  questo tempo, sono per loro lo stesso fatto (vedi il commento sopra
  *  `neutralizzaMarcatoreMotivo`). */
@@ -431,6 +460,14 @@ export type SendOutcomeArgs = {
    *  la call appena promessa al lead risulterebbe fuori finestra. Chi non li ha (la
    *  route di recupero manuale, i cron) li lascia vuoti: la guardia ricalcola. */
   bookingDays?: readonly string[];
+  /** Interno, usato solo dalla ricorsione del ramo `restituisci` delle tre fasce
+   *  RICHIAMO: `report` deve comunque persistere su `bot_report` (colonna locale, che
+   *  `inviaNotaAlCrm` non scrive mai — per questo NON basta ometterlo da `args.report`),
+   *  ma non deve ripetersi nel corpo della POST se la nota di restituzione l'ha già
+   *  portato al CRM. Le due cose — persistenza locale e corpo della richiesta — sono
+   *  disaccoppiate apposta: prima erano un solo argomento (`report: undefined`), e
+   *  quando la nota falliva sparivano entrambe. */
+  omitReportFromCrmBody?: boolean;
 };
 
 /**
@@ -736,56 +773,61 @@ export async function sendOutcome(
       // segnalazione deve precederlo. La citazione riporta le parole VERE del lead
       // (`leadWords`), mai la sintesi del modello: per quella c'è `quando`.
       const nota = buildRichiamoRestituitoNote({ quando, leadWords: args.leadWords });
-      // Chiave di idempotenza NON sul testo della nota: la nota incorpora le parole
-      // verbatim del lead (`leadWords`), che cambiano se nel frattempo il lead ha
-      // scritto un altro messaggio — e allora anche il fingerprint cambierebbe,
-      // mancando l'aggancio proprio nel caso di retry vero (rete giù sull'INTERROTTO,
-      // il lead scrive ancora, fenice-autoreply ricalcola `leadWords` dall'ultimo
-      // turno). La chiave sta su ciò che identifica LA RESTITUZIONE e non cambia: la
-      // conversazione (già nel filtro di `notaGiaInviata`) e il "quando".
-      const notaFp = noteFingerprint(`richiamo_restituito|${quando ?? 'senza-quando'}`);
-      const notaGiaPartita = await notaGiaInviata(supabase, 'richiamo_restituito', conversationId, notaFp);
-      // `notaAndataABuonFine` decide se il `report` del bot può ancora viaggiare
-      // sull'INTERROTTO che segue (vedi sotto): è vero sia quando la nota è appena
-      // partita con successo, sia quando risultava già partita da un giro precedente.
+      // Idempotenza: guarda `richiamoGiaRestituito` sopra per il perché non è (più) un
+      // fingerprint sul contenuto.
+      const notaGiaPartita = await richiamoGiaRestituito(supabase, conversationId);
+      // `notaAndataABuonFine` decide se `report` può ancora viaggiare nel CORPO della
+      // POST dell'INTERROTTO che segue (vedi sotto): è vero sia quando la nota è
+      // appena partita con successo, sia quando risultava già partita da un giro
+      // precedente. NON decide se `report` si persiste su `bot_report`: quella colonna
+      // si scrive sempre, vedi `omitReportFromCrmBody` più sotto.
       let notaAndataABuonFine = notaGiaPartita;
       if (!notaGiaPartita) {
         const esitoNota = await inviaNotaAlCrm(supabase, conversationId, crmLeadId, nota, args.report, secret);
+        // Compromesso accettato: `esitoNota.sent` può essere `false` anche quando la
+        // nota È arrivata al CRM ma la risposta si è persa (timeout, 5xx dopo la
+        // scrittura) — non solo quando non è mai partita. In quel caso
+        // `notaAndataABuonFine` resta `false`, il `report` viaggia ANCHE sull'INTERROTTO
+        // che segue, e la stessa riga può atterrare due volte sul CRM. È la stessa
+        // classe di trappola già pagata altrove in questo progetto ("un timeout riletto
+        // come mancata consegna"): qui la si accetta di proposito, perché l'alternativa
+        // (dare per scontato il successo) rischierebbe di perdere il report per sempre.
+        // Meglio due volte che zero.
         notaAndataABuonFine = esitoNota.sent;
         await supabase.from('event_log').insert({
           type: esitoNota.sent ? 'richiamo_restituito' : 'richiamo_restituito_nota_fallita',
           payload: {
             conversationId, crmLeadId, quando,
-            ...(esitoNota.sent
-              ? { noteFingerprint: notaFp }
-              : { notaError: esitoNota.error ?? null, notaStatus: esitoNota.status ?? null }),
+            ...(esitoNota.sent ? {} : { notaError: esitoNota.error ?? null, notaStatus: esitoNota.status ?? null }),
           } as never,
           message: esitoNota.sent
             ? `[bot-fissatore] richiamo oltre ${RICHIAMO_FASCIA_APERTA_GG} giorni per lead ${crmLeadId}: lead restituito a un GDO con nota`
-            // ATTENZIONE a chi legge questo evento: se il POST che segue (l'INTERROTTO,
-            // qui sotto) va a buon fine, `sendOutcome` chiude la conversazione
-            // (ai_status: 'closed') e il drain non la riclaima più da 'active' — quindi
-            // NON c'è un turno successivo che ritenta questa nota, e questa campanella
-            // dedicata è persa per sempre. Il testo resta comunque leggibile nel campo
-            // `note` dell'esito INTERROTTO che parte subito dopo (il GDO la spiegazione
-            // ce l'ha, anche se non come notifica a sé stante); questo evento `warn` è
-            // la traccia per un recupero manuale (via `resend-outcome`), non la prova
-            // che qualcosa la ritenterà da sola.
+            // ATTENZIONE a chi legge questo evento `richiamo_restituito_nota_fallita`:
+            // se il POST che segue (l'INTERROTTO, qui sotto) va a buon fine,
+            // `sendOutcome` chiude la conversazione (ai_status: 'closed') e il drain
+            // non la riclaima più da 'active' — quindi NON c'è un turno successivo che
+            // ritenta questa nota, e questa campanella dedicata è persa per sempre. Il
+            // testo resta comunque leggibile nel campo `note` dell'esito INTERROTTO che
+            // parte subito dopo (il GDO la spiegazione ce l'ha, anche se non come
+            // notifica a sé stante); questo evento `warn` è la traccia per un recupero
+            // manuale (via `resend-outcome`), non la prova che qualcosa la ritenterà da
+            // sola.
             : `[bot-fissatore] richiamo oltre ${RICHIAMO_FASCIA_APERTA_GG} giorni per lead ${crmLeadId}: la nota di restituzione NON è partita al CRM (${esitoNota.error ?? esitoNota.status ?? 'errore sconosciuto'})`,
           level: esitoNota.sent ? 'info' : 'warn',
         });
       }
       // Ritenta solo l'esito, mai una nota già partita (idempotenza sopra). `report`
-      // viaggia sull'INTERROTTO SOLO se la nota non è (ancora) passata: se è passata lo
-      // portava già lei, e rimandarlo qui scriverebbe la stessa riga due volte sul CRM
-      // — ma se la nota è fallita, il report non deve sparire: prima di questo fix
-      // finiva perso in entrambi i casi.
+      // viaggia PER INTERO qui: `bot_report` è una colonna locale che `inviaNotaAlCrm`
+      // non scrive mai, quindi deve valorizzarsi anche quando la nota è fallita — non
+      // solo quando è passata. Quello che si evita non è la persistenza, è la
+      // duplicazione nel corpo della richiesta al CRM: `omitReportFromCrmBody` filtra
+      // SOLO quella, quando la nota è già passata con `report` incluso.
       return sendOutcome(supabase, conversationId, {
         ...args,
         outcome: 'INTERROTTO',
         date: undefined,
         note: nota,
-        report: notaAndataABuonFine ? undefined : args.report,
+        omitReportFromCrmBody: notaAndataABuonFine,
       }, opts);
     }
 
@@ -934,7 +976,11 @@ export async function sendOutcome(
         ...(periodo ? { periodo } : args.date ? { date: args.date } : {}),
         ...(args.note ? { note: args.note } : {}),
         ...(args.discardReason ? { discardReason: args.discardReason } : {}),
-        ...(args.report ? { report: args.report } : {}),
+        // `omitReportFromCrmBody`: solo per non duplicare il report nel corpo della
+        // richiesta quando l'ha già portato una POST precedente (vedi il ramo
+        // `restituisci` delle tre fasce RICHIAMO). Non tocca `bot_report`: quella
+        // colonna si scrive più sotto da `args.report` direttamente, non dal corpo.
+        ...(args.report && !args.omitReportFromCrmBody ? { report: args.report } : {}),
       };
 
   const valid = validateOutcomeBody(body);

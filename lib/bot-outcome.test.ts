@@ -1535,35 +1535,47 @@ describe('RICHIAMO restituito: fix round 2 (22/09/2026) — idempotenza vera e r
   // della nota non aggancerebbe: qui i due giri hanno `leadWords` volutamente diverse,
   // stessa data/stesso "quando".
   it('un retry vero (leadWords diverse fra i due giri) non rimanda la nota: la chiave non è il testo della nota', async () => {
-    const conv = { crm_lead_id: 'lead-10', bot_outcome: null, bot_scheduled_at: null };
-    const primoGiro = { outcome: 'RICHIAMO' as const, date: isoFraGiorni(5), leadWords: 'richiamami sabato' };
+    // Orologio congelato: senza, i due giri chiamano `isoFraGiorni(5)` in istanti
+    // diversi e la data (quindi `quando`, formattato al minuto) può cambiare da un
+    // giro all'altro a cavallo di un minuto — irrilevante per QUESTA guardia (che dal
+    // round 3 non usa più `quando`), ma il test deve restare deterministico a
+    // prescindere da quando gira.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.parse('2026-09-22T10:00:00+02:00'));
+      const conv = { crm_lead_id: 'lead-10', bot_outcome: null, bot_scheduled_at: null };
+      const primoGiro = { outcome: 'RICHIAMO' as const, date: isoFraGiorni(5), leadWords: 'richiamami sabato' };
 
-    // Primo giro: la nota parte (200), l'INTERROTTO che la segue fallisce (rete giù).
-    vi.stubGlobal('fetch', vi.fn()
-      .mockImplementationOnce(async () => ({ ok: true, status: 200, text: async () => '' }))
-      .mockImplementationOnce(async () => ({ ok: false, status: 500, text: async () => 'boom' })));
-    const { supabase: s1, calls: c1 } = makeSupabase(conv);
-    await sendOutcome(s1, 10, primoGiro);
-    const notaEvento = { id: 1, ...c1.events.find((e: { type: string }) => e.type === 'richiamo_restituito') };
-    expect(notaEvento.type).toBe('richiamo_restituito');
+      // Primo giro: la nota parte (200), l'INTERROTTO che la segue fallisce (rete giù).
+      vi.stubGlobal('fetch', vi.fn()
+        .mockImplementationOnce(async () => ({ ok: true, status: 200, text: async () => '' }))
+        .mockImplementationOnce(async () => ({ ok: false, status: 500, text: async () => 'boom' })));
+      const { supabase: s1, calls: c1 } = makeSupabase(conv);
+      await sendOutcome(s1, 10, primoGiro);
+      const notaEvento = { id: 1, ...c1.events.find((e: { type: string }) => e.type === 'richiamo_restituito') };
+      expect(notaEvento.type).toBe('richiamo_restituito');
 
-    // Il lead scrive ancora nel frattempo: stessa data, ma `leadWords` è un testo
-    // diverso da quello del primo giro.
-    const secondoGiro = {
-      outcome: 'RICHIAMO' as const,
-      date: isoFraGiorni(5),
-      leadWords: 'dai va bene, aspetto che mi richiamate allora',
-    };
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, text: async () => '' })));
-    const { supabase: s2, calls: c2 } = makeSupabase(conv, { eventLogRows: [notaEvento] });
-    const secondo = await sendOutcome(s2, 10, secondoGiro);
+      // Il lead scrive ancora nel frattempo (qualche minuto dopo): stessa data, ma
+      // `leadWords` è un testo diverso da quello del primo giro.
+      vi.setSystemTime(Date.parse('2026-09-22T10:03:00+02:00'));
+      const secondoGiro = {
+        outcome: 'RICHIAMO' as const,
+        date: isoFraGiorni(5),
+        leadWords: 'dai va bene, aspetto che mi richiamate allora',
+      };
+      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, text: async () => '' })));
+      const { supabase: s2, calls: c2 } = makeSupabase(conv, { eventLogRows: [notaEvento] });
+      const secondo = await sendOutcome(s2, 10, secondoGiro);
 
-    const chiamate = vi.mocked(globalThis.fetch).mock.calls;
-    expect(chiamate).toHaveLength(1); // solo il retry dell'INTERROTTO: la nota con le
-    // parole nuove del lead NON deve ripartire una seconda volta.
-    expect(JSON.parse(chiamate[0][1]!.body as string).outcome).toBe('INTERROTTO');
-    expect(c2.events.some((e: { type: string }) => e.type === 'richiamo_restituito')).toBe(false);
-    expect(secondo.sent).toBe(true);
+      const chiamate = vi.mocked(globalThis.fetch).mock.calls;
+      expect(chiamate).toHaveLength(1); // solo il retry dell'INTERROTTO: la nota con le
+      // parole nuove del lead NON deve ripartire una seconda volta.
+      expect(JSON.parse(chiamate[0][1]!.body as string).outcome).toBe('INTERROTTO');
+      expect(c2.events.some((e: { type: string }) => e.type === 'richiamo_restituito')).toBe(false);
+      expect(secondo.sent).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // R-1: prima del fix, `report: undefined` era incondizionato — se la nota falliva,
@@ -1600,6 +1612,97 @@ describe('RICHIAMO restituito: fix round 2 (22/09/2026) — idempotenza vera e r
       leadWords: 'richiamami sabato',
       report: { summary: 'riassunto della chat' },
     });
+    const update = calls.updates.find((u: { bot_report?: unknown }) => 'bot_report' in u);
+    expect(update).toBeTruthy();
+    expect(update.bot_report).toEqual({ summary: 'riassunto della chat' });
+  });
+});
+
+describe('RICHIAMO restituito: fix round 3 (22/09/2026) — chiave di idempotenza senza "quando", report sempre persistito', () => {
+  // R-3 residuo: `quando` NON è un invariante della restituzione. Lo ricalcola
+  // `classificaRichiamo` a ogni turno, su input che il modello rigenera ogni volta —
+  // un'ora inventata diversa per "sabato" senza ora, un periodo a parole diverso da
+  // una data valida per "fra 5 giorni" a cavallo di mezzanotte. Qui i due giri hanno
+  // `quando` volutamente diverso (date diverse, entrambe nella fascia di
+  // restituzione): con una chiave che includesse `quando` (round 2) questo test
+  // sarebbe rosso.
+  it('due giri con "quando" diverso non rimandano la nota: la chiave è solo tipo + conversazione', async () => {
+    const conv = { crm_lead_id: 'lead-13', bot_outcome: null, bot_scheduled_at: null };
+    const primoGiro = { outcome: 'RICHIAMO' as const, date: isoFraGiorni(4), leadWords: 'richiamami fra 4 giorni' };
+
+    vi.stubGlobal('fetch', vi.fn()
+      .mockImplementationOnce(async () => ({ ok: true, status: 200, text: async () => '' })) // NOTA
+      .mockImplementationOnce(async () => ({ ok: false, status: 500, text: async () => 'boom' }))); // INTERROTTO fallisce
+    const { supabase: s1, calls: c1 } = makeSupabase(conv);
+    await sendOutcome(s1, 13, primoGiro);
+    const notaEvento = { id: 1, ...c1.events.find((e: { type: string }) => e.type === 'richiamo_restituito') };
+    expect(notaEvento.type).toBe('richiamo_restituito');
+
+    // Secondo giro: il lead ha detto un'altra data (o il modello ne ha proposta
+    // un'altra) — "quando" è diverso da quello del primo giro, ma è la STESSA
+    // restituzione sulla STESSA conversazione.
+    const secondoGiro = { outcome: 'RICHIAMO' as const, date: isoFraGiorni(6), leadWords: 'richiamami fra 6 giorni allora' };
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, text: async () => '' })));
+    const { supabase: s2, calls: c2 } = makeSupabase(conv, { eventLogRows: [notaEvento] });
+    const secondo = await sendOutcome(s2, 13, secondoGiro);
+
+    const chiamate = vi.mocked(globalThis.fetch).mock.calls;
+    expect(chiamate).toHaveLength(1); // solo il retry dell'INTERROTTO, mai una seconda NOTA
+    expect(JSON.parse(chiamate[0][1]!.body as string).outcome).toBe('INTERROTTO');
+    expect(c2.events.some((e: { type: string }) => e.type === 'richiamo_restituito')).toBe(false);
+    expect(secondo.sent).toBe(true);
+  });
+
+  // N-2: le righe scritte con l'impronta delle versioni precedenti della guardia
+  // (round 1: fingerprint sul testo della nota; round 2: fingerprint su `quando`)
+  // restano agganciate dal filtro tipo + conversazione, perché il filtro non guarda
+  // più `noteFingerprint` — quindi non serve nessuna migrazione delle righe già
+  // scritte prima di questo deploy.
+  it('una riga "richiamo_restituito" scritta con la vecchia impronta (round 2) aggancia lo stesso: niente doppioni alla finestra di deploy', async () => {
+    const conv = { crm_lead_id: 'lead-14', bot_outcome: null, bot_scheduled_at: null };
+    // Evento come lo scriveva il codice del round 2: `noteFingerprint` calcolato su
+    // `quando`, un campo che la guardia di questo round non legge più.
+    const eventoVecchioFormato = {
+      id: 1,
+      type: 'richiamo_restituito',
+      payload: { conversationId: 14, crmLeadId: 'lead-14', quando: '27 settembre alle 15:00', noteFingerprint: 'abc12345' },
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, text: async () => '' })));
+    const { supabase, calls } = makeSupabase(conv, { eventLogRows: [eventoVecchioFormato] });
+    const res = await sendOutcome(supabase, 14, {
+      outcome: 'RICHIAMO',
+      date: isoFraGiorni(5),
+      leadWords: 'qualunque cosa, diversa da prima',
+    });
+
+    const chiamate = vi.mocked(globalThis.fetch).mock.calls;
+    expect(chiamate).toHaveLength(1); // solo l'INTERROTTO: la nota non riparte
+    expect(JSON.parse(chiamate[0][1]!.body as string).outcome).toBe('INTERROTTO');
+    expect(calls.events.some((e: { type: string }) => e.type === 'richiamo_restituito')).toBe(false);
+    expect(res.sent).toBe(true);
+  });
+
+  // R-2 residuo: nel round 2 il caso "nota fallita" era coperto, ma nel percorso
+  // NOMINALE (nota riuscita — quello che succede quasi sempre) `report` restava
+  // `undefined` sulla ricorsione e la persistenza scriveva `bot_report: null`.
+  it('nel percorso nominale (nota riuscita) bot_report NON è null: persistenza e corpo della POST sono disaccoppiati', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, text: async () => '' })));
+    const { supabase, calls } = makeSupabase({ crm_lead_id: 'lead-15', bot_outcome: null, bot_scheduled_at: null });
+    await sendOutcome(supabase, 15, {
+      outcome: 'RICHIAMO',
+      date: isoFraGiorni(5),
+      leadWords: 'richiamami sabato',
+      report: { summary: 'riassunto della chat' },
+    });
+
+    // Il corpo della POST dell'INTERROTTO non deve ripetere il report (già portato
+    // dalla NOTA)...
+    const postAlCrm = corpiPostAlCrm();
+    expect(postAlCrm.map((c) => c.outcome)).toEqual(['NOTA', 'INTERROTTO']);
+    expect(postAlCrm[0].report).toBeTruthy();
+    expect(postAlCrm[1].report).toBeUndefined();
+    // ...ma la colonna locale sì: prima di questo fix restava `null` proprio qui, nel
+    // percorso che succede quasi sempre.
     const update = calls.updates.find((u: { bot_report?: unknown }) => 'bot_report' in u);
     expect(update).toBeTruthy();
     expect(update.bot_report).toEqual({ summary: 'riassunto della chat' });
