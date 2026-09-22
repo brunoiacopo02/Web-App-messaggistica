@@ -11,6 +11,7 @@ const base = {
   lastMessageIsInbound: false,
   romeHour: 15,             // orario buono
   gdoPostino: false,        // conversazione normale, non un lead del GDO
+  confermaForm: false,      // non ha (ancora) confermato il form
 };
 
 describe('decideAgendaFollowup', () => {
@@ -52,6 +53,27 @@ describe('decideAgendaFollowup — lead dei GDO', () => {
   // al telefono col commerciale. È esattamente ciò che il CRM ci ha chiesto di evitare.
   it('mai il follow-up "prenota" a un lead che ha già l’appuntamento col GDO', () => {
     expect(decideAgendaFollowup({ ...base, gdoPostino: true })).toBe('none');
+  });
+});
+
+describe('decideAgendaFollowup — conferma del form', () => {
+  // Il testo dice "non ho ancora visto la conferma": a chi ha già prenotato sul form
+  // è il messaggio peggiore possibile, gli dice che non risulta dopo che ha fatto tutto.
+  it('non sollecita chi ha già confermato il form', () => {
+    const base = {
+      agendaSentAtMs: Date.parse('2026-09-15T15:58:00+02:00'),
+      nowMs: Date.parse('2026-09-16T12:00:00+02:00'),
+      terminal: false,
+      followupAlreadySent: false,
+      lastInboundAtMs: Date.parse('2026-09-15T16:07:00+02:00'),
+      lastMessageIsInbound: false,
+      romeHour: 12,
+      gdoPostino: false,
+    };
+    // senza la conferma il sollecito parte (comportamento di sempre)
+    expect(decideAgendaFollowup({ ...base, confermaForm: false })).not.toBe('none');
+    // con la conferma no: gli direbbe che non risulta, dopo che ha prenotato
+    expect(decideAgendaFollowup({ ...base, confermaForm: true })).toBe('none');
   });
 });
 

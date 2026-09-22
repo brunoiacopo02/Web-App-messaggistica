@@ -5,11 +5,19 @@ import { firstNameOf } from './name';
 import { FILTRO_FUORI_LANCIO } from './lancio-fase';
 import { logCronQueryError } from './cron-query-error';
 import { mittenteDiConversazione, numeroPrimario } from './mittente';
+import { haConfermatoIlForm } from './conferma-form';
 
 const H = 3600_000;
 
 /** Quanto deve essere vecchia l'agenda inviata perché parta il follow-up. */
 export const AGENDA_FOLLOWUP_DELAY_MS = 2 * H;
+/**
+ * Tetto sugli ultimi messaggi della conversazione letti per decidere il follow-up
+ * (finestra 24h, "ha appena scritto lui", conferma del form). La domanda di verifica
+ * del form e la risposta del lead sono sempre vicine fra loro: non serve la cronologia
+ * intera per una singola decisione booleana.
+ */
+export const MAX_MESSAGES_FOR_DECISION = 20;
 /**
  * Segnale "agenda inviata" nel flusso attuale: Mario manda in chat il link del
  * form di prenotazione (JotForm). NON usiamo più il template legacy AGENDA_TEMPLATE_SID,
@@ -33,10 +41,16 @@ export interface AgendaFollowupInput {
   romeHour: number;
   /** Lead arruolato per conto di un GDO (`gdo_agenda_at` valorizzato). */
   gdoPostino: boolean;
+  /** Il lead ha già confermato di aver compilato il form di prenotazione
+   *  (`haConfermatoIlForm`). Veto: "non ho ancora visto la conferma" sarebbe falso. */
+  confermaForm: boolean;
 }
 
 /** Decide se mandare il singolo follow-up agenda. Puro, niente effetti. */
 export function decideAgendaFollowup(input: AgendaFollowupInput): 'send' | 'none' {
+  // Il lead ha già prenotato sul form: "non ho ancora visto la conferma" gli direbbe
+  // che non risulta, dopo che ha fatto tutto. È il veto più forte, quindi sta per primo.
+  if (input.confermaForm) return 'none';
   // Lead del GDO: l'appuntamento l'ha già preso al telefono col commerciale, e il
   // link di prenotazione è lo stesso del bot. Il sollecito "non ho ancora visto la
   // conferma" arriverebbe proprio a chi ha già prenotato.
@@ -129,25 +143,27 @@ export async function runAgendaFollowups(
     const lead = leadById.get(c.lead_id);
     const phone = lead?.phone_e164 as string | undefined;
 
-    // Ultimo inbound del lead → finestra 24h.
-    const { data: lastIn } = await supabase
+    // Ultimi messaggi della conversazione (più recente per primo): un'unica select al
+    // posto delle due di prima (una per l'ultimo inbound, una per l'ultimo messaggio in
+    // assoluto) — copre anche il terzo bisogno, la conferma del form, senza aggiungere
+    // query. `body` serve solo a `haConfermatoIlForm`.
+    const { data: recentMsgs } = await supabase
       .from('messages')
-      .select('created_at')
+      .select('direction, body, created_at')
       .eq('conversation_id', c.id)
-      .eq('direction', 'in')
       .order('created_at', { ascending: false })
-      .limit(1);
-    const lastInboundAtMs = lastIn && lastIn[0] ? Date.parse(lastIn[0].created_at) : null;
+      .limit(MAX_MESSAGES_FOR_DECISION);
+    const msgsDesc = (recentMsgs ?? []) as { direction: string; body: string | null; created_at: string }[];
 
-    // Ultimo messaggio in qualsiasi direzione → evita follow-up se il lead
-    // ha già scritto e il backstop sta già gestendo la risposta.
-    const { data: lastMsg } = await supabase
-      .from('messages')
-      .select('direction')
-      .eq('conversation_id', c.id)
-      .order('created_at', { ascending: false })
-      .limit(1);
-    const lastMessageIsInbound = lastMsg?.[0]?.direction === 'in';
+    // Ultimo messaggio in qualsiasi direzione → evita follow-up se il lead ha già
+    // scritto e il backstop sta già gestendo la risposta. Identico a prima: il primo
+    // elemento in ordine decrescente è sempre l'ultimo messaggio, tetto o no.
+    const lastMessageIsInbound = msgsDesc[0]?.direction === 'in';
+    // Ultimo inbound del lead → finestra 24h.
+    const lastInbound = msgsDesc.find((m) => m.direction === 'in');
+    const lastInboundAtMs = lastInbound ? Date.parse(lastInbound.created_at) : null;
+    // haConfermatoIlForm vuole i messaggi in ordine cronologico crescente.
+    const confermaForm = haConfermatoIlForm([...msgsDesc].reverse());
 
     const decision = decideAgendaFollowup({
       agendaSentAtMs,
@@ -161,6 +177,7 @@ export async function runAgendaFollowups(
       lastMessageIsInbound,
       romeHour: hour,
       gdoPostino: c.gdo_agenda_at != null,
+      confermaForm,
     });
 
     // Dallo stesso numero della chat: il link dell'agenda e' partito da li', e la
