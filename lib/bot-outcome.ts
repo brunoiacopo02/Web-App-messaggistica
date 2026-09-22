@@ -106,10 +106,9 @@ async function notaGiaInviata(
  * La restituzione di un RICHIAMO (ramo `restituisci` delle tre fasce) è già partita
  * per questa conversazione?
  *
- * Niente impronta sul contenuto apposta: una restituzione è una-per-conversazione per
- * costruzione (la manda `sendOutcome` una volta sola, e l'`INTERROTTO` che la chiude
- * chiude anche la chat), quindi la domanda è solo "è già successa qui?", non "è già
- * successa QUESTA esatta nota?". Un fingerprint sul testo (round 1) o su `quando`
+ * Niente impronta sul contenuto apposta: la domanda che serve è "una nota di
+ * restituzione è già partita qui?", non "è già partita QUESTA esatta nota?". Un
+ * fingerprint sul testo (round 1) o su `quando`
  * (round 2) sono entrambi fragili, perché entrambi dipendono da un input che
  * `classificaRichiamo`/il modello rigenerano ad ogni turno — `quando` cambia da solo
  * fra un turno e l'altro della STESSA restituzione (un'ora inventata diversa per
@@ -120,6 +119,20 @@ async function notaGiaInviata(
  * la finestra di deploy: le righe scritte con l'impronta delle versioni precedenti di
  * questa guardia hanno comunque lo stesso `type` e lo stesso `conversationId`, quindi
  * restano agganciate da questo filtro.
+ *
+ * Nessuna finestra temporale, e non è una svista: una restituzione NON è
+ * una-per-conversazione per costruzione. Una conversazione restituita può essere
+ * riaperta — `shouldReopen` (`lib/fenice-autoreply.ts`) riporta ad `active` qualunque
+ * chat `closed` ancora di proprietà di mario e non in pausa, e il webhook di Twilio lo
+ * fa davvero quando il lead riscrive. Dopo una restituzione `bot_outcome` vale
+ * `INTERROTTO`, quindi `holdsAppointment` è falso e il blocco delle tre fasce rigira
+ * per intero: se il lead chiede di nuovo di essere risentito fra qualche giorno si
+ * ricade nel ramo `restituisci` e questa guardia scatta. È voluto: la nota di
+ * restituzione resta soppressa dalla seconda volta in poi, perché la priorità è non
+ * mandare una seconda campanella alla stessa persona (122 doppie campanelle già
+ * pagate), e il testo integrale viaggia comunque nel campo `note` dell'`INTERROTTO`.
+ * Quello che NON si perde è la traccia: il ramo `restituisci` scrive l'evento anche
+ * quando salta la nota, con il tipo `richiamo_restituito_nota_saltata`.
  */
 async function richiamoGiaRestituito(supabase: Supa, conversationId: number): Promise<boolean> {
   const { data } = await supabase
@@ -782,8 +795,13 @@ export async function sendOutcome(
       // precedente. NON decide se `report` si persiste su `bot_report`: quella colonna
       // si scrive sempre, vedi `omitReportFromCrmBody` più sotto.
       let notaAndataABuonFine = notaGiaPartita;
+      // `null` = la nota non è stata nemmeno tentata, perché una restituzione era già
+      // partita su questa conversazione. È il terzo caso che la traccia qui sotto deve
+      // saper distinguere, e si riconosce solo da qui: `notaAndataABuonFine` da solo
+      // non basta, vale `true` sia per "appena inviata con successo" sia per "saltata".
+      let esitoNota: { sent: boolean; status?: number; error?: string } | null = null;
       if (!notaGiaPartita) {
-        const esitoNota = await inviaNotaAlCrm(supabase, conversationId, crmLeadId, nota, args.report, secret);
+        esitoNota = await inviaNotaAlCrm(supabase, conversationId, crmLeadId, nota, args.report, secret);
         // Compromesso accettato: `esitoNota.sent` può essere `false` anche quando la
         // nota È arrivata al CRM ma la risposta si è persa (timeout, 5xx dopo la
         // scrittura) — non solo quando non è mai partita. In quel caso
@@ -794,14 +812,34 @@ export async function sendOutcome(
         // (dare per scontato il successo) rischierebbe di perdere il report per sempre.
         // Meglio due volte che zero.
         notaAndataABuonFine = esitoNota.sent;
-        await supabase.from('event_log').insert({
-          type: esitoNota.sent ? 'richiamo_restituito' : 'richiamo_restituito_nota_fallita',
-          payload: {
-            conversationId, crmLeadId, quando,
-            ...(esitoNota.sent ? {} : { notaError: esitoNota.error ?? null, notaStatus: esitoNota.status ?? null }),
-          } as never,
-          message: esitoNota.sent
-            ? `[bot-fissatore] richiamo oltre ${RICHIAMO_FASCIA_APERTA_GG} giorni per lead ${crmLeadId}: lead restituito a un GDO con nota`
+      }
+      // La traccia si scrive SEMPRE, anche quando la nota è stata saltata. Prima questa
+      // insert stava dentro l'`if` qui sopra, e la seconda restituzione della stessa
+      // conversazione (caso reale: vedi il commento di `richiamoGiaRestituito`) non
+      // lasciava nessuna riga — invisibile a chi legge il registro. I tre tipi sono
+      // distinti apposta, perché chi legge deve sapere quale dei tre è successo; e
+      // `richiamo_restituito` resta il tipo della SOLA nota davvero inviata, perché è
+      // quello su cui gira la guardia: se lo portasse anche la riga "saltata", quella
+      // riga varrebbe da sola come prova che una nota è partita.
+      const tipoTraccia = esitoNota === null
+        ? 'richiamo_restituito_nota_saltata'
+        : esitoNota.sent ? 'richiamo_restituito' : 'richiamo_restituito_nota_fallita';
+      const intestazioneTraccia = `[bot-fissatore] richiamo oltre ${RICHIAMO_FASCIA_APERTA_GG} giorni per lead ${crmLeadId}`;
+      await supabase.from('event_log').insert({
+        type: tipoTraccia,
+        payload: {
+          conversationId, crmLeadId, quando,
+          ...(esitoNota === null ? { notaSaltata: true } : {}),
+          ...(esitoNota && !esitoNota.sent ? { notaError: esitoNota.error ?? null, notaStatus: esitoNota.status ?? null } : {}),
+        } as never,
+        message: esitoNota === null
+          // La soppressione è voluta, non un errore: la nota di restituzione parte una
+          // volta sola per conversazione, per non mandare una seconda campanella alla
+          // stessa persona. Il testo integrale viaggia comunque nel campo `note`
+          // dell'INTERROTTO che parte subito dopo, quindi il GDO l'informazione ce l'ha.
+          ? `${intestazioneTraccia}: lead restituito di nuovo a un GDO, nota NON rimandata (già partita su questa conversazione)`
+          : esitoNota.sent
+            ? `${intestazioneTraccia}: lead restituito a un GDO con nota`
             // ATTENZIONE a chi legge questo evento `richiamo_restituito_nota_fallita`:
             // se il POST che segue (l'INTERROTTO, qui sotto) va a buon fine,
             // `sendOutcome` chiude la conversazione (ai_status: 'closed') e il drain
@@ -812,10 +850,9 @@ export async function sendOutcome(
             // notifica a sé stante); questo evento `warn` è la traccia per un recupero
             // manuale (via `resend-outcome`), non la prova che qualcosa la ritenterà da
             // sola.
-            : `[bot-fissatore] richiamo oltre ${RICHIAMO_FASCIA_APERTA_GG} giorni per lead ${crmLeadId}: la nota di restituzione NON è partita al CRM (${esitoNota.error ?? esitoNota.status ?? 'errore sconosciuto'})`,
-          level: esitoNota.sent ? 'info' : 'warn',
-        });
-      }
+            : `${intestazioneTraccia}: la nota di restituzione NON è partita al CRM (${esitoNota.error ?? esitoNota.status ?? 'errore sconosciuto'})`,
+        level: tipoTraccia === 'richiamo_restituito_nota_fallita' ? 'warn' : 'info',
+      });
       // Ritenta solo l'esito, mai una nota già partita (idempotenza sopra). `report`
       // viaggia PER INTERO qui: `bot_report` è una colonna locale che `inviaNotaAlCrm`
       // non scrive mai, quindi deve valorizzarsi anche quando la nota è fallita — non

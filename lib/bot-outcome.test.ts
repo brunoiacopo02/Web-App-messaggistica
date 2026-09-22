@@ -1737,3 +1737,63 @@ describe('RICHIAMO: la classificazione prova prima le parole del modello sul "qu
     expect(postAlCrm[0].note).not.toContain('"la settimana prossima"');
   });
 });
+
+describe('RICHIAMO restituito: la seconda restituzione resta tracciabile (22/09/2026)', () => {
+  // La guardia `richiamoGiaRestituito` non ha finestra temporale, e va bene così: la
+  // nota resta soppressa dal secondo giro in poi, per non mandare una seconda
+  // campanella alla stessa persona (questo repo ha già pagato 122 doppie campanelle).
+  // Ma una conversazione restituita NON è chiusa per sempre: `shouldReopen`
+  // (`lib/fenice-autoreply.ts`) la riporta ad `active` se il lead riscrive, e il
+  // webhook di Twilio lo fa davvero. Dopo la restituzione `bot_outcome` vale
+  // `INTERROTTO`, quindi `holdsAppointment` è falso e il blocco delle tre fasce
+  // rigira per intero: se il lead chiede di nuovo di essere risentito fra 5 giorni si
+  // ricade nel ramo `restituisci`. Prima di questo fix quel secondo giro non lasciava
+  // NESSUNA riga su `event_log` (l'insert stava dentro `if (!notaGiaPartita)`): la
+  // seconda restituzione era invisibile a chi legge il registro.
+  it('conversazione riaperta e restituita di nuovo: una sola nota, ma due tracce distinguibili sul registro', async () => {
+    const conv = { crm_lead_id: 'lead-16', bot_outcome: null, bot_scheduled_at: null };
+
+    // Giro 1: restituzione vera, nota inviata.
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, text: async () => '' })));
+    const { supabase: s1, calls: c1 } = makeSupabase(conv);
+    await sendOutcome(s1, 16, { outcome: 'RICHIAMO', date: isoFraGiorni(5), leadWords: 'richiamami fra 5 giorni' });
+    expect(corpiPostAlCrm().map((c) => c.outcome)).toEqual(['NOTA', 'INTERROTTO']);
+    const primaTraccia = c1.events.find((e: { type: string }) => String(e.type).startsWith('richiamo_restituito'));
+    expect(primaTraccia.type).toBe('richiamo_restituito');
+
+    // Giro 2: il lead ha riscritto, `shouldReopen` ha riportato la chat ad `active`
+    // (`bot_outcome` è rimasto `INTERROTTO` dalla restituzione) e chiede di nuovo di
+    // essere risentito più avanti.
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, text: async () => '' })));
+    const riaperta = { crm_lead_id: 'lead-16', bot_outcome: 'INTERROTTO', bot_scheduled_at: null };
+    const { supabase: s2, calls: c2 } = makeSupabase(riaperta, { eventLogRows: [{ id: 1, ...primaTraccia }] });
+    const secondo = await sendOutcome(s2, 16, { outcome: 'RICHIAMO', date: isoFraGiorni(5), leadWords: 'scusa, allora fra cinque giorni' });
+
+    // La nota NON riparte: una sola campanella a quel GDO, per scelta.
+    expect(corpiPostAlCrm().map((c) => c.outcome)).toEqual(['INTERROTTO']);
+    expect(secondo.sent).toBe(true);
+
+    // Ma la seconda restituzione lascia comunque la sua riga, e chi legge il registro
+    // capisce che lì la nota è stata saltata di proposito, non inviata.
+    const secondaTraccia = c2.events.find((e: { type: string }) => String(e.type).startsWith('richiamo_restituito'));
+    expect(secondaTraccia).toBeTruthy();
+    expect(secondaTraccia.type).not.toBe('richiamo_restituito');
+    expect(secondaTraccia.type).toBe('richiamo_restituito_nota_saltata');
+    expect(secondaTraccia.payload.conversationId).toBe(16);
+    expect(secondaTraccia.payload.crmLeadId).toBe('lead-16');
+    expect(secondaTraccia.message).toContain('nota');
+  });
+
+  // La traccia nuova non deve entrare nella guardia: `richiamoGiaRestituito` cerca
+  // `type = 'richiamo_restituito'` esatto, e deve continuare a farlo (se allargasse il
+  // filtro, una riga "saltata" varrebbe da sola come prova che la nota è partita).
+  it('la guardia continua a interrogare esattamente tipo + conversazione, come prima', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, text: async () => '' })));
+    const { supabase, calls } = makeSupabase({ crm_lead_id: 'lead-17', bot_outcome: null, bot_scheduled_at: null });
+    await sendOutcome(supabase, 17, { outcome: 'RICHIAMO', date: isoFraGiorni(5), leadWords: 'richiamami fra 5 giorni' });
+
+    const query = calls.eventLogQueries.find((f: [string, string][]) =>
+      f.some(([colonna, valore]) => colonna === 'type' && valore === 'richiamo_restituito'));
+    expect(query).toEqual([['type', 'richiamo_restituito'], ['payload->>conversationId', '17']]);
+  });
+});
