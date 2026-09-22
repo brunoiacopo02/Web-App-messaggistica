@@ -12,7 +12,7 @@ import {
   TOUCH_OFFSETS_DAYS,
   type MsgLite,
 } from '@/lib/sequence';
-import { sendOutcome } from '@/lib/bot-outcome';
+import { inviaNotaAlCrm } from '@/lib/bot-outcome';
 import { sendTemplate, sendFreeText, getTemplateBody } from '@/lib/twilio';
 import { stopDalCrmPerLead } from '@/lib/stop-crm';
 import { feniceOpening } from '@/lib/fenice-opening';
@@ -30,6 +30,7 @@ import { firstNameOf, templateName } from '@/lib/name';
 import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
 import { mittenteDiConversazione } from '@/lib/mittente';
+import { formatRomeDateTime } from '@/lib/rome-time';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -324,17 +325,39 @@ export async function GET(req: NextRequest) {
           const touchRes = await sendSequenceTemplate(
             supabase, c.id, phone, sid, `Sequenza touch ${action.touchIndex}`, from, { '1': templateName(firstName) },
           );
-          // Dopo il primo follow-up riuscito: RICHIAMO interim (una volta sola,
-          // perché il touch 1 parte una volta sola) con data = fine sequenza, così
-          // il CRM vede il lead "in lavorazione estesa" con la data del termine.
+          // Dopo il primo follow-up riuscito: una NOTA al CRM (una volta sola, perché
+          // il touch 1 parte una volta sola) che dice fino a quando la sequenza va
+          // avanti. Fino al 22/09/2026 era un RICHIAMO interim con `date = t0 + 4
+          // giorni`: una `recallDate` con i secondi della macchina addosso, che finiva
+          // nei "Richiami" di un GDO appena il lead passava a un umano (es. richiamo
+          // alle 09:02:49 per una persona mai sentita — 396 lead così). Serve
+          // visibilità, non un appuntamento telefonico.
+          //
+          // `inviaNotaAlCrm`, non `sendOutcome`: un `outcome: 'NOTA'` passato come
+          // `args.outcome` a `sendOutcome` prende il ramo "normal" di
+          // `resolveOutcomeAction` (qui il lead non ha ancora un esito) e, a differenza
+          // del vecchio interim, PERSISTE — chiude `ai_status` e scrive
+          // `bot_outcome: 'NOTA'` sulla conversazione. Il prossimo run la troverebbe
+          // fuori dalla query (`ai_status in ('active')`) o comunque skippata
+          // (`bot_outcome != null`), e i touch 2/3/4 non partirebbero mai più.
+          // `inviaNotaAlCrm` manda la stessa nota al CRM senza toccare né `ai_status`
+          // né `bot_outcome`: la sequenza prosegue esattamente come prima.
           if (touchRes.ok && action.touchIndex === 1) {
             const t0 = firstOutboundAtMs(msgs);
-            if (t0 !== null) {
-              await sendOutcome(supabase, c.id, {
-                outcome: 'RICHIAMO',
-                date: toRomeIso(t0 + SEQUENCE_END_DAYS * 24 * H),
-                note: 'Sequenza WhatsApp estesa in corso: tentativi automatici fino a questa data, poi esito definitivo.',
-              }, { interim: true });
+            const secret = process.env.BOT_WEBHOOK_SECRET;
+            const crmLeadId = c.crm_lead_id as string | null;
+            if (t0 !== null && secret && crmLeadId) {
+              const fine = toRomeIso(t0 + SEQUENCE_END_DAYS * 24 * H);
+              await inviaNotaAlCrm(
+                supabase,
+                c.id,
+                crmLeadId,
+                'Sequenza WhatsApp estesa in corso: tentativi automatici fino al ' +
+                  `${formatRomeDateTime(fine)}, poi esito definitivo. Non è un richiamo: ` +
+                  'non c\'è niente da chiamare a quell\'ora.',
+                undefined,
+                secret,
+              );
             }
           }
         } else {
