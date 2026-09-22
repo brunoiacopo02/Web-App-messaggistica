@@ -1528,6 +1528,84 @@ describe('RICHIAMO restituito: nota onesta e idempotenza sul retry (fix round 1,
   });
 });
 
+describe('RICHIAMO restituito: fix round 2 (22/09/2026) — idempotenza vera e report non perso', () => {
+  // R-3: nel retry vero il lead SCRIVE ANCORA fra un giro e l'altro, e
+  // fenice-autoreply ricalcola `leadWords` dall'ultimo turno — quindi il testo della
+  // nota (che cita `leadWords` verbatim) cambia. Un fingerprint calcolato sul testo
+  // della nota non aggancerebbe: qui i due giri hanno `leadWords` volutamente diverse,
+  // stessa data/stesso "quando".
+  it('un retry vero (leadWords diverse fra i due giri) non rimanda la nota: la chiave non è il testo della nota', async () => {
+    const conv = { crm_lead_id: 'lead-10', bot_outcome: null, bot_scheduled_at: null };
+    const primoGiro = { outcome: 'RICHIAMO' as const, date: isoFraGiorni(5), leadWords: 'richiamami sabato' };
+
+    // Primo giro: la nota parte (200), l'INTERROTTO che la segue fallisce (rete giù).
+    vi.stubGlobal('fetch', vi.fn()
+      .mockImplementationOnce(async () => ({ ok: true, status: 200, text: async () => '' }))
+      .mockImplementationOnce(async () => ({ ok: false, status: 500, text: async () => 'boom' })));
+    const { supabase: s1, calls: c1 } = makeSupabase(conv);
+    await sendOutcome(s1, 10, primoGiro);
+    const notaEvento = { id: 1, ...c1.events.find((e: { type: string }) => e.type === 'richiamo_restituito') };
+    expect(notaEvento.type).toBe('richiamo_restituito');
+
+    // Il lead scrive ancora nel frattempo: stessa data, ma `leadWords` è un testo
+    // diverso da quello del primo giro.
+    const secondoGiro = {
+      outcome: 'RICHIAMO' as const,
+      date: isoFraGiorni(5),
+      leadWords: 'dai va bene, aspetto che mi richiamate allora',
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, text: async () => '' })));
+    const { supabase: s2, calls: c2 } = makeSupabase(conv, { eventLogRows: [notaEvento] });
+    const secondo = await sendOutcome(s2, 10, secondoGiro);
+
+    const chiamate = vi.mocked(globalThis.fetch).mock.calls;
+    expect(chiamate).toHaveLength(1); // solo il retry dell'INTERROTTO: la nota con le
+    // parole nuove del lead NON deve ripartire una seconda volta.
+    expect(JSON.parse(chiamate[0][1]!.body as string).outcome).toBe('INTERROTTO');
+    expect(c2.events.some((e: { type: string }) => e.type === 'richiamo_restituito')).toBe(false);
+    expect(secondo.sent).toBe(true);
+  });
+
+  // R-1: prima del fix, `report: undefined` era incondizionato — se la nota falliva,
+  // il report non viaggiava da nessuna parte (prima del fix del round 1 viaggiava
+  // almeno sull'INTERROTTO). Qui la nota fallisce sempre: il report deve comparire sul
+  // secondo POST (l'INTERROTTO).
+  it('se la nota fallisce, il report non sparisce: viaggia sull\'INTERROTTO che segue', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, text: async () => 'boom' })));
+    const { supabase } = makeSupabase({ crm_lead_id: 'lead-11', bot_outcome: null, bot_scheduled_at: null });
+    await sendOutcome(supabase, 11, {
+      outcome: 'RICHIAMO',
+      date: isoFraGiorni(5),
+      leadWords: 'richiamami sabato',
+      report: { summary: 'riassunto della chat' },
+    });
+
+    const postAlCrm = corpiPostAlCrm();
+    expect(postAlCrm[0].outcome).toBe('NOTA');
+    expect(postAlCrm[1].outcome).toBe('INTERROTTO');
+    expect(postAlCrm[1].report).toEqual({ summary: 'riassunto della chat' });
+  });
+
+  // R-2: stessa causa di R-1, ma sulla persistenza (`bot_report`) invece che sul
+  // corpo della POST. Nota fallita, INTERROTTO riuscito: `bot_report` deve salvare il
+  // report vero, non `null`.
+  it('se la nota fallisce ma il successivo INTERROTTO va a buon fine, bot_report non viene azzerato', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockImplementationOnce(async () => ({ ok: false, status: 500, text: async () => 'boom' })) // NOTA fallisce
+      .mockImplementationOnce(async () => ({ ok: true, status: 200, text: async () => '' }))); // INTERROTTO riesce
+    const { supabase, calls } = makeSupabase({ crm_lead_id: 'lead-12', bot_outcome: null, bot_scheduled_at: null });
+    await sendOutcome(supabase, 12, {
+      outcome: 'RICHIAMO',
+      date: isoFraGiorni(5),
+      leadWords: 'richiamami sabato',
+      report: { summary: 'riassunto della chat' },
+    });
+    const update = calls.updates.find((u: { bot_report?: unknown }) => 'bot_report' in u);
+    expect(update).toBeTruthy();
+    expect(update.bot_report).toEqual({ summary: 'riassunto della chat' });
+  });
+});
+
 describe('RICHIAMO: la classificazione prova prima le parole del modello sul "quando" (fix round 1, I-4)', () => {
   it('leadWords discorde da note ("ok va bene" dopo aver detto "a novembre"): vince note, si scarta', async () => {
     const { supabase } = makeSupabase({ crm_lead_id: 'lead-8', bot_outcome: null, bot_scheduled_at: null });

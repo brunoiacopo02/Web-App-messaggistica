@@ -736,18 +736,22 @@ export async function sendOutcome(
       // segnalazione deve precederlo. La citazione riporta le parole VERE del lead
       // (`leadWords`), mai la sintesi del modello: per quella c'è `quando`.
       const nota = buildRichiamoRestituitoNote({ quando, leadWords: args.leadWords });
-      const notaFp = noteFingerprint(nota);
-      // Idempotenza: se l'INTERROTTO che segue fallisce (rete giù, 5xx), sendOutcome
-      // torna sent:false e fenice-autoreply NON chiude la conversazione — al prossimo
-      // messaggio del lead questo blocco rigira da capo. Senza questa guardia
-      // rimanderebbe la stessa nota, e `inviaNotaAlCrm` scavalca apposta la deduplica
-      // di 15' del CRM (per non far perdere una campanella vera) — qui invece serve
-      // l'opposto: non farla arrivare due volte per un retry nostro. Il fingerprint si
-      // scrive SOLO quando la nota è partita: se è fallita, il turno dopo deve poterla
-      // ritentare, non saltarla convinto che sia già arrivata.
+      // Chiave di idempotenza NON sul testo della nota: la nota incorpora le parole
+      // verbatim del lead (`leadWords`), che cambiano se nel frattempo il lead ha
+      // scritto un altro messaggio — e allora anche il fingerprint cambierebbe,
+      // mancando l'aggancio proprio nel caso di retry vero (rete giù sull'INTERROTTO,
+      // il lead scrive ancora, fenice-autoreply ricalcola `leadWords` dall'ultimo
+      // turno). La chiave sta su ciò che identifica LA RESTITUZIONE e non cambia: la
+      // conversazione (già nel filtro di `notaGiaInviata`) e il "quando".
+      const notaFp = noteFingerprint(`richiamo_restituito|${quando ?? 'senza-quando'}`);
       const notaGiaPartita = await notaGiaInviata(supabase, 'richiamo_restituito', conversationId, notaFp);
+      // `notaAndataABuonFine` decide se il `report` del bot può ancora viaggiare
+      // sull'INTERROTTO che segue (vedi sotto): è vero sia quando la nota è appena
+      // partita con successo, sia quando risultava già partita da un giro precedente.
+      let notaAndataABuonFine = notaGiaPartita;
       if (!notaGiaPartita) {
         const esitoNota = await inviaNotaAlCrm(supabase, conversationId, crmLeadId, nota, args.report, secret);
+        notaAndataABuonFine = esitoNota.sent;
         await supabase.from('event_log').insert({
           type: esitoNota.sent ? 'richiamo_restituito' : 'richiamo_restituito_nota_fallita',
           payload: {
@@ -758,19 +762,30 @@ export async function sendOutcome(
           } as never,
           message: esitoNota.sent
             ? `[bot-fissatore] richiamo oltre ${RICHIAMO_FASCIA_APERTA_GG} giorni per lead ${crmLeadId}: lead restituito a un GDO con nota`
+            // ATTENZIONE a chi legge questo evento: se il POST che segue (l'INTERROTTO,
+            // qui sotto) va a buon fine, `sendOutcome` chiude la conversazione
+            // (ai_status: 'closed') e il drain non la riclaima più da 'active' — quindi
+            // NON c'è un turno successivo che ritenta questa nota, e questa campanella
+            // dedicata è persa per sempre. Il testo resta comunque leggibile nel campo
+            // `note` dell'esito INTERROTTO che parte subito dopo (il GDO la spiegazione
+            // ce l'ha, anche se non come notifica a sé stante); questo evento `warn` è
+            // la traccia per un recupero manuale (via `resend-outcome`), non la prova
+            // che qualcosa la ritenterà da sola.
             : `[bot-fissatore] richiamo oltre ${RICHIAMO_FASCIA_APERTA_GG} giorni per lead ${crmLeadId}: la nota di restituzione NON è partita al CRM (${esitoNota.error ?? esitoNota.status ?? 'errore sconosciuto'})`,
           level: esitoNota.sent ? 'info' : 'warn',
         });
       }
-      // Ritenta solo l'esito, mai la nota già partita (idempotenza sopra). `report`
-      // non viaggia qui: se la nota è passata lo portava già lei, e rimandarlo
-      // sull'INTERROTTO scriverebbe la stessa riga due volte sul CRM.
+      // Ritenta solo l'esito, mai una nota già partita (idempotenza sopra). `report`
+      // viaggia sull'INTERROTTO SOLO se la nota non è (ancora) passata: se è passata lo
+      // portava già lei, e rimandarlo qui scriverebbe la stessa riga due volte sul CRM
+      // — ma se la nota è fallita, il report non deve sparire: prima di questo fix
+      // finiva perso in entrambi i casi.
       return sendOutcome(supabase, conversationId, {
         ...args,
         outcome: 'INTERROTTO',
         date: undefined,
         note: nota,
-        report: undefined,
+        report: notaAndataABuonFine ? undefined : args.report,
       }, opts);
     }
 
