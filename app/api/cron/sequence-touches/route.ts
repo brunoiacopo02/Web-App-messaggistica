@@ -333,22 +333,30 @@ export async function GET(req: NextRequest) {
           // alle 09:02:49 per una persona mai sentita — 396 lead così). Serve
           // visibilità, non un appuntamento telefonico.
           //
-          // `inviaNotaAlCrm`, non `sendOutcome`: un `outcome: 'NOTA'` passato come
-          // `args.outcome` a `sendOutcome` prende il ramo "normal" di
-          // `resolveOutcomeAction` (qui il lead non ha ancora un esito) e, a differenza
-          // del vecchio interim, PERSISTE — chiude `ai_status` e scrive
-          // `bot_outcome: 'NOTA'` sulla conversazione. Il prossimo run la troverebbe
-          // fuori dalla query (`ai_status in ('active')`) o comunque skippata
-          // (`bot_outcome != null`), e i touch 2/3/4 non partirebbero mai più.
-          // `inviaNotaAlCrm` manda la stessa nota al CRM senza toccare né `ai_status`
-          // né `bot_outcome`: la sequenza prosegue esattamente come prima.
+          // TRAPPOLA per chi in futuro "semplifica" questo blocco: NON sostituire
+          // `inviaNotaAlCrm` con `sendOutcome(supabase, c.id, { outcome: 'NOTA', note })`
+          // — sembra la scelta più naturale (è già importato nel resto del file) ma è
+          // sbagliata. Su una conversazione senza esito ancora (il nostro caso: qui
+          // `bot_outcome` è sempre null) `resolveOutcomeAction` ritorna
+          // `{ kind: 'normal' }`, e nel ramo "normal" `sendOutcome`, dopo un POST
+          // riuscito, PERSISTE: scrive `bot_outcome: 'NOTA'` e chiude
+          // `ai_status: 'closed'` sulla conversazione. Questo stesso cron filtra le sue
+          // candidate proprio su quei due campi (`ai_status in ('active')` nella query
+          // in cima alla route, `bot_outcome != null` nello skip poco sotto): al run
+          // successivo la conversazione sparirebbe, e i touch 2/3/4 non partirebbero
+          // MAI PIÙ per nessun lead che arriva a questo punto — una rottura silenziosa
+          // e permanente di tutta la sequenza, non un dettaglio. `inviaNotaAlCrm` manda
+          // la stessa nota al CRM senza toccare né `ai_status` né `bot_outcome`. Il
+          // test che inchioda questo comportamento (e diventa rosso se `sendOutcome`
+          // smette di persistere una NOTA "normale") sta in `lib/bot-outcome.test.ts`,
+          // describe "sendOutcome — NOTA su lead senza esito NON è un ping innocuo".
           if (touchRes.ok && action.touchIndex === 1) {
             const t0 = firstOutboundAtMs(msgs);
             const secret = process.env.BOT_WEBHOOK_SECRET;
             const crmLeadId = c.crm_lead_id as string | null;
             if (t0 !== null && secret && crmLeadId) {
               const fine = toRomeIso(t0 + SEQUENCE_END_DAYS * 24 * H);
-              await inviaNotaAlCrm(
+              const esitoNota = await inviaNotaAlCrm(
                 supabase,
                 c.id,
                 crmLeadId,
@@ -358,6 +366,21 @@ export async function GET(req: NextRequest) {
                 undefined,
                 secret,
               );
+              // `inviaNotaAlCrm` scrive su event_log solo sul successo (`bot_note_sent`)
+              // o su un body non valido: una risposta non-ok del CRM o un'eccezione di
+              // rete tornano `sent: false` senza lasciare nessuna traccia propria. Il
+              // blocco spara una volta sola per conversazione (`touchIndex === 1`, mai
+              // ripetuto ai run successivi), quindi senza questo log un fallimento qui
+              // sparirebbe per sempre — nessun retry, nessuna visibilità. Stessa forma
+              // di `nota_secondo_recapito_non_inviata` in `fenice-autoreply.ts`.
+              if (!esitoNota.sent) {
+                await supabase.from('event_log').insert({
+                  type: 'sequence_nota_estesa_non_inviata',
+                  payload: { conversationId: c.id, crmLeadId, error: esitoNota.error ?? null, status: esitoNota.status ?? null } as never,
+                  message: `[sequenza] conv ${c.id}: nota "lavorazione estesa" non inviata al CRM (${esitoNota.error ?? esitoNota.status ?? 'errore sconosciuto'})`,
+                  level: 'warn',
+                });
+              }
             }
           }
         } else {

@@ -233,6 +233,33 @@ describe('sendOutcome — RICHIAMO interim', () => {
   });
 });
 
+/**
+ * Non un test di comportamento voluto: inchioda una trappola. `outcome: 'NOTA'` passato
+ * a `sendOutcome` come esito "normale" (nessun `opts.interim`, nessun `opts.noteOnly`,
+ * lead senza esito ancora) NON è il canale-nota puro che il nome farebbe pensare — è un
+ * esito come un altro agli occhi di `resolveOutcomeAction` (ritorna `{ kind: 'normal' }`
+ * per qualsiasi lead non ancora APPUNTAMENTO) e quindi, dopo un POST riuscito, PERSISTE:
+ * scrive `bot_outcome` e chiude `ai_status`. Un ping informativo a metà sequenza che
+ * volesse "solo far vedere qualcosa al CRM" chiuderebbe invece la conversazione, e un
+ * cron come `app/api/cron/sequence-touches` — che seleziona le sue candidate proprio su
+ * `ai_status`/`bot_outcome` — smetterebbe di rivederla per sempre. Per quel caso il
+ * canale giusto è `inviaNotaAlCrm` (vedi il commento nella route), non `sendOutcome`.
+ * Se questo test diventa rosso, vuol dire che `sendOutcome` ha smesso di persistere una
+ * NOTA "normale" — e chi ha scritto quel commento nella route va avvisato.
+ */
+describe('sendOutcome — NOTA su lead senza esito NON è un ping innocuo', () => {
+  it('outcome NOTA su lead senza esito ancora → persiste bot_outcome=NOTA e chiude ai_status', async () => {
+    const { supabase, calls } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null });
+    const res = await sendOutcome(supabase, 1, { outcome: 'NOTA', note: 'sequenza in corso' });
+
+    expect(res.sent).toBe(true);
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(body.outcome).toBe('NOTA');
+    expect(calls.updates[0]).toMatchObject({ bot_outcome: 'NOTA', ai_status: 'closed' });
+    expect(calls.events.some((e) => e.type === 'bot_outcome_sent')).toBe(true);
+  });
+});
+
 describe('sendOutcome — nota duplicata non rimandata', () => {
   const CONV = { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE };
   const ARGS = { outcome: 'DA_SCARTARE' as const, discardReason: 'non ha budget' };
