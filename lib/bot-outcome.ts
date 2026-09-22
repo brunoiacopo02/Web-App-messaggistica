@@ -15,6 +15,13 @@ import { bookingBlackout } from './booking-blackout';
 import { estraiPeriodo } from './periodo-richiamo';
 import { categoriaPerCrm, disponibilitaDalTesto, motivoRichiesta } from './contatti-umani';
 import { noteFingerprint, divergiChiaveDaNotePrecedenti, type NotaCrmPrecedente } from './note-dedup';
+import {
+  classificaRichiamo,
+  buildRichiamoRestituitoNote,
+  buildRichiamoScartatoReason,
+  RICHIAMO_FASCIA_APERTA_GG,
+  RICHIAMO_FASCIA_RESTITUZIONE_GG,
+} from './richiamo-fasce';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -683,6 +690,72 @@ export async function sendOutcome(
   const holdsAppointment = (row?.bot_outcome ?? null) === 'APPUNTAMENTO';
   if (holdsAppointment && !interim && isRichiestaDisdetta(args.outcome)) {
     await marcaDisdetta(supabase, conversationId, crmLeadId, args.outcome);
+  }
+
+  // LE TRE FASCE DI UN "RISENTIAMOCI PIÙ AVANTI" (PO, 22/09/2026).
+  //
+  // Il bot non manda più `RICHIAMO` al CRM su una trattativa aperta: quell'esito
+  // scriveva una `recallDate` sul lead del bot, che non telefona — quindi il richiamo
+  // non lo faceva nessuno e il lead restava fermo (93 lead così al 22/09). E quando poi
+  // il lead passava a un umano, il GDO se lo ritrovava in "Richiami" a un'ora scelta
+  // dalla macchina, per una persona che non aveva mai sentito.
+  //
+  // `holdsAppointment` esclude il caso "vuole spostare l'appuntamento già fissato": lì
+  // RICHIAMO ha un altro significato e la sua strada (→ NOTA via resolveOutcomeAction)
+  // resta quella di prima. `interim` è il ping della sequenza, che non passa più di qui.
+  if (args.outcome === 'RICHIAMO' && !interim && !holdsAppointment) {
+    const { fascia, quando } = classificaRichiamo({
+      date: args.date,
+      leadWords: args.leadWords ?? args.note,
+      nowMs: Date.now(),
+    });
+
+    if (fascia === 'tieni_aperta') {
+      // Non è un esito: la sequenza di follow-up lo ripesca da sola entro 4 giorni.
+      // Nessun POST — al CRM non serve sapere che una chat è ancora viva.
+      await supabase.from('event_log').insert({
+        type: 'richiamo_tenuto_aperto',
+        payload: { conversationId, crmLeadId, date: args.date ?? null, quando } as never,
+        message: `[bot-fissatore] richiamo entro ${RICHIAMO_FASCIA_APERTA_GG} giorni per lead ${crmLeadId}: chat tenuta aperta, nessun esito`,
+        level: 'info',
+      });
+      return { sent: false, error: 'richiamo_entro_finestra', keepOpen: true };
+    }
+
+    if (fascia === 'restituisci') {
+      // Prima la nota (così il GDO che lo riceve legge il "quando" che il lead ha
+      // detto), poi la restituzione vera. Stesso ordine del ramo
+      // `conferma_senza_appuntamento` in bot-followups: l'esito chiude la chat, la
+      // segnalazione deve precederlo.
+      const nota = buildRichiamoRestituitoNote({ quando, leadWords: args.leadWords ?? args.note });
+      await inviaNotaAlCrm(supabase, conversationId, crmLeadId, nota, args.report, secret);
+      await supabase.from('event_log').insert({
+        type: 'richiamo_restituito',
+        payload: { conversationId, crmLeadId, quando } as never,
+        message: `[bot-fissatore] richiamo oltre ${RICHIAMO_FASCIA_APERTA_GG} giorni per lead ${crmLeadId}: lead restituito a un GDO con nota`,
+        level: 'info',
+      });
+      return sendOutcome(supabase, conversationId, {
+        ...args,
+        outcome: 'INTERROTTO',
+        date: undefined,
+        note: nota,
+      });
+    }
+
+    // fascia === 'scarta'
+    await supabase.from('event_log').insert({
+      type: 'richiamo_scartato',
+      payload: { conversationId, crmLeadId, quando } as never,
+      message: `[bot-fissatore] richiamo oltre ${RICHIAMO_FASCIA_RESTITUZIONE_GG} giorni per lead ${crmLeadId}: scartato, riscriverà lui`,
+      level: 'info',
+    });
+    return sendOutcome(supabase, conversationId, {
+      ...args,
+      outcome: 'DA_SCARTARE',
+      date: undefined,
+      discardReason: buildRichiamoScartatoReason({ quando }),
+    });
   }
 
   // Un RICHIAMO senza una data che regga non è un richiamo: è un'ora inventata che

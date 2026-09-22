@@ -337,66 +337,67 @@ describe('sendOutcome — nota duplicata non rimandata', () => {
   });
 });
 
-describe('sendOutcome — RICHIAMO con data non utilizzabile', () => {
+// Fino al 22/09/2026 un RICHIAMO su trattativa aperta con una data non utilizzabile
+// degradava a NOTA (via `checkDataRichiamo`/`buildRichiamoSenzaDataNote`), oppure
+// passava intatto come RICHIAMO quando la data era buona o c'era un periodo a parole.
+// Dal 22/09 quel percorso non è più raggiunto per questo caso (RICHIAMO, non-interim,
+// senza un appuntamento già fissato): ci arriva prima il blocco delle tre fasce
+// (`classificaRichiamo`), che decide se tenere la chat aperta, restituire il lead con
+// una nota o scartarlo — ma non manda mai più un RICHIAMO al CRM. Questi test sono
+// stati riscritti sulla nuova regola, stessi input di prima.
+describe('sendOutcome — RICHIAMO su trattativa aperta: instradato dalle tre fasce', () => {
   const attivo = { crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null };
-  const bodyInviato = () => JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string);
+  const bodyInviato = (indice = 0) => JSON.parse(vi.mocked(globalThis.fetch).mock.calls[indice][1]!.body as string);
 
-  // Dal contratto v1.5: se il lead dice QUANDO con parole sue, quelle parole partono
-  // nel campo `periodo` e il richiamo resta un richiamo. Prima diventava una nota, e
-  // il CRM non aveva modo di rimetterlo in agenda.
-  it('col periodo detto dal lead parte come RICHIAMO, senza data inventata', async () => {
+  it('un periodo troppo lontano ("a settembre") non è più un RICHIAMO: si scarta', async () => {
     const { supabase } = makeSupabase(attivo);
     const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', note: 'ci risentiamo a settembre' });
 
+    expect(vi.mocked(globalThis.fetch).mock.calls).toHaveLength(1);
     const body = bodyInviato();
-    expect(body.outcome).toBe('RICHIAMO');
-    expect(body.periodo).toBe('a settembre');
-    expect(body.date).toBeUndefined();
+    expect(body.outcome).toBe('DA_SCARTARE');
+    expect(body.discardReason).toContain('a settembre');
     expect(res.sent).toBe(true);
   });
 
-  it("senza un'espressione di tempo resta una NOTA: non si deduce un periodo", async () => {
-    const { supabase } = makeSupabase(attivo);
+  it("senza un'espressione di tempo la chat resta aperta: nessun POST al CRM", async () => {
+    const { supabase, calls } = makeSupabase(attivo);
     const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', note: 'ora non posso parlare' });
 
-    const body = bodyInviato();
-    expect(body.outcome).toBe('NOTA');
-    expect(body.date).toBeUndefined();
-    expect(body.periodo).toBeUndefined();
-    expect(body.note).toContain('"ora non posso parlare"');
-    expect(res.sent).toBe(true);
+    expect(vi.mocked(globalThis.fetch).mock.calls).toHaveLength(0);
+    expect(res.sent).toBe(false);
+    expect(res.keepOpen).toBe(true);
+    expect(calls.updates).toHaveLength(0);
+  });
+
+  it('una data nel passato senza periodo non arriva mai al CRM (caso conv 3369): chat tenuta aperta', async () => {
+    const { supabase } = makeSupabase(attivo);
+    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: '2026-01-27T09:00:00+01:00' });
+    expect(vi.mocked(globalThis.fetch).mock.calls).toHaveLength(0);
     expect(res.keepOpen).toBe(true);
   });
 
-  it('una data nel passato non arriva mai al CRM (caso conv 3369)', async () => {
-    const { supabase } = makeSupabase(attivo);
-    await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: '2026-01-27T09:00:00+01:00' });
-    const body = bodyInviato();
-    expect(body.outcome).toBe('NOTA');
-    expect(JSON.stringify(body)).not.toContain('2026-01-27');
-  });
-
-  it('una data sbagliata non parte nemmeno quando il periodo la sostituisce', async () => {
+  it('una data sbagliata ma con un periodo detto dal lead: restituzione con nota, non un RICHIAMO', async () => {
     const { supabase } = makeSupabase(attivo);
     await sendOutcome(supabase, 1, {
       outcome: 'RICHIAMO',
       date: '2026-01-27T09:00:00+01:00',
       note: 'mi richiami la settimana prossima',
     });
-    const body = bodyInviato();
-    expect(body.outcome).toBe('RICHIAMO');
-    expect(body.periodo).toBe('la settimana prossima');
-    expect(JSON.stringify(body)).not.toContain('2026-01-27');
+    const chiamate = vi.mocked(globalThis.fetch).mock.calls;
+    expect(chiamate.map((_c, i) => bodyInviato(i).outcome)).toEqual(['NOTA', 'INTERROTTO']);
+    expect(bodyInviato(0).note).toContain('la settimana prossima');
+    expect(JSON.stringify(chiamate.map((c) => c[1]!.body))).not.toContain('2026-01-27');
   });
 
-  it('una data a due anni non arriva mai al CRM', async () => {
+  it('una data a due anni si scarta: non resta mai un RICHIAMO', async () => {
     const { supabase } = makeSupabase(attivo);
     const fra2anni = new Date(Date.now() + 730 * 86400_000).toISOString();
     await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: fra2anni });
-    expect(bodyInviato().outcome).toBe('NOTA');
+    expect(bodyInviato().outcome).toBe('DA_SCARTARE');
   });
 
-  it('non tocca bot_outcome né ai_status: la conversazione resta lavorabile', async () => {
+  it('non tocca bot_outcome né ai_status quando la chat resta aperta ("più avanti" senza periodo riconoscibile)', async () => {
     const { supabase, calls } = makeSupabase(attivo);
     await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', note: 'più avanti' });
     for (const u of calls.updates) {
@@ -405,23 +406,21 @@ describe('sendOutcome — RICHIAMO con data non utilizzabile', () => {
     }
   });
 
-  it('una data valida detta dal lead passa intatta come RICHIAMO', async () => {
+  it('una data a 7 giorni cade nella fascia di restituzione: non resta un RICHIAMO', async () => {
     const { supabase } = makeSupabase(attivo);
     const fra7giorni = new Date(Date.now() + 7 * 86400_000).toISOString();
     const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: fra7giorni });
-    const body = bodyInviato();
-    expect(body.outcome).toBe('RICHIAMO');
-    expect(body.date).toBe(fra7giorni);
+    const chiamate = vi.mocked(globalThis.fetch).mock.calls;
+    expect(chiamate.map((_c, i) => bodyInviato(i).outcome)).toEqual(['NOTA', 'INTERROTTO']);
     expect(res.keepOpen).toBeUndefined();
   });
 
-  it('registra l\'evento con la data scartata, per poterla ritrovare', async () => {
+  it('registra l\'evento di chat tenuta aperta quando la data è nel passato senza periodo', async () => {
     const { supabase, calls } = makeSupabase(attivo);
     await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', date: '2026-01-27T09:00:00+01:00' });
-    const ev = calls.events.find((e: { type: string }) => e.type === 'richiamo_senza_data');
+    const ev = calls.events.find((e: { type: string }) => e.type === 'richiamo_tenuto_aperto');
     expect(ev).toBeTruthy();
-    expect(ev.payload.dataScartata).toBe('2026-01-27T09:00:00+01:00');
-    expect(ev.payload.motivo).toBe('passato');
+    expect(ev.payload.date).toBe('2026-01-27T09:00:00+01:00');
   });
 });
 
@@ -1396,5 +1395,73 @@ describe('sendOutcome — il corpo della risposta 2xx viene esposto (restituzion
     const senza = await sendOutcome(makeSupabase({ crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null }).supabase, 1, { outcome: 'NON_RISPOSTO' });
     expect(senza.sent).toBe(true);
     expect(senza.corpo).toBeUndefined();
+  });
+});
+
+/** Un giorno ISO fra N giorni da adesso: come `FRA_TRE_GIORNI` più sopra, ma con un
+ *  offset scelto dal chiamante, per posizionare la data in una fascia precisa. */
+function isoFraGiorni(n: number): string {
+  return new Date(Date.now() + n * 86400_000).toISOString();
+}
+
+/** Il corpo di ciascuna POST al CRM inviata durante il test, nell'ordine in cui sono
+ *  partite. Il file non ha un doppio dedicato a "quello che è arrivato al CRM": lo
+ *  ricava dal mock di `fetch`, come fa il resto del file (`bodyInviato` qui sopra). */
+function corpiPostAlCrm(): Array<Record<string, unknown>> {
+  const fetchMock = globalThis.fetch as unknown as { mock: { calls: [string, { body: string }][] } };
+  return fetchMock.mock.calls.map(([, init]) => JSON.parse(init.body));
+}
+
+describe('RICHIAMO su trattativa aperta: le tre fasce (dal 22/09/2026)', () => {
+  it('entro 3 giorni non manda niente al CRM e tiene la chat aperta', async () => {
+    const { supabase } = makeSupabase({ crm_lead_id: 'lead-1', bot_outcome: null, bot_scheduled_at: null });
+    const r = await sendOutcome(supabase, 1, {
+      outcome: 'RICHIAMO',
+      date: isoFraGiorni(2),
+      leadWords: 'richiamami dopodomani',
+    });
+    expect(r.keepOpen).toBe(true);
+    expect(corpiPostAlCrm()).toHaveLength(0);
+  });
+
+  it('fra 4 e 7 giorni manda PRIMA una nota e POI la restituzione, mai un RICHIAMO', async () => {
+    const { supabase } = makeSupabase({ crm_lead_id: 'lead-2', bot_outcome: null, bot_scheduled_at: null });
+    await sendOutcome(supabase, 2, {
+      outcome: 'RICHIAMO',
+      date: isoFraGiorni(5),
+      leadWords: 'richiamami sabato',
+    });
+    const postAlCrm = corpiPostAlCrm();
+    expect(postAlCrm.map((c) => c.outcome)).toEqual(['NOTA', 'INTERROTTO']);
+    expect(postAlCrm[0].note).toContain('VOLEVA ESSERE RISENTITO');
+    expect(postAlCrm.some((c) => c.outcome === 'RICHIAMO')).toBe(false);
+  });
+
+  it('oltre 7 giorni manda DA_SCARTARE con il motivo giusto', async () => {
+    const { supabase } = makeSupabase({ crm_lead_id: 'lead-3', bot_outcome: null, bot_scheduled_at: null });
+    await sendOutcome(supabase, 3, {
+      outcome: 'RICHIAMO',
+      date: isoFraGiorni(40),
+      leadWords: 'ci risentiamo a novembre',
+    });
+    const postAlCrm = corpiPostAlCrm();
+    expect(postAlCrm).toHaveLength(1);
+    expect(postAlCrm[0].outcome).toBe('DA_SCARTARE');
+    expect(postAlCrm[0].discardReason).toContain('riscrivere quando sarà il momento');
+  });
+
+  it('su un appuntamento GIÀ fissato il RICHIAMO resta uno spostamento: nessuna fascia', async () => {
+    const { supabase } = makeSupabase({
+      crm_lead_id: 'lead-4',
+      bot_outcome: 'APPUNTAMENTO',
+      bot_scheduled_at: isoFraGiorni(1),
+    });
+    await sendOutcome(supabase, 4, {
+      outcome: 'RICHIAMO',
+      date: isoFraGiorni(30),
+      leadWords: 'spostiamo',
+    });
+    // resolveOutcomeAction lo traduce in NOTA: l'appuntamento non si declassa mai.
+    expect(corpiPostAlCrm().map((c) => c.outcome)).toEqual(['NOTA']);
   });
 });
