@@ -13,11 +13,14 @@ const H = 3600_000;
 export const AGENDA_FOLLOWUP_DELAY_MS = 2 * H;
 /**
  * Tetto sugli ultimi messaggi della conversazione letti per decidere il follow-up
- * (finestra 24h, "ha appena scritto lui", conferma del form). La domanda di verifica
- * del form e la risposta del lead sono sempre vicine fra loro: non serve la cronologia
- * intera per una singola decisione booleana.
+ * (finestra 24h, "ha appena scritto lui", conferma del form). Serve solo a non tirare
+ * su cronologie lunghissime per una singola decisione booleana: la raffica di messaggi
+ * dopo la conferma del form arriva al massimo a 13 nei casi visti in produzione, quindi
+ * 100 sta molto sopra il caso peggiore reale e rende irraggiungibile in pratica il caso
+ * in cui l'ultimo inbound vero resti fuori dal tetto (vedi il commento su
+ * `datiDecisioneDaMessaggi`).
  */
-export const MAX_MESSAGES_FOR_DECISION = 20;
+export const MAX_MESSAGES_FOR_DECISION = 100;
 /**
  * Segnale "agenda inviata" nel flusso attuale: Mario manda in chat il link del
  * form di prenotazione (JotForm). NON usiamo più il template legacy AGENDA_TEMPLATE_SID,
@@ -66,6 +69,42 @@ export function decideAgendaFollowup(input: AgendaFollowupInput): 'send' | 'none
   if (input.nowMs - input.lastInboundAtMs >= WINDOW_MS) return 'none';
   if (input.romeHour < FOLLOWUP_HOUR_START || input.romeHour >= FOLLOWUP_HOUR_END) return 'none';
   return 'send';
+}
+
+export interface DecisionMsgRow {
+  direction: string;
+  body: string | null;
+  created_at: string;
+}
+
+/**
+ * Da una pagina di messaggi (ordine DECRESCENTE — il più recente per primo, così come
+ * torna la query a Supabase, `.limit(MAX_MESSAGES_FOR_DECISION)`) deriva i tre segnali
+ * che `decideAgendaFollowup` non può calcolarsi da sola. Pura, niente I/O: isola la
+ * logica che prima viveva solo dentro `runAgendaFollowups`, non testata da nessuno
+ * tranne un commento.
+ *
+ * - `lastMessageIsInbound` guarda solo il primo elemento: identico a prima, a qualunque
+ *   tetto, perché il messaggio più recente è sempre incluso.
+ * - `lastInboundAtMs` cerca il primo `direction: 'in'` scorrendo dal più recente: torna
+ *   `null` solo se NESSUNO dei messaggi letti è un inbound. Se l'ultimo inbound vero
+ *   fosse più indietro del tetto (cioè ci fossero `MAX_MESSAGES_FOR_DECISION` o più
+ *   messaggi consecutivi non-inbound dopo di lui) il valore tornerebbe `null` invece di
+ *   quello vero: un tetto abbondante (100, vedi la costante) rende il caso irraggiungibile
+ *   nelle conversazioni che questo modulo guarda.
+ * - `confermaForm` inverte l'array (cronologico CRESCENTE, come vuole
+ *   `haConfermatoIlForm`) prima di passarlo.
+ */
+export function datiDecisioneDaMessaggi(msgsDesc: DecisionMsgRow[]): {
+  lastInboundAtMs: number | null;
+  lastMessageIsInbound: boolean;
+  confermaForm: boolean;
+} {
+  const lastMessageIsInbound = msgsDesc[0]?.direction === 'in';
+  const lastInbound = msgsDesc.find((m) => m.direction === 'in');
+  const lastInboundAtMs = lastInbound ? Date.parse(lastInbound.created_at) : null;
+  const confermaForm = haConfermatoIlForm([...msgsDesc].reverse());
+  return { lastInboundAtMs, lastMessageIsInbound, confermaForm };
 }
 
 /** Testo fisso del follow-up, in voce Mario. */
@@ -153,17 +192,9 @@ export async function runAgendaFollowups(
       .eq('conversation_id', c.id)
       .order('created_at', { ascending: false })
       .limit(MAX_MESSAGES_FOR_DECISION);
-    const msgsDesc = (recentMsgs ?? []) as { direction: string; body: string | null; created_at: string }[];
+    const msgsDesc = (recentMsgs ?? []) as DecisionMsgRow[];
 
-    // Ultimo messaggio in qualsiasi direzione → evita follow-up se il lead ha già
-    // scritto e il backstop sta già gestendo la risposta. Identico a prima: il primo
-    // elemento in ordine decrescente è sempre l'ultimo messaggio, tetto o no.
-    const lastMessageIsInbound = msgsDesc[0]?.direction === 'in';
-    // Ultimo inbound del lead → finestra 24h.
-    const lastInbound = msgsDesc.find((m) => m.direction === 'in');
-    const lastInboundAtMs = lastInbound ? Date.parse(lastInbound.created_at) : null;
-    // haConfermatoIlForm vuole i messaggi in ordine cronologico crescente.
-    const confermaForm = haConfermatoIlForm([...msgsDesc].reverse());
+    const { lastInboundAtMs, lastMessageIsInbound, confermaForm } = datiDecisioneDaMessaggi(msgsDesc);
 
     const decision = decideAgendaFollowup({
       agendaSentAtMs,

@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { decideAgendaFollowup, agendaFollowupText, AGENDA_FOLLOWUP_DELAY_MS } from './agenda-followup';
+import {
+  decideAgendaFollowup,
+  agendaFollowupText,
+  AGENDA_FOLLOWUP_DELAY_MS,
+  datiDecisioneDaMessaggi,
+  type DecisionMsgRow,
+} from './agenda-followup';
 
 const H = 3600_000;
 const base = {
@@ -74,6 +80,76 @@ describe('decideAgendaFollowup — conferma del form', () => {
     expect(decideAgendaFollowup({ ...base, confermaForm: false })).not.toBe('none');
     // con la conferma no: gli direbbe che non risulta, dopo che ha prenotato
     expect(decideAgendaFollowup({ ...base, confermaForm: true })).toBe('none');
+  });
+});
+
+describe('datiDecisioneDaMessaggi', () => {
+  // L'input è in ordine DECRESCENTE (più recente per primo), come torna la query a
+  // Supabase con `.order('created_at', { ascending: false })`.
+  it('lista vuota: nessun segnale', () => {
+    expect(datiDecisioneDaMessaggi([])).toEqual({
+      lastInboundAtMs: null,
+      lastMessageIsInbound: false,
+      confermaForm: false,
+    });
+  });
+
+  it('ultimo messaggio inbound', () => {
+    const msgsDesc: DecisionMsgRow[] = [
+      { direction: 'in', body: 'ciao, ci sono', created_at: '2026-09-16T10:00:00.000Z' },
+      { direction: 'out', body: 'link agenda', created_at: '2026-09-16T09:00:00.000Z' },
+    ];
+    const r = datiDecisioneDaMessaggi(msgsDesc);
+    expect(r.lastMessageIsInbound).toBe(true);
+    expect(r.lastInboundAtMs).toBe(Date.parse('2026-09-16T10:00:00.000Z'));
+    expect(r.confermaForm).toBe(false);
+  });
+
+  it('ultimo messaggio outbound, ma con un inbound più indietro nella lista', () => {
+    const msgsDesc: DecisionMsgRow[] = [
+      { direction: 'out', body: 'ok grazie a presto', created_at: '2026-09-16T11:00:00.000Z' },
+      { direction: 'in', body: 'perfetto', created_at: '2026-09-16T10:00:00.000Z' },
+      { direction: 'out', body: 'link agenda', created_at: '2026-09-16T09:00:00.000Z' },
+    ];
+    const r = datiDecisioneDaMessaggi(msgsDesc);
+    expect(r.lastMessageIsInbound).toBe(false);
+    expect(r.lastInboundAtMs).toBe(Date.parse('2026-09-16T10:00:00.000Z'));
+  });
+
+  it('conferma del form con la domanda di verifica in mezzo alla lista', () => {
+    // Cronologia vera (crescente): ..., domanda di verifica, "Noemi", messaggio finale.
+    // Qui sotto è già capovolta in ordine decrescente, come la riceve la funzione.
+    const msgsDesc: DecisionMsgRow[] = [
+      { direction: 'out', body: 'Perfetto, ci vediamo lì!', created_at: '2026-09-16T10:02:00.000Z' },
+      { direction: 'in', body: 'Noemi', created_at: '2026-09-16T10:01:00.000Z' },
+      { direction: 'out', body: 'Dimmi, quando hai cliccato su invia, che nome ti è comparso?', created_at: '2026-09-16T10:00:30.000Z' },
+      { direction: 'out', body: 'Ecco il link per prenotare', created_at: '2026-09-16T10:00:00.000Z' },
+    ];
+    expect(datiDecisioneDaMessaggi(msgsDesc).confermaForm).toBe(true);
+  });
+
+  it('nessuna conferma del form: falso', () => {
+    const msgsDesc: DecisionMsgRow[] = [
+      { direction: 'in', body: 'ok grazie', created_at: '2026-09-16T10:01:00.000Z' },
+      { direction: 'out', body: 'Ecco il link per prenotare', created_at: '2026-09-16T10:00:00.000Z' },
+    ];
+    expect(datiDecisioneDaMessaggi(msgsDesc).confermaForm).toBe(false);
+  });
+
+  it('caso limite: l\'unico inbound sta in fondo alla lista (il più vecchio dei letti)', () => {
+    // È esattamente il caso che il tetto MAX_MESSAGES_FOR_DECISION rende raro: qui la
+    // lista letta (dopo il troncamento a monte) contiene comunque l'inbound, in ultima
+    // posizione perché è il più vecchio fra quelli letti.
+    const msgsDesc: DecisionMsgRow[] = [
+      { direction: 'out', body: 'msg 5', created_at: '2026-09-16T14:00:00.000Z' },
+      { direction: 'out', body: 'msg 4', created_at: '2026-09-16T13:00:00.000Z' },
+      { direction: 'out', body: 'msg 3', created_at: '2026-09-16T12:00:00.000Z' },
+      { direction: 'out', body: 'msg 2', created_at: '2026-09-16T11:00:00.000Z' },
+      { direction: 'in', body: 'msg 1, l\'unico inbound', created_at: '2026-09-16T10:00:00.000Z' },
+    ];
+    const r = datiDecisioneDaMessaggi(msgsDesc);
+    expect(r.lastMessageIsInbound).toBe(false);
+    expect(r.lastInboundAtMs).toBe(Date.parse('2026-09-16T10:00:00.000Z'));
   });
 });
 
