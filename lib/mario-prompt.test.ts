@@ -84,8 +84,20 @@ describe('conferme: anticipo e micro-impegni', () => {
     expect(p).toContain('Aspetta il sì, poi manda il link');
   });
 
-  it('fa riscrivere giorno e ora al lead', () => {
-    expect(p).toContain('Confermami tu giorno e ora della call');
+  // Task 4 (2026-09-22): il bot non fa più riscrivere giorno e ora quando li conosce
+  // già (37 lead su 83 li avevano appena scritti loro stessi, due messaggi prima). Ora
+  // si divide in CASO 1 (li sa già: conferma e basta) e CASO 2 (manca l'ora: la chiede,
+  // e SOLO quella, da sola).
+  it('CASO 1: se conosce già giorno e ora non li fa riscrivere al lead, conferma e chiude con ESITO', () => {
+    expect(p).toContain('CASO 1');
+    expect(p).toContain("NON chiedere niente: quella è la data");
+    expect(p).not.toContain('Confermami tu giorno e ora della call');
+  });
+
+  it('CASO 2: se manca l\'ora chiede solo quella, da sola, prima di Noemi e del video', () => {
+    expect(p).toContain('CASO 2');
+    expect(p).toContain('che orario hai scelto sul form?');
+    expect(p).toContain('Quel messaggio va da solo');
   });
 
   it('sul video usa la scelta attiva invece del divieto', () => {
@@ -108,11 +120,15 @@ describe('conferme: anticipo e micro-impegni', () => {
   });
 });
 
-describe('C1: i quattro passaggi della conferma post-appuntamento escono nello stesso turno', () => {
+describe('C1: i passaggi 2, 3 e 4 della conferma post-appuntamento escono sempre insieme nello stesso turno', () => {
   const p = buildMarioSystem('Marta');
 
-  it('istruisce a mandarli tutti nello stesso turno senza aspettare risposta tra un passaggio e l\'altro', () => {
-    expect(p).toContain('manda questi quattro passaggi tutti nello stesso turno');
+  // Task 4 (2026-09-22): il passaggio 1 (giorno e ora) non è più qui dentro, è nel
+  // blocco CASO 1/CASO 2 subito dopo che il lead scrive "Noemi" — vedi describe
+  // 'conferme: anticipo e micro-impegni'. Qui restano solo Noemi, video e FATTO, che
+  // continuano a uscire sempre insieme, senza aspettare risposta fra loro.
+  it('istruisce a mandare i passaggi 2, 3 e 4 sempre insieme senza aspettare risposta tra un passaggio e l\'altro', () => {
+    expect(p).toContain('Escono sempre insieme, uno per riga');
     expect(p).toMatch(/senza aspettare (la )?risposta[^\n]*tra (un passaggio e l'altro|l'uno e l'altro)/);
     expect(p).not.toContain('manda questi quattro passaggi in sequenza');
   });
@@ -143,9 +159,9 @@ describe('C1: i quattro passaggi della conferma post-appuntamento escono nello s
     // passaggio 3 (es. "3. Quando conferma di aver ricevuto:") passerebbe inosservato.
     const KNOWN_ROUTING_LINE = '3. Manda il link video giusto in base alla situazione del lead:';
     // Ancorato al solo titolo di sezione (preceduto e seguito da un a-capo), non a
-    // una qualunque menzione della stringa "CONFERMA POST-APPUNTAMENTO": ora che la
-    // regola tassativa e il tag [APPUNTAMENTO_FISSATO] la citano anche loro (fuori dal
-    // blocco), un indexOf generico prenderebbe la prima occorrenza sbagliata.
+    // una qualunque menzione della stringa "CONFERMA POST-APPUNTAMENTO": la regola
+    // tassativa (REGOLE TASSATIVE, punto 4) la cita anche lei fuori dal blocco, e un
+    // indexOf generico prenderebbe la prima occorrenza sbagliata.
     const block = p.slice(
       p.indexOf('\nCONFERMA POST-APPUNTAMENTO\n'),
       p.indexOf("SE L'APPUNTAMENTO È GIÀ FISSATO")
@@ -159,11 +175,15 @@ describe('C1: i quattro passaggi della conferma post-appuntamento escono nello s
     }
   });
 
-  it('[APPUNTAMENTO_FISSATO] va nello stesso messaggio dei quattro passaggi, mai da solo', () => {
-    expect(p).toContain(
-      'scrivi [APPUNTAMENTO_FISSATO] insieme ai quattro passaggi della CONFERMA POST-APPUNTAMENTO qui sotto, nello stesso messaggio'
-    );
-    expect(p).toContain('non scriverlo mai da solo, senza altro testo visibile');
+  // Task 4 (2026-09-22): non si usa più il tag legacy [APPUNTAMENTO_FISSATO] (senza
+  // data) a questo trigger — è proprio quello a generare l'evento
+  // 'booked_without_outcome' quando il modello non riesce a parsare una data. Ora, sia
+  // in CASO 1 che in CASO 2, si chiude sempre con [ESITO:APPUNTAMENTO|<data>], che porta
+  // la data con sé.
+  it('CASO 1 e CASO 2 chiudono sempre con [ESITO:APPUNTAMENTO|<data>], mai con [APPUNTAMENTO_FISSATO] da solo', () => {
+    expect(p).toContain('[ESITO:APPUNTAMENTO|<quella data in ISO 8601 con fuso>]');
+    expect(p).toContain('[ESITO:APPUNTAMENTO|<giorno concordato + ora che ti ha detto, in ISO 8601 con fuso>]');
+    expect(p).not.toContain('scrivi [APPUNTAMENTO_FISSATO] insieme ai quattro passaggi');
     expect(p).not.toContain('Quando risponde, scrivi: [APPUNTAMENTO_FISSATO]');
   });
 
@@ -175,11 +195,13 @@ describe('C1: i quattro passaggi della conferma post-appuntamento escono nello s
 
   it('REGOLE TASSATIVE, punto 4 (UNA SOLA DOMANDA): nomina esplicitamente l\'eccezione della CONFERMA POST-APPUNTAMENTO', () => {
     // Senza questa eccezione una regola "non violarle MAI" ("aspetta sempre la
-    // risposta prima di continuare") confligge con l'istruzione di mandare i quattro
-    // passaggi della conferma nello stesso turno: il modello risolverebbe il conflitto
-    // fermandosi dopo il primo passaggio, riaprendo il bug di C1.
+    // risposta prima di continuare") confligge con l'istruzione di mandare i passaggi
+    // 2, 3 e 4 della conferma nello stesso turno: il modello risolverebbe il conflitto
+    // fermandosi dopo il primo, riaprendo il bug di C1. Da task 4 l'eccezione è ristretta
+    // ai soli passaggi 2-4 (non più "i quattro passaggi"): il passaggio 1 (giorno e ora)
+    // in CASO 2 aspetta davvero la risposta, di proposito.
     expect(p).toContain(
-      "Aspetta sempre la risposta prima di continuare. Unica eccezione: i quattro passaggi della CONFERMA POST-APPUNTAMENTO, che escono tutti insieme nello stesso turno."
+      "Aspetta sempre la risposta prima di continuare. Unica eccezione: i passaggi 2, 3 e 4 della CONFERMA POST-APPUNTAMENTO, che escono sempre insieme nello stesso turno."
     );
   });
 });
