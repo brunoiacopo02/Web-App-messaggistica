@@ -12,11 +12,11 @@ import {
   resolveOutcomeAction,
 } from './bot-outcome-rules';
 import { bookingBlackout } from './booking-blackout';
-import { estraiPeriodo } from './periodo-richiamo';
 import { categoriaPerCrm, disponibilitaDalTesto, motivoRichiesta } from './contatti-umani';
 import { noteFingerprint, divergiChiaveDaNotePrecedenti, type NotaCrmPrecedente } from './note-dedup';
 import {
   classificaRichiamo,
+  periodoDaCongedo,
   buildRichiamoRestituitoNote,
   buildRichiamoScartatoReason,
   RICHIAMO_FASCIA_APERTA_GG,
@@ -592,7 +592,11 @@ export async function registraEsitoSenzaLeadId(
   //    parole si registra comunque (senza data); senza, non e' un esito e il bot deve
   //    poter ancora chiedere al lead quando gli va bene.
   const dataCheck = args.outcome === 'RICHIAMO' ? checkDataRichiamo(args.date, Date.now()) : { ok: true as const };
-  const periodo = !dataCheck.ok ? estraiPeriodo(args.note) : null;
+  // `periodoDaCongedo` e non `estraiPeriodo` (vedi il suo commento): qui un periodo
+  // riconosciuto porta dritto a chiudere la conversazione, e su un adottato non c'e'
+  // nessun GDO che lo riceve indietro — chiuderla vuol dire che non lo tocca piu'
+  // nessuno. Solo un "quando" della fascia `scarta` giustifica quella fine.
+  const periodo = !dataCheck.ok ? periodoDaCongedo(args.note, Date.now()) : null;
   if (!dataCheck.ok && !periodo) {
     const decisione = await registra('richiamo_senza_data', {
       motivo: dataCheck.motivo,
@@ -896,7 +900,13 @@ export async function sendOutcome(
   // il lead ha detto QUANDO con parole sue ("a settembre"), quelle parole viaggiano nel
   // campo `periodo` e il CRM lo registra come RICHIAMO vero. Nessuna deduzione: senza
   // un'espressione di tempo nelle sue parole si resta sulla nota di prima.
-  const periodo = !dataCheck.ok ? estraiPeriodo(args.note) : null;
+  // Stessa ragione del gemello in `registraEsitoSenzaLeadId`: qui si arriva solo con
+  // l'appuntamento gia' in piedi (`holdsAppointment`), dove un periodo riconosciuto
+  // porta a `resolveOutcomeAction` → `locked` → NOTA e chat chiusa. Chiuderla a chi ha
+  // la call fissata e chiede solo di spostarla e' esattamente cio' che
+  // `lib/mario-prompt.ts` vieta di dirgli ("non ti scrivo piu'"): finche' il "quando"
+  // non e' da congedo vale come "nessun periodo", nota generica e conversazione aperta.
+  const periodo = !dataCheck.ok ? periodoDaCongedo(args.note, Date.now()) : null;
   if (!dataCheck.ok && periodo) {
     await supabase.from('event_log').insert({
       type: 'richiamo_con_periodo',

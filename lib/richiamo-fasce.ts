@@ -56,11 +56,17 @@ function giorniPerUnita(unita: string): number {
  *  o un'espressione vaga come "qualche settimana" — quelle le assegna
  *  `fasciaPeriodoVago`, PRIMA di arrivare qui: vedi `classificaRichiamo`).
  *  "un paio di" vale sempre 2, con la stessa precisione di "due": non è
- *  un'espressione vaga, è solo scritta in tre parole invece di una. */
+ *  un'espressione vaga, è solo scritta in tre parole invece di una. Stesso discorso
+ *  per "una decina/ventina di" (fix round 4): lì il numero c'è — 10 e 20 sono la
+ *  lettura più bassa possibile di quelle parole — quindi il confronto con le soglie
+ *  lo fa `fasciaDaGiorni`, come per ogni altro numero, invece di una fascia costante
+ *  scritta a mano che resterebbe ferma se un giorno le soglie si spostassero. */
 function periodoInGiorni(periodo: string): number | null {
   const t = periodo.toLowerCase();
   const paio = t.match(/\b(?:tra|fra)\s+un\s+paio\s+di\s+(giorn[oi]|settiman[ae]|mes[ei])\b/);
   if (paio) return 2 * giorniPerUnita(paio[1]);
+  const decina = t.match(/\b(?:tra|fra)\s+una\s+(decina|ventina)\s+di\s+(giorn[oi]|settiman[ae]|mes[ei])\b/);
+  if (decina) return (decina[1] === 'decina' ? 10 : 20) * giorniPerUnita(decina[2]);
   const m = t.match(/\b(?:tra|fra)\s+([a-zà-ù]+|\d{1,3})\s+(giorn[oi]|settiman[ae]|mes[ei])\b/);
   if (m) {
     const grezzo = m[1];
@@ -104,11 +110,12 @@ function fasciaPeriodoVago(periodo: string): FasciaRichiamo | null {
   // "qualche settimana/mese" / "poche settimane" / "pochi mesi": sempre oltre la
   // settimana.
   if (/\b(?:qualche|poch[ei])\s+(?:settiman[ae]|mes[ei])\b/.test(t)) return 'scarta';
-  // "una decina di X" / "una ventina di X" (fix round 3): un ordine di grandezza
-  // già oltre i 7 giorni qualunque sia l'unità — anche la lettura più bassa,
-  // "una decina di giorni", sono già 10: non serve calcolarlo per unità, è
-  // sempre oltre la finestra.
-  if (/\buna\s+(?:decina|ventina)\s+di\s+(?:giorn[oi]|settiman[ae]|mes[ei])\b/.test(t)) return 'scarta';
+  // NB: "una decina/ventina di X" NON sta qui. È l'unica di queste espressioni che un
+  // numero ce l'ha (10, 20), quindi la legge `periodoInGiorni` e la fascia gliela dà
+  // `fasciaDaGiorni` come a qualsiasi altro numero — vedi il commento lì. Fino al fix
+  // round 4 tornava `scarta` come costante, con un ragionamento sul numero scritto nel
+  // commento invece che nel codice: se domani la soglia diventasse 14 giorni, "una
+  // decina di giorni" avrebbe continuato a scartare in silenzio un lead da restituire.
   return null;
 }
 
@@ -171,6 +178,42 @@ export function classificaRichiamo(input: {
     fascia: fasciaPeriodoVago(periodo) ?? fasciaDaGiorni(periodoInGiorni(periodo)),
     quando: periodo,
   };
+}
+
+/**
+ * Il periodo detto a parole, ma SOLO se è così lontano da giustificare la chiusura
+ * della conversazione. Altrimenti `null`, cioè "nessun periodo" per chi chiama.
+ *
+ * Serve ai due chiamanti che usavano `estraiPeriodo` come semaforo binario "c'è un
+ * periodo / non c'è": `sendOutcome` sul lead che ha GIÀ l'appuntamento in piedi, e
+ * `registraEsitoSenzaLeadId` sugli adottati (quelli senza `crm_lead_id`). Per loro un
+ * periodo riconosciuto significa registrare l'esito e chiudere la chat. Finché
+ * `estraiPeriodo` agganciava solo i "quando" espliciti la cosa reggeva; da quando
+ * riconosce anche le formule vicine («tra pochi giorni», «tra un paio di giorni») si è
+ * rovesciata: le stesse parole che sul percorso delle tre fasce lasciano il lead vivo
+ * — chat aperta, o ritorno a un GDO umano — qui gli chiudevano la porta in faccia.
+ *
+ * La regola, scritta una volta sola e in termini di fasce, non di numeri:
+ * - `tieni_aperta` → `null`. È il "quando" vicino: la chat resta aperta ovunque, come
+ *   sul percorso principale.
+ * - `restituisci` → `null` anche qui, e questo è il punto che NON si legge dalle tre
+ *   fasce: su questi due rami non c'è nessuno a cui restituire il lead. L'adottato non
+ *   ha un lead nel CRM da ridare a un GDO, e chi ha già l'appuntamento non è un lead da
+ *   consegnare ma una persona che chiede di spostare la sua call. Lì `restituisci` non
+ *   ha una destinazione: l'unica cosa che resta della chiusura è "non lo tocca più
+ *   nessuno", cioè il lead parcheggiato che questo piano esiste per eliminare.
+ * - `scarta` → il periodo. È la sola fascia in cui la chiusura è voluta: il bot congeda
+ *   il lead (vedi `lib/mario-prompt.ts`, voce di glossario RICHIAMO) e la chat finisce
+ *   davvero lì, con la porta che il lead può riaprire scrivendo lui.
+ *
+ * Le soglie non sono riscritte qui: le applica `classificaRichiamo`, unica scala.
+ */
+export function periodoDaCongedo(
+  parole: string | undefined,
+  nowMs: number,
+): string | null {
+  const { fascia, quando } = classificaRichiamo({ periodoWords: parole, nowMs });
+  return fascia === 'scarta' ? quando : null;
 }
 
 /** La nota che accompagna la restituzione al GDO. Dice il fatto e il giorno, e non

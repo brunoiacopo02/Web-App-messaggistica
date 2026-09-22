@@ -3,6 +3,7 @@ import {
   RICHIAMO_FASCIA_APERTA_GG,
   RICHIAMO_FASCIA_RESTITUZIONE_GG,
   classificaRichiamo,
+  periodoDaCongedo,
   buildRichiamoRestituitoNote,
   buildRichiamoScartatoReason,
 } from './richiamo-fasce';
@@ -304,5 +305,64 @@ describe('i testi', () => {
   it('il motivo di scarto regge senza un quando', () => {
     expect(buildRichiamoScartatoReason({ quando: null }))
       .toBe("vuole essere risentito più avanti: il bot aveva l'istruzione di dirgli che può riscrivere lui quando sarà il momento");
+  });
+});
+
+// Fix round 4 (22/09/2026), punto 3. "una decina/ventina di" è l'unica delle
+// espressioni senza numero preciso che un numero ce l'ha: 10 e 20 sono la lettura più
+// bassa possibile di quelle parole. Prima tornava `scarta` come costante, con il
+// ragionamento sul numero scritto nel commento invece che nel codice — se domani
+// RICHIAMO_FASCIA_RESTITUZIONE_GG diventasse 14, "una decina di giorni" avrebbe
+// continuato a scartare in silenzio un lead da restituire. Ora passa da
+// `fasciaDaGiorni` come qualsiasi altro numero, e il modo di dimostrarlo senza
+// toccare le soglie è che dica sempre la stessa cosa della cifra equivalente.
+describe('fix round 4: "una decina/ventina di" è agganciata alla scala, non a una costante', () => {
+  const stessaFasciaDi = (vago: string, cifra: string) => {
+    const a = classificaRichiamo({ leadWords: vago, nowMs: NOW }).fascia;
+    const b = classificaRichiamo({ leadWords: cifra, nowMs: NOW }).fascia;
+    expect(a).toBe(b);
+    return a;
+  };
+
+  it('"una decina di giorni" vale quanto "10 giorni"', () => {
+    expect(stessaFasciaDi('fra una decina di giorni', 'fra 10 giorni')).toBe('scarta');
+  });
+
+  it('"una ventina di giorni" vale quanto "20 giorni"', () => {
+    expect(stessaFasciaDi('tra una ventina di giorni', 'tra 20 giorni')).toBe('scarta');
+  });
+
+  it('"una decina di settimane" vale quanto "10 settimane"', () => {
+    expect(stessaFasciaDi('tra una decina di settimane', 'tra 10 settimane')).toBe('scarta');
+  });
+
+  it('"una ventina di mesi" vale quanto "20 mesi"', () => {
+    expect(stessaFasciaDi('tra una ventina di mesi', 'tra 20 mesi')).toBe('scarta');
+  });
+});
+
+// Fix round 4 (22/09/2026), punti 1 e 2: la porta che i due percorsi fuori dalle tre
+// fasce usavano come semaforo binario. Vedi il commento sulla funzione per il perché
+// `restituisci` qui vale come "non chiudere": su quei due rami non c'è nessuno a cui
+// restituire il lead.
+describe('periodoDaCongedo: solo un "quando" da congedo giustifica la chiusura', () => {
+  it('un "quando" vicino non è un periodo da registrare', () => {
+    expect(periodoDaCongedo('tra un paio di giorni', NOW)).toBeNull();
+    expect(periodoDaCongedo('richiamami tra due giorni', NOW)).toBeNull();
+  });
+
+  it('nemmeno un "quando" della fascia di restituzione: non ci sono GDO a cui ridarlo', () => {
+    expect(periodoDaCongedo('tra pochi giorni', NOW)).toBeNull();
+    expect(periodoDaCongedo('fra cinque giorni', NOW)).toBeNull();
+  });
+
+  it('un "quando" oltre la finestra torna le parole del lead', () => {
+    expect(periodoDaCongedo('ci risentiamo a novembre', NOW)).toBe('a novembre');
+    expect(periodoDaCongedo('fra una decina di giorni', NOW)).toBe('fra una decina di giorni');
+  });
+
+  it('nessuna parola, nessun periodo', () => {
+    expect(periodoDaCongedo(undefined, NOW)).toBeNull();
+    expect(periodoDaCongedo('non so, vediamo', NOW)).toBeNull();
   });
 });

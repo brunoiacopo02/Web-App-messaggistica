@@ -113,4 +113,16 @@ describe('estraiPeriodo', () => {
     expect(estraiPeriodo('ho poche cose da fare oggi')).toBeNull();
     expect(estraiPeriodo('una decina di persone erano in sala')).toBeNull();
   });
+
+  // Fix round 4: i negativi qui sopra cadono TUTTI perché manca sia l'ancora
+  // (`tra`/`fra`) sia l'unità ("minuti", "cose", "persone"), quindi passerebbero anche
+  // con una regex molto più sciatta — non dimostrano che l'ancora serva. Questi due
+  // hanno l'unità giusta e il quantificatore giusto, e sono `null` per la SOLA ragione
+  // che nessuno ha detto "tra"/"fra". Serve davvero: `fasciaPeriodoVago`
+  // (lib/richiamo-fasce.ts) scrive le sue regex senza quell'ancora ed è corretta solo
+  // perché riceve un output già ancorato da qui.
+  it("l'ancora tra/fra è obbligatoria: senza, un'unità di tempo non è un periodo", () => {
+    expect(estraiPeriodo('ho pochi giorni di ferie')).toBeNull();
+    expect(estraiPeriodo('ho qualche giorno libero')).toBeNull();
+  });
 });

@@ -1827,3 +1827,54 @@ describe('RICHIAMO restituito: la seconda restituzione resta tracciabile (22/09/
     expect(query).toEqual([['type', 'richiamo_restituito'], ['payload->>conversationId', '17']]);
   });
 });
+
+/**
+ * Fix round 4 (22/09/2026): la stessa frase, la stessa risposta.
+ *
+ * `estraiPeriodo` ha tre chiamanti, ma solo uno (il ramo delle tre fasce, qui sopra)
+ * passa da `classificaRichiamo`. Gli altri due lo usano come semaforo binario "c'e' un
+ * periodo / non c'e'", e da quando i pattern riconoscono anche le formule vicine
+ * («tra pochi giorni», «un paio di», «qualche») l'effetto si e' rovesciato proprio li':
+ * una frase che sul percorso principale vale `tieni_aperta` chiudeva la chat sugli
+ * altri due. Questi due test partono dalla stessa frase e chiedono la stessa cosa —
+ * che la conversazione NON si chiuda.
+ */
+describe('un "quando" vicino non chiude la chat nemmeno fuori dalle tre fasce (fix round 4)', () => {
+  // Il caso piu' grave: la persona ha la call in piedi e chiede solo di spostarla di
+  // qualche giorno. Chiuderle la chat significa smettere di risponderle proprio dove
+  // `lib/mario-prompt.ts` prescrive di non dirle mai che non le scriveremo piu'.
+  it('appuntamento gia\' fissato + "spostiamola tra pochi giorni": chat aperta, nessun ai_status closed', async () => {
+    const { supabase, calls } = makeSupabase({
+      crm_lead_id: 'lead-vicino-1',
+      bot_outcome: 'APPUNTAMENTO',
+      bot_scheduled_at: isoFraGiorni(1),
+    });
+
+    const r = await sendOutcome(supabase, 11, {
+      outcome: 'RICHIAMO',
+      note: 'vuole spostare la call, dice tra pochi giorni',
+      leadWords: 'possiamo spostarla tra pochi giorni?',
+    });
+
+    expect(r.keepOpen).toBe(true);
+    expect(calls.updates.some((u) => u.ai_status === 'closed')).toBe(false);
+    expect(calls.events.some((e) => e.type === 'richiamo_con_periodo')).toBe(false);
+    expect(calls.events.some((e) => e.type === 'richiamo_senza_data')).toBe(true);
+  });
+
+  // Sugli adottati non c'e' nessun GDO a cui restituire il lead: chiudere qui vuol dire
+  // che non lo tocca piu' nessuno, cioe' il lead parcheggiato che questo piano esiste
+  // per eliminare.
+  it('adottato senza crm_lead_id + "risentiamoci tra pochi giorni": non si registra e non si chiude', async () => {
+    const { supabase, calls } = makeSupabase(null);
+
+    const res = await registraEsitoSenzaLeadId(
+      supabase, 7246,
+      { outcome: 'RICHIAMO', note: 'risentiamoci tra pochi giorni' },
+      { botOutcome: null, botScheduledAt: null },
+    );
+
+    expect(res).toEqual({ decisione: 'richiamo_senza_data', chiudi: false });
+    expect(calls.updates).toHaveLength(0);
+  });
+});
