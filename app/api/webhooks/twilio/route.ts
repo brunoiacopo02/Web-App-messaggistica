@@ -10,8 +10,13 @@ import { handleGdoDeliveryUpdate } from '@/lib/send-agenda-gdo';
 import { sendCrmNota } from '@/lib/bot-outcome';
 import { buildBotRipresoNote } from '@/lib/bot-outcome-rules';
 import { segnalaRispostaDopoTerzoNr } from '@/lib/risposta-post-nr';
-import { classificaPrimoMessaggio, isMarkerPulsanteWebinar } from '@/lib/primo-messaggio';
-import { LANCIO_SLUG, pulsanteRiportaInPostPitch, pulsanteRiapreChat, pulsanteScriveFase, serveNotaRestituzione } from '@/lib/lancio-fase';
+import {
+  classificaPrimoMessaggio, isMarkerPulsanteWebinar, isMarkerLinkSviluppatore, LANCIO_INGRESSO_LINK_SVILUPPATORE,
+} from '@/lib/primo-messaggio';
+import {
+  LANCIO_SLUG, pulsanteRiportaInPostPitch, pulsanteRiapreChat, pulsanteScriveFase, serveNotaRestituzione,
+  linkSviluppatoreEntraNelLancio,
+} from '@/lib/lancio-fase';
 import { impostaFaseLancio, marcaNotaRestituzione } from '@/lib/lancio-db';
 import { notaInboundDopoRestituzione } from '@/lib/lancio-restituzioni';
 import { getLancioSettings } from '@/lib/lancio-settings';
@@ -457,6 +462,43 @@ export async function POST(req: NextRequest) {
               scrittoIl: primoRigaInbound?.created_at ?? now,
             }));
           }
+        }
+      }
+
+      // Link "professione dello Sviluppatore AI" (PO 24/09/2026): chi ci scrive da li'
+      // entra nel lancio gia' in fase `chiuso`, cioe' Mario standard col video della live
+      // (`lancioStandardDrain`) e la nota che chiede se l'ha vista. Sta DOPO l'adozione
+      // perche' la chat appena adottata deve risultare gia' di Mario, e PRIMA del drain
+      // perche' il drain deve trovare la fase scritta. Il pulsante del webinar, se c'e',
+      // vince: quella chat l'ha gia' presa il blocco qui sopra.
+      if (conv && !markerPulsante && isMarkerLinkSviluppatore(messageBody) && linkSviluppatoreEntraNelLancio({
+        lancioSlug: conv.lancio_slug,
+        aiOwner: conv.ai_owner,
+        aiPausedAt: conv.ai_paused_at,
+        handedOffAt: conv.handed_off_at,
+      })) {
+        // Compare-and-set sullo slug: due inbound in volo insieme scrivono la fase una volta sola.
+        const { data: entrate, error: erroreLink } = await supabase.from('conversations')
+          .update({ lancio_slug: LANCIO_SLUG, lancio_ingresso: LANCIO_INGRESSO_LINK_SVILUPPATORE })
+          .eq('id', conversationId).is('lancio_slug', null).select('id');
+        if (erroreLink) {
+          await supabase.from('event_log').insert({
+            type: 'lancio_link_colonne_non_scritte',
+            payload: { conversationId, phone, errore: erroreLink.message } as never,
+            message: `[lancio] conv ${conversationId}: link Sviluppatore AI, colonne del lancio NON scritte — ${erroreLink.message}`,
+            level: 'warn',
+          });
+        } else if (entrate && entrate.length > 0) {
+          await impostaFaseLancio(supabase, conversationId, 'chiuso');
+          conv.lancio_slug = LANCIO_SLUG;
+          conv.lancio_ingresso = LANCIO_INGRESSO_LINK_SVILUPPATORE;
+          conv.lancio_fase = 'chiuso';
+          await supabase.from('event_log').insert({
+            type: 'lancio_link_sviluppatore',
+            payload: { conversationId } as never,
+            message: `[lancio] ${phone} ha scritto dal link "professione dello Sviluppatore AI" (conv ${conversationId})`,
+            level: 'info',
+          });
         }
       }
 

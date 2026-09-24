@@ -47,3 +47,14 @@ oppure, subito dopo il deploy, dalla pagina `/fenice/impostazioni` (admin). Poi:
 - Il cron `adotta-mai-risposti` e' manuale (POST con `esegui`) e bypassa `INBOUND_ADOPTION_ENABLED` per disegno.
 - Mittente secondario (Task 11 del piano B4): non implementato; quando si fa, allinearsi a `lib/twilio-account.ts` (`TWILIO_AUTH_TOKEN_2`) dell'altra sessione.
 - PROSSIMO LAVORONE dopo il lancio: altri numeri per il bot (ne parla Bruno).
+
+## Link "professione dello Sviluppatore AI" (24/09/2026)
+
+Link pubblicitario: `https://wa.me/393520413199?text=Ciao%2C%20ho%20visto%20la%20professione%20dello%20Sviluppatore%20AI%20e%20vorrei%20pi%C3%B9%20informazioni`
+
+- Riconosciuto su "professione dello sviluppatore ai" (`lib/primo-messaggio.ts`), sempre acceso, niente interruttore.
+- Persona nuova: adottata con provenienza `Lancio Web Dev AI` (sul CRM: bucket del lancio, ingresso "pulsante_webinar" perche' il CRM conosce solo quello).
+- La chat entra nel lancio in fase `chiuso` con `lancio_ingresso='link_sviluppatore'`: Mario standard, niente Zoom/follow-up/restituzioni del lancio.
+- Nota di Mario: dopo `lancio_evento_at` chiede se ha visto la live e manda `lancio_video_live_link`; prima della live non la nomina (scelta (a) del PO). Si somma alla dichiarazione IA.
+- Chat gia' nel lancio, restituite, in pausa, passate a umano o non adottabili: non si toccano.
+- Evento `lancio_link_sviluppatore` in `event_log`.

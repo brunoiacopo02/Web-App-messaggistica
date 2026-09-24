@@ -18,8 +18,11 @@ import { confermaVideoVisto } from './video-visto';
 import { notaPrimoContatto } from './primo-contatto-note';
 import { haCongedo, lancioInCorso } from './lancio-fase';
 import { eseguiTurnoLancio } from './lancio-turno';
-import { lancioStandardDrain, lancioStandardContextNote } from './lancio-followup';
-import { getLancioSettings } from './lancio-settings';
+import {
+  lancioStandardDrain, lancioStandardContextNote, linkSviluppatoreContextNote, eventoLancioPassato,
+} from './lancio-followup';
+import { LANCIO_INGRESSO_LINK_SVILUPPATORE } from './primo-messaggio';
+import { getLancioSettings, type LancioSettings } from './lancio-settings';
 import { alertUnaVolta } from './alert-una-volta';
 import type { LancioInfo } from './lancio-crm';
 import { mittenteDiConversazione } from './mittente';
@@ -361,7 +364,7 @@ export async function drainMarioReplies(
     // conversazione c'e' gia' un appuntamento in piedi, e lo declasserebbe.
     // `wa_number` e' il numero con cui questa chat e' nata: ogni bolla del turno — le
     // risposte di Mario, il video del GDO, i turni del lancio — deve partire da li'.
-    .select('id, ai_started_at, crm_lead_id, bot_outcome, bot_scheduled_at, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, gdo_appuntamento_at, lancio_slug, lancio_fase, lancio_info, wa_number, leads(first_name)')
+    .select('id, ai_started_at, crm_lead_id, bot_outcome, bot_scheduled_at, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, gdo_appuntamento_at, lancio_slug, lancio_fase, lancio_ingresso, lancio_info, wa_number, leads(first_name)')
     .single();
   // PGRST116 = nessuna riga: e' il caso NORMALE (conversazione non claimabile, o
   // lucchetto di un altro drain) e non va segnalato. Qualunque altro errore invece qui
@@ -467,7 +470,9 @@ export async function drainMarioReplies(
     leads?: { first_name?: string | null } | null;
   };
   // Chat del lancio Web Dev AI: il turno lo fa lib/lancio-turno, non Mario.
-  const lancio = claimed as { lancio_slug?: string | null; lancio_fase?: string | null; lancio_info?: LancioInfo | null };
+  const lancio = claimed as {
+    lancio_slug?: string | null; lancio_fase?: string | null; lancio_ingresso?: string | null; lancio_info?: LancioInfo | null;
+  };
   const gdoAgendaAt = gdo.gdo_agenda_at ?? null;
   const gdoVideoUrl = gdo.gdo_video_url ?? null;
   const postino = gdoAgendaAt !== null;
@@ -542,10 +547,15 @@ export async function drainMarioReplies(
   // Lancio Web Developer AI, dopo il follow-up (spec §5.5): la chat e' di Mario standard e
   // il video di preparazione e' la live editata. Il link si legge una volta per drain, e
   // solo se serve; se manca, Mario usa i quattro video classici e resta la traccia.
+  // Le impostazioni si leggono una volta per drain: servono al video della live e, per chi
+  // arriva dal link "Sviluppatore AI", all'ora dell'evento.
+  let lancioSettings: LancioSettings | undefined;
+  const leggiSettingsLancio = async (): Promise<LancioSettings> =>
+    (lancioSettings ??= await getLancioSettings(supabase));
   let lancioVideoLive: string | null | undefined;
   const leggiVideoLive = async (): Promise<string | null> => {
     if (lancioVideoLive !== undefined) return lancioVideoLive;
-    lancioVideoLive = (await getLancioSettings(supabase)).videoLiveLink;
+    lancioVideoLive = (await leggiSettingsLancio()).videoLiveLink;
     // Una volta per chat, non a ogni drain: la mattina del 6, col link non ancora
     // impostato, ogni messaggio di ogni lead del lancio ne scriveva uno — e un avviso che
     // si ripete non e' un avviso. Il fatto che manchi e' uno solo e si legge alla prima.
@@ -653,7 +663,14 @@ export async function drainMarioReplies(
       // assente" (niente passaggio FATTO) proprio nel turno in cui il video esce.
       // Sui quattro video classici non cambia nulla: sono gia' nella whitelist.
       const lancioStandard = lancioStandardDrain(lancio);
-      const videoLive = lancioStandard ? await leggiVideoLive() : null;
+      // Chi e' entrato dal link "professione dello Sviluppatore AI" (PO 24/09/2026): prima
+      // della live non c'e' nessuna registrazione da mandare, e nessun avviso da scrivere
+      // perche' manca — i video restano i classici e Mario non nomina la live.
+      const daLinkSviluppatore = lancioStandard && lancio.lancio_ingresso === LANCIO_INGRESSO_LINK_SVILUPPATORE;
+      const eventoPassato = daLinkSviluppatore
+        ? eventoLancioPassato((await leggiSettingsLancio()).eventoAt, Date.now())
+        : true;
+      const videoLive = lancioStandard && eventoPassato ? await leggiVideoLive() : null;
       const videoExtra: string[] = videoLive ? [videoLive] : [];
       const linkExtra: string[] = [...videoExtra, ...(gdoVideoUrl ? [gdoVideoUrl] : [])];
       // Un link del video già uscito in questa chat: serve sia alla patch del blocco
@@ -724,6 +741,14 @@ export async function drainMarioReplies(
       // conversazione non e' mai uscito niente da parte nostra, il lead non sa mai
       // con chi sta parlando senza questa nota.
       const notaPrimo = notaPrimoContatto(rows);
+      // Nota del lancio: per chi arriva dal link c'e' sempre (la domanda sulla live), e si
+      // SOMMA alla dichiarazione IA del primo contatto invece di prenderne il posto — quella
+      // persona non ha mai ricevuto niente da noi, ed e' proprio il caso in cui serve.
+      const notaLancio = daLinkSviluppatore
+        ? [linkSviluppatoreContextNote({ videoLiveLink: videoLive, eventoPassato }), notaPrimo].filter(Boolean).join('\n\n')
+        : lancioStandard
+          ? lancioStandardContextNote(videoLive)
+          : null;
       const result = await generateMarioReply(history, {
         personaName: PERSONA_NAME[persona],
         giorniPieni,
@@ -745,8 +770,8 @@ export async function drainMarioReplies(
                 gdoAppuntamentoAt: gdoAppuntamentoAt,
               }),
             }
-          : lancioStandard && lancioStandardContextNote(videoLive)
-            ? { contextNote: lancioStandardContextNote(videoLive) as string }
+          : notaLancio
+            ? { contextNote: notaLancio }
             : notaPrimo
               ? { contextNote: notaPrimo }
               : {}),

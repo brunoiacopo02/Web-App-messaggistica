@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   FASI_FOLLOWUP, inFinestraFollowup, finestraFollowupChiusa, ancoraLancio, inboundDopo, haInteragito,
   ultimoTestoInbound, haDettoNo, decideFollowup, lancioFollowupText, lancioStandardContextNote,
-  lancioStandardDrain, NOTA_CONGEDO_FOLLOWUP, type CandidataFollowup,
+  lancioStandardDrain, NOTA_CONGEDO_FOLLOWUP, type CandidataFollowup, linkSviluppatoreContextNote, eventoLancioPassato,
 } from './lancio-followup';
 import { fineNotteLancio } from './lancio-scelta';
 import type { RigaLancio } from './lancio-fase';
@@ -211,5 +211,42 @@ describe('testi', () => {
     expect(nota).not.toMatch(/prezz|€|euro|sconto/i);
     expect(lancioStandardContextNote(null)).toBeNull();
     expect(lancioStandardContextNote('  ')).toBeNull();
+  });
+});
+
+describe('linkSviluppatoreContextNote — chi scrive dal link "professione dello Sviluppatore AI"', () => {
+  const LIVE = 'https://corso.feniceacademy.it/live-webdev-2026';
+  it('dopo la live: chiede se l ha vista e il video e la registrazione', () => {
+    const nota = linkSviluppatoreContextNote({ videoLiveLink: LIVE, eventoPassato: true });
+    expect(nota).toMatch(/chiedi.*se ha visto la live/i);
+    expect(nota).toContain(LIVE);
+    expect(nota).toContain('conferenza-*');
+    expect(nota).toMatch(/flusso e' quello standard/i);
+    expect(nota).not.toMatch(/prezz|€|euro|sconto/i);
+  });
+  it('dopo la live ma senza link: la domanda resta, i video restano i classici', () => {
+    const nota = linkSviluppatoreContextNote({ videoLiveLink: null, eventoPassato: true });
+    expect(nota).toMatch(/se ha visto la live/i);
+    expect(nota).not.toContain('conferenza-*');
+    expect(nota).not.toContain('http');
+  });
+  it('prima della live: niente domanda sulla live, flusso standard', () => {
+    const nota = linkSviluppatoreContextNote({ videoLiveLink: LIVE, eventoPassato: false });
+    expect(nota).not.toMatch(/se ha visto la live/i);
+    expect(nota).not.toContain(LIVE);
+    expect(nota).toMatch(/flusso e' quello standard/i);
+  });
+});
+
+describe('eventoLancioPassato', () => {
+  const EVT = '2026-10-05T21:00:00+02:00';
+  it('vero dall inizio della live in poi', () => {
+    expect(eventoLancioPassato(EVT, Date.parse('2026-10-05T21:00:00+02:00'))).toBe(true);
+    expect(eventoLancioPassato(EVT, Date.parse('2026-10-08T10:00:00+02:00'))).toBe(true);
+  });
+  it('falso prima, e falso con data assente o illeggibile (niente domanda su una live che non sappiamo)', () => {
+    expect(eventoLancioPassato(EVT, Date.parse('2026-10-05T20:59:00+02:00'))).toBe(false);
+    expect(eventoLancioPassato(null, Date.parse('2026-10-08T10:00:00+02:00'))).toBe(false);
+    expect(eventoLancioPassato('boh', Date.parse('2026-10-08T10:00:00+02:00'))).toBe(false);
   });
 });

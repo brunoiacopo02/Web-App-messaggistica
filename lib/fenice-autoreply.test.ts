@@ -27,6 +27,7 @@ import { OPENING_ENV_KEYS, personaForConversation } from './persona';
 import { eseguiTurnoLancio } from './lancio-turno';
 import { getLancioSettings } from './lancio-settings';
 import { TESTO_POSTO_BLOCCATO } from './lancio-fase';
+import { NOTA_PRIMO_CONTATTO } from './primo-contatto-note';
 
 describe('shouldAutoReply', () => {
   const ok = { toMatchesFenice: true, autoReplyOn: true, aiOwner: 'mario', aiStatus: 'active' };
@@ -2420,5 +2421,55 @@ describe('shouldReopen — veto sulle chat del lancio restituite al pool (C8)', 
   });
   it('il congedo continua a vincere', () => {
     expect(shouldReopen({ ...base, lancioFase: 'chiuso', lancioInfo: { congedo_at: '2026-10-05T23:00:00Z' } })).toBe(false);
+  });
+});
+
+describe('drainMarioReplies — chi scrive dal link "professione dello Sviluppatore AI" (PO 24/09/2026)', () => {
+  const LIVE = 'https://corso.feniceacademy.it/live-webdev-2026';
+  const LINK: FakeMsgRow = {
+    direction: 'in', body: 'Ciao, ho visto la professione dello Sviluppatore AI e vorrei più informazioni', template_sid: null, created_at: '2026-10-07T10:00:00Z',
+  };
+  const riga = (): ClaimedRow => ({
+    id: 9, ai_started_at: null, crm_lead_id: 'crm9', bot_outcome: null,
+    lancio_slug: 'webdev-2026-10', lancio_fase: 'chiuso', lancio_ingresso: 'link_sviluppatore', lancio_info: null,
+  } as ClaimedRow);
+  const rispostaMario = (testo: string) => ({
+    visibleReply: testo, appointmentFixed: false, passToHuman: false, videoWatched: false, outcome: undefined, scheduledAt: undefined,
+  });
+  const nota = () => (vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string }).contextNote ?? '';
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(eseguiTurnoLancio).mockClear();
+    vi.mocked(getLancioSettings).mockClear();
+    vi.useFakeTimers({ toFake: ['Date'] });
+  });
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
+
+  it('dopo la live: Mario (non il turno del lancio) chiede della live, col video della live e la dichiarazione IA', async () => {
+    vi.setSystemTime(new Date('2026-10-07T10:01:00Z'));
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(rispostaMario('Ciao! Hai visto la live del 5 ottobre?'));
+    const { supabase } = makeDrainSupabase(riga(), [LINK]);
+
+    await drainMarioReplies(supabase, 9, '+391234567890', () => 0);
+
+    expect(eseguiTurnoLancio).not.toHaveBeenCalled();
+    expect(nota()).toMatch(/se ha visto la live/i);
+    expect(nota()).toContain(LIVE);
+    expect(nota()).toContain(NOTA_PRIMO_CONTATTO);
+  });
+
+  it('prima della live: niente domanda sulla live, niente video della live, nessun avviso', async () => {
+    vi.setSystemTime(new Date('2026-09-25T10:00:00Z'));
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(rispostaMario('Ciao!'));
+    const { supabase, calls } = makeDrainSupabase(riga(), [{ ...LINK, created_at: '2026-09-25T09:59:00Z' }]);
+
+    await drainMarioReplies(supabase, 9, '+391234567890', () => 0);
+
+    expect(nota()).not.toMatch(/se ha visto la live/i);
+    expect(nota()).not.toContain(LIVE);
+    expect(nota()).toContain(NOTA_PRIMO_CONTATTO);
+    expect(calls.events.map((e) => e.type)).not.toContain('lancio_video_live_link_missing');
   });
 });
