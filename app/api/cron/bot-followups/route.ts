@@ -323,16 +323,19 @@ export async function GET(req: NextRequest) {
   }
 
   // Follow-up agenda (singolo, idempotente) a chi ha ricevuto l'agenda e non ha preso.
+  // Sospeso dal PO il 24/09/2026 per la qualita' dei numeri: riparte solo con '1'.
   let agendaFollowup = { sent: 0, skipped: 0 };
-  try {
-    agendaFollowup = await runAgendaFollowups(supabase, new Date(now));
-  } catch (e) {
-    await supabase.from('event_log').insert({
-      type: 'agenda_followup_error',
-      payload: { error: e instanceof Error ? e.message : 'errore' } as never,
-      message: `[bot-fissatore] errore follow-up agenda: ${e instanceof Error ? e.message : 'errore'}`,
-      level: 'error',
-    });
+  if (process.env.AGENDA_FOLLOWUP_ENABLED === '1') {
+    try {
+      agendaFollowup = await runAgendaFollowups(supabase, new Date(now));
+    } catch (e) {
+      await supabase.from('event_log').insert({
+        type: 'agenda_followup_error',
+        payload: { error: e instanceof Error ? e.message : 'errore' } as never,
+        message: `[bot-fissatore] errore follow-up agenda: ${e instanceof Error ? e.message : 'errore'}`,
+        level: 'error',
+      });
+    }
   }
 
   await supabase.from('event_log').insert({
