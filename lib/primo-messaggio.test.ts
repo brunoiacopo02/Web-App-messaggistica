@@ -5,6 +5,8 @@ import {
   TESTO_PULSANTE_WEBINAR,
   PROVENIENZA_LANCIO_WEBDEV,
   vaRiagganciato,
+  isMarkerLinkSviluppatore,
+  TESTO_LINK_SVILUPPATORE,
 } from './primo-messaggio';
 
 const TELEGRAM = 'Buongiorno, sono nel canale Telegram e mi hanno indicato questo contatto per più informazioni su Fenice Academy';
@@ -110,5 +112,49 @@ describe('classificaPrimoMessaggio — interruttore lancio_pulsante_attivo', () 
     expect(classificaPrimoMessaggio({
       primoInbound: null, inboundCorrente: TESTO_PULSANTE_WEBINAR,
     }).tipo).toBe('lancio_pulsante');
+  });
+});
+
+describe('link "professione dello Sviluppatore AI" (PO 24/09/2026)', () => {
+  it('riconosce la frase precompilata, anche ritoccata o in altro caso', () => {
+    expect(TESTO_LINK_SVILUPPATORE).toBe('Ciao, ho visto la professione dello Sviluppatore AI e vorrei più informazioni');
+    expect(isMarkerLinkSviluppatore(TESTO_LINK_SVILUPPATORE)).toBe(true);
+    expect(isMarkerLinkSviluppatore('ho visto la PROFESSIONE DELLO SVILUPPATORE AI')).toBe(true);
+    expect(isMarkerLinkSviluppatore(`${TESTO_LINK_SVILUPPATORE}
+Sono Luca`)).toBe(true);
+  });
+
+  it('non scatta su chi nomina lo sviluppo o l AI senza la frase, ne su null', () => {
+    expect(isMarkerLinkSviluppatore('Sono uno sviluppatore, mi interessa l AI')).toBe(false);
+    expect(isMarkerLinkSviluppatore(TESTO_PULSANTE_WEBINAR)).toBe(false);
+    expect(isMarkerLinkSviluppatore(null)).toBe(false);
+    expect(isMarkerLinkSviluppatore('')).toBe(false);
+  });
+
+  it('classifica come lancio_link con la provenienza del lancio, sul corrente o sul primo inbound', () => {
+    expect(classificaPrimoMessaggio({ primoInbound: TESTO_LINK_SVILUPPATORE, inboundCorrente: TESTO_LINK_SVILUPPATORE }))
+      .toEqual({ tipo: 'lancio_link', provenienza: PROVENIENZA_LANCIO_WEBDEV });
+    // Chi manda "ciao" e poi incolla la frase, o il contrario: la porta resta il link.
+    expect(classificaPrimoMessaggio({ primoInbound: 'ciao', inboundCorrente: TESTO_LINK_SVILUPPATORE }).tipo).toBe('lancio_link');
+    expect(classificaPrimoMessaggio({ primoInbound: TESTO_LINK_SVILUPPATORE, inboundCorrente: 'quanto costa?' }).tipo).toBe('lancio_link');
+  });
+
+  it('non dipende dall interruttore del pulsante: vale sempre', () => {
+    expect(classificaPrimoMessaggio({
+      primoInbound: TESTO_LINK_SVILUPPATORE, inboundCorrente: TESTO_LINK_SVILUPPATORE, pulsanteAttivo: false,
+    }).tipo).toBe('lancio_link');
+  });
+
+  it('il pulsante del webinar sul corrente vince sul link', () => {
+    expect(classificaPrimoMessaggio({ primoInbound: TESTO_LINK_SVILUPPATORE, inboundCorrente: TESTO_PULSANTE_WEBINAR }).tipo)
+      .toBe('lancio_pulsante');
+  });
+
+  it('il link vince su Telegram: e la porta di adesso', () => {
+    expect(classificaPrimoMessaggio({ primoInbound: TELEGRAM, inboundCorrente: TESTO_LINK_SVILUPPATORE }).tipo).toBe('lancio_link');
+  });
+
+  it('si riaggancia come un inbound normale: lo gestisce Mario standard', () => {
+    expect(vaRiagganciato({ tipo: 'lancio_link', provenienza: PROVENIENZA_LANCIO_WEBDEV })).toBe(true);
   });
 });

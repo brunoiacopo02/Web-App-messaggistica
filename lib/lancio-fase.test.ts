@@ -6,6 +6,7 @@ import {
   inboundDelLotto, ultimoTestoDelLotto, haCongedo, pulsanteRiportaInPostPitch, pulsanteScriveFase,
   pulsanteRiapreChat, serveNotaRestituzione, NOTA_RESTITUZIONE_OGNI_MS, lancioRestituito,
   tagliaRigheDalLancio, lancioRipartePerRiarruolamento, LANCIO_FASE_RIPARTE_AL_RIARRUOLAMENTO,
+  linkSviluppatoreEntraNelLancio,
 } from './lancio-fase';
 
 describe('costanti della spec §3.2 / §5.2', () => {
@@ -382,5 +383,21 @@ describe('lancioRipartePerRiarruolamento — chi riparte e chi si preserva', () 
   // la rete se qualcuno la allarga a `Partial` per far compilare una fase nuova.
   it('ogni fase del lancio ha una voce decisa', () => {
     for (const fase of LANCIO_FASI) expect(typeof LANCIO_FASE_RIPARTE_AL_RIARRUOLAMENTO[fase]).toBe('boolean');
+  });
+});
+
+describe('linkSviluppatoreEntraNelLancio — il link "Sviluppatore AI" porta la chat nel lancio (PO 24/09)', () => {
+  const libera = { lancioSlug: null, aiOwner: 'mario', aiPausedAt: null, handedOffAt: null };
+  it('si su una chat di Mario libera mai entrata nel lancio (appena adottata o gia sua)', () => {
+    expect(linkSviluppatoreEntraNelLancio(libera)).toBe(true);
+  });
+  it('no su una chat gia nel lancio, in qualunque fase: la gestisce gia il lancio (o e del GDO)', () => {
+    expect(linkSviluppatoreEntraNelLancio({ ...libera, lancioSlug: 'webdev-2026-10' })).toBe(false);
+  });
+  it('no se la chat non e di Mario, e in pausa o passata a una persona', () => {
+    expect(linkSviluppatoreEntraNelLancio({ ...libera, aiOwner: null })).toBe(false);
+    expect(linkSviluppatoreEntraNelLancio({ ...libera, aiOwner: 'gdo' })).toBe(false);
+    expect(linkSviluppatoreEntraNelLancio({ ...libera, aiPausedAt: '2026-10-06T10:00:00Z' })).toBe(false);
+    expect(linkSviluppatoreEntraNelLancio({ ...libera, handedOffAt: '2026-10-06T10:00:00Z' })).toBe(false);
   });
 });

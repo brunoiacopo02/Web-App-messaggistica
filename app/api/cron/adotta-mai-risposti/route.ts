@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { fetchAllRows } from '@/lib/supabase/paginate';
 import { sendTemplateAndLog } from '@/lib/messaging';
-import { classificaPrimoMessaggio, vaRiagganciato } from '@/lib/primo-messaggio';
+import { classificaPrimoMessaggio, vaRiagganciato, LANCIO_INGRESSO_LINK_SVILUPPATORE } from '@/lib/primo-messaggio';
 import { LANCIO_SLUG } from '@/lib/lancio-fase';
 import { impostaFaseLancio } from '@/lib/lancio-db';
 import { getLancioSettings } from '@/lib/lancio-settings';
@@ -203,6 +203,22 @@ export async function POST(req: NextRequest) {
           type: 'lancio_pulsante',
           payload: { conversationId: c.id, giaDiMario: false, daCron: 'adotta-mai-risposti' } as never,
           message: `[lancio] ${l.phone} aveva premuto il pulsante del webinar e non gli ha mai risposto nessuno (conv ${c.id})`,
+          level: 'info',
+        });
+      }
+
+      // Ha scritto dal link "professione dello Sviluppatore AI" (PO 24/09/2026): entra nel
+      // lancio in fase `chiuso` come fa il webhook, cosi' quando risponde al riaggancio il
+      // drain usa la nota della live e il suo video. Lo slug e' nullo per costruzione.
+      if (esito.tipo === 'lancio_link') {
+        await admin.from('conversations')
+          .update({ lancio_slug: LANCIO_SLUG, lancio_ingresso: LANCIO_INGRESSO_LINK_SVILUPPATORE })
+          .eq('id', c.id);
+        await impostaFaseLancio(admin, c.id, 'chiuso');
+        await admin.from('event_log').insert({
+          type: 'lancio_link_sviluppatore',
+          payload: { conversationId: c.id, daCron: 'adotta-mai-risposti' } as never,
+          message: `[lancio] ${l.phone} aveva scritto dal link "professione dello Sviluppatore AI" e non gli ha mai risposto nessuno (conv ${c.id})`,
           level: 'info',
         });
       }

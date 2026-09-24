@@ -130,6 +130,28 @@ export function pulsanteScriveFase(i: {
   return { scrive: false, motivo: 'adozione_spenta' };
 }
 
+/**
+ * Il link "professione dello Sviluppatore AI" (PO 24/09/2026) porta questa chat nel lancio?
+ *
+ * Chi entra dal link non passa dal pitch ne' dalla lista: va dritto a Mario standard col
+ * video della live, cioe' nella stessa condizione di chi ha risposto al follow-up del
+ * giorno dopo (fase `chiuso`, vedi `lancioStandardDrain`). Si scrive solo:
+ *  - su una chat di Mario libera (appena adottata dal webhook, o gia' sua): una chat senza
+ *    padrone, in pausa o passata a una persona resta com'e', come per il pulsante;
+ *  - su una chat MAI entrata nel lancio: chi e' gia' dentro lo sta gestendo il lancio, e
+ *    un `restituito` e' del GDO (ruling C8). Riscriverle vorrebbe dire togliere la chat a
+ *    chi ce l'ha.
+ */
+export function linkSviluppatoreEntraNelLancio(c: {
+  lancioSlug: string | null;
+  aiOwner: string | null;
+  aiPausedAt?: string | null;
+  handedOffAt?: string | null;
+}): boolean {
+  if (c.lancioSlug) return false;
+  return c.aiOwner === 'mario' && !c.aiPausedAt && !c.handedOffAt;
+}
+
 /** Le fasi che questo blocco (B1) sa gestire nel turno. Le altre arrivano con B4/B5. */
 export const LANCIO_FASI_B1: readonly LancioFase[] = ['attesa', 'posto_bloccato'];
 export const FASI_GESTITE_B1: ReadonlySet<string> = new Set<string>(LANCIO_FASI_B1);

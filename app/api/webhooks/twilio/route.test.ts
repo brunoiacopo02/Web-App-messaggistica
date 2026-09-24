@@ -30,6 +30,8 @@ const stato = {
   updates: [] as { valori: Riga; filtri: Record<string, unknown> }[],
   /** Il numero su cui vive la chat, null = non ancora scritto. */
   waNumberChat: null as string | null,
+  /** Righe tornate dal compare-and-set sullo slug del link Sviluppatore AI. */
+  linkEntrate: [{ id: 7 }] as Riga[],
 };
 
 function from(table: string) {
@@ -58,6 +60,7 @@ function from(table: string) {
       stato.updates.push({ valori: s.valori as Riga, filtri: { ...s.filtri } });
       // Il compare-and-set dell'adozione: `.is('ai_owner', null)` + `.select('id')`.
       if ('is:ai_owner' in s.filtri) return { data: stato.adottate, error: null };
+      if ('is:lancio_slug' in s.filtri) return { data: stato.linkEntrate, error: null };
       return { data: null, error: null };
     }
     if (s.colonne.includes('unread_count')) {
@@ -122,7 +125,7 @@ import { NextRequest } from 'next/server';
 import { POST } from './route';
 import { pushLeadEntrante } from '@/lib/lead-entrante';
 import { getLancioSettings } from '@/lib/lancio-settings';
-import { TESTO_PULSANTE_WEBINAR } from '@/lib/primo-messaggio';
+import { TESTO_PULSANTE_WEBINAR, TESTO_LINK_SVILUPPATORE } from '@/lib/primo-messaggio';
 import { sendCrmNota } from '@/lib/bot-outcome';
 import { drainMarioReplies } from '@/lib/fenice-autoreply';
 
@@ -160,6 +163,7 @@ beforeEach(() => {
   stato.eventi = [];
   stato.updates = [];
   stato.waNumberChat = null;
+  stato.linkEntrate = [{ id: 7 }];
   vi.mocked(pushLeadEntrante).mockClear();
 });
 
@@ -349,5 +353,60 @@ describe('il numero della chat non si sposta', () => {
     const avviso = eventi('inbound_su_altro_numero');
     expect(avviso).toHaveLength(1);
     expect(avviso[0].payload).toMatchObject({ numeroChat: FENICE, numeroEntrante: ALTRO });
+  });
+});
+
+describe('link "professione dello Sviluppatore AI" (PO 24/09/2026)', () => {
+  const faseScritta = () => stato.updates.find((u) => 'lancio_fase' in u.valori)?.valori.lancio_fase;
+
+  it('persona nuova: adottata come lancio, entra in fase chiuso con ingresso link_sviluppatore', async () => {
+    stato.primoInbound = { body: TESTO_LINK_SVILUPPATORE, created_at: '2026-10-06T10:00:00Z' };
+    await inbound(TESTO_LINK_SVILUPPATORE);
+    expect(stato.updates.find((u) => 'crm_funnel' in u.valori)?.valori.crm_funnel).toBe('Lancio Web Dev AI');
+    expect(pushLeadEntrante).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(pushLeadEntrante).mock.calls[0][1]).toMatchObject({ provenienza: 'Lancio Web Dev AI' });
+    const slug = updateConSlug();
+    expect(slug).toHaveLength(1);
+    expect(slug[0].valori).toEqual({ lancio_slug: 'webdev-2026-10', lancio_ingresso: 'link_sviluppatore' });
+    expect(slug[0].filtri['is:lancio_slug']).toBeNull();
+    expect(faseScritta()).toBe('chiuso');
+    expect(eventi('lancio_link_sviluppatore')).toHaveLength(1);
+  });
+
+  it('non dipende dall interruttore del pulsante (spento nel mock di default)', async () => {
+    await inbound(TESTO_LINK_SVILUPPATORE);
+    expect(faseScritta()).toBe('chiuso');
+  });
+
+  it('chat gia nel lancio: non si tocca niente', async () => {
+    Object.assign(stato.conv, {
+      ai_owner: 'mario', ai_status: 'active', lancio_slug: 'webdev-2026-10', lancio_fase: 'posto_bloccato', lancio_ingresso: 'lista',
+    });
+    await inbound(TESTO_LINK_SVILUPPATORE);
+    expect(updateConSlug()).toHaveLength(0);
+    expect(faseScritta()).toBeUndefined();
+    expect(eventi('lancio_link_sviluppatore')).toHaveLength(0);
+  });
+
+  it('chat con una storia e senza padrone (non adottabile): non entra nel lancio', async () => {
+    stato.outbound = 2;
+    await inbound(TESTO_LINK_SVILUPPATORE);
+    expect(updateConSlug()).toHaveLength(0);
+    expect(faseScritta()).toBeUndefined();
+  });
+
+  it('chat in pausa manuale: non entra nel lancio', async () => {
+    Object.assign(stato.conv, { ai_owner: 'mario', ai_status: 'active', ai_paused_at: '2026-10-06T09:00:00Z' });
+    await inbound(TESTO_LINK_SVILUPPATORE);
+    expect(updateConSlug()).toHaveLength(0);
+  });
+
+  it('compare-and-set perso (l altra richiesta l ha gia messa nel lancio): la fase non si riscrive', async () => {
+    Object.assign(stato.conv, { ai_owner: 'mario', ai_status: 'active' });
+    stato.linkEntrate = [];
+    await inbound(TESTO_LINK_SVILUPPATORE);
+    expect(updateConSlug()).toHaveLength(1);
+    expect(faseScritta()).toBeUndefined();
+    expect(eventi('lancio_link_sviluppatore')).toHaveLength(0);
   });
 });

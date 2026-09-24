@@ -10,6 +10,9 @@ import { funnelDaPrimoMessaggio } from './persona';
  *  - il pulsante WhatsApp mostrato la sera del webinar (spec lancio §6.3) → la chat
  *    entra nel lancio in fase `post_pitch`; se nasce adesso, il CRM la crea nel bucket
  *    del lancio;
+ *  - il link "professione dello Sviluppatore AI" (PO 24/09/2026) → la chat entra nel
+ *    lancio gia' in fase `chiuso`, cioe' Mario standard col video della live, e sul CRM
+ *    nasce nel bucket del lancio (stessa provenienza del pulsante);
  *  - tutto il resto → INBOUND, Mario standard.
  *
  * La provenienza Telegram si legge dal PRIMO inbound della conversazione (chi riscrive
@@ -31,15 +34,29 @@ export const TESTO_PULSANTE_WEBINAR = 'Ho seguito la live Web Developer AI e vog
  *  lead che aggiunge una riga o perde l'emoji resta riconosciuto. */
 export const MARKER_PULSANTE_WEBINAR = /live web developer ai/i;
 
+/** Testo precompilato del link wa.me "professione dello Sviluppatore AI" (PO 24/09/2026). */
+export const TESTO_LINK_SVILUPPATORE = 'Ciao, ho visto la professione dello Sviluppatore AI e vorrei più informazioni';
+
+/** Marker del link: la parte che la persona difficilmente tocca, non l'intera frase. */
+export const MARKER_LINK_SVILUPPATORE = /professione dello sviluppatore ai/i;
+
+/** `conversations.lancio_ingresso` di chi entra dal link (accanto a 'lista' e 'pulsante_webinar'). */
+export const LANCIO_INGRESSO_LINK_SVILUPPATORE = 'link_sviluppatore' as const;
+
 export type ProvenienzaLeadEntrante = 'TELEGRAM' | 'INBOUND' | typeof PROVENIENZA_LANCIO_WEBDEV;
 
 export type EsitoPrimoMessaggio =
   | { tipo: 'telegram'; provenienza: 'TELEGRAM' }
   | { tipo: 'inbound'; provenienza: 'INBOUND' }
-  | { tipo: 'lancio_pulsante'; provenienza: typeof PROVENIENZA_LANCIO_WEBDEV };
+  | { tipo: 'lancio_pulsante'; provenienza: typeof PROVENIENZA_LANCIO_WEBDEV }
+  | { tipo: 'lancio_link'; provenienza: typeof PROVENIENZA_LANCIO_WEBDEV };
 
 export function isMarkerPulsanteWebinar(body: string | null | undefined): boolean {
   return MARKER_PULSANTE_WEBINAR.test(body ?? '');
+}
+
+export function isMarkerLinkSviluppatore(body: string | null | undefined): boolean {
+  return MARKER_LINK_SVILUPPATORE.test(body ?? '');
 }
 
 /**
@@ -67,6 +84,11 @@ export function classificaPrimoMessaggio(input: {
 }): EsitoPrimoMessaggio {
   if ((input.pulsanteAttivo ?? true) && isMarkerPulsanteWebinar(input.inboundCorrente)) {
     return { tipo: 'lancio_pulsante', provenienza: PROVENIENZA_LANCIO_WEBDEV };
+  }
+  // Il link non ha interruttore: e' una pubblicita' che gira da subito. Primo O corrente,
+  // come Telegram: chi manda "ciao" e poi incolla la frase e' arrivato comunque da li'.
+  if (isMarkerLinkSviluppatore(input.inboundCorrente) || isMarkerLinkSviluppatore(input.primoInbound)) {
+    return { tipo: 'lancio_link', provenienza: PROVENIENZA_LANCIO_WEBDEV };
   }
   // OR e non solo il primo: un Telegram scritto ORA (dopo un primo messaggio diverso)
   // deve restare TELEGRAM tanto quanto un Telegram scritto all'apertura — altrimenti

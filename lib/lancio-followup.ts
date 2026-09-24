@@ -225,10 +225,51 @@ export function lancioStandardContextNote(videoLiveLink: string | null): string 
 }
 
 /**
+ * Nota di contesto per chi ci scrive dal link "professione dello Sviluppatore AI" (PO
+ * 24/09/2026). Il flusso e' quello standard, come dopo il follow-up; cambiano l'apertura
+ * e il video. Dopo la live Mario chiede se l'ha vista, e il video di preparazione e' la
+ * registrazione. Prima della live (scelta (a) del PO) non la nomina: fissa e basta.
+ * Mai null, a differenza della nota del follow-up: senza link la domanda sulla live
+ * serve lo stesso, e i video restano i quattro classici.
+ */
+export function linkSviluppatoreContextNote(i: { videoLiveLink: string | null; eventoPassato: boolean }): string {
+  const righe = [
+    "CONTESTO LANCIO WEB DEVELOPER AI: questo lead ci ha scritto dal link \"professione dello Sviluppatore AI\", la pubblicita' del percorso Web Developer AI.",
+  ];
+  if (!i.eventoPassato) {
+    righe.push("Il flusso e' quello standard: presentati e fissa la call come sempre. Non nominare nessuna live o webinar.");
+    return righe.join('\n');
+  }
+  righe.push(
+    'Il 5 ottobre abbiamo fatto una live su questo percorso. Nel tuo primo messaggio chiedigli se ha visto la live del 5 ottobre.',
+    "Se l'ha vista, parti da li': chiedigli cosa l'ha colpito e cosa vuole capire meglio. Se non l'ha vista, digli che gli mandi la registrazione.",
+  );
+  const link = i.videoLiveLink?.trim();
+  if (link) {
+    righe.push(
+      `Il video di preparazione da mandargli e' UNO SOLO ed e' la registrazione della live: ${link}`,
+      "Usa questo link al posto dei quattro link conferenza-* del blocco sul video, in ogni punto in cui manderesti il video. Non chiedere se lavora o ha famiglia per scegliere il video: il video e' questo.",
+    );
+  }
+  righe.push("Per il resto il flusso e' quello standard: fissa la call con il consulente come sempre.");
+  return righe.join('\n');
+}
+
+/**
  * La chat e' del lancio ed e' in mano a Mario standard: fase `chiuso` (dopo il
  * follow-up, o dopo il congedo — ma un congedato non arriva al drain: `shouldReopen`
  * lo tiene chiuso). `restituito` NO: quel lead e' del GDO (ruling C8).
  */
 export function lancioStandardDrain(c: { lancio_slug?: string | null; lancio_fase?: string | null }): boolean {
   return !!c.lancio_slug && c.lancio_fase === 'chiuso';
+}
+
+/**
+ * La live del lancio e' gia' iniziata? Da `lancio_evento_at` (app_settings). Assente o
+ * illeggibile = no: meglio non chiedere di una live che non sappiamo se c'e' stata.
+ */
+export function eventoLancioPassato(eventoAt: string | null, nowMs: number): boolean {
+  if (!eventoAt) return false;
+  const t = Date.parse(eventoAt);
+  return !Number.isNaN(t) && nowMs >= t;
 }
