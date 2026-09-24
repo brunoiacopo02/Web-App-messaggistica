@@ -18,8 +18,13 @@ import { estraiPeriodo } from './periodo-richiamo';
 import { paroleDelLead } from './bot-outcome-rules';
 import { formatRomeDateTime, romeDaysBetween } from './rome-time';
 
-/** Entro questi giorni non si chiude niente: la sequenza di follow-up (SEQUENCE_END_DAYS
- *  = 4) lo ripesca da sola, quindi il lead viene davvero riseguito. */
+/** Entro questi giorni non si chiude niente: nessun esito al CRM, la chat resta aperta.
+ *  Quello che succede dopo NON è la sequenza dei 4 giorni (SEQUENCE_END_DAYS vale solo
+ *  per chi non ha mai risposto, Track A): il lead ha risposto, quindi sta sul Track B
+ *  (`decideTrackB` in `lib/sequence.ts`) — un solo nudge free-text a 12-24h di silenzio,
+ *  poi a 96h la restituzione a un GDO come INTERROTTO. Il cron (bot-followups) in quel
+ *  momento rilegge l'evento `richiamo_tenuto_aperto` e mette nella nota dell'INTERROTTO
+ *  `buildRichiamoRestituitoNote`: il GDO sa quando il lead voleva essere risentito. */
 export const RICHIAMO_FASCIA_APERTA_GG = 3;
 
 /** Fin qui il lead torna a un GDO umano, che il richiamo lo può fare davvero.
@@ -94,8 +99,8 @@ function periodoInGiorni(periodo: string): number | null {
  *    non si perde;
  *  - se classifichiamo `tieni_aperta` un "quando" che in realtà era lontano,
  *    il bot ha appena detto al lead (nel prompt, per un "quando" oltre la
- *    settimana) "da qui non ti scrivo più io", e poi la sequenza di
- *    follow-up gli riscrive lo stesso entro 4 giorni: è una promessa rotta a
+ *    settimana) "da qui non ti scrivo più io", e poi il nudge del Track B
+ *    gli riscrive lo stesso entro 24 ore: è una promessa rotta a
  *    una persona vera, non un dettaglio interno.
  *  Nel dubbio si sbaglia dalla parte che non tradisce nessuno: mai
  *  `tieni_aperta` da qui in giù. */
@@ -141,8 +146,8 @@ function fasciaDaGiorni(giorni: number | null): FasciaRichiamo {
  *
  * Una data assente, illeggibile o nel passato NON è un esito: torna `tieni_aperta`. Il
  * chiamante (`sendOutcome`) in quel caso non manda NIENTE al CRM — nessuna nota, nessun
- * esito: la sequenza di follow-up ripesca da sola la conversazione entro
- * `RICHIAMO_FASCIA_APERTA_GG` giorni. Non si deduce mai una data da niente: è esattamente
+ * esito: la chat resta aperta e segue il Track B (nudge a 12-24h, restituzione come
+ * INTERROTTO a 96h — vedi `RICHIAMO_FASCIA_APERTA_GG`). Non si deduce mai una data da niente: è esattamente
  * il bug chiuso il 06/08.
  */
 export function classificaRichiamo(input: {

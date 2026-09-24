@@ -4,6 +4,7 @@ import { sendOutcome } from '@/lib/bot-outcome';
 import { decideFollowupAction, serveCronologia, ultimaAttivitaMs } from '@/lib/bot-followups';
 import { classifyInterrupted } from '@/lib/interrotto-note';
 import { buildConfermaPersaNote } from '@/lib/bot-outcome-rules';
+import { buildRichiamoRestituitoNote } from '@/lib/richiamo-fasce';
 import { haConfermatoIlForm, decidiSuConfermaForm } from '@/lib/conferma-form';
 import type { MarioTurn } from '@/lib/mario';
 import { drainMarioReplies, lastIsUnansweredInbound, isOrphanedReplyingLock, isLockStale, LOCK_TTL_MS, serveRedrive } from '@/lib/fenice-autoreply';
@@ -57,6 +58,34 @@ async function formGiaTrattenuto(
     .contains('payload', { conversationId })
     .limit(1);
   return (data ?? []).length > 0;
+}
+
+/** L'ultimo "quando" registrato su questa conversazione da un `richiamo_tenuto_aperto`
+ *  (la prima delle tre fasce: "sentiamoci fra 2 giorni"), o `null` se non ce n'è.
+ *
+ *  Serve all'INTERROTTO qui sotto. Quella fascia non manda niente al CRM e lascia la
+ *  chat aperta; ma il lead ha risposto, quindi sta sul Track B (`decideTrackB`): un solo
+ *  nudge free-text a 12-24h e poi, a 96h di silenzio, la restituzione come chat
+ *  interrotta. Senza questa lettura il GDO riceveva un INTERROTTO generico e il giorno
+ *  che il lead aveva chiesto andava perso. Il payload è quello scritto da `sendOutcome`
+ *  (`lib/bot-outcome.ts`): `{ conversationId, crmLeadId, date, quando }`. Vince l'ultimo
+ *  "quando" non nullo: se il lead l'ha cambiato, conta quello più recente. */
+async function quandoRichiamoTenutoAperto(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+  conversationId: number,
+): Promise<string | null> {
+  const { data } = await supabase
+    .from('event_log')
+    .select('payload, created_at')
+    .eq('type', 'richiamo_tenuto_aperto')
+    .contains('payload', { conversationId })
+    .order('created_at', { ascending: false })
+    .limit(20);
+  for (const r of (data ?? []) as { payload: { quando?: unknown } | null }[]) {
+    const q = r.payload?.quando;
+    if (typeof q === 'string' && q.trim()) return q.trim();
+  }
+  return null;
 }
 
 export async function GET(req: NextRequest) {
@@ -328,9 +357,13 @@ export async function GET(req: NextRequest) {
         }));
         const v = await classifyInterrupted(history);
 
+        // L'esito dell'invio del CONTATTO_UMANO, per la riga di guardia qui sotto: la
+        // riga si scrive comunque (è lei che impedisce di richiamare il classificatore a
+        // ogni giro), ma deve dire la verità su cosa è arrivato al CRM.
+        let invioContatto: { esito: 'inviato' | 'fallito' | 'senza_lead'; errore?: string } = { esito: 'senza_lead' };
         if ((azioneForm === 'segnala_e_trattieni' || v.confermato) && c.crm_lead_id) {
           const ultimoDelLead = [...rows].reverse().find((r) => r.direction === 'in')?.body ?? undefined;
-          await sendOutcome(supabase, c.id, {
+          const r = await sendOutcome(supabase, c.id, {
             outcome: 'CONTATTO_UMANO',
             note: ultimoDelLead,
             // Il nome esatto conta: e' l'unico punto del contratto in cui un valore
@@ -341,6 +374,9 @@ export async function GET(req: NextRequest) {
             motivoContattoUmano: 'conferma_senza_appuntamento',
             notaContattoUmano: buildConfermaPersaNote({ leadWords: ultimoDelLead, stage: v.note }),
           });
+          invioContatto = r.sent
+            ? { esito: 'inviato' }
+            : { esito: 'fallito', errore: r.error ?? (r.status ? `http_${r.status}` : 'errore') };
         }
 
         // E qui la differenza: chi ha confermato NON viene restituito né scartato. La
@@ -348,14 +384,22 @@ export async function GET(req: NextRequest) {
         // lead resta dov'è invece di ripartire da zero nella pipeline di un GDO. La riga
         // di guardia si scrive DOPO l'invio del CONTATTO_UMANO (non prima): è quella che
         // il run successivo legge per non richiamare più il classificatore.
+        //
+        // `esito` dice cosa è successo al CONTATTO_UMANO: `inviato`, `fallito` (il CRM
+        // l'ha rifiutato o non ha risposto: c'è `errore`) o `senza_lead` (nessun
+        // crm_lead_id, quindi niente da mandare). La riga si scrive in tutti e tre i casi
+        // e non solo sul successo: scriverla solo sull'`inviato` farebbe richiamare
+        // `classifyInterrupted` (a pagamento) a ogni giro su un invio che fallisce sempre.
+        // Chi verifica le trattenute filtra `payload->>esito=eq.inviato`; le altre due
+        // sono le segnalazioni da recuperare a mano, e non si riprovano da sole.
         if (azioneForm === 'segnala_e_trattieni') {
           await supabase.from('event_log').insert({
             type: 'restituzione_bloccata_conferma_form',
-            payload: { conversationId: c.id, crmLeadId: c.crm_lead_id } as never,
-            message: `[bot-fissatore] conv ${c.id}: conferma del form presente, restituzione bloccata`,
-            level: 'warn',
+            payload: { conversationId: c.id, crmLeadId: c.crm_lead_id, ...invioContatto } as never,
+            message: `[bot-fissatore] conv ${c.id}: conferma del form presente, restituzione bloccata (segnalazione ${invioContatto.esito})`,
+            level: invioContatto.esito === 'inviato' ? 'warn' : 'error',
           });
-          report.push({ id: c.id, action, trattenuto: true });
+          report.push({ id: c.id, action, trattenuto: true, segnalazione: invioContatto.esito });
           continue;
         }
 
@@ -366,7 +410,13 @@ export async function GET(req: NextRequest) {
             note: v.note,
           });
         } else {
-          await sendOutcome(supabase, c.id, { outcome: 'INTERROTTO', note: v.note });
+          // Un lead che aveva chiesto "sentiamoci fra N giorni" (fascia `tieni_aperta`)
+          // e poi è sparito arriva qui: il GDO deve sapere QUANDO voleva essere
+          // risentito, non ricevere una chat interrotta qualsiasi. Senza un "quando"
+          // registrato la nota resta quella del classificatore, come prima.
+          const quando = await quandoRichiamoTenutoAperto(supabase, c.id);
+          const note = quando ? `${buildRichiamoRestituitoNote({ quando })} ${v.note}` : v.note;
+          await sendOutcome(supabase, c.id, { outcome: 'INTERROTTO', note });
         }
         report.push({ id: c.id, action, discard: v.discard });
       }

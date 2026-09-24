@@ -168,7 +168,13 @@ export type TrackBAction =
   | { kind: 'classify' }
   | { kind: 'wait' };
 
-/** Track B: lead che ha risposto poi è rimasto in silenzio. Puro. */
+/** Track B: lead che ha risposto poi è rimasto in silenzio. Puro.
+ *
+ *  Ci passa anche chi ha chiesto "sentiamoci fra N giorni" con N ≤ 3 (fascia
+ *  `tieni_aperta` di `lib/richiamo-fasce.ts`): nessun trattamento a parte, stesso nudge
+ *  a 12-24h e stessa resa a 96h. Il giorno chiesto non si perde: alla resa il cron
+ *  (bot-followups) rilegge l'evento `richiamo_tenuto_aperto` e lo scrive nella nota
+ *  dell'INTERROTTO. `SEQUENCE_END_DAYS` qui non c'entra: vale solo per il Track A. */
 export function decideTrackB(input: {
   nowMs: number;
   lastInboundAtMs: number;

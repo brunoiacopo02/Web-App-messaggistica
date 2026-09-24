@@ -772,8 +772,13 @@ export async function sendOutcome(
     });
 
     if (fascia === 'tieni_aperta') {
-      // Non è un esito: la sequenza di follow-up lo ripesca da sola entro 4 giorni.
-      // Nessun POST — al CRM non serve sapere che una chat è ancora viva.
+      // Non è un esito: nessun POST, la chat resta aperta. NON la ripesca la sequenza
+      // dei 4 giorni (SEQUENCE_END_DAYS vale solo per chi non ha mai risposto, Track A):
+      // questo lead ha risposto, quindi sta sul Track B (`decideTrackB`) — un nudge
+      // free-text a 12-24h di silenzio e poi, a 96h, la restituzione come INTERROTTO.
+      // È questo evento, con il suo `quando`, che il cron (bot-followups, ramo
+      // `interrotto_classify`) rilegge per dire al GDO quando il lead voleva essere
+      // risentito: il payload non si cambia senza cambiare anche lì.
       await supabase.from('event_log').insert({
         type: 'richiamo_tenuto_aperto',
         payload: { conversationId, crmLeadId, date: args.date ?? null, quando } as never,
