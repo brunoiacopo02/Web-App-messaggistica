@@ -523,6 +523,45 @@ describe('enrollGdoLeadAsPostino — arruolamento in modalità postino', () => {
     expect(calls.events.some((e) => e.type === 'send_error' && e.level === 'error')).toBe(true);
   });
 
+  // 24/09/2026: l'agenda partiva dal numero storico ma la chat restava sul numero
+  // nuovo. Il lead rispondeva al numero storico, il video usciva dal nuovo e Twilio lo
+  // respingeva (63016, finestra chiusa su quella coppia): 16 lead senza video in 3
+  // giorni. La chat segue l'agenda: da qui in poi il video, le risposte e i solleciti
+  // partono dal numero da cui il lead ha appena ricevuto il link.
+  it('una chat nata sul numero nuovo passa al numero storico, e lo scrive nel registro', async () => {
+    vi.mocked(findOrCreateLeadConversation).mockResolvedValueOnce({
+      leadId: 7, conversationId: 42, waNumber: 'whatsapp:+391111111111',
+    });
+    const { supabase, calls } = makeSupabase();
+
+    await enrollGdoLeadAsPostino(supabase, PAYLOAD);
+
+    expect(vi.mocked(sendTemplateAndLog).mock.calls[0][5]).toBe('whatsapp:+390000000000');
+    expect(calls.updates[0].wa_number).toBe('whatsapp:+390000000000');
+    const evento = calls.events.find((e) => e.type === 'gdo_agenda_chat_su_numero_storico');
+    expect(evento?.payload).toMatchObject({ conversationId: 42, da: 'whatsapp:+391111111111', a: 'whatsapp:+390000000000' });
+  });
+
+  it('una chat gia sul numero storico non genera nessun evento di spostamento', async () => {
+    vi.mocked(findOrCreateLeadConversation).mockResolvedValueOnce({
+      leadId: 7, conversationId: 42, waNumber: 'whatsapp:+390000000000',
+    });
+    const { supabase, calls } = makeSupabase();
+
+    await enrollGdoLeadAsPostino(supabase, PAYLOAD);
+
+    expect(calls.updates[0].wa_number).toBe('whatsapp:+390000000000');
+    expect(calls.events.some((e) => e.type === 'gdo_agenda_chat_su_numero_storico')).toBe(false);
+  });
+
+  it('una chat che nasce adesso nasce gia sul numero storico, senza sorteggio', async () => {
+    const { supabase } = makeSupabase();
+
+    await enrollGdoLeadAsPostino(supabase, PAYLOAD);
+
+    expect(vi.mocked(findOrCreateLeadConversation).mock.calls[0][2]).toEqual({ mittente: 'whatsapp:+390000000000' });
+  });
+
   it('template agenda non configurato → errore esplicito, nessun invio', async () => {
     vi.stubEnv('AGENDA_GDO_TEMPLATE_SID', '');
     const { supabase } = makeSupabase();

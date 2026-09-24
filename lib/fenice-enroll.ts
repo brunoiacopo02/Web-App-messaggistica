@@ -368,20 +368,31 @@ export async function enrollGdoLeadAsPostino(
   if (!templateSid) throw new Error('AGENDA_GDO_TEMPLATE_SID non configurato');
   if (!primario) throw new Error('TWILIO_WHATSAPP_NUMBER_FENICE non configurato');
 
-  const { conversationId, waNumber } = await findOrCreateLeadConversation(supabase, {
-    phone: args.phone,
-    firstName: args.name ?? undefined,
-    email: args.email ?? undefined,
-  });
   // Le agende partono SEMPRE dal numero storico, per decisione del PO
   // (18/09/2026). Il numero nuovo deve fare solo le aperture dei suoi lead, e
   // ogni altra cosa che parte da li' e' volume che non gli vogliamo dare.
   //
-  // Conseguenza da conoscere: per un lead la cui chat vive sul numero nuovo,
-  // l'agenda arrivera' da un altro nostro numero. E' l'unica eccezione alla
-  // regola "un lead, un numero", ed e' voluta.
-  void waNumber;
+  // E la chat segue l'agenda (PO, 24/09/2026). Il lead risponde al numero da cui
+  // ha appena ricevuto il link: se la chat restasse sul numero nuovo, il video e
+  // ogni risposta uscirebbero da li', dove il lead non ha mai scritto, e Twilio
+  // li respingerebbe tutti (63016, finestra 24h chiusa su quella coppia). Dal 21
+  // al 24/09 e' successo a 18 chat, 16 senza video. Una chat che nasce qui nasce
+  // quindi gia' sul numero storico, e una nata sul numero nuovo ci passa adesso.
+  // Il vecchio thread sul numero nuovo resta muto: e' il prezzo, ed e' voluto.
+  const { conversationId, waNumber } = await findOrCreateLeadConversation(supabase, {
+    phone: args.phone,
+    firstName: args.name ?? undefined,
+    email: args.email ?? undefined,
+  }, { mittente: primario });
   const from = primario;
+  if (waNumber && waNumber !== primario) {
+    await supabase.from('event_log').insert({
+      type: 'gdo_agenda_chat_su_numero_storico',
+      payload: { conversationId, crmLeadId: args.crmLeadId, da: waNumber, a: primario } as never,
+      message: `[gdo] conv ${conversationId}: l'agenda parte dal numero storico e la chat ci passa (era su ${waNumber})`,
+      level: 'info',
+    });
+  }
 
   const res = await sendTemplateAndLog(
     supabase,
@@ -402,6 +413,7 @@ export async function enrollGdoLeadAsPostino(
       ai_status: 'active',
       ai_started_at: now,
       ai_lock_at: null,
+      wa_number: primario,
       crm_lead_id: args.crmLeadId,
       crm_funnel: args.crmFunnel ?? null,
       gdo_agenda_at: now,
