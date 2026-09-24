@@ -270,7 +270,12 @@ export async function GET(req: NextRequest) {
       if (!hasInbound) {
         // ── Track A: mai risposto ─────────────────────────────────────────
         trackA++;
-        const action = decideTrackA({ nowMs: now, msgs, seqSids, sequenceEnabled: true });
+        // Il touch "Ti ho scritto ieri" e' MARKETING a chi non ha mai risposto: sospeso
+        // dal PO il 24/09/2026 per la qualita' dei numeri. Riparte solo con '1'.
+        const action = decideTrackA({
+          nowMs: now, msgs, seqSids, sequenceEnabled: true,
+          touchEnabled: process.env.SEQUENCE_TOUCH_ENABLED === '1',
+        });
 
         if (action.kind === 'send_opening') {
           if (!from) {

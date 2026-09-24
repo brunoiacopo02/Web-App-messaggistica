@@ -131,8 +131,11 @@ export function decideTrackA(input: {
   msgs: MsgLite[];
   seqSids: string[];
   sequenceEnabled: boolean;
+  /** Il touch di sequenza, separato dalle aperture differite: si puo' sospendere da
+   *  solo (`SEQUENCE_TOUCH_ENABLED`). Assente = acceso, come prima. */
+  touchEnabled?: boolean;
 }): TrackAAction {
-  const { nowMs, msgs, seqSids, sequenceEnabled } = input;
+  const { nowMs, msgs, seqSids, sequenceEnabled, touchEnabled = true } = input;
   const t0 = firstOutboundAtMs(msgs);
   if (t0 === null) {
     // Apertura differita: la conv CRM esiste ma non è ancora partito nulla.
@@ -152,6 +155,7 @@ export function decideTrackA(input: {
     nowMs - t0 >= TOUCH_OFFSETS_DAYS[touches] * D &&
     inSendWindow(nowMs) &&
     sequenceEnabled &&
+    touchEnabled &&
     nowMs - (lastOutboundAtMs(msgs) ?? 0) >= MIN_GAP_OUT_H * H
   ) {
     return { kind: 'send_touch', touchIndex: touches + 1 };

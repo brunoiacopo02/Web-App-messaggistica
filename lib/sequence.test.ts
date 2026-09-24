@@ -179,6 +179,23 @@ describe('decideTrackA — il touch non segue la fascia larga delle aperture', (
   });
 });
 
+// 24/09/2026: il touch "Ti ho scritto ieri" (MARKETING a chi non ha mai risposto) e'
+// sospeso per la qualita' dei numeri. Le aperture differite e la chiusura a fine
+// sequenza non dipendono da lui e devono continuare.
+describe('decideTrackA — touch sospeso', () => {
+  it('touch dovuto ma sospeso → wait', () => {
+    const msgs = [out(30, 'delivered', 'HXopening')];
+    expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true, touchEnabled: false })).toEqual({ kind: 'wait' });
+  });
+  it("con il touch sospeso l'apertura differita parte lo stesso", () => {
+    expect(decideTrackA({ nowMs: NOW, msgs: [], seqSids: SEQ, sequenceEnabled: true, touchEnabled: false })).toEqual({ kind: 'send_opening' });
+  });
+  it('con il touch sospeso la chiusura a fine sequenza arriva lo stesso', () => {
+    const msgs = [out(5 * 24, 'delivered', 'HXopening')];
+    expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true, touchEnabled: false })).toEqual({ kind: 'non_risposto' });
+  });
+});
+
 describe('decideTrackA — fast-fail numero morto', () => {
   it('1 touch, tutto undelivered/failed, 49h da t0 → discard_dead', () => {
     const msgs = [out(49, 'undelivered'), out(25, 'failed', 'HX1')];
