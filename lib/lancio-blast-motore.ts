@@ -47,7 +47,7 @@ export const MAX_PAGINE = 20;
 export const PAGINA = 1000;
 
 export type EsitoInvio = 'sent' | 'riparato' | 'capped' | 'failed' | 'incerto' | 'skip' | 'errore' | 'bloccato';
-export type ColonnaTimbro = 'lancio_link_inviato_at' | 'lancio_followup_inviato_at';
+export type ColonnaTimbro = 'lancio_link_inviato_at' | 'lancio_followup_inviato_at' | 'lancio_inizio_inviato_at';
 
 /** Lo stato condiviso fra i worker di un run: il fermo e i numeri che il freno legge. */
 export type StatoRun = { fermo: string | null; tentati: number; codici: (number | string)[] };
@@ -136,6 +136,9 @@ export const GIORNI_CONFIG_STANTIA = 14;
 export const TOLLERANZA_GIORNI_EVENTO = {
   'lancio-aperture': 0,
   'lancio-zoom': 0,
+  // "La live sta iniziando" (20:30-21:30 del giorno dell'evento): come il blast Zoom,
+  // una data di ieri e' gia' il guasto.
+  'lancio-inizio': 0,
   'lancio-followup': GIORNI_CONFIG_STANTIA,
   'lancio-restituzioni': GIORNI_CONFIG_STANTIA,
 } as const;
@@ -236,23 +239,15 @@ export async function leggiCoda<T>(
   return { righe, queryKo: false };
 }
 
-/** L'oggetto per l'update del timbro, con la SOLA colonna chiesta (i tipi di
- *  `conversations.Update` non accettano una chiave calcolata su un'unione). */
-export function timbroUpdate(
-  colonna: ColonnaTimbro,
-  valore: string | null,
-): { lancio_link_inviato_at: string | null } | { lancio_followup_inviato_at: string | null } {
-  return colonna === 'lancio_link_inviato_at'
-    ? { lancio_link_inviato_at: valore }
-    : { lancio_followup_inviato_at: valore };
+/** L'oggetto per l'update del timbro, con la SOLA colonna chiesta. La chiave calcolata
+ *  su un'unione TypeScript la allarga a `string`: il cast la riporta alle tre colonne. */
+export function timbroUpdate(colonna: ColonnaTimbro, valore: string | null): Partial<Record<ColonnaTimbro, string | null>> {
+  return { [colonna]: valore } as Partial<Record<ColonnaTimbro, string | null>>;
 }
 
 /** Lo stesso oggetto, ma per `impostaFaseLancio` (i suoi `campi` non ammettono null). */
-export function timbroCampi(
-  colonna: ColonnaTimbro,
-  valore: string,
-): { lancio_link_inviato_at: string } | { lancio_followup_inviato_at: string } {
-  return colonna === 'lancio_link_inviato_at' ? { lancio_link_inviato_at: valore } : { lancio_followup_inviato_at: valore };
+export function timbroCampi(colonna: ColonnaTimbro, valore: string): Partial<Record<ColonnaTimbro, string>> {
+  return { [colonna]: valore } as Partial<Record<ColonnaTimbro, string>>;
 }
 
 export type ConvInvio = {
@@ -271,8 +266,12 @@ export type MessaggioCostruito = { vars: Record<string, string>; body: string };
 export type InvioTimbrato = {
   conv: ConvInvio;
   colonna: ColonnaTimbro;
-  /** La fase scritta con `impostaFaseLancio` a invio riuscito (e nella riparazione). */
-  faseDopo: LancioFase;
+  /**
+   * La fase scritta con `impostaFaseLancio` a invio riuscito (e nella riparazione).
+   * Assente = il messaggio NON sposta la fase (il "la live sta iniziando" del 5/10): a
+   * invio riuscito resta solo il timbro, gia' scritto dal claim.
+   */
+  faseDopo?: LancioFase;
   sid: string;
   from: string;
   /**
@@ -294,7 +293,7 @@ export type InvioTimbrato = {
    * senza guardia la fase tornerebbe indietro col template ormai partito. Il timbro
    * resta comunque (e' del claim di sopra): la chat esce da sola dai candidati.
    */
-  soloDaFasi: readonly LancioFase[];
+  soloDaFasi?: readonly LancioFase[];
   /** Prefisso dei tipi di evento: `lancio_zoom` | `lancio_followup`. */
   prefisso: string;
   /** Come si chiama il messaggio nei log: 'link Zoom' | 'follow-up'. */
@@ -322,7 +321,12 @@ export async function inviaTemplateTimbrato(supabase: Supa, stato: StatoRun, p: 
     if (p.giaSpedito) {
       // Riparazione: il messaggio era gia' a DB e manca solo la fase. Stessa guardia
       // dell'invio — fra la select e adesso la chat puo' essere andata avanti da sola.
-      await impostaFaseLancio(supabase, id, p.faseDopo, timbroCampi(p.colonna, new Date().toISOString()), { soloDaFasi: p.soloDaFasi });
+      if (p.faseDopo) {
+        await impostaFaseLancio(supabase, id, p.faseDopo, timbroCampi(p.colonna, new Date().toISOString()), { soloDaFasi: p.soloDaFasi });
+      } else {
+        // Senza fase da scrivere si ripara il solo timbro, e solo se manca ancora.
+        await supabase.from('conversations').update(timbroUpdate(p.colonna, new Date().toISOString())).eq('id', id).is(p.colonna, null);
+      }
       return 'riparato';
     }
 
@@ -424,7 +428,9 @@ export async function inviaTemplateTimbrato(supabase: Supa, stato: StatoRun, p: 
       // Compare-and-set sulla fase, non un update alla cieca: mentre il template partiva,
       // il turno puo' aver portato la chat avanti. Se la guardia scatta non si scrive
       // NIENTE, timbro compreso: a proteggere dal doppio invio e' il claim di sopra.
-      await impostaFaseLancio(supabase, id, p.faseDopo, timbroCampi(p.colonna, timbro), { soloDaFasi: p.soloDaFasi });
+      if (p.faseDopo) {
+        await impostaFaseLancio(supabase, id, p.faseDopo, timbroCampi(p.colonna, timbro), { soloDaFasi: p.soloDaFasi });
+      }
       if (p.eventoInvio) {
         await logEvento(supabase, p.eventoInvio, { conversationId: id, crmLeadId, phone, sid: res.sid },
           `[lancio] ${p.etichetta} inviato a ${phone}`);
