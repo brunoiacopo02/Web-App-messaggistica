@@ -9,7 +9,9 @@ import { canAccess, landingPath } from '@/lib/access';
 // sessione. E' elencato per percorso ESATTO e non come `/api/admin`, cosi' una
 // rotta admin aggiunta domani non si trova esentata senza che nessuno l'abbia
 // deciso.
-const PUBLIC_PATHS = ['/login', '/api/webhooks', '/api/cron', '/api/bot', '/api/send-agenda', '/api/send-template', '/api/admin/secondo-numero'];
+// /api/appointment-set mancava dal 07/08: ogni chiamata del CRM finiva in un 307 verso
+// /login e gdo_appuntamento_at non e' mai stato scritto (0 conversazioni al 25/09).
+const PUBLIC_PATHS = ['/login', '/api/webhooks', '/api/cron', '/api/bot', '/api/send-agenda', '/api/send-template', '/api/appointment-set', '/api/admin/secondo-numero'];
 
 export async function proxy(request: NextRequest) {
   const { response, user } = await refreshSession(request);
