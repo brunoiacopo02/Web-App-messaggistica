@@ -5,9 +5,32 @@ import { haCongedo } from './lancio-fase';
 // database. La finestra si deriva dall'ora dell'evento e non da numeri scritti qui, così
 // la prova generale del B6 sposta l'evento e la finestra la segue.
 
-/** Quante conversazioni per run, salvo `LANCIO_BATCH_MAX`. Delibera 16/09: 200 (non 400)
- *  ogni 5' per stare comodi dentro i 300s di Vercel. */
+/** Quante conversazioni per run del FOLLOW-UP del 6/10, salvo `LANCIO_BATCH_MAX`.
+ *  Delibera 16/09: 200 (non 400) ogni 5' per stare comodi dentro i 300s di Vercel. Dal
+ *  25/09 vale solo per il follow-up: il blast Zoom ha il suo tetto, qui sotto. */
 export const LANCIO_BATCH_MAX_DEFAULT = 200;
+/**
+ * Quante conversazioni per run del BLAST ZOOM, salvo `LANCIO_ZOOM_BATCH_MAX`. Decisione PO
+ * del 25/09: capienza per ~4.000 iscritti. La finestra 19:30-20:45 ha 16 run (ogni 5',
+ * estremi inclusi): 16 x 300 = 4.800 posti, contro i 3.200 dei vecchi 200.
+ *
+ * Tempo di un run da 300, stima prudente (il DB bot non era leggibile da questa sessione,
+ * quindi niente misura diretta su `messages`): un invio fa il claim, `sendTemplate`, la
+ * riga `messages`, `last_message_at` e la fase, cioe' lo stesso lavoro dell'intake del
+ * bot, che il 10/09 si e' misurato a ~2,0s a lead end-to-end (mediana su 199 push, p99
+ * Twilio+DB 1,7s). Il motore manda a blocchi di 25 con concorrenza 5 e aspetta il piu'
+ * lento di ogni ondata: 300 = 12 blocchi x 5 ondate = 60 ondate. A 2s l'ondata sono 120s,
+ * a 3s (DB sotto carico, coda lenta) 180s, piu' pochi secondi di lettura della coda (4-5
+ * pagine da 1.000). Sotto la sveglia dei 240s (`TEMPO_MASSIMO_MS`) con margine; e se una
+ * sera va peggio di 4s a ondata, la sveglia ferma il run a `fermo: 'tempo'` e i residui li
+ * prende il run dopo: si perde velocita', non lead.
+ *
+ * Perche' il follow-up NON sale a 300: prima degli invii fa lavoro in sequenza che il
+ * blast non ha — fino a 50 letture dell'evento `lancio_intake` e i congedi (una chiamata
+ * al CRM ciascuno) — e il suo bersaglio (solo chi ha interagito) e' una frazione degli
+ * iscritti, con 48 run disponibili nelle due fasce: 200 bastano e avanzano.
+ */
+export const LANCIO_ZOOM_BATCH_MAX_DEFAULT = 300;
 /** Stessa concorrenza di `send-batch`: Twilio regge, Meta conta i template, non i secondi. */
 export const LANCIO_BLAST_CONCURRENCY = 5;
 
@@ -55,8 +78,9 @@ export function zoomBlastBody(nome: string, link: string): string {
 
 /**
  * Tetto del lotto da env: intero positivo, altrimenti il default (200, delibera 16/09).
- * `predefinito` serve a chi ha un tetto suo e una env sua — le restituzioni, che non
- * mandano nessun messaggio e girano una volta l'ora (`RESTITUZIONI_MAX_DEFAULT`).
+ * `predefinito` serve a chi ha un tetto suo e una env sua — il blast Zoom
+ * (`LANCIO_ZOOM_BATCH_MAX_DEFAULT`, 300) e le restituzioni, che non mandano nessun
+ * messaggio (`RESTITUZIONI_MAX_DEFAULT`).
  */
 export function batchMax(raw: string | undefined, predefinito: number = LANCIO_BATCH_MAX_DEFAULT): number {
   const n = parseInt(raw ?? '', 10);

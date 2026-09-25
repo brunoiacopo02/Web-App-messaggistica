@@ -12,6 +12,7 @@ import {
   finestraBlastChiusa,
   zoomBlastBody,
   batchMax,
+  LANCIO_ZOOM_BATCH_MAX_DEFAULT,
   idoneoAlBlast,
   ordinaCandidatiBlast,
   LANCIO_BLAST_CONCURRENCY,
@@ -37,10 +38,11 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
 // Blast del link Zoom (spec §5.3, §11): ogni 5' dalle 19:30 alle 20:45 di Roma del giorno
-// dell'evento, a lotti di LANCIO_BATCH_MAX (200), a chi e' ancora in `attesa` o
-// `posto_bloccato` — anche a chi non ha mai risposto al benvenuto (decisione 14/09), mai
-// a chi si e' congedato. ~3.000 lead in 16 run: il ritmo lo tiene il tetto del lotto, non
-// una pausa dentro al run.
+// dell'evento, a lotti di LANCIO_ZOOM_BATCH_MAX (300, decisione PO 25/09), a chi e' ancora
+// in `attesa` o `posto_bloccato` — anche a chi non ha mai risposto al benvenuto (decisione
+// 14/09), mai a chi si e' congedato. 16 run x 300 = fino a 4.800 lead (il bersaglio e'
+// ~4.000): il ritmo lo tiene il tetto del lotto, non una pausa dentro al run. Il conto dei
+// tempi (300 invii sotto i 240s) sta su `LANCIO_ZOOM_BATCH_MAX_DEFAULT`.
 //
 // Il numero WhatsApp e' a qualita' LOW e da qui non parte nient'altro che questo
 // template. Le tre difese, in ordine di importanza:
@@ -216,7 +218,9 @@ export async function GET(req: NextRequest) {
   // Gli stessi filtri della query, ma in memoria: se la migrazione del congedo non fosse
   // applicata, o il filtro JSON cambiasse forma, qui il congedato viene fuori lo stesso.
   const candidati = ordinaCandidatiBlast(tutti.filter((c) => idoneoAlBlast(c, perimetro)));
-  const max = batchMax(process.env.LANCIO_BATCH_MAX);
+  // Env sua (`LANCIO_ZOOM_BATCH_MAX`), non piu' `LANCIO_BATCH_MAX`: quella resta del
+  // follow-up del 6, che a 300 non deve salire (vedi `LANCIO_ZOOM_BATCH_MAX_DEFAULT`).
+  const max = batchMax(process.env.LANCIO_ZOOM_BATCH_MAX, LANCIO_ZOOM_BATCH_MAX_DEFAULT);
   const lotto = candidati.slice(0, max);
 
   if (parametri.dry) {

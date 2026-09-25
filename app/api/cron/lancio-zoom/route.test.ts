@@ -247,7 +247,7 @@ beforeEach(() => {
   vi.stubEnv('CRON_SECRET', SEGRETO);
   vi.stubEnv('LANCIO_ZOOM_TEMPLATE_SID', SID);
   vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
-  vi.stubEnv('LANCIO_BATCH_MAX', '');
+  vi.stubEnv('LANCIO_ZOOM_BATCH_MAX', '');
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -406,7 +406,7 @@ describe('GET /api/cron/lancio-zoom — perimetro e ordine', () => {
   });
 
   it('ordine per intenzione: prima chi ha bloccato il posto, poi chi ha scritto, poi i muti', async () => {
-    vi.stubEnv('LANCIO_BATCH_MAX', '2');
+    vi.stubEnv('LANCIO_ZOOM_BATCH_MAX', '2');
     stato.convs = [
       conv(1),
       conv(2, { last_inbound_at: '2026-10-05T18:00:00Z' }),
@@ -417,8 +417,13 @@ describe('GET /api/cron/lancio-zoom — perimetro e ordine', () => {
     expect(chiamati).toEqual([tel(3), tel(2)]);
   });
 
-  it('il tetto del lotto lascia i residui al run dopo', async () => {
+  it('senza env il lotto del blast e 300 (decisione PO 25/09), e LANCIO_BATCH_MAX del follow-up non lo tocca', async () => {
     vi.stubEnv('LANCIO_BATCH_MAX', '1');
+    await expect((await richiesta()).json()).resolves.toMatchObject({ max: 300, candidati: 2, sent: 2, residui: 0 });
+  });
+
+  it('il tetto del lotto lascia i residui al run dopo', async () => {
+    vi.stubEnv('LANCIO_ZOOM_BATCH_MAX', '1');
     await expect((await richiesta()).json()).resolves.toMatchObject({ candidati: 2, sent: 1, residui: 1 });
     expect(sendTemplate).toHaveBeenCalledTimes(1);
   });
@@ -675,7 +680,7 @@ describe('GET /api/cron/lancio-zoom — freno automatico', () => {
 
 describe('GET /api/cron/lancio-zoom — il run scritto', () => {
   it('i conti tornano: candidati = inviati + riparati + falliti + cap + saltati + residui', async () => {
-    vi.stubEnv('LANCIO_BATCH_MAX', '3');
+    vi.stubEnv('LANCIO_ZOOM_BATCH_MAX', '3');
     stato.convs = [conv(1), conv(2), conv(3, { leads: null }), conv(4)];
     sendTemplate.mockRejectedValueOnce(Object.assign(new Error('giu'), { code: 21211 }));
     const res = await (await richiesta()).json();

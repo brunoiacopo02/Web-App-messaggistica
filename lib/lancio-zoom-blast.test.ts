@@ -12,6 +12,7 @@ import {
   finestraBlastChiusa,
   CODICI_FRENO_TWILIO,
   LANCIO_BATCH_MAX_DEFAULT,
+  LANCIO_ZOOM_BATCH_MAX_DEFAULT,
   LANCIO_BLAST_CONCURRENCY,
   LANCIO_BLAST_PERIMETRO_DEFAULT,
 } from './lancio-zoom-blast';
@@ -94,8 +95,10 @@ describe('zoomBlastBody e batchMax', () => {
     expect(batchMax('zero')).toBe(200);
     expect(batchMax('0')).toBe(200);
   });
-  it('le costanti riflettono la delibera: 200 di default, stessa concorrenza di send-batch', () => {
+  it('le costanti riflettono le delibere: follow-up 200, blast Zoom 300 (25/09), stessa concorrenza di send-batch', () => {
     expect(LANCIO_BATCH_MAX_DEFAULT).toBe(200);
+    expect(LANCIO_ZOOM_BATCH_MAX_DEFAULT).toBe(300);
+    expect(batchMax(undefined, LANCIO_ZOOM_BATCH_MAX_DEFAULT)).toBe(300);
     expect(LANCIO_BLAST_CONCURRENCY).toBe(5);
   });
 });

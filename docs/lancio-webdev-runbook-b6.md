@@ -155,16 +155,16 @@ Come si prova lo stesso — tre strade, in ordine di preferenza:
       **Verificato il 17/09: ci sono tutte.**
 - [ ] Env di produzione **assenti**: `LANCIO_FAKE_NOW`, `LANCIO_FAKE_NOW_ARMED`
       (verificato il 17/09: assenti, come deve essere).
-- [ ] `LANCIO_BATCH_MAX`, `LANCIO_RESTITUZIONI_MAX`, `LANCIO_WELCOME_MAX_PER_HOUR`,
-      `LANCIO_APERTURE_MAX_PER_RUN` e `CRM_LANCIO_URL` **non sono in produzione, ed è
-      giusto così**: i default del codice sono già i valori deliberati
-      (200 / 500 / 200 / 100 / URL di produzione del CRM). Si aggiunge l'env solo per
-      cambiarli.
-- [ ] **Chi governa cosa:** `LANCIO_BATCH_MAX` (200) è **uno solo per due cron** — il blast
-      Zoom del 5 **e** il follow-up del 6: alzarlo per il blast alza anche il follow-up.
-      Le restituzioni hanno la loro, `LANCIO_RESTITUZIONI_MAX` (500), perché da lì non
-      parte nessun messaggio WhatsApp (si chiama il CRM e si scrive una fase) e il cron
-      gira una volta l'ora.
+- [ ] `LANCIO_ZOOM_BATCH_MAX`, `LANCIO_BATCH_MAX`, `LANCIO_RESTITUZIONI_MAX`,
+      `LANCIO_WELCOME_MAX_PER_HOUR`, `LANCIO_APERTURE_MAX_PER_RUN` e `CRM_LANCIO_URL`
+      **non sono in produzione, ed è giusto così**: i default del codice sono già i valori
+      deliberati (300 / 200 / 500 / 200 / 100 / URL di produzione del CRM). Si
+      aggiunge l'env solo per cambiarli.
+- [ ] **Chi governa cosa (dal 25/09):** il blast Zoom del 5 ha la sua,
+      `LANCIO_ZOOM_BATCH_MAX` (300 per run: 16 run × 300 = 4.800 posti per ~4.000 iscritti);
+      `LANCIO_BATCH_MAX` (200) resta **solo** del follow-up del 6, che prima degli invii fa
+      letture e congedi in sequenza e non ha bisogno di correre. Le restituzioni hanno la
+      loro, `LANCIO_RESTITUZIONI_MAX` (500).
 - [ ] Il mittente secondario resta spento: `TWILIO_WHATSAPP_NUMBERS_2` non è in produzione,
       quindi `TWILIO_ACCOUNT_SID_2`/`TWILIO_AUTH_TOKEN_2` (dell'altra sessione) non
       instradano niente. Il lancio parte dal numero principale, `lancio_sender=principale`.
@@ -221,7 +221,11 @@ e' partito da quello storico) · `lancio_apertura_freq_capped` · `lancio_fase_n
 
 - [ ] Il primo `lancio_zoom_run` fuori finestra (le 19:00) verifica la configurazione senza
       mandare: se manca qualcosa esce `lancio_zoom_config_error`.
-- [ ] Dalle 19:30 lotti da 200 ogni 5'. `inviati` + `riparati` devono salire a ogni run.
+- [ ] Dalle 19:30 lotti da 300 ogni 5'. `inviati` + `riparati` devono salire a ogni run.
+- [ ] Un run con `fermo: 'tempo'` vuol dire che 300 invii non sono stati nei 240s (stima:
+      120-180s): non si perde nessuno, i residui li prende il run dopo. Se capita a ogni
+      run, abbassare `LANCIO_ZOOM_BATCH_MAX` (per esempio a 250) — ma a quel punto gli
+      ultimi iscritti potrebbero restare senza link a finestra chiusa: guardare `residui`.
 - [ ] `capped` (63049, frequency cap di Meta per destinatario) **non è un freno**: il timbro
       si libera e si ritenta al run dopo.
 
