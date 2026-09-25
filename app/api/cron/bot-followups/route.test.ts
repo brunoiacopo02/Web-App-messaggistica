@@ -69,8 +69,11 @@ const classifyInterrupted = vi.fn<(...a: unknown[]) => Promise<Verdetto>>(async 
 }));
 vi.mock('@/lib/interrotto-note', () => ({ classifyInterrupted: (...a: unknown[]) => classifyInterrupted(...a) }));
 
-vi.mock('@/lib/bot-followups', () => ({
-  decideFollowupAction: () => 'interrotto_classify',
+// L'azione decisa si cambia per test; `esitoMaiConsegnato` resta quello vero.
+const azione = { valore: 'interrotto_classify' as string };
+vi.mock('@/lib/bot-followups', async (importOriginal) => ({
+  esitoMaiConsegnato: (await importOriginal<typeof import('@/lib/bot-followups')>()).esitoMaiConsegnato,
+  decideFollowupAction: () => azione.valore,
   serveCronologia: () => true,
   ultimaAttivitaMs: () => 0,
 }));
@@ -123,6 +126,7 @@ const righeGuardia = () =>
     .filter((e) => e.type === 'restituzione_bloccata_conferma_form');
 
 beforeEach(() => {
+  azione.valore = 'interrotto_classify';
   chiamate.length = 0;
   stato.convs = [conv()];
   stato.messaggi = CHAT_NORMALE;
@@ -208,5 +212,38 @@ describe('restituzione_bloccata_conferma_form — la riga dice come è andato l\
     const righe = righeGuardia();
     expect(righe).toHaveLength(1);
     expect(righe[0].payload).toMatchObject({ esito: 'senza_lead' });
+  });
+});
+
+describe('mai_consegnato — numero senza WhatsApp: torna a un GDO, mai scartato (PO 25/09/2026)', () => {
+  const nonConsegnato = (created_at: string): Riga & { twilio_error_code: number } => ({
+    direction: 'out', body: 'Ciao, sono Mario!', created_at, twilio_status: 'undelivered', template_sid: null, twilio_error_code: 63024,
+  });
+
+  beforeEach(() => {
+    azione.valore = 'mai_consegnato';
+    stato.messaggi = [nonConsegnato('2026-09-20T10:00:00Z'), nonConsegnato('2026-09-21T10:00:00Z')];
+  });
+
+  it('parte NON_RISPOSTO con la nota per il GDO, nessun DA_SCARTARE', async () => {
+    await richiesta();
+    expect(esitoInviato('DA_SCARTARE')).toBeUndefined();
+    const e = esitoInviato('NON_RISPOSTO');
+    expect(e?.note).toContain('WhatsApp mai consegnato');
+    expect(e?.note).toContain('chiamare a voce');
+    expect(e).not.toHaveProperty('discardReason');
+    expect(sendOutcome).toHaveBeenCalledTimes(1);
+  });
+
+  it('il codice d\'errore Twilio viene letto dai messaggi: senza, la cronologia non direbbe "senza WhatsApp"', async () => {
+    await richiesta();
+    const sel = chiamate.find((c) => c.table === 'messages' && c.op === 'select');
+    expect(String(sel?.arg)).toContain('twilio_error_code');
+    expect(esitoInviato('NON_RISPOSTO')?.note).toContain('senza WhatsApp');
+  });
+
+  it('non chiama il classificatore a pagamento', async () => {
+    await richiesta();
+    expect(classifyInterrupted).not.toHaveBeenCalled();
   });
 });

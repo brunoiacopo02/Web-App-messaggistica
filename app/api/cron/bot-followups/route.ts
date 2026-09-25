@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendOutcome } from '@/lib/bot-outcome';
-import { decideFollowupAction, serveCronologia, ultimaAttivitaMs } from '@/lib/bot-followups';
+import { decideFollowupAction, esitoMaiConsegnato, serveCronologia, ultimaAttivitaMs } from '@/lib/bot-followups';
 import { classifyInterrupted } from '@/lib/interrotto-note';
 import { buildConfermaPersaNote } from '@/lib/bot-outcome-rules';
 import { buildRichiamoRestituitoNote } from '@/lib/richiamo-fasce';
@@ -32,6 +32,7 @@ type MsgRow = {
   twilio_status: string | null;
   template_sid: string | null;
   is_template?: boolean;
+  twilio_error_code?: number | null;
 };
 
 function authorized(req: NextRequest): boolean {
@@ -138,7 +139,7 @@ export async function GET(req: NextRequest) {
       if (serve) {
         let q = supabase
           .from('messages')
-          .select('direction, body, created_at, twilio_status, template_sid, is_template')
+          .select('direction, body, created_at, twilio_status, template_sid, is_template, twilio_error_code')
           .eq('conversation_id', c.id)
           .order('created_at', { ascending: true })
           .limit(200);
@@ -306,12 +307,13 @@ export async function GET(req: NextRequest) {
         lancio: lancioInCorso(c),
       });
 
-      if (action === 'discard_dead') {
-        await sendOutcome(supabase, c.id, {
-          outcome: 'DA_SCARTARE',
-          discardReason: 'numero inesistente',
-          note: 'Nessun messaggio consegnato in 14 giorni (verifica Twilio delivery). Numero morto.',
-        });
+      if (action === 'mai_consegnato') {
+        // WhatsApp non ha consegnato niente: quasi sempre il numero non ha WhatsApp
+        // (63024), non è inesistente. Decisione PO 25/09/2026: mai scartarlo, torna a
+        // un GDO da chiamare a voce. Era un DA_SCARTARE "numero inesistente" con una
+        // nota che parlava di 14 giorni, quando la soglia vera è 48h (fast-fail) o 4
+        // giorni (fine sequenza). Vedi `esitoMaiConsegnato`.
+        await sendOutcome(supabase, c.id, esitoMaiConsegnato(rows));
         report.push({ id: c.id, action });
       } else if (action === 'non_risposto') {
         // Quanti messaggi il lead ha DAVVERO ricevuto (delivered/read), non inviati.

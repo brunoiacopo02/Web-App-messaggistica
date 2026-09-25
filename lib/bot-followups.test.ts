@@ -4,7 +4,9 @@ import {
   serveCronologia,
   ultimaAttivitaMs,
   ultimoMessaggioEInbound,
+  esitoMaiConsegnato,
   type CronConvRow,
+  type MsgConErrore,
 } from './bot-followups';
 import type { MsgLite } from './sequence';
 
@@ -100,14 +102,14 @@ describe('decideFollowupAction — Track A (mai risposto)', () => {
     expect(a).toBe('non_risposto');
   });
 
-  it('14g mai consegnato nulla → discard_dead', () => {
+  it('oltre i 4g di sequenza, mai consegnato nulla → mai_consegnato', () => {
     const a = decide({ msgs: [out(14 * D, 'failed'), out(13 * D, 'undelivered', 'HXseq1')] });
-    expect(a).toBe('discard_dead');
+    expect(a).toBe('mai_consegnato');
   });
 
-  it('fast-fail: touch inviato, tutto undelivered/failed a 50h → discard_dead', () => {
+  it('fast-fail: touch inviato, tutto undelivered/failed a 50h → mai_consegnato', () => {
     const a = decide({ msgs: [out(50 * H, 'failed'), out(26 * H, 'undelivered', 'HXseq1')] });
-    expect(a).toBe('discard_dead');
+    expect(a).toBe('mai_consegnato');
   });
 
   it('touch dovuto (sequenceEnabled, in fascia) → none: gli invii non sono compito del cron classificatore', () => {
@@ -346,5 +348,49 @@ describe('lancio Web Dev AI — fuori dalle classificazioni, dentro il re-drive'
       bot_outcome: null, gdo_agenda_at: null, lancio_slug: 'webdev-2026-10', lancio_fase: 'chiuso',
     };
     expect(serveCronologia(c, NOW)).toBe(true);
+  });
+});
+
+describe('esitoMaiConsegnato — numero senza WhatsApp: al GDO da chiamare, mai scartato (PO 25/09/2026)', () => {
+  const morto = (code: number | null, status = 'undelivered'): MsgConErrore => ({
+    direction: 'out', twilio_status: status, twilio_error_code: code, template_sid: null, created_at: at(3 * D),
+  });
+
+  it('mai DA_SCARTARE: torna al CRM come NON_RISPOSTO, che il CRM restituisce a un GDO', () => {
+    const e = esitoMaiConsegnato([morto(63024), morto(63024)]);
+    expect(e.outcome).toBe('NON_RISPOSTO');
+    expect(e).not.toHaveProperty('discardReason');
+  });
+
+  it('con il 63024 la nota dice che il numero non ha WhatsApp e che va chiamato a voce', () => {
+    const { note } = esitoMaiConsegnato([morto(63024)]);
+    expect(note).toMatch(/WhatsApp mai consegnato/);
+    expect(note).toMatch(/senza WhatsApp/);
+    expect(note).toMatch(/chiamare a voce/i);
+  });
+
+  it('senza il 63024 non afferma che il numero non ha WhatsApp, ma lo manda lo stesso a voce', () => {
+    const { note } = esitoMaiConsegnato([morto(null, 'failed'), morto(63049)]);
+    expect(note).toMatch(/WhatsApp mai consegnato/);
+    expect(note).not.toMatch(/senza WhatsApp/);
+    expect(note).toMatch(/chiamare a voce/i);
+  });
+
+  it('la nota non parla piu\' di 14 giorni (la soglia vera e\' 48h / 4 giorni) ne\' di numero inesistente', () => {
+    const { note } = esitoMaiConsegnato([morto(63024)]);
+    expect(note).not.toMatch(/14 giorni/);
+    expect(note).not.toMatch(/inesistente|morto/i);
+  });
+
+  it('la nota non si fa leggere dal CRM come un follow-up del lancio (motivoRestituzioneDaNota)', () => {
+    // Sul lead del lancio il CRM ricava il motivo dalla nota: "follow-up" la
+    // sposterebbe su un motivo sbagliato. Deve restare il default mai_risposto.
+    const { note } = esitoMaiConsegnato([morto(63024)]);
+    expect(note).not.toMatch(/follow-?up/i);
+  });
+
+  it('i messaggi in entrata non contano', () => {
+    const { note } = esitoMaiConsegnato([morto(63024), { ...inb(D), twilio_error_code: null }]);
+    expect(note).toMatch(/1 messaggio/);
   });
 });

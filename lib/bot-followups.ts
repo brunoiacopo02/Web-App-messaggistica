@@ -104,7 +104,9 @@ export function serveCronologia(c: CronConvRow, nowMs: number): boolean {
 
 // Il cron bot-followups fa SOLO le classificazioni finali verso il CRM:
 // gli invii (aperture, touch, nudge) sono compito del cron sequence-touches.
-export type FollowupAction = 'non_risposto' | 'discard_dead' | 'interrotto_classify' | 'none';
+// `mai_consegnato` si chiamava `discard_dead`: fino al 25/09/2026 finiva in un
+// DA_SCARTARE "numero inesistente" (vedi `esitoMaiConsegnato` in fondo al file).
+export type FollowupAction = 'non_risposto' | 'mai_consegnato' | 'interrotto_classify' | 'none';
 
 /**
  * Decide la classificazione finale per un lead CRM. Pura: delega a
@@ -162,7 +164,43 @@ export function decideFollowupAction(input: {
     seqSids: input.seqSids,
     sequenceEnabled: input.sequenceEnabled ?? false,
   });
-  if (a.kind === 'discard_dead') return 'discard_dead';
+  if (a.kind === 'discard_dead') return 'mai_consegnato';
   if (a.kind === 'non_risposto') return 'non_risposto';
   return 'none';
+}
+
+/** Un messaggio con il codice d'errore Twilio: serve solo a scrivere la nota giusta. */
+export type MsgConErrore = MsgLite & { twilio_error_code?: number | null };
+
+/** Twilio 63024: "invalid message recipient" — il destinatario non ha WhatsApp. */
+const TWILIO_SENZA_WHATSAPP = 63024;
+
+/**
+ * L'esito per un lead a cui WhatsApp non ha consegnato NIENTE (Track A, `mai_consegnato`).
+ *
+ * Fino al 25/09/2026 partiva un `DA_SCARTARE` con motivo "numero inesistente" e il lead
+ * usciva dal circuito. Ma quasi sempre il numero esiste: semplicemente non ha WhatsApp
+ * (errore Twilio 63024 in ~9 casi su 10 a settembre), e al telefono può rispondere. Fra
+ * gli "inesistenti" c'erano perfino fissi italiani scritti senza lo 0 iniziale
+ * (+39 965..., +39 661...). Decisione del PO: mai scartarli, vanno ai GDO da chiamare.
+ *
+ * `NON_RISPOSTO` è l'esito del contratto che fa esattamente questo, senza toccare il
+ * CRM: `/api/bot/outcome` lo passa a `reassignBotLeadToHumanPool(leadId, 'mai_risposto')`
+ * (round robin dei ridati, lead di nuovo NEW con callCount 0). Sui lead del lancio va nel
+ * pool di /import con motivo `mai_risposto`: per questo la nota non deve contenere
+ * "follow-up", che il CRM leggerebbe come un altro motivo.
+ *
+ * Nessun filtro per i numeri "palesemente falsi" (1111111111, 3400000000...): a
+ * settembre erano ~6 su 562, e ogni regola provata prendeva anche numeri veri. Un GDO
+ * che lo scopre con una telefonata costa meno di un lead buono buttato.
+ */
+export function esitoMaiConsegnato(msgs: MsgConErrore[]): { outcome: 'NON_RISPOSTO'; note: string } {
+  const uscite = msgs.filter((m) => m.direction === 'out');
+  const n = uscite.length;
+  const quanti = `${n} ${n === 1 ? 'messaggio' : 'messaggi'}`;
+  const senzaWhatsApp = uscite.some((m) => m.twilio_error_code === TWILIO_SENZA_WHATSAPP);
+  const note = senzaWhatsApp
+    ? `WhatsApp mai consegnato (numero senza WhatsApp, errore Twilio 63024: ${quanti} inviati, nessuno arrivato). Il numero può essere valido: chiamare a voce.`
+    : `WhatsApp mai consegnato (${quanti} inviati, nessuno arrivato). Il numero può essere valido: chiamare a voce.`;
+  return { outcome: 'NON_RISPOSTO', note };
 }

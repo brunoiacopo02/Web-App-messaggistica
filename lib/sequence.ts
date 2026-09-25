@@ -146,7 +146,8 @@ export function decideTrackA(input: {
   if (touches >= 1 && allOutboundDeadNoDelivery(msgs) && nowMs - t0 >= FAST_FAIL_H * H) {
     return { kind: 'discard_dead' };
   }
-  // Chiusura a 14g: classificazione SEMPRE attiva, anche a kill-switch spento.
+  // Chiusura a SEQUENCE_END_DAYS (4g dal 01/08, era 14g): classificazione SEMPRE attiva,
+  // anche a kill-switch spento. Mai consegnato nulla → al GDO da chiamare (bot-followups).
   if (nowMs - t0 >= SEQUENCE_END_DAYS * D) {
     return anyDelivered(msgs) ? { kind: 'non_risposto' } : { kind: 'discard_dead' };
   }
