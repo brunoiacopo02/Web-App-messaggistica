@@ -52,7 +52,7 @@ describe('lancioInCorso — quando la chat è del lancio e va tenuta fuori da Ma
 });
 
 describe('decideLancioTurno — fase attesa', () => {
-  const base = { fase: 'attesa', scambiDomande: 0, passToHuman: false } as const;
+  const base = { fase: 'attesa', scambiDomande: 0 } as const;
 
   it('sì → posto bloccato col testo fisso', () => {
     expect(decideLancioTurno({ ...base, classe: 'si' })).toEqual({ kind: 'posto_bloccato', testo: TESTO_POSTO_BLOCCATO });
@@ -74,13 +74,10 @@ describe('decideLancioTurno — fase attesa', () => {
   it('incerto senza modello → silenzio, mai una risposta a caso', () => {
     expect(decideLancioTurno({ ...base, classe: 'incerto' })).toEqual({ kind: 'silenzio', motivo: 'classe_incerta' });
   });
-  it('la richiesta di una persona vince su tutto', () => {
-    expect(decideLancioTurno({ ...base, classe: 'si', passToHuman: true })).toEqual({ kind: 'passaggio_umano' });
-  });
 });
 
 describe('decideLancioTurno — fase posto_bloccato', () => {
-  const base = { fase: 'posto_bloccato', scambiDomande: 0, passToHuman: false } as const;
+  const base = { fase: 'posto_bloccato', scambiDomande: 0 } as const;
   it('un secondo sì non riceve un secondo "posto bloccato"', () => {
     expect(decideLancioTurno({ ...base, classe: 'si' })).toEqual({ kind: 'silenzio', motivo: 'gia_bloccato' });
   });
@@ -96,7 +93,7 @@ describe('decideLancioTurno — fase posto_bloccato', () => {
 describe('decideLancioTurno — fasi che B1 non gestisce', () => {
   it('link_inviato, post_pitch ecc. sono di B4/B5: qui silenzio, mai il pitch di Mario', () => {
     for (const fase of ['link_inviato', 'post_pitch', 'scelta_fatta', 'followup_inviato']) {
-      expect(decideLancioTurno({ fase, classe: 'domanda', scambiDomande: 0, passToHuman: false }))
+      expect(decideLancioTurno({ fase, classe: 'domanda', scambiDomande: 0 }))
         .toEqual({ kind: 'silenzio', motivo: 'fase_non_gestita' });
     }
   });

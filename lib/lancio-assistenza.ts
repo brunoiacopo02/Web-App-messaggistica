@@ -8,12 +8,19 @@ import { puoRispondere } from './lancio-scelta';
 import { zoomMeetingId } from './lancio-zoom-blast';
 import {
   congedoLancio, contestoDi, eventoAtDa, eventoLancio, historyDi, inviaBollaLancio,
-  passaggioUmanoLancio, silenzioLancio, tracciaTurnoLancio, type StatoTurno,
+  silenzioLancio, tracciaTurnoLancio, type StatoTurno,
 } from './lancio-effetti';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
 const NOTA_CONGEDO = 'Lancio Web Dev AI: ha ricevuto il link Zoom e ha detto di non essere interessato.';
+/**
+ * Al posto della riga del modello quando scrive [PASSAGGIO_UMANO]: il lancio non passa MAI
+ * la chat a una persona (PO 25/09/2026), e "ti aiuta subito un collega" prometterebbe un
+ * aiuto che la sera della live non arriva. L'ultima mossa utile, poi il follow-up di domani.
+ */
+export const TESTO_ASSISTENZA_SENZA_PASSAGGIO =
+  'Riprova dal link qui in chat oppure aprilo dal browser di un computer e scegli "partecipa dal browser". Se proprio non riesci, domani ti scriviamo qui noi.';
 
 /**
  * Fase `link_inviato` (spec §5.3): dal blast del link (90' prima dell'evento) alle 23:59
@@ -78,13 +85,16 @@ export async function turnoAssistenza(
     meetingId: zoomLink ? zoomMeetingId(zoomLink) : null,
   });
 
-  if (r.passToHuman) return passaggioUmanoLancio(supabase, c, r.visibleReply, testoLead);
+  if (r.passToHuman) {
+    await eventoLancio(supabase, c, 'lancio_passaggio_umano_ignorato', { testo: testoLead.slice(0, 300), risposta: r.visibleReply.slice(0, 300) },
+      `[lancio] conv ${c.conversationId}: il modello voleva passare la chat a una persona, ignorato`);
+  }
   // Il no che le regex non hanno visto: il modello lo dice con la classe o col tag.
   if (r.classe === 'no' || r.lancioTag?.tag === 'NO') {
     return congedoLancio(supabase, c, testoLead, NOTA_CONGEDO);
   }
 
-  const testo = r.visibleReply.trim();
+  const testo = r.passToHuman ? TESTO_ASSISTENZA_SENZA_PASSAGGIO : r.visibleReply.trim();
   if (!testo) return silenzioLancio(supabase, c, 'risposta_vuota', true);
   await inviaBollaLancio(supabase, c, testo);
   await eventoLancio(supabase, c, 'lancio_assistenza', { classe: r.classe }, `[lancio] conv ${c.conversationId}: assistenza al collegamento`);

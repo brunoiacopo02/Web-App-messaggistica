@@ -241,7 +241,18 @@ export const TESTO_POSTO_BLOCCATO =
 export const TESTO_CONGEDO =
   'Va bene, grazie per avermelo detto: non ti scrivo più per questo evento. Buona giornata!';
 export const TESTO_CHIUSURA_DOMANDE = 'Ci sentiamo il 5!';
+/** Uscito fino al 25/09/2026, quando il lancio passava la chat a una persona. Non si
+ *  manda piu' (vedi `TESTO_NIENTE_PASSAGGIO`), ma resta fra i testi fissi: sulle chat
+ *  di prima non deve contare come una risposta a una domanda. */
 export const TESTO_PASSAGGIO_UMANO = 'Certo, ti faccio contattare da una persona del team.';
+/**
+ * Il lancio non passa MAI la chat a una persona (PO 25/09/2026): il passaggio finiva nella
+ * coda delle richieste di contatto e da li' a un GDO, fuori dal percorso del lancio. Se il
+ * modello scrive [PASSAGGIO_UMANO] lo stesso, la sua riga ("ti faccio contattare")
+ * prometterebbe un contatto che non arriva: esce questa al suo posto.
+ */
+export const TESTO_NIENTE_PASSAGGIO =
+  'Prima della live non posso metterti in contatto con nessuno: ne parliamo dopo la live, e alla fine potrai parlare con un nostro consulente.';
 
 /** Dopo tre scambi di domande il bot chiude e tace fino al link (spec §5.2). */
 export const MAX_SCAMBI_DOMANDE = 3;
@@ -260,7 +271,6 @@ export type LancioAzione =
   | { kind: 'posto_bloccato'; testo: string }
   | { kind: 'congedo'; testo: string }
   | { kind: 'domanda'; chiudi: boolean }
-  | { kind: 'passaggio_umano' }
   | { kind: 'silenzio'; motivo: 'gia_bloccato' | 'domande_esaurite' | 'fase_non_gestita' | 'classe_incerta' | 'inbound_fuori_lancio' };
 
 /**
@@ -272,9 +282,7 @@ export function decideLancioTurno(i: {
   fase: string | null;
   classe: ClasseLancio;
   scambiDomande: number;
-  passToHuman: boolean;
 }): LancioAzione {
-  if (i.passToHuman) return { kind: 'passaggio_umano' };
   if (!faseGestitaB1(i.fase)) return { kind: 'silenzio', motivo: 'fase_non_gestita' };
   if (i.classe === 'no') return { kind: 'congedo', testo: TESTO_CONGEDO };
   if (i.classe === 'si') {

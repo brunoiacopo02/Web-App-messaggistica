@@ -8,7 +8,7 @@ import { classificaLancio, type LancioReplyParsed } from './lancio-classifica';
 import {
   congedoGiaInviato, contaScambiDomande, decideLancioTurno, faseGestitaB1, inboundDelLotto,
   MAX_SCAMBI_DOMANDE, paroleDelCongedo, tagliaRigheDalLancio, TESTO_CHIUSURA_DOMANDE, TESTO_CONGEDO,
-  TESTO_PASSAGGIO_UMANO, ultimoTestoDelLotto,
+  TESTO_NIENTE_PASSAGGIO, ultimoTestoDelLotto,
   type ClasseLancio, type LancioAzione, type RigaLancio,
 } from './lancio-fase';
 import { impostaFaseLancio, leggiIngressoLancioAt, marcaCongedo } from './lancio-db';
@@ -143,13 +143,24 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
     const history: MarioTurn[] = righe.map((m) => ({ role: m.direction === 'in' ? 'user' : 'assistant', content: m.body ?? '' }));
     modello = await genera(history, { fase: i.fase, nome: i.nome, eventoAt: settings.eventoAt });
     if (classe === 'incerto') classe = modello.classe;
+    // Il lancio non passa MAI la chat a una persona (PO 25/09/2026): il tag si ignora e
+    // la riga del modello, che prometterebbe un contatto, cede il posto a quella fissa.
+    if (modello.passToHuman) {
+      await supabase.from('event_log').insert({
+        type: 'lancio_passaggio_umano_ignorato',
+        payload: { conversationId: i.conversationId, crmLeadId: i.crmLeadId, fase: i.fase, testo: testoLead.slice(0, 300), risposta: modello.visibleReply.slice(0, 300) } as never,
+        message: `[lancio] conv ${i.conversationId}: il modello voleva passare la chat a una persona, ignorato`,
+        level: 'info',
+      });
+      modello = { ...modello, passToHuman: false, visibleReply: TESTO_NIENTE_PASSAGGIO };
+    }
   }
 
   const azione: LancioAzione = daRitentare
     ? { kind: 'congedo', testo: TESTO_CONGEDO }
     : inboundFuoriLancio
       ? { kind: 'silenzio', motivo: 'inbound_fuori_lancio' }
-      : decideLancioTurno({ fase: i.fase, classe, scambiDomande: scambi, passToHuman: modello?.passToHuman ?? false });
+      : decideLancioTurno({ fase: i.fase, classe, scambiDomande: scambi });
 
   const invia = async (body: string): Promise<void> => {
     const sent = await sendFreeText({ to: i.phone, body, from: i.from });
@@ -165,7 +176,7 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
     });
   };
 
-  let finalStatus: 'active' | 'closed' | 'handed_off' = 'active';
+  let finalStatus: 'active' | 'closed' = 'active';
   let motivoSilenzio: string | null = null;
 
   switch (azione.kind) {
@@ -229,27 +240,6 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
       await evento('lancio_domanda', { scambio: scambi + 1, chiuso: azione.chiudi }, `[lancio] conv ${i.conversationId}: risposta a domanda ${scambi + 1}/3`);
       break;
     }
-    case 'passaggio_umano': {
-      await invia((modello?.visibleReply ?? '').trim() || TESTO_PASSAGGIO_UMANO);
-      if (i.crmLeadId) {
-        const esito = await sendOutcome(supabase, i.conversationId, { outcome: 'CONTATTO_UMANO', note: testoLead });
-        if (!esito.sent) {
-          await evento('contatto_umano_non_segnalato', { error: esito.error ?? null, status: esito.status ?? null },
-            `[lancio] conv ${i.conversationId}: passaggio a una persona non segnalato al CRM`, 'warn');
-        }
-      }
-      // Come nel percorso di Mario: se la colonna non c'e' l'errore non si propaga, ma
-      // resta scritto che il motivo del passaggio non e' stato registrato.
-      const { error: errHandoff } = await supabase.from('conversations')
-        .update({ handed_off_at: new Date().toISOString(), handed_off_reason: testoLead })
-        .eq('id', i.conversationId);
-      if (errHandoff) {
-        await evento('handed_off_non_registrato', { error: errHandoff.message },
-          `[lancio] conv ${i.conversationId}: motivo del passaggio non registrato (${errHandoff.message})`, 'warn');
-      }
-      finalStatus = 'handed_off';
-      break;
-    }
     case 'silenzio': {
       motivoSilenzio = azione.motivo;
       break;
@@ -261,7 +251,7 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
   }
   await supabase.from('event_log').insert({
     type: 'fenice_ai_reply',
-    payload: { conversationId: i.conversationId, phone: i.phone, lancio: true, azione: azione.kind, appointmentFixed: false, passToHuman: azione.kind === 'passaggio_umano' } as never,
+    payload: { conversationId: i.conversationId, phone: i.phone, lancio: true, azione: azione.kind, appointmentFixed: false, passToHuman: false } as never,
     message: `[lancio] turno su ${i.phone}: ${azione.kind}`,
     level: 'info',
   });

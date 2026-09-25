@@ -124,12 +124,13 @@ describe('turnoPostPitch — riscaldamento', () => {
     expect(infoSalvata(calls)).toEqual({ risposte: ['studio informatica', 'il progetto finale'] });
   });
 
-  it('[PASSAGGIO_UMANO] → handed_off, con le risposte salvate', async () => {
+  it("[PASSAGGIO_UMANO] (PO 25/09/2026): nessun CONTATTO_UMANO, la persona e' il consulente -> le ore della call", async () => {
     genera.mockResolvedValueOnce(modello({ passToHuman: true, visibleReply: 'Certo, ti faccio contattare.' }));
     const { supabase, calls } = makeSupabase();
-    expect(await turnoPostPitch(supabase, base({ inboundBody: 'voglio parlare con una persona', rows: [LINK, PULSANTE, inb('voglio parlare con una persona')] }), ctx())).toBe('handed_off');
-    expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'CONTATTO_UMANO' });
-    expect(infoSalvata(calls)).toEqual({ risposte: ['voglio parlare con una persona'] });
+    expect(await turnoPostPitch(supabase, scelta('voglio parlare con una persona'), ctx())).toBe('active');
+    expect(sendOutcome).not.toHaveBeenCalled();
+    expect(bolle()).toEqual([SLOT_TEXT_NOTTE]);
+    expect(eventi(calls, 'lancio_passaggio_umano_ignorato')).toHaveLength(1);
   });
 });
 

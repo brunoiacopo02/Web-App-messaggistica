@@ -17,7 +17,7 @@ import { sendOutcome } from './bot-outcome';
 import { turnoAssistenza } from './lancio-assistenza';
 import { turnoPostPitch, turnoDopoScelta } from './lancio-post-pitch';
 import { getLancioSettings } from './lancio-settings';
-import { TESTO_POSTO_BLOCCATO, TESTO_CONGEDO, TESTO_CHIUSURA_DOMANDE, TESTO_PASSAGGIO_UMANO } from './lancio-fase';
+import { TESTO_POSTO_BLOCCATO, TESTO_CONGEDO, TESTO_CHIUSURA_DOMANDE, TESTO_NIENTE_PASSAGGIO } from './lancio-fase';
 
 type Row = { direction: string; body: string | null; template_sid: string | null };
 const WELCOME: Row = { direction: 'out', body: "Ciao Anna, sono l'assistente virtuale...", template_sid: 'HX_W' };
@@ -292,22 +292,25 @@ describe('eseguiTurnoLancio — niente modello quando non serve', () => {
   });
 });
 
-describe('eseguiTurnoLancio — passaggio umano', () => {
-  it('[PASSAGGIO_UMANO] → CONTATTO_UMANO al CRM con le parole del lead, handed_off', async () => {
+describe('eseguiTurnoLancio — mai un passaggio a una persona (PO 25/09/2026)', () => {
+  it('[PASSAGGIO_UMANO] si ignora: niente CONTATTO_UMANO, niente handed_off, esce la frase fissa', async () => {
     genera.mockResolvedValueOnce({ classe: 'domanda', passToHuman: true, visibleReply: 'Certo, ti faccio contattare.' });
     const { supabase, calls } = makeSupabase();
     const stato = await eseguiTurnoLancio(supabase, base({ rows: [WELCOME, inb('voglio parlare con una persona')], inboundBody: 'voglio parlare con una persona' }));
-    expect(stato).toBe('handed_off');
-    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe('Certo, ti faccio contattare.');
-    expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'CONTATTO_UMANO', note: 'voglio parlare con una persona' });
-    expect(calls.convUpdates.some((u) => u.handed_off_at && u.handed_off_reason === 'voglio parlare con una persona')).toBe(true);
+    expect(stato).toBe('active');
+    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe(TESTO_NIENTE_PASSAGGIO);
+    expect(sendOutcome).not.toHaveBeenCalled();
+    expect(calls.convUpdates.some((u) => u.handed_off_at)).toBe(false);
+    expect(calls.events.some((e) => e.type === 'lancio_passaggio_umano_ignorato')).toBe(true);
   });
 
-  it('senza testo del modello usa la frase fissa di passaggio', async () => {
-    genera.mockResolvedValueOnce({ classe: 'domanda', passToHuman: true, visibleReply: '' });
+  it('il caso del 25/09: "quanto dura?" ripetuto non porta a nessun contatto', async () => {
+    genera.mockResolvedValueOnce({ classe: 'domanda', passToHuman: true, visibleReply: 'Ti faccio contattare da una persona del team.' });
     const { supabase } = makeSupabase();
-    await eseguiTurnoLancio(supabase, base({ rows: [WELCOME, inb('mi chiamate?')], inboundBody: 'mi chiamate?' }));
-    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe(TESTO_PASSAGGIO_UMANO);
+    const stato = await eseguiTurnoLancio(supabase, base({ fase: 'posto_bloccato', rows: [WELCOME, inb('La live quanto dura?')], inboundBody: 'La live quanto dura?' }));
+    expect(stato).toBe('active');
+    expect(sendOutcome).not.toHaveBeenCalled();
+    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).not.toMatch(/contattare/);
   });
 });
 

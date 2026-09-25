@@ -9,11 +9,11 @@ vi.mock('./lancio-db', () => ({
   marcaCongedo: vi.fn(async () => undefined),
 }));
 
-import { turnoAssistenza } from './lancio-assistenza';
+import { turnoAssistenza, TESTO_ASSISTENZA_SENZA_PASSAGGIO } from './lancio-assistenza';
 import { sendFreeText } from './twilio';
 import { sendOutcome } from './bot-outcome';
 import { impostaFaseLancio, marcaCongedo } from './lancio-db';
-import { TESTO_CONGEDO, TESTO_PASSAGGIO_UMANO } from './lancio-fase';
+import { TESTO_CONGEDO } from './lancio-fase';
 import type { LancioSettings } from './lancio-settings';
 
 type Row = { direction: string; body: string | null; template_sid: string | null; created_at?: string | null };
@@ -191,15 +191,15 @@ describe('turnoAssistenza — nella finestra', () => {
     expect(impostaFaseLancio).toHaveBeenCalledWith(expect.anything(), 42, 'chiuso');
   });
 
-  it('[PASSAGGIO_UMANO] → CONTATTO_UMANO con le parole del lead, handed_off_at, handed_off', async () => {
-    genera.mockResolvedValueOnce({ classe: 'domanda', passToHuman: true, visibleReply: '', lancioTag: null });
+  it("[PASSAGGIO_UMANO] si ignora (PO 25/09/2026): niente CONTATTO_UMANO, esce l'ultima mossa utile", async () => {
+    genera.mockResolvedValueOnce({ classe: 'domanda', passToHuman: true, visibleReply: 'Ti aiuta subito un collega.', lancioTag: null });
     const { supabase, calls } = makeSupabase();
-    const stato = await turnoAssistenza(supabase, base({ rows: [LINK, inb('voglio parlare con qualcuno')], inboundBody: 'voglio parlare con qualcuno' }), { settings: SETTINGS, now: NOTTE5 });
-    expect(stato).toBe('handed_off');
-    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe(TESTO_PASSAGGIO_UMANO);
-    expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'CONTATTO_UMANO', note: 'voglio parlare con qualcuno' });
-    expect(calls.convUpdates.some((u) => u.handed_off_at && u.handed_off_reason === 'voglio parlare con qualcuno')).toBe(true);
-    expect(calls.events.find((e) => e.type === 'fenice_ai_reply').payload).toMatchObject({ azione: 'passaggio_umano', passToHuman: true });
+    const stato = await turnoAssistenza(supabase, base({ rows: [LINK, inb('non riesco a entrare')], inboundBody: 'non riesco a entrare' }), { settings: SETTINGS, now: NOTTE5 });
+    expect(stato).toBe('active');
+    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe(TESTO_ASSISTENZA_SENZA_PASSAGGIO);
+    expect(sendOutcome).not.toHaveBeenCalled();
+    expect(calls.convUpdates.some((u) => u.handed_off_at)).toBe(false);
+    expect(calls.events.some((e) => e.type === 'lancio_passaggio_umano_ignorato')).toBe(true);
   });
 
   it('modello vuoto: silenzio risposta_vuota, tracciato, niente bolla', async () => {

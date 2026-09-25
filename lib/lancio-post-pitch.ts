@@ -21,7 +21,7 @@ import {
 } from './lancio-scelta';
 import {
   congedoLancio, contestoDi, historyDi, eventoAtDa, inviaBollaLancio, inviaSceltaLancio, eventoLancio, tracciaTurnoLancio,
-  silenzioLancio, passaggioUmanoLancio, type StatoTurno, type ContestoTurno,
+  silenzioLancio, type StatoTurno, type ContestoTurno,
 } from './lancio-effetti';
 import { eDomandaScelta, tapPulsanteScelta } from './lancio-pulsanti';
 
@@ -236,9 +236,12 @@ export async function turnoPostPitch(
         modo, risposteRaccolte: info.risposte.length, bloccoSlot,
       });
 
+  // Il lancio non passa MAI la chat a una persona (PO 25/09/2026): dopo la live la
+  // persona e' il consulente della call, quindi un [PASSAGGIO_UMANO] vale come la
+  // richiesta delle ore (SLOTS). Un tag di scelta vero, se il modello l'ha messo, vince.
   if (r?.passToHuman) {
-    await salvaInfo(info);
-    return passaggioUmanoLancio(supabase, c, r.visibleReply, testoLead);
+    await eventoLancio(supabase, c, 'lancio_passaggio_umano_ignorato', { testo: testoLead.slice(0, 300), risposta: r.visibleReply.slice(0, 300) },
+      `[lancio] conv ${c.conversationId}: il modello voleva passare la chat a una persona, proposte le ore della call`);
   }
 
   if (tap) {
@@ -247,7 +250,9 @@ export async function turnoPostPitch(
   // Il tocco vale come il tag che il modello avrebbe scritto: da qui in giu' il flusso e'
   // lo stesso di sempre, regole dure comprese (di giorno CHIAMA_ORA diventa il testo fisso
   // "a quest'ora fissiamo la call" piu' le ore, come oggi).
-  const tag: LancioTag | null = tap ? (tap === 'CHIAMA_ORA' ? { tag: 'CHIAMA_ORA' } : { tag: 'SLOTS' }) : r!.lancioTag;
+  const tag: LancioTag | null = tap
+    ? (tap === 'CHIAMA_ORA' ? { tag: 'CHIAMA_ORA' } : { tag: 'SLOTS' })
+    : (r!.lancioTag ?? (r!.passToHuman ? { tag: 'SLOTS' } : null));
   switch (tag?.tag) {
     case 'CHIAMA_ORA': {
       // Regola dura: la chiamata immediata esiste solo la notte del webinar.

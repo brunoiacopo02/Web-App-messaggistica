@@ -3,7 +3,7 @@ import type { MarioTurn } from './mario';
 import { sendFreeText, sendTemplate } from './twilio';
 import { sendOutcome } from './bot-outcome';
 import { impostaFaseLancio, marcaCongedo } from './lancio-db';
-import { TESTO_CONGEDO, TESTO_PASSAGGIO_UMANO, type RigaLancio } from './lancio-fase';
+import { TESTO_CONGEDO, type RigaLancio } from './lancio-fase';
 import type { LancioSettings } from './lancio-settings';
 import type { TurnoLancioInput } from './lancio-turno';
 import type { ModoPostPitch } from './lancio-scelta';
@@ -221,36 +221,4 @@ export async function congedoLancio(
   );
   await tracciaTurnoLancio(supabase, c, 'congedo');
   return stato;
-}
-
-/** Ha chiesto una persona: `CONTATTO_UMANO` al CRM con le sue parole, chat a un umano. */
-export async function passaggioUmanoLancio(
-  supabase: Supa,
-  c: ContestoTurno,
-  testo: string,
-  leadWords: string,
-): Promise<'handed_off'> {
-  await inviaBollaLancio(supabase, c, testo.trim() || TESTO_PASSAGGIO_UMANO);
-  if (c.crmLeadId) {
-    const esito = await sendOutcome(supabase, c.conversationId, { outcome: 'CONTATTO_UMANO', note: leadWords });
-    if (!esito.sent) {
-      await eventoLancio(
-        supabase, c, 'contatto_umano_non_segnalato', { error: esito.error ?? null, status: esito.status ?? null },
-        `[lancio] conv ${c.conversationId}: passaggio a una persona non segnalato al CRM`, 'warn',
-      );
-    }
-  }
-  // Come nel percorso di Mario e in quello del B1: se la colonna non c'è l'errore non si
-  // propaga, ma resta scritto che il motivo del passaggio non è stato registrato.
-  const { error: errHandoff } = await supabase.from('conversations')
-    .update({ handed_off_at: new Date().toISOString(), handed_off_reason: leadWords })
-    .eq('id', c.conversationId);
-  if (errHandoff) {
-    await eventoLancio(
-      supabase, c, 'handed_off_non_registrato', { error: errHandoff.message },
-      `[lancio] conv ${c.conversationId}: motivo del passaggio non registrato (${errHandoff.message})`, 'warn',
-    );
-  }
-  await tracciaTurnoLancio(supabase, c, 'passaggio_umano', true);
-  return 'handed_off';
 }
