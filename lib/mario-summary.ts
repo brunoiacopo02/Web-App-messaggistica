@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { MarioTurn } from './mario';
 
-export const SUMMARY_MODEL = 'claude-sonnet-4-6';
+export const SUMMARY_MODEL = 'claude-sonnet-5';
 
 const SUMMARY_SYSTEM = `Sei un assistente che riassume per un venditore una conversazione WhatsApp tra "Mario" (il nostro agente) e un lead.
 Scrivi in italiano, conciso e concreto, SENZA inventare nulla che non sia nella conversazione.
@@ -34,7 +34,7 @@ export async function generateLeadSummary(history: MarioTurn[]): Promise<string>
 
   const response = await getClient().messages.create({
     model: SUMMARY_MODEL,
-    max_tokens: 512,
+    max_tokens: 700,
     thinking: { type: 'disabled' },
     system: SUMMARY_SYSTEM,
     messages: [{ role: 'user', content: `Conversazione:\n\n${transcript}` }],

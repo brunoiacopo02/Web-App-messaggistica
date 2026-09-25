@@ -5,7 +5,7 @@ import { bookingSlotsContext, computeBookingDays } from './booking-slots';
 import { sanitizeOutbound } from './outbound-sanitize';
 import { isoWithOffset } from './bot-contract';
 
-export const MARIO_MODEL = 'claude-sonnet-4-6';
+export const MARIO_MODEL = 'claude-sonnet-5';
 
 export type MarioTurn = { role: 'user' | 'assistant'; content: string };
 export type MarioOutcome = 'APPUNTAMENTO' | 'RICHIAMO' | 'DA_SCARTARE' | 'INTERROTTO';
@@ -194,7 +194,7 @@ export async function generateMarioReply(
   const response = await getClient().messages.create(
     {
       model: MARIO_MODEL,
-      max_tokens: 1024,
+      max_tokens: 1400,
       thinking: { type: 'disabled' },
       system: [
         { type: 'text', text: systemStabile, cache_control: { type: 'ephemeral' } },

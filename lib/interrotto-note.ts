@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { MarioTurn } from './mario';
 
-export const INTERRUPTED_MODEL = 'claude-sonnet-4-6';
+export const INTERRUPTED_MODEL = 'claude-sonnet-5';
 
 const INTERRUPTED_SYSTEM = `Sei un analista che classifica una conversazione WhatsApp interrotta tra "Mario" (il nostro agente di prequalifica) e un lead.
 Il lead ha smesso di rispondere. Devi decidere se il lead va scartato o restituito al venditore, e a che punto dello script si è fermata la chat.
@@ -111,7 +111,7 @@ export async function classifyInterrupted(history: MarioTurn[]): Promise<Interru
 
     const response = await getClient().messages.create({
       model: INTERRUPTED_MODEL,
-      max_tokens: 512,
+      max_tokens: 700,
       thinking: { type: 'disabled' },
       system: INTERRUPTED_SYSTEM,
       messages: [{ role: 'user', content: `Conversazione:\n\n${transcript}` }],

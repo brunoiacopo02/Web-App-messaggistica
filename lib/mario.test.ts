@@ -53,7 +53,7 @@ describe('generateMarioReply', () => {
     const out = await generateMarioReply([{ role: 'user', content: 'ciao' }]);
     expect(out.visibleReply).toBe('Ciao! Sono Mario 😊');
     const arg = messagesCreate.mock.calls[0][0];
-    expect(arg.model).toBe('claude-sonnet-4-6');
+    expect(arg.model).toBe('claude-sonnet-5');
     expect(arg.messages).toEqual([{ role: 'user', content: 'ciao' }]);
     expect(Array.isArray(arg.system)).toBe(true);
   });

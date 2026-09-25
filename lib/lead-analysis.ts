@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { MarioTurn } from './mario';
 
-export const ANALYSIS_MODEL = 'claude-sonnet-4-6';
+export const ANALYSIS_MODEL = 'claude-sonnet-5';
 
 export type ObjectionCategory = 'prezzo' | 'tempo' | 'sfiducia' | 'garanzia_lavoro' | 'ci_penso' | 'altro' | 'nessuna';
 const CATEGORIES: ObjectionCategory[] = ['prezzo', 'tempo', 'sfiducia', 'garanzia_lavoro', 'ci_penso', 'altro', 'nessuna'];
@@ -80,7 +80,7 @@ export async function extractLeadInsight(history: MarioTurn[]): Promise<ExtractR
     model: ANALYSIS_MODEL,
     // 300 token bastavano appena: una objectionNote lunga troncava il JSON a metà, e un
     // JSON troncato diventava un'analisi finta. Qui lo spazio non è il costo.
-    max_tokens: 1000,
+    max_tokens: 1300,
     thinking: { type: 'disabled' },
     system: EXTRACT_SYSTEM,
     messages: [{ role: 'user', content: `Conversazione:\n\n${transcript}` }],
@@ -140,7 +140,7 @@ export async function aggregateInsights(input: AggregateInput): Promise<Aggregat
 
   const response = await getClient().messages.create({
     model: ANALYSIS_MODEL,
-    max_tokens: 500,
+    max_tokens: 650,
     thinking: { type: 'disabled' },
     system: AGG_SYSTEM,
     messages: [{ role: 'user', content: statsText }],

@@ -32,7 +32,7 @@ export async function generateLancioReply(
 
   const response = await getAnthropicClient().messages.create({
     model: MARIO_MODEL,
-    max_tokens: 400,
+    max_tokens: 520,
     thinking: { type: 'disabled' },
     system,
     messages,

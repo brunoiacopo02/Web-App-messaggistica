@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { BotReport } from './bot-contract';
 import type { MarioTurn } from './mario';
 
-export const REPORT_MODEL = 'claude-sonnet-4-6';
+export const REPORT_MODEL = 'claude-sonnet-5';
 
 const REPORT_SYSTEM = `Analizza una conversazione WhatsApp tra "Mario" (nostro agente) e un lead.
 Rispondi SOLO con un oggetto JSON con queste chiavi (tutte opzionali, ometti quelle senza dati):
@@ -45,7 +45,7 @@ export async function generateBotReport(history: MarioTurn[]): Promise<BotReport
     const client = new Anthropic({ apiKey, maxRetries: 5, timeout: 60_000 });
     const response = await client.messages.create({
       model: REPORT_MODEL,
-      max_tokens: 600,
+      max_tokens: 800,
       thinking: { type: 'disabled' },
       system: REPORT_SYSTEM,
       messages: [{ role: 'user', content: `Conversazione:\n\n${transcript}` }],
