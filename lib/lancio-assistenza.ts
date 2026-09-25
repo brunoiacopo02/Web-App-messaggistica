@@ -17,10 +17,11 @@ const NOTA_CONGEDO = 'Lancio Web Dev AI: ha ricevuto il link Zoom e ha detto di 
 /**
  * Al posto della riga del modello quando scrive [PASSAGGIO_UMANO]: il lancio non passa MAI
  * la chat a una persona (PO 25/09/2026), e "ti aiuta subito un collega" prometterebbe un
- * aiuto che la sera della live non arriva. L'ultima mossa utile, poi il follow-up di domani.
+ * aiuto che non arriva. Il bot resta lui ad aiutare: una mossa concreta e la domanda che
+ * gli serve per proporre la prossima.
  */
 export const TESTO_ASSISTENZA_SENZA_PASSAGGIO =
-  'Riprova dal link qui in chat oppure aprilo dal browser di un computer e scegli "partecipa dal browser". Se proprio non riesci, domani ti scriviamo qui noi.';
+  'Ti aiuto io: apri il link di questa chat dal browser e scegli "partecipa dal browser", non serve nessuna app. Se non va, dimmi cosa vedi sullo schermo.';
 
 /**
  * Fase `link_inviato` (spec §5.3): dal blast del link (90' prima dell'evento) alle 23:59
