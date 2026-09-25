@@ -2359,7 +2359,7 @@ describe('drainMarioReplies — dopo il follow-up la chat passa a Mario nello ST
     expect(calls.finalStatusWrites).not.toContain('handed_to_mario');
   });
 
-  it('senza lancio_video_live_link: Mario risponde coi video classici (nessuna contextNote) e resta un warn', async () => {
+  it('senza lancio_video_live_link: Mario risponde coi video classici (nessun video della live, solo il divieto di passare la chat) e resta un warn', async () => {
     vi.mocked(getLancioSettings).mockResolvedValueOnce({
       attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null,
       eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti', sender: 'principale', quotaSecondario: 0,
@@ -2371,7 +2371,8 @@ describe('drainMarioReplies — dopo il follow-up la chat passa a Mario nello ST
     await drainMarioReplies(supabase, 7, '+391234567890', () => 0);
 
     const opts = vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string };
-    expect(opts.contextNote).toBeUndefined();
+    expect(opts.contextNote).not.toMatch(/registrazione della live/);
+    expect(opts.contextNote).toContain('Non usare MAI [PASSAGGIO_UMANO]');
     expect(calls.events.map((e) => e.type)).toContain('lancio_video_live_link_missing');
     expect(calls.finalStatusWrites).toEqual(['active']);
   });

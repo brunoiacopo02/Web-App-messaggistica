@@ -213,6 +213,32 @@ export function lancioFollowupText(name: string | null | undefined): string {
  * link: Mario usa i quattro video classici (meglio un video che nessun video). Nessuna
  * promessa nuova: "il video riassuntivo della live" e' nel template approvato.
  */
+/**
+ * Il lancio non passa MAI un lead ai GDO (PO 25/09/2026). Nel flusso standard il
+ * passaggio a una persona finiva nella coda delle richieste di contatto e da li' a un GDO:
+ * finche' il lead non ha un appuntamento, "voglio una persona" e' la call col consulente.
+ * Con l'appuntamento gia' fissato la richiesta va alle Conferme, non ai GDO: resta com'e'.
+ */
+export const NOTA_LANCIO_NIENTE_PASSAGGIO =
+  "Non usare MAI [PASSAGGIO_UMANO] in questa chat e non promettere che lo contatta o lo richiama una collega: la persona con cui parlera' e' il consulente, nella call che fissi tu. Se chiede una persona o di essere chiamato, proponigli di fissare la call.";
+
+/** La riga che il lead legge al posto di quella del modello quando scrive [PASSAGGIO_UMANO] lo stesso. */
+export const TESTO_LANCIO_NIENTE_PASSAGGIO =
+  "Ti rispondo io: la persona con cui parlerai e' il nostro consulente, in una call dedicata a te. Vuoi che la fissiamo? Dimmi che giorno ti va meglio.";
+
+/**
+ * Il passaggio a una persona si blocca sulle chat del lancio in mano a Mario standard
+ * finche' non c'e' un appuntamento (ne' gia' registrato, ne' fissato in questo turno).
+ */
+export function bloccaPassaggioLancio(i: {
+  lancioStandard: boolean;
+  passToHuman: boolean;
+  esitoInPiedi: string | null;
+  appointmentFixed: boolean;
+}): boolean {
+  return i.lancioStandard && i.passToHuman && i.esitoInPiedi !== 'APPUNTAMENTO' && !i.appointmentFixed;
+}
+
 export function lancioStandardContextNote(videoLiveLink: string | null): string | null {
   const link = videoLiveLink?.trim();
   if (!link) return null;

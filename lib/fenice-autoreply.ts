@@ -20,6 +20,7 @@ import { haCongedo, lancioInCorso } from './lancio-fase';
 import { eseguiTurnoLancio } from './lancio-turno';
 import {
   lancioStandardDrain, lancioStandardContextNote, linkSviluppatoreContextNote, eventoLancioPassato,
+  bloccaPassaggioLancio, NOTA_LANCIO_NIENTE_PASSAGGIO, TESTO_LANCIO_NIENTE_PASSAGGIO,
 } from './lancio-followup';
 import { LANCIO_INGRESSO_LINK_SVILUPPATORE } from './primo-messaggio';
 import { getLancioSettings, type LancioSettings } from './lancio-settings';
@@ -749,6 +750,12 @@ export async function drainMarioReplies(
         : lancioStandard
           ? lancioStandardContextNote(videoLive)
           : null;
+      // Sul lancio senza appuntamento Mario non passa la chat a una persona: la riga va in
+      // coda alla nota, anche quando la nota del follow-up e' null (video della live non
+      // ancora impostato).
+      const notaLancioCompleta = lancioStandard && esitoInPiedi !== 'APPUNTAMENTO'
+        ? [notaLancio ?? notaPrimo, NOTA_LANCIO_NIENTE_PASSAGGIO].filter(Boolean).join('\n\n')
+        : notaLancio;
       const result = await generateMarioReply(history, {
         personaName: PERSONA_NAME[persona],
         giorniPieni,
@@ -770,8 +777,8 @@ export async function drainMarioReplies(
                 gdoAppuntamentoAt: gdoAppuntamentoAt,
               }),
             }
-          : notaLancio
-            ? { contextNote: notaLancio }
+          : notaLancioCompleta
+            ? { contextNote: notaLancioCompleta }
             : notaPrimo
               ? { contextNote: notaPrimo }
               : {}),
@@ -788,6 +795,23 @@ export async function drainMarioReplies(
       // Noemi, e la nota in più che gli passiamo lo distoglierebbe dal resto del
       // turno — il primo giro li ha già letti puliti.
       let visibleReply = result.visibleReply;
+      // Il lancio non passa MAI un lead ai GDO (PO 25/09/2026): senza appuntamento il
+      // [PASSAGGIO_UMANO] si ignora e la riga del modello, che prometterebbe un contatto,
+      // cede il posto alla proposta della call col consulente.
+      const passaggioBloccato = bloccaPassaggioLancio({
+        lancioStandard, passToHuman: result.passToHuman, esitoInPiedi,
+        appointmentFixed: result.appointmentFixed || result.outcome === 'APPUNTAMENTO',
+      });
+      const passaAPersona = result.passToHuman && !passaggioBloccato;
+      if (passaggioBloccato) {
+        await supabase.from('event_log').insert({
+          type: 'lancio_passaggio_umano_ignorato',
+          payload: { conversationId, crmLeadId, mario: true, risposta: (result.visibleReply ?? '').slice(0, 300) } as never,
+          message: `[lancio] conv ${conversationId}: Mario voleva passare la chat a una persona, proposta la call`,
+          level: 'info',
+        });
+        visibleReply = TESTO_LANCIO_NIENTE_PASSAGGIO;
+      }
       let watchedAt: string | null = null;
       // Rete di sicurezza: il tag [VIDEO_VISTO] il modello se lo dimentica nel 40% dei
       // casi. Se il video è già uscito e il lead scrive "fatto"/"visto", vale come
@@ -802,7 +826,7 @@ export async function drainMarioReplies(
       // "l'ho visto, ma voglio annullare" vale insieme videoWatched e disdetta, e la
       // NOTA_NOEMI ("diglielo adesso") sostituirebbe la risposta giusta con un
       // promemoria della preselezione mentre al CRM parte la nota di annullamento.
-      if (postino && videoConfermato && !gdoNoemiRemindedAt && !result.outcome && !result.passToHuman) {
+      if (postino && videoConfermato && !gdoNoemiRemindedAt && !result.outcome && !passaAPersona) {
         try {
           const retry = await generateMarioReply(history, {
             personaName: PERSONA_NAME[persona],
@@ -904,7 +928,7 @@ export async function drainMarioReplies(
 
       await supabase.from('event_log').insert({
         type: 'fenice_ai_reply',
-        payload: { conversationId, phone, appointmentFixed: result.appointmentFixed, passToHuman: result.passToHuman } as never,
+        payload: { conversationId, phone, appointmentFixed: result.appointmentFixed, passToHuman: passaAPersona } as never,
         message: `Mario ha risposto a ${phone}`, level: 'info',
       });
 
@@ -1018,7 +1042,7 @@ export async function drainMarioReplies(
         }
       }
 
-      if (result.passToHuman) {
+      if (passaAPersona) {
         // Il CRM ha un esito apposta (CONTATTO_UMANO, dal 05/08). Senza questa chiamata
         // la richiesta di parlare con una persona resta solo nel nostro database e
         // nessuno la vede: 6 casi fra i 338 lead che ci hanno segnalato come fermi.

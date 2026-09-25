@@ -3,6 +3,7 @@ import {
   FASI_FOLLOWUP, inFinestraFollowup, finestraFollowupChiusa, ancoraLancio, inboundDopo, haInteragito,
   ultimoTestoInbound, haDettoNo, decideFollowup, lancioFollowupText, lancioStandardContextNote,
   lancioStandardDrain, NOTA_CONGEDO_FOLLOWUP, type CandidataFollowup, linkSviluppatoreContextNote, eventoLancioPassato,
+  bloccaPassaggioLancio, NOTA_LANCIO_NIENTE_PASSAGGIO, TESTO_LANCIO_NIENTE_PASSAGGIO,
 } from './lancio-followup';
 import { fineNotteLancio } from './lancio-scelta';
 import type { RigaLancio } from './lancio-fase';
@@ -248,5 +249,25 @@ describe('eventoLancioPassato', () => {
     expect(eventoLancioPassato(EVT, Date.parse('2026-10-05T20:59:00+02:00'))).toBe(false);
     expect(eventoLancioPassato(null, Date.parse('2026-10-08T10:00:00+02:00'))).toBe(false);
     expect(eventoLancioPassato('boh', Date.parse('2026-10-08T10:00:00+02:00'))).toBe(false);
+  });
+});
+
+describe('bloccaPassaggioLancio (PO 25/09/2026: il lancio non passa mai un lead ai GDO)', () => {
+  const base = { lancioStandard: true, passToHuman: true, esitoInPiedi: null, appointmentFixed: false };
+  it('chat del lancio senza appuntamento: il passaggio si blocca', () => {
+    expect(bloccaPassaggioLancio(base)).toBe(true);
+  });
+  it('appuntamento gia registrato o fissato in questo turno: il passaggio resta (va alle Conferme)', () => {
+    expect(bloccaPassaggioLancio({ ...base, esitoInPiedi: 'APPUNTAMENTO' })).toBe(false);
+    expect(bloccaPassaggioLancio({ ...base, appointmentFixed: true })).toBe(false);
+  });
+  it('fuori dal lancio o senza tag non cambia niente', () => {
+    expect(bloccaPassaggioLancio({ ...base, lancioStandard: false })).toBe(false);
+    expect(bloccaPassaggioLancio({ ...base, passToHuman: false })).toBe(false);
+  });
+  it('la frase e la nota non promettono un contatto e portano alla call', () => {
+    expect(TESTO_LANCIO_NIENTE_PASSAGGIO).toMatch(/consulente/);
+    expect(TESTO_LANCIO_NIENTE_PASSAGGIO).not.toMatch(/collega|ti contatt|ti richiam/);
+    expect(NOTA_LANCIO_NIENTE_PASSAGGIO).toMatch(/Non usare MAI \[PASSAGGIO_UMANO\]/);
   });
 });
