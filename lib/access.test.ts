@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { areaForEmail, canAccess, landingPath, puoModificareLancio } from './access';
+import { areaForEmail, canAccess, landingPath, puoModificareLancio, puoVedereMonitorLancio } from './access';
 
 describe('access map', () => {
   it('fenicebot vede solo fenice', () => {
@@ -91,5 +91,15 @@ describe('puoModificareLancio — chi scrive le impostazioni del lancio', () => 
   });
   it('il maiuscolo non apre una porta: FENICEBOT resta in sola lettura', () => {
     expect(puoModificareLancio('FeniceBot@Fenice.com')).toBe(false);
+  });
+});
+
+describe('puoVedereMonitorLancio — chi apre /fenice/lancio', () => {
+  it('solo gli admin (area all): il bot, le campagne e la chat no', () => {
+    expect(puoVedereMonitorLancio('brunoiacopo02@gmail.com')).toBe(true);
+    expect(puoVedereMonitorLancio('fenicebot@fenice.com')).toBe(false);
+    expect(puoVedereMonitorLancio('FeniceBot@Fenice.com')).toBe(false);
+    expect(puoVedereMonitorLancio('campagne@fenice.com')).toBe(false);
+    expect(puoVedereMonitorLancio('fenice@academy.com')).toBe(false);
   });
 });

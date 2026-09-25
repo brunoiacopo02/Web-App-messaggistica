@@ -38,6 +38,13 @@ export function puoModificareLancio(email: string | null | undefined): boolean {
   return areaForEmail(email) === 'all';
 }
 
+/** Chi vede il monitor del lancio (/fenice/lancio): gli admin, cioe' l'area `all`.
+ *  Il monitor mostra nomi, telefoni e chat di migliaia di iscritti: un account confinato
+ *  a /fenice (il bot) non ne ha bisogno. E' in sola lettura, ma resta una vetrina. */
+export function puoVedereMonitorLancio(email: string | null | undefined): boolean {
+  return areaForEmail(email) === 'all';
+}
+
 /** Dove mandare l'utente dopo il login. */
 export function landingPath(email: string | null | undefined): string {
   const area = areaForEmail(email);
