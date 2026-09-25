@@ -322,7 +322,9 @@ export async function GET(req: NextRequest) {
         ).length;
         await sendOutcome(supabase, c.id, {
           outcome: 'NON_RISPOSTO',
-          note: `Sequenza completa: ${nDelivered} messaggi consegnati in 12 giorni, mai una risposta. Da provare a voce.`,
+          // Niente durata nella nota: "12 giorni" era rimasto dalla sequenza lunga, la
+          // soglia vera è SEQUENCE_END_DAYS (4 giorni dal primo messaggio).
+          note: `Sequenza completa: ${nDelivered} messaggi consegnati, mai una risposta. Da provare a voce.`,
         });
         report.push({ id: c.id, action });
       } else if (action === 'interrotto_classify') {
