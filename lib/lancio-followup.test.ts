@@ -290,3 +290,20 @@ describe('pulsanteDopoNotteContextNote (PO 25/09)', () => {
     expect(n).not.toMatch(/registrazione della live:/);
   });
 });
+
+describe('iscrittoDopoLiveContextNote (PO 25/09)', () => {
+  it('col link: la live c e gia stata, registrazione al posto dei video classici', async () => {
+    const { iscrittoDopoLiveContextNote } = await import('./lancio-followup');
+    const n = iscrittoDopoLiveContextNote('https://x/live');
+    expect(n).toMatch(/la live era gia' finita/);
+    expect(n).toMatch(/gli mandi la registrazione/);
+    expect(n).toContain('https://x/live');
+    expect(n).toMatch(/fissa la call/);
+  });
+  it('senza link (lancio_video_live_link vuoto): la registrazione non si promette', async () => {
+    const { iscrittoDopoLiveContextNote } = await import('./lancio-followup');
+    const n = iscrittoDopoLiveContextNote('  ');
+    expect(n).toMatch(/non promettergliela/);
+    expect(n).not.toMatch(/gli mandi la registrazione/);
+  });
+});

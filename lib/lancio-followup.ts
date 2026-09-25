@@ -290,6 +290,35 @@ export function pulsanteDopoNotteContextNote(i: {
 }
 
 /**
+ * Nota di contesto per chi si e' iscritto alla live quando era gia' finita, o era rimasto
+ * in coda senza benvenuto (decisione PO 25/09): la live non l'ha vista. Mario gli dice
+ * che c'e' gia' stata, gli manda la registrazione e fissa la call come sempre.
+ *
+ * Senza `lancio_video_live_link` la registrazione NON si promette: si fissa la call coi
+ * video classici (e il drain lascia il warn `lancio_video_live_link_missing`, una volta
+ * per chat). Promettere un link che non c'e' e' peggio che non nominarlo.
+ */
+export function iscrittoDopoLiveContextNote(videoLiveLink: string | null): string {
+  const righe = [
+    "CONTESTO LANCIO WEB DEVELOPER AI: questo lead si e' iscritto alla live gratuita del percorso Web Developer AI del 5 ottobre, ma la live era gia' finita e non l'ha vista.",
+  ];
+  const link = videoLiveLink?.trim();
+  if (link) {
+    righe.push(
+      "Nel tuo primo messaggio digli che la live c'e' gia' stata e che gli mandi la registrazione, poi fissa la call.",
+      `Il video di preparazione da mandargli e' UNO SOLO ed e' la registrazione della live: ${link}`,
+      "Usa questo link al posto dei quattro link conferenza-* del blocco sul video, in ogni punto in cui manderesti il video. Non chiedere se lavora o ha famiglia per scegliere il video: il video e' questo.",
+    );
+  } else {
+    righe.push(
+      "Se ne parla, digli che la live c'e' gia' stata. La registrazione non ce l'hai: non promettergliela e non inventare link.",
+    );
+  }
+  righe.push("Per il resto il flusso e' quello standard: fissa la call con il consulente come sempre.");
+  return righe.join('\n');
+}
+
+/**
  * Nota di contesto per chi ci scrive dal link "professione dello Sviluppatore AI" (PO
  * 24/09/2026). Il flusso e' quello standard, come dopo il follow-up; cambiano l'apertura
  * e il video. Dopo la live Mario chiede se l'ha vista, e il video di preparazione e' la

@@ -21,6 +21,7 @@ import { eseguiTurnoLancio } from './lancio-turno';
 import {
   lancioStandardDrain, lancioStandardContextNote, linkSviluppatoreContextNote, eventoLancioPassato,
   bloccaPassaggioLancio, NOTA_LANCIO_NIENTE_PASSAGGIO, TESTO_LANCIO_NIENTE_PASSAGGIO, pulsanteDopoNotteContextNote,
+  iscrittoDopoLiveContextNote,
 } from './lancio-followup';
 import { LANCIO_INGRESSO_LINK_SVILUPPATORE } from './primo-messaggio';
 import { getLancioSettings, type LancioSettings } from './lancio-settings';
@@ -757,7 +758,9 @@ export async function drainMarioReplies(
       // persona non ha mai ricevuto niente da noi, ed e' proprio il caso in cui serve.
       const notaLancio = dopoNotte
         ? [
-            pulsanteDopoNotteContextNote({ da: dopoNotte.da, videoLiveLink: videoLive, risposte: risposteRiscaldamento(lancio.lancio_info) }),
+            dopoNotte.da === 'iscritto_dopo_live'
+              ? iscrittoDopoLiveContextNote(videoLive)
+              : pulsanteDopoNotteContextNote({ da: dopoNotte.da, videoLiveLink: videoLive, risposte: risposteRiscaldamento(lancio.lancio_info) }),
             notaPrimo,
           ].filter(Boolean).join('\n\n')
         : daLinkSviluppatore

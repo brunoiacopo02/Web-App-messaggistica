@@ -58,6 +58,8 @@ const stato = {
    *  e' l'ancora da cui si contano i benvenuti gia' partiti. Vuota = nessun evento, e si
    *  conta su tutta la cronologia come si e' sempre fatto. */
   ingressi: new Map<number, string>(),
+  /** Le fasi scritte dal passaggio a Mario dopo la live (PO 25/09). */
+  fasiScritte: [] as Record<string, unknown>[],
 };
 
 const valore = (rec: Chiamata, colonna: string) => rec.filtri.find(([c]) => c === colonna)?.[1];
@@ -66,6 +68,12 @@ function esegui(rec: Chiamata): { data: unknown; error: unknown; count?: number 
   if (rec.table === 'conversations' && rec.op === 'update') {
     const campi = rec.arg as Record<string, unknown>;
     const id = Number(valore(rec, 'id'));
+    // La fase (passaggio a Mario dopo la live, `impostaFaseLancio` con `soloDaFasi`):
+    // la guardia sulla fase di partenza tiene, la riga torna.
+    if ('lancio_fase' in campi) {
+      stato.fasiScritte.push({ id, ...campi });
+      return { data: [{ id }], error: null };
+    }
     if (!('lancio_benvenuto_at' in campi)) return { data: [], error: null };
     if (campi.lancio_benvenuto_at === null) {
       // Rilascio ancorato: si libera solo il timbro scritto da questo run.
@@ -215,6 +223,7 @@ beforeEach(() => {
   stato.timbri = new Map();
   stato.messagesInsertKo = false;
   stato.convSelectError = null;
+  stato.fasiScritte = [];
   stato.benvenutiUltimaOra = 0;
   stato.conteggioError = null;
   stato.ingressi = new Map();
@@ -242,15 +251,16 @@ describe('GET /api/cron/lancio-aperture', () => {
 
   // `lancio_evento_at` rimasto indietro: tutte le finestre del lancio si derivano da
   // quella data, e senza questo allarme i cron escono "fuori_finestra" a livello info.
-  it('lancio_evento_at nel passato: evento error, e il run continua', async () => {
+  it('lancio_evento_at nel passato: evento error, e (PO 25/09) nessun benvenuto: la coda passa a Mario', async () => {
     stato.eventoAt = '2026-09-17T21:00:00+02:00';
     stato.convs = [conv(1)];
     await richiesta();
     const allarme = eventi().find((e) => e.type === 'lancio_evento_at_nel_passato');
     expect(allarme?.level).toBe('error');
     expect(allarme?.payload).toMatchObject({ cron: 'lancio-aperture', evento_giorno: '2026-09-17', oggi: '2026-09-20' });
-    // Non blocca: il benvenuto parte lo stesso.
-    expect(sendTemplate).toHaveBeenCalledTimes(1);
+    // Con la data nel passato la live "e' finita": nessun benvenuto con un link morto.
+    expect(sendTemplate).not.toHaveBeenCalled();
+    expect(tipiEvento()).toContain('lancio_benvenuto_dopo_live_a_mario');
   });
 
   it('data dell evento nel futuro: nessun allarme', async () => {
@@ -749,5 +759,40 @@ describe('GET /api/cron/lancio-aperture — benvenuto a due variabili', () => {
       variables: { '1': 'Mario' },
     });
     expect(insertIn('messages')[0].body).not.toContain(ZOOM);
+  });
+});
+
+// Decisione PO del 25/09: dopo la live (evento + 100') nessun benvenuto parte piu'. La
+// coda rimasta senza benvenuto passa a Mario standard con la nota della registrazione.
+describe('GET /api/cron/lancio-aperture — dopo la live (PO 25/09)', () => {
+  it('un minuto prima del taglio (evento + 99 minuti) il benvenuto parte ancora', async () => {
+    vi.setSystemTime(new Date('2026-10-05T22:39:00+02:00'));
+    stato.eventoAt = '2026-10-05T21:00:00+02:00';
+    stato.convs = [conv(1)];
+    await richiesta();
+    expect(sendTemplate).toHaveBeenCalledTimes(1);
+    expect(stato.fasiScritte).toHaveLength(0);
+  });
+
+  it('da evento + 100 minuti: nessun benvenuto, la coda va a Mario in fase chiuso col marcatore', async () => {
+    vi.setSystemTime(new Date('2026-10-05T22:40:00+02:00'));
+    stato.eventoAt = '2026-10-05T21:00:00+02:00';
+    stato.convs = [conv(1), conv(2, { crm_lead_id: null })];
+    const res = await (await richiesta()).json();
+    expect(sendTemplate).not.toHaveBeenCalled();
+    expect(res).toMatchObject({ motivo: 'dopo_live', candidati: 2, inviati: 0, passatiAMario: 2, senzaLeadCrm: 1 });
+    expect(stato.fasiScritte.map((f) => f.lancio_fase)).toEqual(['chiuso', 'chiuso']);
+    expect(stato.fasiScritte[0].lancio_info).toMatchObject({ mario_dopo_notte: { da: 'iscritto_dopo_live' } });
+    expect(tipiEvento().filter((t) => t === 'lancio_benvenuto_dopo_live_a_mario')).toHaveLength(2);
+  });
+
+  it('dopo la live vale anche a lancio spento e di notte: non parte nessun messaggio da qui', async () => {
+    vi.setSystemTime(new Date('2026-10-06T02:00:00+02:00'));
+    stato.attivo = '0';
+    stato.eventoAt = '2026-10-05T21:00:00+02:00';
+    stato.convs = [conv(1)];
+    const res = await (await richiesta()).json();
+    expect(res).toMatchObject({ motivo: 'dopo_live', passatiAMario: 1 });
+    expect(sendTemplate).not.toHaveBeenCalled();
   });
 });

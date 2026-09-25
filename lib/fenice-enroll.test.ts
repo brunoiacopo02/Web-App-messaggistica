@@ -1441,3 +1441,70 @@ describe('apreSopraChatViva', () => {
     expect(apreSopraChatViva({ ...adottato, haOutboundPartito: false })).toBe(false);
   });
 });
+
+// Decisione PO del 25/09: dopo la live (evento + 100') nessun benvenuto del lancio. Chi
+// si iscrive dopo lo prende Mario standard: apertura di Mario, chat nel lancio in fase
+// `chiuso` col marcatore che fa usare al drain la nota della registrazione.
+describe('enrollLeadIntoMario — ramo lancio dopo la live (PO 25/09)', () => {
+  const LANCIO = { slug: 'webdev-2026-10', ingresso: 'lista' as const };
+  const ARGS = { phone: '+393331234567', firstName: 'ANNA', crmLeadId: 'crm-L1', crmFunnel: 'Lancio Web Dev AI', lancio: LANCIO };
+  const EVENTO = '2026-10-05T21:00:00+02:00';
+
+  beforeEach(() => {
+    vi.stubEnv('LANCIO_WELCOME_TEMPLATE_SID', 'HX_LANCIO_WELCOME');
+    vi.stubEnv('NEW_OPENING_ENABLED', '');
+    vi.mocked(getLancioSettings).mockResolvedValue({ attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null, eventoAt: EVENTO, blastPerimetro: 'tutti', sender: 'principale', quotaSecondario: 0 });
+  });
+
+  it('durante la live (21:30 del 5) il benvenuto parte come sempre', async () => {
+    vi.setSystemTime(Date.parse('2026-10-05T21:30:00+02:00'));
+    const { supabase } = makeSupabase();
+    await enrollLeadIntoMario(supabase, ARGS);
+    expect(vi.mocked(sendTemplateAndLog).mock.calls[0][3]).toBe('HX_LANCIO_WELCOME');
+  });
+
+  it('il 6 mattina: niente benvenuto, apertura di Mario, chat del lancio in fase chiuso col marcatore', async () => {
+    vi.setSystemTime(Date.parse('2026-10-06T10:00:00+02:00'));
+    const { supabase, calls } = makeSupabase();
+    const res = await enrollLeadIntoMario(supabase, ARGS);
+    expect(res.ok).toBe(true);
+    expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendTemplateAndLog).mock.calls[0][3]).toBe('HX_OPENING');
+    const lancio = calls.updates.find((u) => u.lancio_fase === 'chiuso');
+    expect(lancio).toMatchObject({ lancio_slug: 'webdev-2026-10', lancio_ingresso: 'lista', lancio_benvenuto_at: null, bot_outcome: null });
+    expect(lancio.lancio_info).toMatchObject({ mario_dopo_notte: { da: 'iscritto_dopo_live' } });
+    expect(calls.updates.some((u) => u.lancio_fase === 'attesa')).toBe(false);
+    expect(calls.events.find((e) => e.type === 'lancio_intake').payload).toMatchObject({ dopoLive: true, aMario: true });
+  });
+
+  it('vale anche a lancio spento: da qui non parte nessun messaggio del lancio', async () => {
+    vi.setSystemTime(Date.parse('2026-10-06T10:00:00+02:00'));
+    vi.mocked(getLancioSettings).mockResolvedValue({ attivo: false, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null, eventoAt: EVENTO, blastPerimetro: 'tutti', sender: 'principale', quotaSecondario: 0 });
+    const { supabase } = makeSupabase();
+    await enrollLeadIntoMario(supabase, ARGS);
+    expect(vi.mocked(sendTemplateAndLog).mock.calls[0][3]).toBe('HX_OPENING');
+  });
+
+  it('gia nel lancio a meta strada (posto bloccato): nessun messaggio, fase intatta', async () => {
+    vi.setSystemTime(Date.parse('2026-10-06T10:00:00+02:00'));
+    const { supabase, calls } = makeSupabase(0, false, {
+      lancioRow: { lancio_slug: 'webdev-2026-10', lancio_fase: 'posto_bloccato', lancio_benvenuto_at: '2026-09-30T10:00:00Z' },
+    });
+    const res = await enrollLeadIntoMario(supabase, ARGS);
+    expect(res).toMatchObject({ ok: true, duplicato: true });
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+    expect(calls.updates.some((u) => 'lancio_fase' in u)).toBe(false);
+  });
+
+  it('gia nel lancio ma ancora in coda senza benvenuto: passa a Mario anche lui', async () => {
+    vi.setSystemTime(Date.parse('2026-10-06T10:00:00+02:00'));
+    const { supabase, calls } = makeSupabase(0, false, {
+      lancioRow: { lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa', lancio_benvenuto_at: null },
+    });
+    await enrollLeadIntoMario(supabase, ARGS);
+    expect(vi.mocked(sendTemplateAndLog).mock.calls[0][3]).toBe('HX_OPENING');
+    const lancio = calls.updates.find((u) => u.lancio_fase === 'chiuso');
+    // L'ingresso di allora resta: non si riscrive.
+    expect('lancio_ingresso' in lancio).toBe(false);
+  });
+});

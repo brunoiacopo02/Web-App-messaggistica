@@ -8,11 +8,14 @@ import { getLancioSettings } from '@/lib/lancio-settings';
 import {
   decideAperturaLancio,
   riassumiOutboundLancio,
+  benvenutoLancioChiuso,
   CODICE_FREQUENCY_CAP,
   type RigaOutbound,
 } from '@/lib/lancio-aperture';
 import { leggiTettoOrario, sottoTettoOrario } from '@/lib/lancio-tetto';
-import { contaBenvenutiUltimaOra, leggiIngressiLancioAt } from '@/lib/lancio-db';
+import { contaBenvenutiUltimaOra, leggiIngressiLancioAt, impostaFaseLancio } from '@/lib/lancio-db';
+import { conMarioDopoNotte } from '@/lib/lancio-fase';
+import type { Json } from '@/lib/supabase/types';
 import { inOpeningWindow } from '@/lib/sequence';
 import { componiBenvenutoLancio, messaggioBenvenutoNonComponibile } from '@/lib/lancio-benvenuto';
 import { logCronQueryError } from '@/lib/cron-query-error';
@@ -83,6 +86,71 @@ async function logEvento(
   await supabase.from('event_log').insert({ type, payload: payload as never, message, level });
 }
 
+/**
+ * La coda dei benvenuti rimasta a live finita passa a Mario standard (PO 25/09). Stessa
+ * query dei candidati (lancio, `attesa`, mai servite, attive, non in pausa); la fase si
+ * scrive con `impostaFaseLancio` e la guardia `soloDaFasi: ['attesa']`, cosi' una chat
+ * che nel frattempo si e' mossa (il lead ha scritto, il turno l'ha portata avanti) non
+ * torna indietro. Una chat senza `crm_lead_id` non la vede `sequence-touches`: si conta a
+ * parte, e va guardata a mano.
+ */
+async function passaCodaAMario(supabase: Supa, attivo: boolean): Promise<NextResponse> {
+  const coda: { id: number; crm_lead_id: string | null; lancio_info: unknown }[] = [];
+  let queryKo = false;
+  for (let pagina = 0; pagina < MAX_PAGINE; pagina++) {
+    const { data, error } = await supabase
+      .from('conversations')
+      .select('id, crm_lead_id, lancio_info')
+      .not('lancio_slug', 'is', null)
+      .eq('lancio_fase', 'attesa')
+      .eq('ai_status', 'active')
+      .is('ai_paused_at', null)
+      .is('lancio_benvenuto_at', null)
+      .order('id', { ascending: true })
+      .range(pagina * 1000, pagina * 1000 + 999);
+    if (error) {
+      queryKo = true;
+      await logCronQueryError(supabase, 'lancio_aperture_query_error', error);
+      break;
+    }
+    const lotto = (data ?? []) as unknown as typeof coda;
+    coda.push(...lotto);
+    if (lotto.length < 1000) break;
+  }
+  const at = new Date().toISOString();
+  let passati = 0;
+  let nonPassati = 0;
+  let senzaLeadCrm = 0;
+  for (const c of coda) {
+    const esito = await impostaFaseLancio(
+      supabase, c.id, 'chiuso',
+      { lancio_info: conMarioDopoNotte(c.lancio_info, 'iscritto_dopo_live', at) as unknown as Json },
+      { soloDaFasi: ['attesa'] },
+    );
+    if (esito !== 'cambiata') {
+      nonPassati++;
+      continue;
+    }
+    passati++;
+    if (!c.crm_lead_id) senzaLeadCrm++;
+    await logEvento(
+      supabase,
+      'lancio_benvenuto_dopo_live_a_mario',
+      { conversationId: c.id, crmLeadId: c.crm_lead_id },
+      `[lancio] conv ${c.id}: live finita senza benvenuto, la chat passa a Mario standard${c.crm_lead_id ? '' : ' (SENZA crm_lead_id: la sequenza non la vede, guardarla a mano)'}`,
+      c.crm_lead_id ? 'info' : 'warn',
+    );
+  }
+  await logEvento(
+    supabase,
+    'lancio_aperture_run',
+    { motivo: 'dopo_live', candidati: coda.length, inviati: 0, passatiAMario: passati, nonPassati, senzaLeadCrm, queryKo, attivo },
+    `[lancio] benvenuti differiti: live finita, ${passati} chat passate a Mario standard (${nonPassati} non passate, ${senzaLeadCrm} senza lead CRM)`,
+    queryKo || nonPassati > 0 || senzaLeadCrm > 0 ? 'warn' : 'info',
+  );
+  return NextResponse.json({ ok: true, motivo: 'dopo_live', candidati: coda.length, inviati: 0, passatiAMario: passati, nonPassati, senzaLeadCrm, queryKo, attivo });
+}
+
 export async function GET(req: NextRequest) {
   if (!authorized(req)) return new NextResponse('unauthorized', { status: 401 });
 
@@ -108,6 +176,21 @@ export async function GET(req: NextRequest) {
   const settings = await getLancioSettings(supabase);
   const now = Date.now();
   const maxPerRun = Math.max(1, Number(process.env.LANCIO_APERTURE_MAX_PER_RUN) || 100);
+
+  // Dopo la live (decisione PO del 25/09) il benvenuto non parte piu' — un benvenuto
+  // differito direbbe "lunedi' 5 alle 21" col link Zoom di una live finita. Chi e' rimasto
+  // in coda senza benvenuto passa a Mario standard, come chi si iscrive dopo
+  // (`enrollLancio`): fase `chiuso` col marcatore della nota "la live c'e' gia' stata",
+  // e l'apertura la manda `sequence-touches` con le sue regole. Da qui non parte nessun
+  // messaggio, quindi non conta ne' il kill-switch del lancio ne' la fascia oraria.
+  //
+  // ATTENZIONE: se `lancio_evento_at` resta indietro (una prova generale non riportata
+  // al 5/10) questo ramo scatta PRIMA della live e manda a Mario gli iscritti senza
+  // benvenuto. Per questo, a lancio acceso, l'allarme della data stantia suona anche qui.
+  if (benvenutoLancioChiuso(now, settings.eventoAt)) {
+    if (settings.attivo) await allarmeEventoStantio(supabase, 'lancio-aperture', new Date(now), settings.eventoAt);
+    return passaCodaAMario(supabase, settings.attivo);
+  }
 
   // Kill-switch e fascia oraria valgono per TUTTI i candidati: si esce prima di
   // leggere anche una sola conversazione (il cron gira ogni 15', di notte gira a vuoto

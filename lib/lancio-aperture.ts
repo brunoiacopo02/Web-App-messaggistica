@@ -33,6 +33,28 @@ export const CODICE_FREQUENCY_CAP = 63049;
  *  lo stesso buffer 5' dei cron che tagliano la cronologia su `ai_started_at`. */
 export const BUFFER_ANCORA_MS = 5 * 60_000;
 
+/**
+ * Dopo quanti minuti dall'inizio della live il benvenuto del lancio non parte piu'
+ * (decisione PO del 25/09): la live dura ~90 minuti, piu' 10 di margine per chi resta
+ * collegato. Da `lancio_evento_at` + 100' in poi un benvenuto direbbe ancora "lunedi' 5
+ * alle 21" con un link Zoom morto: chi si iscrive dopo — o era in coda senza benvenuto —
+ * lo prende Mario standard, che fissa la call e manda la registrazione
+ * (`lancio_video_live_link`).
+ */
+export const BENVENUTO_CHIUSO_MIN_DOPO_EVENTO = 100;
+
+/**
+ * La finestra del benvenuto e' chiusa? Vero da `lancio_evento_at` + 100' in poi.
+ * Evento assente o illeggibile = no: senza una data non si chiude niente, e si resta sul
+ * comportamento di prima (benvenuto se il lancio e' acceso).
+ */
+export function benvenutoLancioChiuso(nowMs: number, eventoAtIso: string | null | undefined): boolean {
+  if (!eventoAtIso) return false;
+  const t = Date.parse(eventoAtIso);
+  if (Number.isNaN(t)) return false;
+  return nowMs >= t + BENVENUTO_CHIUSO_MIN_DOPO_EVENTO * 60_000;
+}
+
 export type AperturaLancioAzione = 'invia' | 'attendi' | 'salta';
 
 /** Una riga `messages` in uscita, come serve qui. */

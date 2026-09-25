@@ -192,7 +192,13 @@ update app_settings set value = '"https://…"'::jsonb    where key = 'lancio_vi
 
 ### 4/10 — preparazione
 - [ ] Tutta la sezione 2 spuntata.
-- [ ] `lancio_attivo` = **false** (si accende domani), `lancio_pulsante_attivo` = **false**.
+- [ ] `lancio_attivo` resta **true** (decisione PO 25/09: il lancio **non si spegne** il 4/10;
+      chi si iscrive il 4 e il 5 riceve subito il benvenuto). `lancio_pulsante_attivo` =
+      **false**.
+- [ ] **Turni venditori "sera" del 5/10 caricati su `/lancio` (CRM, `launchShifts`) entro
+      lunedì 5/10 alle 14:00**, non dopo le 21: il pulsante della sera legge il turno SERA
+      per la chiamata immediata, e un turno vuoto alle 21 vuol dire `nessun_venditore`.
+      Insieme, il turno "giorno dopo" del 6/10.
 - [ ] `lancio_blast_perimetro` = `tutti`, `lancio_sender` = `principale`.
 - [ ] `lancio_quota_secondario` = **0**, salvo decisione di Bruno. E' la quota di
       riscaldamento del numero nuovo sui **benvenuti** del lancio: 9 vuol dire uno dal
@@ -202,9 +208,11 @@ update app_settings set value = '"https://…"'::jsonb    where key = 'lancio_vi
       spedibile dal numero nuovo parte comunque dal vecchio con un
       `lancio_mittente_ripiego` (warn) in `event_log`.
 
-### 5/10 ore 18:00 — go / no-go
-- [ ] Qualità del numero ≥ MEDIUM e limite ≥ 10K (`node scripts/qualita-numero.mjs`).
-- [ ] **Go:** `lancio_attivo` = **true**.
+### 5/10 ore 18:00 — controllo qualità del numero
+- [ ] Qualità del numero ≥ MEDIUM e limite ≥ 10K (`node scripts/qualita-numero.mjs`). È un
+      **controllo**, non un interruttore: `lancio_attivo` è già `true` e **non si spegne**
+      (decisione PO 25/09). Se la qualità è bassa si usa il piano B qui sotto.
+- [ ] Controllo di sicurezza: turni "sera" presenti su `/lancio` (scadenza 14:00, vedi 4/10).
 - [ ] **Piano B** (qualità bassa o limite stretto): `lancio_blast_perimetro` = `risposto` —
       il link Zoom va solo a chi ha risposto almeno una volta. Si decide **adesso**, non a
       blast partito.
@@ -232,10 +240,31 @@ e' partito da quello storico) · `lancio_apertura_freq_capped` · `lancio_fase_n
 ### 5/10 dopo le 21:00 — il pulsante
 - [ ] `lancio_pulsante_attivo` = **true** **SOLO dopo le 21:00**, poco prima del pitch. Acceso
       prima, chi scrive per caso quella frase entra nel dopo-pitch a vuoto.
-- [ ] Turni venditori "sera" caricati su `/lancio` (CRM).
+- [ ] Turni venditori "sera" **già** caricati su `/lancio` (CRM) dalle 14:00: qui si verifica
+      soltanto, non si caricano.
 - [ ] Da guardare: `lancio_pulsante` (anche `orfano` col motivo), `lancio_scelta`,
       `lancio_slots_mostrati`, `lancio_slots_vuoti`, `lancio_slots_non_letti`,
       `lancio_crm_call`, `lancio_crm_errore`, `lancio_giro_interrotto`.
+
+### 5/10 dalle 22:40 in poi — niente più benvenuti (decisione PO 25/09)
+- [ ] Da `lancio_evento_at` + 100 minuti (`BENVENUTO_CHIUSO_MIN_DOPO_EVENTO`, cioè le
+      22:40 del 5) **nessun benvenuto del lancio parte più**, né all'intake
+      (`fenice-enroll`) né dal cron `lancio-aperture`, a lancio acceso o spento.
+- [ ] Chi si iscrive dopo, o era rimasto in coda senza benvenuto, passa a **Mario
+      standard**: chat nel lancio in fase `chiuso` con `lancio_info.mario_dopo_notte.da` =
+      `iscritto_dopo_live`, apertura di Mario (dal CRM subito se in fascia 07-23,
+      altrimenti da `sequence-touches`), e alla prima risposta Mario manda la
+      registrazione (`lancio_video_live_link`) e fissa la call.
+      Da guardare: `lancio_intake` con `dopoLive: true`, `lancio_benvenuto_dopo_live_a_mario`,
+      `lancio_aperture_run` con `motivo: 'dopo_live'` (`senzaLeadCrm` > 0 = chat che la
+      sequenza non vede: guardarle a mano).
+- [ ] **`lancio_video_live_link` va impostato appena c'è la registrazione.** Vuoto, Mario
+      non la promette (nota apposta) e usa i video classici; resta un
+      `lancio_video_live_link_missing` (warn) una volta per chat.
+- [ ] **Una data stantia ora costa di più:** se `lancio_evento_at` resta nel passato prima
+      del 5/10 (una prova generale non riportata indietro), per il codice la live è già
+      finita — i nuovi iscritti non ricevono il benvenuto e vanno a Mario. L'allarme
+      `lancio_evento_at_nel_passato` suona anche su questo ramo: va guardato.
 
 ### 6/10 ore 11:30 — **il controllo che vale più di tutti gli altri**
 
@@ -390,4 +419,5 @@ tengono i già serviti fuori dalla coda.
 - [ ] **`LANCIO_WEBDEV_INTAKE`**: l'interruttore dell'intake lato CRM è ancora spento. Va
       acceso quando Bruno dà il via alla lista 132.
 - [ ] **Turni venditori su `/lancio`**: turno "sera" del 5/10 e turno "giorno dopo" del 6/10
-      compilati, con le ore dichiarate nel calendario disponibilità.
+      compilati, con le ore dichiarate nel calendario disponibilità — **entro lunedì 5/10
+      alle 14:00** (decisione PO 25/09), non la sera.

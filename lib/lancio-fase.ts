@@ -77,10 +77,13 @@ export function pulsantePassaAMario(fase: string | null | undefined): boolean {
  * webinar: dice al drain QUALE nota di contesto usare (chi ha visto la live e ha premuto
  * il pulsante non e' chi ha risposto al follow-up del giorno dopo) e conserva, accanto,
  * le risposte del riscaldamento gia' date la sera. `da`: 'pulsante' = premuto dal 6 in
- * poi; 'post_pitch' = premuto la sera, la chat ha attraversato le 03:00 a meta' scelta.
+ * poi; 'post_pitch' = premuto la sera, la chat ha attraversato le 03:00 a meta' scelta;
+ * 'iscritto_dopo_live' = iscritto (o rimasto in coda senza benvenuto) quando la live era
+ * gia' finita, vedi `benvenutoLancioChiuso`.
  */
 export const CHIAVE_MARIO_DOPO_NOTTE = 'mario_dopo_notte';
-export type MarioDopoNotte = { da: 'pulsante' | 'post_pitch'; at: string };
+export type MarioDopoNotte = { da: 'pulsante' | 'post_pitch' | 'iscritto_dopo_live'; at: string };
+const DA_MARIO_DOPO_NOTTE: ReadonlySet<string> = new Set(['pulsante', 'post_pitch', 'iscritto_dopo_live']);
 
 export function conMarioDopoNotte(info: unknown, da: MarioDopoNotte['da'], at: string): Record<string, unknown> {
   const base = info && typeof info === 'object' && !Array.isArray(info) ? (info as Record<string, unknown>) : {};
@@ -92,8 +95,8 @@ export function marioDopoNotte(info: unknown): MarioDopoNotte | null {
   const v = (info as Record<string, unknown>)[CHIAVE_MARIO_DOPO_NOTTE];
   if (!v || typeof v !== 'object') return null;
   const { da, at } = v as { da?: unknown; at?: unknown };
-  if ((da !== 'pulsante' && da !== 'post_pitch') || typeof at !== 'string') return null;
-  return { da, at };
+  if (typeof da !== 'string' || !DA_MARIO_DOPO_NOTTE.has(da) || typeof at !== 'string') return null;
+  return { da: da as MarioDopoNotte['da'], at };
 }
 
 /** Le risposte del riscaldamento salvate in `lancio_info.risposte` (solo stringhe). */

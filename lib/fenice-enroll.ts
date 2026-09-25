@@ -7,7 +7,8 @@ import { firstNameOf, templateName } from './name';
 import type { GdoVariant, LancioIntake } from './bot-contract';
 import { gdoAgendaText, videoLinkForVariant } from './gdo-agenda';
 import { getLancioSettings } from './lancio-settings';
-import { lancioRipartePerRiarruolamento } from './lancio-fase';
+import { lancioRipartePerRiarruolamento, conMarioDopoNotte } from './lancio-fase';
+import { benvenutoLancioChiuso } from './lancio-aperture';
 import { componiBenvenutoLancio, messaggioBenvenutoNonComponibile } from './lancio-benvenuto';
 import { leggiTettoOrario, sottoTettoOrario } from './lancio-tetto';
 import { contaBenvenutiUltimaOra } from './lancio-db';
@@ -626,6 +627,44 @@ async function enrollLancio(
       message,
       level: 'info',
     });
+
+  // Dopo la live (decisione PO del 25/09): nessun benvenuto del lancio, a nessuno. Da
+  // `lancio_evento_at` + 100' il benvenuto direbbe "lunedi' 5 alle 21" con un link Zoom
+  // morto. Vale a lancio acceso o spento, perche' qui non parte nessun messaggio del lancio.
+  if (benvenutoLancioChiuso(Date.now(), settings.eventoAt)) {
+    // Gia' dentro questo lancio e oltre la coda del benvenuto (l'ha avuto, o la fase e'
+    // avanzata): e' il ri-arruolamento di sempre, che non tocca niente. Si aggiorna solo
+    // il legame col CRM, e nessun messaggio parte.
+    const aMetaStrada = giaInQuestoLancio && !(fasePrima === 'attesa' && !stato?.lancio_benvenuto_at);
+    if (aMetaStrada) {
+      await supabase.from('conversations')
+        .update({ ...(args.crmLeadId ? { crm_lead_id: args.crmLeadId } : {}), ...(args.crmFunnel ? { crm_funnel: args.crmFunnel } : {}) })
+        .eq('id', conversationId);
+      await evento({ dopoLive: true, nessunBenvenuto: true, fasePreservata: fasePrima },
+        `[lancio] lead ${args.crmLeadId ?? args.phone} dopo la live, gia' nel lancio (fase ${fasePrima ?? 'nulla'}): nessun benvenuto`);
+      return { ok: true, conversationId, duplicato: true };
+    }
+    // Iscritto adesso, o rimasto in coda senza benvenuto: lo prende Mario standard, come
+    // chi arriva dal link "professione dello Sviluppatore AI" (f8400a0). La chat entra nel
+    // lancio gia' in fase `chiuso` — fuori da blast, follow-up e restituzioni — col
+    // marcatore che fa usare al drain la nota "la live c'e' gia' stata, ecco la
+    // registrazione". Poi l'apertura di Mario, con tutte le sue guardie: chat viva,
+    // doppio intake, fascia 07-23 (fuori fascia la manda `sequence-touches`, che sulle
+    // fasi terminali del lancio lavora come su qualunque chat di Mario).
+    await supabase.from('conversations').update({
+      lancio_slug: args.lancio.slug,
+      ...(giaInQuestoLancio ? {} : { lancio_ingresso: args.lancio.ingresso }),
+      lancio_fase: 'chiuso',
+      lancio_info: conMarioDopoNotte(null, 'iscritto_dopo_live', new Date().toISOString()) as never,
+      lancio_benvenuto_at: null,
+      bot_outcome: null,
+      bot_outcome_at: null,
+      bot_scheduled_at: null,
+    }).eq('id', conversationId);
+    await evento({ dopoLive: true, aMario: true },
+      `[lancio] lead ${args.crmLeadId ?? args.phone} iscritto dopo la live: nessun benvenuto, passa a Mario standard con la registrazione`);
+    return enrollLeadIntoMario(supabase, { ...args, lancio: null });
+  }
 
   const guardia = args.crmLeadId ? await apertutaDaFermare(supabase, conversationId) : null;
   if (guardia) {
