@@ -28,6 +28,7 @@ Nessuna sessione, nessun cron e nessuno script li accende da solo.
 | Voce | Schedule (UTC) | Cosa vuol dire a Roma |
 |---|---|---|
 | `/api/cron/lancio-zoom` | `*/5 17-18 5 10 *` | 5/10, ogni 5', copre le 19:00-20:55; il blast vero è 19:30-20:45 (finestra fine nel codice) |
+| `/api/cron/lancio-inizio` | `*/5 18-19 5 10 *` | 5/10, ogni 5', copre 20:00-21:55; il messaggio "la live sta iniziando" (`fenice_lancio_inizio_v1`, env `LANCIO_INIZIO_TEMPLATE_SID`) parte 20:30-21:30 (evento ±30'), spalmato sui 13 run, solo a chi ha scritto dopo il benvenuto e non si e' congedato. Timbro `lancio_inizio_inviato_at` (migration 20260925000001). Riepilogo per run: `lancio_inizio_run` |
 | `/api/cron/lancio-followup` | `*/5 10-11,15-17 6-7 10 *` | 6 e 7/10, ogni 5', copre 12:00-13:55 e 17:00-19:55; le fasce vere sono 12:00-14:00 e 17:30-19:30 |
 | `/api/cron/lancio-restituzioni` | `0 7-17 7-31 10 *` + `0 7-17 1-15 11 *` | ogni ora di giorno, **dal 7/10** al 15/11; si restituisce solo lun-sab 09:00-18:00 di Roma (fascia nel codice) |
 
@@ -68,6 +69,7 @@ forzato su quella sola conversazione.
 Autenticazione: `?secret=$CRON_SECRET` (oppure header `Authorization: Bearer $CRON_SECRET`).
 
 - [ ] **Blast Zoom** — `GET /api/cron/lancio-zoom?secret=…&forza=1&solo=<conversationId>`
+- [ ] **Inizio live** — `GET /api/cron/lancio-inizio?secret=…&forza=1&solo=<conversationId>` (`dry=1` per vedere rimanenti/quota senza mandare)
 - [ ] **Follow-up** — `GET /api/cron/lancio-followup?secret=…&forza=1&solo=<conversationId>`
 - [ ] **Restituzioni** — `GET /api/cron/lancio-restituzioni?secret=…&forza=1&solo=<conversationId>`
 
