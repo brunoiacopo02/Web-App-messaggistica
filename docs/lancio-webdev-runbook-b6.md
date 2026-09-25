@@ -29,7 +29,7 @@ Nessuna sessione, nessun cron e nessuno script li accende da solo.
 |---|---|---|
 | `/api/cron/lancio-zoom` | `*/5 17-18 5 10 *` | 5/10, ogni 5', copre le 19:00-20:55; il blast vero è 19:30-20:45 (finestra fine nel codice) |
 | `/api/cron/lancio-followup` | `*/5 10-11,15-17 6-7 10 *` | 6 e 7/10, ogni 5', copre 12:00-13:55 e 17:00-19:55; le fasce vere sono 12:00-14:00 e 17:30-19:30 |
-| `/api/cron/lancio-restituzioni` | `0 * 7-31 10 *` + `0 * 1-15 11 *` | ogni ora, **dal 7/10** al 15/11 |
+| `/api/cron/lancio-restituzioni` | `0 7-17 7-31 10 *` + `0 7-17 1-15 11 *` | ogni ora di giorno, **dal 7/10** al 15/11; si restituisce solo lun-sab 09:00-18:00 di Roma (fascia nel codice) |
 
 Le **finestre vere** le derivano i moduli da `app_settings.lancio_evento_at`
 (`inFinestraFollowup`, `restituzioniAttive`, il blast Zoom): la data scritta nel cron è
@@ -82,7 +82,8 @@ Regole comuni (`leggiParametriCron`):
 - `dry=1` fa il giro senza mandare niente: risponde coi conteggi e scrive il riepilogo.
   È il modo giusto per la prima passata.
 - Senza `forza` e fuori finestra la risposta è `{ ok: true, skipped: 'fuori_finestra' }`
-  (follow-up) o `{ ok: true, skipped: 'prima_della_data' }` (restituzioni).
+  (follow-up) o `{ ok: true, skipped: 'prima_della_data' }` / `'fuori_fascia'` (restituzioni:
+  prima del 7/10, o fuori da lun-sab 09-18 di Roma; `forza=1&solo=` salta anche la fascia).
 
 ### 1.2 L'orologio dei turni (assistenza e post-pitch)
 
@@ -158,13 +159,14 @@ Come si prova lo stesso — tre strade, in ordine di preferenza:
 - [ ] `LANCIO_ZOOM_BATCH_MAX`, `LANCIO_BATCH_MAX`, `LANCIO_RESTITUZIONI_MAX`,
       `LANCIO_WELCOME_MAX_PER_HOUR`, `LANCIO_APERTURE_MAX_PER_RUN` e `CRM_LANCIO_URL`
       **non sono in produzione, ed è giusto così**: i default del codice sono già i valori
-      deliberati (300 / 200 / 500 / 200 / 100 / URL di produzione del CRM). Si
+      deliberati (300 / 200 / 100 l'ora / 200 / 100 / URL di produzione del CRM). Si
       aggiunge l'env solo per cambiarli.
 - [ ] **Chi governa cosa (dal 25/09):** il blast Zoom del 5 ha la sua,
       `LANCIO_ZOOM_BATCH_MAX` (300 per run: 16 run × 300 = 4.800 posti per ~4.000 iscritti);
       `LANCIO_BATCH_MAX` (200) resta **solo** del follow-up del 6, che prima degli invii fa
       letture e congedi in sequenza e non ha bisogno di correre. Le restituzioni hanno la
-      loro, `LANCIO_RESTITUZIONI_MAX` (500).
+      loro, `LANCIO_RESTITUZIONI_MAX` (100 **l'ora**, decisione PO 25/09: scaglioni
+      graduali, vedi §3 "7/10 in poi").
 - [ ] Il mittente secondario resta spento: `TWILIO_WHATSAPP_NUMBERS_2` non è in produzione,
       quindi `TWILIO_ACCOUNT_SID_2`/`TWILIO_AUTH_TOKEN_2` (dell'altra sessione) non
       instradano niente. Il lancio parte dal numero principale, `lancio_sender=principale`.
@@ -317,6 +319,14 @@ a ogni run se `lancio_attivo` è spento) · `lancio_followup_config_error` ·
 > **Il 6/10 è tutto del bot** (risposte e follow-up): non si restituisce nessuno. Le
 > restituzioni partono il **7/10**, così i GDO possono chiamare quei lead quel giorno
 > stesso (decisione PO del 19/09; prima partivano l'8).
+>
+> **Mai di notte, a scaglioni** (decisione PO del 25/09): si restituisce solo **lun-sab
+> dalle 09:00 al run delle 18:00** di Roma, **100 lead l'ora** (`LANCIO_RESTITUZIONI_MAX`,
+> `inFasciaRestituzioni`). Sono ~1.000 al giorno: ~2.000 lead tornano al pool in 2-3
+> giorni lavorativi. Il pool è pieno prima del turno GDO (feriali 13:30-20:00, sabato
+> 10:00-16:30); la domenica non si restituisce. Fuori fascia il run scrive
+> `lancio_restituzioni_run` con `motivo: 'fuori_fascia'` e non chiama il CRM.
+> Per accelerare (se il pool si svuota prima): alzare `LANCIO_RESTITUZIONI_MAX`.
 Da guardare: `lancio_restituzioni_run` (con `restituiti`, `rifiutati`, `errori`,
 `niente.ancora_ignota`, `scartiRitentati`/`scartiChiusi`, `fuori_finestra_cron`) ·
 `lancio_restituito` · `lancio_restituito_terminale` · `lancio_restituzione_rifiutata` (warn) ·

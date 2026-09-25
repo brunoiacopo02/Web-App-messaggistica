@@ -11,7 +11,7 @@ import { runPool } from '@/lib/run-pool';
 import { batchMax, LANCIO_BLAST_CONCURRENCY } from '@/lib/lancio-zoom-blast';
 import { ancoraLancio, haInteragito } from '@/lib/lancio-followup';
 import {
-  restituzioniAttive, fuoriFinestraCron, decideRestituzione, esitoRestituzioneDalCrm, NOTA_RESTITUZIONE,
+  restituzioniAttive, inFasciaRestituzioni, fuoriFinestraCron, decideRestituzione, esitoRestituzioneDalCrm, NOTA_RESTITUZIONE,
   FASI_RESTITUIBILI, RESTITUZIONI_MAX_DEFAULT,
   type MotivoNiente, type MotivoRestituzione,
 } from '@/lib/lancio-restituzioni';
@@ -91,6 +91,13 @@ export async function GET(req: NextRequest) {
     await scriviRun({ motivo: 'prima_della_data', candidati: 0, restituiti: 0 }, '[lancio] restituzioni: prima della data, nessun ritorno al pool');
     return NextResponse.json({ ok: true, skipped: 'prima_della_data' });
   }
+  // Mai di notte (decisione PO del 25/09): solo lun-sab 09:00-18:00 di Roma, a scaglioni
+  // da `LANCIO_RESTITUZIONI_MAX` (100) l'ora. `forza` (con `solo=`) la salta come salta
+  // la data: e' la prova generale su una conversazione sola.
+  if (!forza && !inFasciaRestituzioni(now)) {
+    await scriviRun({ motivo: 'fuori_fascia', candidati: 0, restituiti: 0 }, '[lancio] restituzioni: fuori dalla fascia diurna (lun-sab 09-18), nessun ritorno al pool');
+    return NextResponse.json({ ok: true, skipped: 'fuori_fascia' });
+  }
 
   const t0 = Date.now();
   const { righe: coda, queryKo } = await leggiCoda<Candidata>(supabase, 'lancio_restituzioni_query_error', (da, a) => {
@@ -107,7 +114,7 @@ export async function GET(req: NextRequest) {
   });
 
   // ─────────────── valutazione a blocchi ───────────────
-  // Tetto suo (`LANCIO_RESTITUZIONI_MAX`, 500): da qui non esce nessun messaggio
+  // Tetto suo (`LANCIO_RESTITUZIONI_MAX`, 100 l'ora dal 25/09): da qui non esce nessun messaggio
   // WhatsApp — si chiama il CRM e si scrive una fase — quindi il tetto del blast, che
   // esiste per non bruciare il numero, non c'entra niente.
   const max = batchMax(process.env.LANCIO_RESTITUZIONI_MAX, RESTITUZIONI_MAX_DEFAULT);

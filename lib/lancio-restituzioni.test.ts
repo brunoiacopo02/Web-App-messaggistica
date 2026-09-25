@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   RESTITUZIONE_ATTESA_MS, NOTA_RESTITUZIONE, FASI_RESTITUIBILI, RESTITUZIONI_MAX_DEFAULT,
-  restituzioniAttive, decideRestituzione,
+  restituzioniAttive, inFasciaRestituzioni, FASCIA_RESTITUZIONI, decideRestituzione,
   esitoRestituzioneDalCrm, notaInboundDopoRestituzione, fuoriFinestraCron, type CandidataRestituzione,
 } from './lancio-restituzioni';
 import { batchMax } from './lancio-zoom-blast';
@@ -126,12 +126,12 @@ describe('decideRestituzione', () => {
     });
     expect([...FASI_RESTITUIBILI]).toEqual(['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch', 'followup_inviato']);
   });
-  it('il tetto delle restituzioni e suo: 500 di default, e non lo decide LANCIO_BATCH_MAX', () => {
-    expect(RESTITUZIONI_MAX_DEFAULT).toBe(500);
-    expect(batchMax(undefined, RESTITUZIONI_MAX_DEFAULT)).toBe(500);
-    expect(batchMax('', RESTITUZIONI_MAX_DEFAULT)).toBe(500);
-    expect(batchMax('0', RESTITUZIONI_MAX_DEFAULT)).toBe(500);
-    expect(batchMax('boh', RESTITUZIONI_MAX_DEFAULT)).toBe(500);
+  it('il tetto delle restituzioni e suo: 100 l ora di default (PO 25/09), e non lo decide LANCIO_BATCH_MAX', () => {
+    expect(RESTITUZIONI_MAX_DEFAULT).toBe(100);
+    expect(batchMax(undefined, RESTITUZIONI_MAX_DEFAULT)).toBe(100);
+    expect(batchMax('', RESTITUZIONI_MAX_DEFAULT)).toBe(100);
+    expect(batchMax('0', RESTITUZIONI_MAX_DEFAULT)).toBe(100);
+    expect(batchMax('boh', RESTITUZIONI_MAX_DEFAULT)).toBe(100);
     expect(batchMax('120', RESTITUZIONI_MAX_DEFAULT)).toBe(120);
   });
 });
@@ -166,5 +166,43 @@ describe('notaInboundDopoRestituzione', () => {
     expect(n).toContain('"ci sono ancora?"');
     // La frase e' a inizio periodo nella nota, quindi il confronto e' sul senso, non sulla maiuscola.
     expect(n.toLowerCase()).toContain('il bot non risponde');
+  });
+});
+
+describe('inFasciaRestituzioni — mai di notte, a scaglioni di giorno (PO 25/09)', () => {
+  const r = (iso: string) => inFasciaRestituzioni(new Date(iso));
+  it('lun-sab dalle 09:00 al run delle 18:00 compreso', () => {
+    expect(FASCIA_RESTITUZIONI).toEqual({ daOra: 9, aOra: 18 });
+    expect(r('2026-10-07T08:59:00+02:00')).toBe(false); // mercoledi
+    expect(r('2026-10-07T09:00:00+02:00')).toBe(true);
+    expect(r('2026-10-07T18:00:00+02:00')).toBe(true);
+    expect(r('2026-10-07T19:00:00+02:00')).toBe(false);
+    expect(r('2026-10-08T03:00:00+02:00')).toBe(false);
+    expect(r('2026-10-10T12:00:00+02:00')).toBe(true); // sabato
+  });
+  it('domenica mai, nemmeno a mezzogiorno', () => {
+    expect(r('2026-10-11T12:00:00+02:00')).toBe(false);
+  });
+  it('dopo il cambio dell ora (25/10) la fascia resta in ora di Roma', () => {
+    expect(r('2026-10-26T09:00:00+01:00')).toBe(true);
+    expect(r('2026-10-26T08:00:00+01:00')).toBe(false);
+  });
+});
+
+describe('lo schedule di vercel.json copre la fascia, e solo di giorno', () => {
+  it('ogni ora 07-17 UTC, 7-31/10 e 1-15/11: con e senza ora legale copre le 09-18 di Roma', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { crons } = JSON.parse(readFileSync('vercel.json', 'utf8')) as { crons: { path: string; schedule: string }[] };
+    const voci = crons.filter((c) => c.path === '/api/cron/lancio-restituzioni').map((c) => c.schedule);
+    expect(voci).toEqual(['0 7-17 7-31 10 *', '0 7-17 1-15 11 *']);
+    // Ogni ora della fascia di Roma cade in un'ora UTC del cron, prima e dopo il 25/10.
+    for (const giorno of ['2026-10-07', '2026-10-27']) {
+      for (let ora = FASCIA_RESTITUZIONI.daOra; ora <= FASCIA_RESTITUZIONI.aOra; ora++) {
+        const offset = giorno < '2026-10-25' ? '+02:00' : '+01:00';
+        const utc = new Date(`${giorno}T${String(ora).padStart(2, '0')}:00:00${offset}`).getUTCHours();
+        expect(utc).toBeGreaterThanOrEqual(7);
+        expect(utc).toBeLessThanOrEqual(17);
+      }
+    }
   });
 });

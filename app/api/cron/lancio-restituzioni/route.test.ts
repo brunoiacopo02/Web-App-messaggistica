@@ -181,6 +181,28 @@ describe('GET /api/cron/lancio-restituzioni — il run si racconta', () => {
     await richiesta();
     expect(eventoRun()?.payload).toMatchObject({ evento_at: EVENTO, fuori_finestra_cron: false });
   });
+  it('di notte (PO 25/09): nessun ritorno al pool, ma il run resta scritto', async () => {
+    vi.setSystemTime(new Date('2026-10-08T02:00:00+02:00'));
+    await expect((await richiesta()).json()).resolves.toMatchObject({ skipped: 'fuori_fascia' });
+    expect(sendOutcome).not.toHaveBeenCalled();
+    expect(eventoRun()?.payload).toMatchObject({ motivo: 'fuori_fascia' });
+  });
+  it('di domenica nemmeno a mezzogiorno', async () => {
+    vi.setSystemTime(new Date('2026-10-11T12:00:00+02:00'));
+    await expect((await richiesta()).json()).resolves.toMatchObject({ skipped: 'fuori_fascia' });
+    expect(sendOutcome).not.toHaveBeenCalled();
+  });
+  it('alle 19:00 la fascia e chiusa, alle 18:00 ancora aperta', async () => {
+    vi.setSystemTime(new Date('2026-10-08T19:00:00+02:00'));
+    await expect((await richiesta()).json()).resolves.toMatchObject({ skipped: 'fuori_fascia' });
+    vi.setSystemTime(new Date('2026-10-08T18:00:00+02:00'));
+    await expect((await richiesta()).json()).resolves.toMatchObject({ restituiti: 2 });
+  });
+  it('forza=1&solo=<id> di notte: la prova generale salta la fascia come salta la data', async () => {
+    vi.setSystemTime(new Date('2026-10-08T02:00:00+02:00'));
+    stato.convs = [conv(1)];
+    await expect((await richiesta('forza=1&solo=1')).json()).resolves.toMatchObject({ restituiti: 1 });
+  });
   it('evento spostato oltre le date di vercel.json: bandierina alzata', async () => {
     vi.setSystemTime(new Date('2026-11-20T10:00:00+01:00'));
     await richiesta();
@@ -366,10 +388,10 @@ describe('GET /api/cron/lancio-restituzioni — decisioni e CRM', () => {
   // Qui non parte nessun messaggio WhatsApp: il tetto del blast (200 ogni 5' per non
   // bruciare il numero) non c'entra niente, e legarli faceva sembrare governata una cosa
   // che non lo era.
-  it('LANCIO_BATCH_MAX non tocca le restituzioni: senza env sue il tetto e 500', async () => {
+  it('LANCIO_BATCH_MAX non tocca le restituzioni: senza env sue il tetto e 100 l ora (PO 25/09)', async () => {
     vi.stubEnv('LANCIO_BATCH_MAX', '1');
     stato.convs = [conv(1), conv(2)];
-    await expect((await richiesta()).json()).resolves.toMatchObject({ restituiti: 2, max: 500 });
+    await expect((await richiesta()).json()).resolves.toMatchObject({ restituiti: 2, max: 100 });
   });
 
   // La corsa vera: le candidate si leggono a t0, e il CRM puo' rispondere fino a 240s

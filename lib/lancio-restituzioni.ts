@@ -1,4 +1,4 @@
-import { romeDayKey, formatRomeDateTime } from './rome-time';
+import { romeDayKey, romeHour, formatRomeDateTime } from './rome-time';
 import { giorniLancio } from './lancio-scelta';
 import { haCongedo } from './lancio-fase';
 
@@ -43,11 +43,37 @@ const FASI_PRIMA_DEL_FOLLOWUP: readonly string[] = ['attesa', 'posto_bloccato', 
 
 /**
  * Tetto del lotto delle restituzioni (env `LANCIO_RESTITUZIONI_MAX`). E' suo e non quello
- * del blast (`LANCIO_BATCH_MAX`, 200 ogni 5'): qui non parte nessun messaggio WhatsApp —
- * si chiama il CRM e si scrive una fase — quindi il numero non ha niente a che vedere con
- * la qualita' del numero, e il cron gira una volta l'ora. 500 e' la coda di un'ora.
+ * del blast (`LANCIO_BATCH_MAX`): qui non parte nessun messaggio WhatsApp — si chiama il
+ * CRM e si scrive una fase — e il cron gira una volta l'ora, quindi e' un tetto ORARIO.
+ *
+ * Decisione PO del 25/09: le restituzioni arrivano a scaglioni graduali, non tutte
+ * insieme. 100 l'ora dentro la fascia `inFasciaRestituzioni` (10 run al giorno) fanno
+ * ~1.000 lead al giorno: i ~2.000 del lancio tornano al pool in 2-3 giorni lavorativi,
+ * invece di 500 alla volta anche di notte.
  */
-export const RESTITUZIONI_MAX_DEFAULT = 500;
+export const RESTITUZIONI_MAX_DEFAULT = 100;
+
+/**
+ * La fascia in cui si restituisce, in ora di Roma (decisione PO del 25/09: mai di notte).
+ * Da lunedi' a sabato, run delle 09:00 fino a quello delle 18:00 compreso; domenica mai.
+ *
+ * Perche' questa: i GDO lavorano i feriali 13:30-20:00 e il sabato 10:00-16:30 (turno
+ * dichiarato dal PO, memoria "produttivita' GDO"), e il pool `LANCIO_WEBDEV_2026` di
+ * `/import` lo assegna un admin in orario d'ufficio. Partendo alle 09:00 il pool e' gia'
+ * pieno per l'inizio del turno, e l'ultimo scaglione (18:00) lascia ancora due ore di
+ * turno; la domenica non c'e' nessuno che li chiami. Il cron di `vercel.json` gira ogni ora
+ * 07-17 UTC, che copre 09-18 di Roma sia con l'ora legale (fino al 25/10) sia senza: la
+ * fascia vera la decide questa funzione.
+ */
+export const FASCIA_RESTITUZIONI = { daOra: 9, aOra: 18 } as const;
+
+export function inFasciaRestituzioni(now: Date): boolean {
+  // 0 = domenica. Il giorno della settimana italiano, dal giorno di calendario di Roma.
+  const giorno = new Date(`${romeDayKey(now)}T12:00:00Z`).getUTCDay();
+  if (giorno === 0) return false;
+  const ora = romeHour(now);
+  return ora >= FASCIA_RESTITUZIONI.daOra && ora <= FASCIA_RESTITUZIONI.aOra;
+}
 
 /**
  * Da dopodomani compreso (regola a data, derivata dall'evento: nessuno stato). Per
