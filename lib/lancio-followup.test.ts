@@ -271,3 +271,22 @@ describe('bloccaPassaggioLancio (PO 25/09/2026: il lancio non passa mai un lead 
     expect(NOTA_LANCIO_NIENTE_PASSAGGIO).toMatch(/Non usare MAI \[PASSAGGIO_UMANO\]/);
   });
 });
+
+describe('pulsanteDopoNotteContextNote (PO 25/09)', () => {
+  it('pulsante il 6: la live l ha vista, niente domanda, video della live se c e', async () => {
+    const { pulsanteDopoNotteContextNote } = await import('./lancio-followup');
+    const n = pulsanteDopoNotteContextNote({ da: 'pulsante', videoLiveLink: ' https://x/live ', risposte: [] });
+    expect(n).toMatch(/dal pulsante mostrato alla fine della live/);
+    expect(n).toMatch(/non chiedergli se l'ha vista/);
+    expect(n).toContain('https://x/live');
+    expect(n).toMatch(/fissa la call con il consulente/);
+    expect(n).not.toMatch(/ci aveva gia' detto/);
+  });
+  it('post_pitch oltre le 03:00: porta le risposte della sera; senza link niente riga del video', async () => {
+    const { pulsanteDopoNotteContextNote } = await import('./lancio-followup');
+    const n = pulsanteDopoNotteContextNote({ da: 'post_pitch', videoLiveLink: null, risposte: ['studio', 'il progetto'] });
+    expect(n).toMatch(/la sera stessa ha premuto il pulsante/);
+    expect(n).toContain('"studio" / "il progetto"');
+    expect(n).not.toMatch(/registrazione della live:/);
+  });
+});

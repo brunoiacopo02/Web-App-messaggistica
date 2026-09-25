@@ -73,6 +73,21 @@ export function fineNotteLancio(eventoAt: Date): number {
   return istante(giorniLancio(eventoAt).giornoDopo, FINE_NOTTE_HHMM);
 }
 
+/**
+ * La notte del webinar e' finita (dalle 03:00 del giorno dopo l'evento in poi)? Decisione
+ * PO del 25/09: i pulsanti di scelta esistono SOLO la sera della live. Da qui in poi chi
+ * preme il pulsante del webinar, e chi era a meta' del dopo-pitch, passa a Mario standard
+ * che fissa l'appuntamento come per qualunque lead. `lancio_evento_at` assente o
+ * illeggibile = no: senza evento non c'e' nessuna notte da dichiarare finita, e si resta
+ * sul comportamento di prima.
+ */
+export function dopoLaNotteDelLancio(now: Date, eventoAtIso: string | null | undefined): boolean {
+  if (!eventoAtIso) return false;
+  const t = Date.parse(eventoAtIso);
+  if (Number.isNaN(t)) return false;
+  return now.getTime() >= fineNotteLancio(new Date(t));
+}
+
 /** Notte = dall'inizio dell'evento alle 03:00 del giorno dopo: il lead sta scrivendo ora. */
 export function modoPostPitch(now: Date, eventoAt: Date): ModoPostPitch {
   const ms = now.getTime();

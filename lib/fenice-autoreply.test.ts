@@ -2474,3 +2474,68 @@ describe('drainMarioReplies — chi scrive dal link "professione dello Sviluppat
     expect(calls.events.map((e) => e.type)).not.toContain('lancio_video_live_link_missing');
   });
 });
+
+describe('drainMarioReplies — passata a Mario dopo la notte del webinar (PO 25/09)', () => {
+  const LIVE = 'https://corso.feniceacademy.it/live-webdev-2026';
+  const PULSANTE: FakeMsgRow = {
+    direction: 'in', body: 'Ho seguito la live Web Developer AI e voglio saperne di più', template_sid: null, created_at: '2026-10-06T10:00:00Z',
+  };
+  const rispostaMario = (testo: string) => ({
+    visibleReply: testo, appointmentFixed: false, passToHuman: false, videoWatched: false, outcome: undefined, scheduledAt: undefined,
+  });
+  const nota = () => (vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string }).contextNote ?? '';
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(eseguiTurnoLancio).mockReset();
+    vi.mocked(getLancioSettings).mockClear();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('pulsante premuto il 6 (fase chiuso + marcatore): Mario col contesto della live, senza chiedere se l ha vista', async () => {
+    const riga = {
+      id: 11, ai_started_at: null, crm_lead_id: 'crm11', bot_outcome: null,
+      lancio_slug: 'webdev-2026-10', lancio_fase: 'chiuso', lancio_ingresso: 'lista',
+      lancio_info: { risposte: [], mario_dopo_notte: { da: 'pulsante', at: '2026-10-06T10:00:05Z' } },
+    } as unknown as ClaimedRow;
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(rispostaMario('Ciao! Cosa ti ha colpito della live?'));
+    const { supabase } = makeDrainSupabase(riga, [PULSANTE]);
+
+    await drainMarioReplies(supabase, 11, '+391234567890', () => 0);
+
+    expect(eseguiTurnoLancio).not.toHaveBeenCalled();
+    expect(nota()).toMatch(/dal pulsante mostrato alla fine della live/);
+    expect(nota()).toMatch(/non chiedergli se l'ha vista/);
+    expect(nota()).not.toMatch(/ha risposto al nostro messaggio del giorno dopo/);
+    expect(nota()).toContain(LIVE);
+    expect(nota()).toContain('[PASSAGGIO_UMANO]');
+  });
+
+  it('post_pitch che attraversa le 03:00: il turno passa la mano, Mario legge il marcatore e le risposte della sera', async () => {
+    const riga = {
+      id: 12, ai_started_at: null, crm_lead_id: 'crm12', bot_outcome: null,
+      lancio_slug: 'webdev-2026-10', lancio_fase: 'post_pitch', lancio_ingresso: 'lista',
+      lancio_info: { risposte: ['faccio il magazziniere'] },
+    } as unknown as ClaimedRow;
+    vi.mocked(eseguiTurnoLancio).mockImplementationOnce(async () => {
+      // Quello che fa il turno vero: fase chiuso e marcatore su lancio_info.
+      (riga as unknown as { lancio_fase: string }).lancio_fase = 'chiuso';
+      (riga as unknown as { lancio_info: unknown }).lancio_info = {
+        risposte: ['faccio il magazziniere'], mario_dopo_notte: { da: 'post_pitch', at: '2026-10-06T08:00:00Z' },
+      };
+      return 'handed_to_mario';
+    });
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(rispostaMario('Ciao! Fissiamo la call?'));
+    const { supabase, calls } = makeDrainSupabase(riga, [{ ...PULSANTE, body: 'Fissiamo domani', created_at: '2026-10-06T07:59:00Z' }]);
+
+    await drainMarioReplies(supabase, 12, '+391234567890', () => 0);
+
+    expect(eseguiTurnoLancio).toHaveBeenCalledTimes(1);
+    expect(generateMarioReply).toHaveBeenCalledTimes(1);
+    expect(nota()).toMatch(/la sera stessa ha premuto il pulsante/);
+    expect(nota()).toContain('"faccio il magazziniere"');
+    expect(nota()).toMatch(/non valgono piu'/);
+    expect(calls.finalStatusWrites).toEqual(['active']);
+  });
+});

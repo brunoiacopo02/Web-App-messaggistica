@@ -410,3 +410,83 @@ describe('link "professione dello Sviluppatore AI" (PO 24/09/2026)', () => {
     expect(eventi('lancio_link_sviluppatore')).toHaveLength(0);
   });
 });
+
+describe('pulsante del webinar dopo la notte (PO 25/09): Mario standard, niente dopo-pitch', () => {
+  const settings = (pulsanteAttivo: boolean) => ({
+    attivo: true, pulsanteAttivo, zoomLink: null, videoLiveLink: null,
+    offertaDelMeseLink: null, eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti' as const, sender: 'principale' as const, quotaSecondario: 0,
+  });
+  const faseUpdate = () => stato.updates.find((u) => 'lancio_fase' in u.valori);
+
+  it('la sera (22:30 del 5) resta tutto com era: post_pitch', async () => {
+    vi.stubEnv('LANCIO_FAKE_NOW', '2026-10-05T22:30:00+02:00');
+    vi.mocked(getLancioSettings).mockResolvedValueOnce(settings(true));
+    Object.assign(stato.conv, { ai_owner: 'mario', ai_status: 'active', lancio_slug: 'webdev-2026-10', lancio_fase: 'link_inviato', lancio_ingresso: 'lista' });
+    await inbound(TESTO_PULSANTE_WEBINAR);
+    expect(faseUpdate()?.valori.lancio_fase).toBe('post_pitch');
+    expect(eventi('lancio_pulsante')[0].payload).not.toHaveProperty('dopoNotte');
+  });
+
+  it('il 6 alle 10 su una chat della lista: chiuso col marcatore, niente post_pitch', async () => {
+    vi.stubEnv('LANCIO_FAKE_NOW', '2026-10-06T10:00:00+02:00');
+    vi.mocked(getLancioSettings).mockResolvedValueOnce(settings(true));
+    Object.assign(stato.conv, {
+      ai_owner: 'mario', ai_status: 'active', lancio_slug: 'webdev-2026-10', lancio_fase: 'link_inviato', lancio_ingresso: 'lista',
+      lancio_info: { risposte: [] },
+    });
+    await inbound(TESTO_PULSANTE_WEBINAR);
+    const f = faseUpdate();
+    expect(f?.valori.lancio_fase).toBe('chiuso');
+    expect(f?.valori.lancio_info).toMatchObject({ risposte: [], mario_dopo_notte: { da: 'pulsante' } });
+    expect(stato.updates.some((u) => u.valori.lancio_fase === 'post_pitch')).toBe(false);
+    expect(eventi('lancio_pulsante')[0].payload).toMatchObject({ dopoNotte: true });
+  });
+
+  it('il 6 a interruttore SPENTO, persona nuova: adottata come lancio, chiuso col marcatore', async () => {
+    vi.stubEnv('LANCIO_FAKE_NOW', '2026-10-06T10:00:00+02:00');
+    vi.mocked(getLancioSettings).mockResolvedValueOnce(settings(false));
+    await inbound(TESTO_PULSANTE_WEBINAR);
+    expect(updateConSlug()[0].valori).toMatchObject({ lancio_slug: 'webdev-2026-10', lancio_ingresso: 'pulsante_webinar' });
+    expect(faseUpdate()?.valori.lancio_fase).toBe('chiuso');
+    expect(stato.updates.find((u) => 'crm_funnel' in u.valori)?.valori.crm_funnel).toBe('Lancio Web Dev AI');
+    expect(eventi('lancio_pulsante')[0].payload).not.toHaveProperty('orfano');
+  });
+
+  it('il 6 su una chat rimasta in post_pitch: passa a Mario anche lei', async () => {
+    vi.stubEnv('LANCIO_FAKE_NOW', '2026-10-06T10:00:00+02:00');
+    vi.mocked(getLancioSettings).mockResolvedValueOnce(settings(true));
+    Object.assign(stato.conv, {
+      ai_owner: 'mario', ai_status: 'active', lancio_slug: 'webdev-2026-10', lancio_fase: 'post_pitch', lancio_ingresso: 'pulsante_webinar',
+      lancio_info: { risposte: ['studio'] },
+    });
+    await inbound(TESTO_PULSANTE_WEBINAR);
+    expect(faseUpdate()?.valori.lancio_fase).toBe('chiuso');
+    expect(faseUpdate()?.valori.lancio_info).toMatchObject({ risposte: ['studio'], mario_dopo_notte: { da: 'pulsante' } });
+  });
+
+  it.each(['followup_inviato', 'scelta_fatta', 'chiuso'])('il 6 su una chat in %s: fase invariata', async (fase) => {
+    vi.stubEnv('LANCIO_FAKE_NOW', '2026-10-06T10:00:00+02:00');
+    vi.mocked(getLancioSettings).mockResolvedValueOnce(settings(true));
+    Object.assign(stato.conv, { ai_owner: 'mario', ai_status: 'active', lancio_slug: 'webdev-2026-10', lancio_fase: fase, lancio_ingresso: 'lista' });
+    await inbound(TESTO_PULSANTE_WEBINAR);
+    expect(faseUpdate()).toBeUndefined();
+    expect(eventi('lancio_pulsante')[0].payload).toMatchObject({ faseInvariata: true, dopoNotte: true });
+  });
+});
+
+describe('pulsante dopo la notte su un congedato (PO 25/09)', () => {
+  it('resta un no: fase invariata, chat non riaperta', async () => {
+    vi.stubEnv('LANCIO_FAKE_NOW', '2026-10-06T10:00:00+02:00');
+    vi.mocked(getLancioSettings).mockResolvedValueOnce({
+      attivo: true, pulsanteAttivo: true, zoomLink: null, videoLiveLink: null,
+      offertaDelMeseLink: null, eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti', sender: 'principale', quotaSecondario: 0,
+    });
+    Object.assign(stato.conv, {
+      ai_owner: 'mario', ai_status: 'closed', lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa', lancio_ingresso: 'lista',
+      lancio_info: { risposte: [], congedo_at: '2026-10-01T10:00:00Z' },
+    });
+    await inbound(TESTO_PULSANTE_WEBINAR);
+    expect(stato.updates.find((u) => 'lancio_fase' in u.valori)).toBeUndefined();
+    expect(stato.updates.some((u) => u.valori.ai_status === 'active')).toBe(false);
+  });
+});

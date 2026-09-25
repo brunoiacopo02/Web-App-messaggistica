@@ -3,7 +3,10 @@ import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { fetchAllRows } from '@/lib/supabase/paginate';
 import { sendTemplateAndLog } from '@/lib/messaging';
 import { classificaPrimoMessaggio, vaRiagganciato, LANCIO_INGRESSO_LINK_SVILUPPATORE } from '@/lib/primo-messaggio';
-import { LANCIO_SLUG } from '@/lib/lancio-fase';
+import { LANCIO_SLUG, conMarioDopoNotte } from '@/lib/lancio-fase';
+import { dopoLaNotteDelLancio } from '@/lib/lancio-scelta';
+import { adessoLancio } from '@/lib/lancio-orologio';
+import type { Json } from '@/lib/supabase/types';
 import { impostaFaseLancio } from '@/lib/lancio-db';
 import { getLancioSettings } from '@/lib/lancio-settings';
 import { templateName } from '@/lib/name';
@@ -71,7 +74,11 @@ export async function POST(req: NextRequest) {
   // Lo stesso interruttore del webhook, letto UNA volta per run e non per lead: spento,
   // il marker del pulsante vale come assente e questi lead tornano a essere TELEGRAM o
   // INBOUND, riaggancio di Marta compreso.
-  const { pulsanteAttivo } = await getLancioSettings(admin);
+  const settingsLancio = await getLancioSettings(admin);
+  // Dopo la notte del webinar (PO 25/09) il pulsante porta a Mario standard e vale anche a
+  // interruttore spento, come nel webhook: qui si decide una volta per run.
+  const pulsanteDopoNotte = dopoLaNotteDelLancio(adessoLancio(), settingsLancio.eventoAt);
+  const pulsanteAttivo = settingsLancio.pulsanteAttivo || pulsanteDopoNotte;
 
   // Candidati: nessun padrone, il lead ha scritto, su uno dei numeri del bot, nessuno
   // l'ha presa in mano. Il filtro sugli outbound si fa dopo, in memoria: PostgREST non
@@ -198,7 +205,14 @@ export async function POST(req: NextRequest) {
         await admin.from('conversations')
           .update({ lancio_slug: LANCIO_SLUG, lancio_ingresso: 'pulsante_webinar' })
           .eq('id', c.id);
-        await impostaFaseLancio(admin, c.id, 'post_pitch');
+        // Dopo la notte del webinar niente dopo-pitch: Mario standard con la nota della live.
+        if (pulsanteDopoNotte) {
+          await impostaFaseLancio(admin, c.id, 'chiuso', {
+            lancio_info: conMarioDopoNotte(null, 'pulsante', now) as unknown as Json,
+          });
+        } else {
+          await impostaFaseLancio(admin, c.id, 'post_pitch');
+        }
         await admin.from('event_log').insert({
           type: 'lancio_pulsante',
           payload: { conversationId: c.id, giaDiMario: false, daCron: 'adotta-mai-risposti' } as never,
@@ -239,7 +253,9 @@ export async function POST(req: NextRequest) {
       // CRM, e a rispondergli ci pensa il turno del lancio nel drain. Il riaggancio di
       // Marta ("ci eravamo persi a meta' discorso") sarebbe una seconda voce sulla stessa
       // persona, con un testo che col webinar non c'entra niente.
-      if (!vaRiagganciato(esito)) { pulsante++; continue; }
+      // Dopo la notte del webinar la chat e' di Mario standard: il riaggancio parte come per
+      // chi arriva dal link "Sviluppatore AI", o nessuno gli risponderebbe.
+      if (!vaRiagganciato(esito) && !pulsanteDopoNotte) { pulsante++; continue; }
 
       const nome = templateName(l.first_name);
       // Dal numero su cui ci ha scritto: e' quello che ha in rubrica, ed e' l'unico

@@ -252,9 +252,17 @@ e' partito da quello storico) · `lancio_apertura_freq_capped` · `lancio_fase_n
       video classici e in `event_log` compare `lancio_video_live_link_missing` (warn, **una
       volta per chat**: se lo vedi una volta sola non vuol dire che sia successo una volta
       sola).
-- [ ] `lancio_pulsante_attivo`: finché resta acceso, chi preme il pulsante il 6 entra in
-      `post_pitch`. Non è un buco — il follow-up non interrompe chi sta scrivendo e dal 7
-      quei lead tornano al pool — ma è una decisione da prendere, non da dimenticare.
+- [ ] **Dalle 03:00 del 6 i pulsanti di scelta non esistono più** (decisione PO 25/09).
+      Chi preme il pulsante del webinar dal 6 in poi va a **Mario standard**, che fissa la
+      call come per qualunque lead, con la nota "ha visto la live" e la registrazione
+      (`lancio_fase` = `chiuso`, `lancio_info.mario_dopo_notte.da` = `pulsante`; evento
+      `lancio_pulsante` con `dopoNotte: true`). Da quell'ora vale **anche a
+      `lancio_pulsante_attivo` spento**: l'interruttore governa solo la sera del 5, e lo si
+      può spegnere il 6 senza conseguenze.
+- [ ] Le chat rimaste in `post_pitch` che riscrivono dopo le 03:00 passano anche loro a Mario
+      (evento `lancio_post_pitch_a_mario`, `mario_dopo_notte.da` = `post_pitch`): Mario
+      riceve le risposte del riscaldamento date la sera e non le richiede. Un tocco il 6 su
+      un pulsante della sera ("Fissiamo domani") non chiama il CRM del lancio: lo legge Mario.
 
 ### 6/10 12:00-14:00 e 17:30-19:30 (sconfina al 7/10) — follow-up
 Da guardare: `lancio_followup_run` · `lancio_followup_inviato` · `lancio_followup_fermo` (warn,
@@ -268,8 +276,10 @@ a ogni run se `lancio_attivo` è spento) · `lancio_followup_config_error` ·
 - [ ] Chi aveva già detto "no" in modo esplicito non riceve niente: il cron lo congeda senza
       bolla (`lancio_followup_congedo_da_cron`).
 - [ ] Il follow-up va anche a chi era rimasto in **`post_pitch`** (pulsante premuto la sera
-      del 5 e poi silenzio). Chi invece **sta ancora scrivendo il 6** — un inbound dalle
-      03:00 in poi — non viene interrotto: nel riepilogo è `saltati.in_scelta`.
+      del 5 e poi silenzio). Chi invece **scrive il 6** — un inbound dalle 03:00 in poi —
+      è già passato a Mario standard (fase `chiuso`) e il follow-up non lo tocca; il
+      contatore `saltati.in_scelta` resta per chi fosse ancora in `post_pitch` con un
+      inbound dopo le 03:00 (turno non ancora girato).
 - [ ] Chi risponde al follow-up torna al flusso standard di Mario, col video della live.
 - [ ] Chi risponde "no" dopo il follow-up lo gestisce Mario standard (`DA_SCARTARE`).
 

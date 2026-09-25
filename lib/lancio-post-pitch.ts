@@ -8,13 +8,15 @@ import { impostaFaseLancio } from './lancio-db';
 import { sendCrmNota } from './bot-outcome';
 import { pushLeadEntrante } from './lead-entrante';
 import { PROVENIENZA_LANCIO_WEBDEV, isMarkerPulsanteWebinar } from './primo-messaggio';
-import { haCongedo, paroleDelCongedo, inboundDelLotto, ultimoTestoDelLotto, type RigaLancio } from './lancio-fase';
+import {
+  haCongedo, paroleDelCongedo, inboundDelLotto, ultimoTestoDelLotto, conMarioDopoNotte, type RigaLancio,
+} from './lancio-fase';
 import { lancioSlots, lancioBook, lancioCallNow, type LancioInfo, type LancioKind } from './lancio-crm';
 import { romeDayKey, romeHour } from './rome-time';
 import {
   giorniLancio, modoPostPitch, modoEtichette, puoRispondere, validaAtLancio, oreProponibili, testoSlots, bloccoSlotPerPrompt,
   testoConfermaChiamata, testoConfermaPrenotazione, testoOraEsaurita, testoAtNonValido, raccogliRisposte,
-  etichettaGiorno,
+  etichettaGiorno, dopoLaNotteDelLancio,
   type LancioTag,
   TESTO_NESSUN_VENDITORE, TESTO_CHIAMATA_FUORI_ORARIO, TESTO_ERRORE_CRM, TESTO_DOPO_SCELTA, TESTO_CONGEDO_POST_PITCH,
   type OreProponibili, type GiorniLancio, type ModoEtichette,
@@ -73,7 +75,7 @@ export async function turnoPostPitch(
   supabase: Supa,
   i: TurnoLancioInput,
   ctx: { settings: LancioSettings; now: Date },
-): Promise<StatoTurno> {
+): Promise<StatoTurno | 'handed_to_mario'> {
   const genera = i.genera ?? generateLancioReply;
   const c = contestoDi(i);
   const now = ctx.now;
@@ -98,6 +100,25 @@ export async function turnoPostPitch(
   // niente al lead e toglie dal limbo chi aveva già detto no.
   if (haCongedo(i.lancioInfo)) {
     return congedoLancio(supabase, c, paroleDelCongedo(i.rows) ?? '', NOTA_CONGEDO, { giaInviato: true });
+  }
+
+  // Finita la notte del webinar (dalle 03:00 del giorno dopo, decisione PO 25/09) i
+  // pulsanti di scelta non esistono piu': chi scrive adesso da una chat rimasta a meta' del
+  // dopo-pitch passa a Mario standard, che fissa l'appuntamento come per qualunque lead.
+  // Come il ramo del follow-up (`eseguiTurnoLancio`): fase `chiuso` e 'handed_to_mario',
+  // e a questo inbound risponde Mario NELLO STESSO drain, senza bolla qui. Il marcatore su
+  // `lancio_info` tiene le risposte del riscaldamento e dice al drain quale nota usare:
+  // Mario sa che la live l'ha vista e non gli rifa' le domande della sera.
+  // Sta DOPO il congedo (chi ha detto no resta un no) e PRIMA della finestra oraria: la
+  // regola 08:30-23:00 era del dopo-pitch, e Mario risponde come a chiunque.
+  // Chi invece resta in silenzio non passa di qui: resta `post_pitch`, riceve il
+  // follow-up del 6 e torna a Mario quando risponde.
+  if (dopoLaNotteDelLancio(now, ctx.settings.eventoAt)) {
+    const lancioInfo = conMarioDopoNotte(i.lancioInfo ?? null, 'post_pitch', now.toISOString());
+    await impostaFaseLancio(supabase, c.conversationId, 'chiuso', { lancio_info: lancioInfo as unknown as Json });
+    await eventoLancio(supabase, c, 'lancio_post_pitch_a_mario', { risposte: (i.lancioInfo?.risposte ?? []).length },
+      `[lancio] conv ${c.conversationId}: post-pitch dopo la notte del webinar, la chat passa a Mario standard`);
+    return 'handed_to_mario';
   }
 
   // Fuori orario (03:00-08:30, dopo le 23:00): silenzio TEMPORANEO, senza traccia, così

@@ -247,3 +247,17 @@ describe('fineNotteLancio — le 03:00 di Roma del giorno dopo, in millisecondi'
     expect(fineNotteLancio(new Date('2026-11-29T21:00:00+01:00'))).toBe(Date.parse('2026-11-30T03:00:00+01:00'));
   });
 });
+
+describe('dopoLaNotteDelLancio (PO 25/09)', () => {
+  const EVENTO = '2026-10-05T21:00:00+02:00';
+  it('falso la sera e fino alle 02:59 del 6, vero dalle 03:00 in poi', () => {
+    expect(scelta.dopoLaNotteDelLancio(new Date('2026-10-05T22:00:00+02:00'), EVENTO)).toBe(false);
+    expect(scelta.dopoLaNotteDelLancio(new Date('2026-10-06T02:59:59+02:00'), EVENTO)).toBe(false);
+    expect(scelta.dopoLaNotteDelLancio(new Date('2026-10-06T03:00:00+02:00'), EVENTO)).toBe(true);
+    expect(scelta.dopoLaNotteDelLancio(new Date('2026-10-20T10:00:00+02:00'), EVENTO)).toBe(true);
+  });
+  it('senza evento o con un evento illeggibile non scatta mai', () => {
+    expect(scelta.dopoLaNotteDelLancio(new Date('2026-10-06T10:00:00+02:00'), null)).toBe(false);
+    expect(scelta.dopoLaNotteDelLancio(new Date('2026-10-06T10:00:00+02:00'), 'boh')).toBe(false);
+  });
+});

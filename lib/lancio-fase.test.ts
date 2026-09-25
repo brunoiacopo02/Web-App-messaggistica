@@ -398,3 +398,25 @@ describe('linkSviluppatoreEntraNelLancio — il link "Sviluppatore AI" porta la 
     expect(linkSviluppatoreEntraNelLancio({ ...libera, handedOffAt: '2026-10-06T10:00:00Z' })).toBe(false);
   });
 });
+
+describe('dopo la notte del webinar (PO 25/09)', () => {
+  it('pulsantePassaAMario: da mai-nel-lancio, attesa, posto_bloccato, link_inviato e post_pitch; non dalle altre', async () => {
+    const { pulsantePassaAMario } = await import('./lancio-fase');
+    for (const f of [null, '', 'attesa', 'posto_bloccato', 'link_inviato', 'post_pitch']) expect(pulsantePassaAMario(f)).toBe(true);
+    for (const f of ['chiuso', 'followup_inviato', 'scelta_fatta', 'restituito']) expect(pulsantePassaAMario(f)).toBe(false);
+  });
+
+  it('conMarioDopoNotte tiene quello che c era; marioDopoNotte lo rilegge e scarta le forme sporche', async () => {
+    const { conMarioDopoNotte, marioDopoNotte, risposteRiscaldamento } = await import('./lancio-fase');
+    const info = conMarioDopoNotte({ risposte: ['a', 'b'], slotsMostratiAt: 'x' }, 'post_pitch', '2026-10-06T08:00:00Z');
+    expect(info).toEqual({ risposte: ['a', 'b'], slotsMostratiAt: 'x', mario_dopo_notte: { da: 'post_pitch', at: '2026-10-06T08:00:00Z' } });
+    expect(marioDopoNotte(info)).toEqual({ da: 'post_pitch', at: '2026-10-06T08:00:00Z' });
+    expect(conMarioDopoNotte(null, 'pulsante', 't')).toEqual({ mario_dopo_notte: { da: 'pulsante', at: 't' } });
+    expect(marioDopoNotte(null)).toBeNull();
+    expect(marioDopoNotte({ mario_dopo_notte: { da: 'boh', at: 't' } })).toBeNull();
+    expect(marioDopoNotte({ mario_dopo_notte: 'si' })).toBeNull();
+    expect(risposteRiscaldamento(info)).toEqual(['a', 'b']);
+    expect(risposteRiscaldamento({ risposte: ['ok', 3, ' '] })).toEqual(['ok']);
+    expect(risposteRiscaldamento(null)).toEqual([]);
+  });
+});

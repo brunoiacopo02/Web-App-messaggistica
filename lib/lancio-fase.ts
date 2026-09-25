@@ -53,6 +53,57 @@ export function pulsanteRiportaInPostPitch(fase: string | null | undefined): boo
 }
 
 /**
+ * Le UNICHE fasi da cui il pulsante premuto DOPO la notte del webinar (dalle 03:00 del
+ * giorno dopo, decisione PO 25/09) passa la chat a Mario standard, cioe' in `chiuso`.
+ * Sono le stesse da cui la sera la riporterebbe in `post_pitch`, piu' `post_pitch` stesso
+ * (chi aveva premuto la sera e ripreme la mattina: i pulsanti della sera non valgono
+ * piu'). Restano fuori, e il pulsante si registra a fase invariata:
+ *  - `chiuso`: e' gia' Mario standard (dal follow-up, dal link, o da un congedo — e un
+ *    congedato non si riapre, vedi `shouldReopen`);
+ *  - `followup_inviato`: al prossimo turno il ramo del follow-up la passa a Mario da se';
+ *  - `scelta_fatta`: il lead ha gia' la sua ora sul CRM;
+ *  - `restituito`: e' del GDO (ruling C8).
+ */
+const FASI_CHE_IL_PULSANTE_PASSA_A_MARIO: ReadonlySet<string> = new Set<string>([
+  '', 'attesa', 'posto_bloccato', 'link_inviato', 'post_pitch',
+]);
+
+export function pulsantePassaAMario(fase: string | null | undefined): boolean {
+  return FASI_CHE_IL_PULSANTE_PASSA_A_MARIO.has(fase ?? '');
+}
+
+/**
+ * Il marcatore su `lancio_info` delle chat passate a Mario standard dopo la notte del
+ * webinar: dice al drain QUALE nota di contesto usare (chi ha visto la live e ha premuto
+ * il pulsante non e' chi ha risposto al follow-up del giorno dopo) e conserva, accanto,
+ * le risposte del riscaldamento gia' date la sera. `da`: 'pulsante' = premuto dal 6 in
+ * poi; 'post_pitch' = premuto la sera, la chat ha attraversato le 03:00 a meta' scelta.
+ */
+export const CHIAVE_MARIO_DOPO_NOTTE = 'mario_dopo_notte';
+export type MarioDopoNotte = { da: 'pulsante' | 'post_pitch'; at: string };
+
+export function conMarioDopoNotte(info: unknown, da: MarioDopoNotte['da'], at: string): Record<string, unknown> {
+  const base = info && typeof info === 'object' && !Array.isArray(info) ? (info as Record<string, unknown>) : {};
+  return { ...base, [CHIAVE_MARIO_DOPO_NOTTE]: { da, at } };
+}
+
+export function marioDopoNotte(info: unknown): MarioDopoNotte | null {
+  if (!info || typeof info !== 'object') return null;
+  const v = (info as Record<string, unknown>)[CHIAVE_MARIO_DOPO_NOTTE];
+  if (!v || typeof v !== 'object') return null;
+  const { da, at } = v as { da?: unknown; at?: unknown };
+  if ((da !== 'pulsante' && da !== 'post_pitch') || typeof at !== 'string') return null;
+  return { da, at };
+}
+
+/** Le risposte del riscaldamento salvate in `lancio_info.risposte` (solo stringhe). */
+export function risposteRiscaldamento(info: unknown): string[] {
+  if (!info || typeof info !== 'object') return [];
+  const r = (info as Record<string, unknown>).risposte;
+  return Array.isArray(r) ? r.filter((x): x is string => typeof x === 'string' && x.trim() !== '') : [];
+}
+
+/**
  * Il pulsante deve riportare ad 'active' una chat chiusa?
  *
  * Solo se la fase si e' mossa davvero (`cambiaFase`, cioe' `pulsanteRiportaInPostPitch`).

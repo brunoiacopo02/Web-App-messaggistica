@@ -16,11 +16,11 @@ import type { BotOutcome } from './bot-contract';
 import { personaForConversation, PERSONA_NAME, OPENING_ENV_KEYS } from './persona';
 import { confermaVideoVisto } from './video-visto';
 import { notaPrimoContatto } from './primo-contatto-note';
-import { haCongedo, lancioInCorso } from './lancio-fase';
+import { haCongedo, lancioInCorso, marioDopoNotte, risposteRiscaldamento } from './lancio-fase';
 import { eseguiTurnoLancio } from './lancio-turno';
 import {
   lancioStandardDrain, lancioStandardContextNote, linkSviluppatoreContextNote, eventoLancioPassato,
-  bloccaPassaggioLancio, NOTA_LANCIO_NIENTE_PASSAGGIO, TESTO_LANCIO_NIENTE_PASSAGGIO,
+  bloccaPassaggioLancio, NOTA_LANCIO_NIENTE_PASSAGGIO, TESTO_LANCIO_NIENTE_PASSAGGIO, pulsanteDopoNotteContextNote,
 } from './lancio-followup';
 import { LANCIO_INGRESSO_LINK_SVILUPPATORE } from './primo-messaggio';
 import { getLancioSettings, type LancioSettings } from './lancio-settings';
@@ -653,6 +653,13 @@ export async function drainMarioReplies(
         // resta 'active' come per qualunque chat che Mario sta servendo.
         lancio.lancio_fase = 'chiuso';
         finalStatus = 'active';
+        // Il turno puo' aver scritto su `lancio_info` il marcatore del passaggio dopo la
+        // notte del webinar (`mario_dopo_notte`, decisione PO 25/09): e' quello che sceglie
+        // la nota di contesto qui sotto. Una lettura sola, e solo su questo passaggio.
+        const { data: dopoIlPassaggio } = await supabase
+          .from('conversations').select('lancio_info').eq('id', conversationId).maybeSingle();
+        const infoDopo = (dopoIlPassaggio as { lancio_info?: LancioInfo | null } | null)?.lancio_info;
+        if (infoDopo !== undefined) lancio.lancio_info = infoDopo;
       }
 
       // Link ufficiali "in piu'" per questa conversazione: il video della live (lancio).
@@ -667,7 +674,10 @@ export async function drainMarioReplies(
       // Chi e' entrato dal link "professione dello Sviluppatore AI" (PO 24/09/2026): prima
       // della live non c'e' nessuna registrazione da mandare, e nessun avviso da scrivere
       // perche' manca — i video restano i classici e Mario non nomina la live.
-      const daLinkSviluppatore = lancioStandard && lancio.lancio_ingresso === LANCIO_INGRESSO_LINK_SVILUPPATORE;
+      // Passata a Mario dopo la notte del webinar (PO 25/09): pulsante premuto dal 6 in poi,
+      // o dopo-pitch rimasto a meta' oltre le 03:00. Ha visto la live: la nota lo dice.
+      const dopoNotte = lancioStandard ? marioDopoNotte(lancio.lancio_info) : null;
+      const daLinkSviluppatore = lancioStandard && !dopoNotte && lancio.lancio_ingresso === LANCIO_INGRESSO_LINK_SVILUPPATORE;
       const eventoPassato = daLinkSviluppatore
         ? eventoLancioPassato((await leggiSettingsLancio()).eventoAt, Date.now())
         : true;
@@ -745,7 +755,12 @@ export async function drainMarioReplies(
       // Nota del lancio: per chi arriva dal link c'e' sempre (la domanda sulla live), e si
       // SOMMA alla dichiarazione IA del primo contatto invece di prenderne il posto — quella
       // persona non ha mai ricevuto niente da noi, ed e' proprio il caso in cui serve.
-      const notaLancio = daLinkSviluppatore
+      const notaLancio = dopoNotte
+        ? [
+            pulsanteDopoNotteContextNote({ da: dopoNotte.da, videoLiveLink: videoLive, risposte: risposteRiscaldamento(lancio.lancio_info) }),
+            notaPrimo,
+          ].filter(Boolean).join('\n\n')
+        : daLinkSviluppatore
         ? [linkSviluppatoreContextNote({ videoLiveLink: videoLive, eventoPassato }), notaPrimo].filter(Boolean).join('\n\n')
         : lancioStandard
           ? lancioStandardContextNote(videoLive)

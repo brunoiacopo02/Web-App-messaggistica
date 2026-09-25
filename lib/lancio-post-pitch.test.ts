@@ -148,18 +148,6 @@ describe('turnoPostPitch — [LANCIO:CHIAMA_ORA]', () => {
     expect(eventi(calls, 'fenice_ai_reply')).toHaveLength(1);
   });
 
-  it('di giorno (dopo le 03:00) non si chiama: testo fisso + le ore, slot segnati come mostrati, active', async () => {
-    genera.mockResolvedValueOnce(modello({ lancioTag: { tag: 'CHIAMA_ORA' } }));
-    const { supabase, calls } = makeSupabase();
-    const stato = await turnoPostPitch(supabase, scelta('chiamami adesso'), ctx(GIORNO6));
-    expect(stato).toBe('active');
-    expect(lancioCallNow).not.toHaveBeenCalled();
-    expect(bolle()[0]).toMatch(new RegExp(`^${TESTO_CHIAMATA_FUORI_ORARIO} Per la call ho oggi pomeriggio dalle 15 alle 20`));
-    expect(bolle()[0]).not.toMatch(/alle 11/);
-    expect(infoSalvata(calls).slotsMostratiAt).toBe(GIORNO6.toISOString());
-    expect(eventi(calls, 'lancio_slots_mostrati')).toHaveLength(1);
-  });
-
   it('409 nessun_venditore: "tutti occupati, fissiamo domani?" + le ore, active', async () => {
     genera.mockResolvedValueOnce(modello({ lancioTag: { tag: 'CHIAMA_ORA' } }));
     vi.mocked(lancioCallNow).mockResolvedValueOnce({ ok: false, motivo: 'nessun_venditore' });
@@ -298,16 +286,6 @@ describe('turnoPostPitch — [LANCIO:PRENOTA|iso]', () => {
     expect(eventi(calls, 'lancio_at_non_valido').map((e) => e.payload.motivo)).toEqual(['ora_non_tonda', 'giorno_non_ammesso', 'giorno_non_ammesso']);
   });
 
-  it('di giorno alle 10:00 le 9 sono andate (troppo vicino) e il testo non nomina la mattina', async () => {
-    genera.mockResolvedValueOnce(prenota(AT9));
-    const { supabase, calls } = makeSupabase();
-    await turnoPostPitch(supabase, scelta('alle 9'), ctx(GIORNO6));
-    expect(lancioBook).not.toHaveBeenCalled();
-    expect(eventi(calls, 'lancio_at_non_valido')[0].payload.motivo).toBe('troppo_vicino');
-    expect(bolle()[0]).toContain('oggi pomeriggio dalle 15 alle 20');
-    expect(bolle()[0]).not.toMatch(/alle 11/);
-  });
-
   it('500 dal CRM: testo di errore, active', async () => {
     genera.mockResolvedValueOnce(prenota(AT9));
     vi.mocked(lancioBook).mockResolvedValueOnce({ ok: false, motivo: 'http', status: 500, detail: 'boom' });
@@ -335,20 +313,6 @@ describe('turnoPostPitch — [LANCIO:SLOTS], [LANCIO:NO], finestra', () => {
     expect(bolle()[0]).toContain('Domattina è tutto pieno');
     expect(bolle()[0]).toContain('domani pomeriggio dalle 15 alle 20');
     expect(eventi(calls, 'lancio_slots_non_letti')[0].level).toBe('warn');
-  });
-
-  it('SLOTS alle 19:30 del 6 senza ore per oggi: propone solo il 7; nessuna ora in assoluto ⇒ nota al CRM', async () => {
-    genera.mockResolvedValue(modello({ lancioTag: { tag: 'SLOTS' } }));
-    const { supabase, calls } = makeSupabase();
-    await turnoPostPitch(supabase, scelta('domani'), ctx(new Date('2026-10-06T19:30:00+02:00')));
-    expect(bolle()[0]).toContain('Per oggi non ho più ore libere. Ho domani mattina dalle 9 alle 14');
-    expect(sendCrmNota).not.toHaveBeenCalled();
-    await turnoPostPitch(supabase, scelta('domani'), ctx(new Date('2026-10-07T13:30:00+02:00')));
-    expect(bolle()[1]).toMatch(/^Per questi due giorni non ho più ore libere/);
-    expect(sendCrmNota).toHaveBeenCalledTimes(1);
-    expect(eventi(calls, 'lancio_slots_vuoti')).toHaveLength(1);
-    // Nessuna ora proposta non e' "ore mostrate": l'evento resta quello del primo turno.
-    expect(eventi(calls, 'lancio_slots_mostrati')).toHaveLength(1);
   });
 
   it('NO: congedo post-pitch, fase chiuso, risposte salvate, DA_SCARTARE "non interessato", closed', async () => {
@@ -409,15 +373,6 @@ describe('turnoPostPitch — [LANCIO:SLOTS], [LANCIO:NO], finestra', () => {
     expect(sendFreeText).not.toHaveBeenCalled();
   });
 
-  it('fra le 03:00 e le 08:30 del 6: silenzio TEMPORANEO senza fenice_ai_reply (il re-drive delle 08:30 risponde)', async () => {
-    const { supabase, calls } = makeSupabase();
-    expect(await turnoPostPitch(supabase, scelta('ci sei?'), ctx(new Date('2026-10-06T05:00:00+02:00')))).toBe('active');
-    expect(genera).not.toHaveBeenCalled();
-    expect(sendFreeText).not.toHaveBeenCalled();
-    expect(eventi(calls, 'lancio_silenzio')[0].payload).toMatchObject({ motivo: 'fuori_orario', definitivo: false });
-    expect(eventi(calls, 'fenice_ai_reply')).toHaveLength(0);
-  });
-
   // Come nell'assistenza: senza niente da leggere il turno tace, ma lascia la traccia o
   // il re-drive di bot-followups ci ritorna sopra ogni ora.
   it('solo media nel lotto: silenzio tracciato, niente modello, niente bolla, niente CRM', async () => {
@@ -442,16 +397,6 @@ describe('turnoPostPitch — [LANCIO:SLOTS], [LANCIO:NO], finestra', () => {
     expect(stato).toBe('active');
     expect(sendFreeText).not.toHaveBeenCalled();
     expect(eventi(calls, 'lancio_silenzio')[0].payload).toMatchObject({ motivo: 'inbound_senza_testo', definitivo: true });
-  });
-
-  it('alle 02:59 del 6 si risponde ancora (notte); alle 09:00 anche (giorno)', async () => {
-    genera.mockResolvedValue(modello({ visibleReply: 'Ok' }));
-    const { supabase } = makeSupabase();
-    await turnoPostPitch(supabase, base(), ctx(new Date('2026-10-06T02:59:00+02:00')));
-    expect(genera.mock.calls[0][1].modo).toBe('notte');
-    await turnoPostPitch(supabase, base(), ctx(new Date('2026-10-06T09:00:00+02:00')));
-    expect(genera.mock.calls[1][1].modo).toBe('giorno');
-    expect(sendFreeText).toHaveBeenCalledTimes(2);
   });
 
   // Il pulsante premuto alle 20:40 del 5, prima che la live cominci. Fuori dalla notte
@@ -617,16 +562,6 @@ describe('turnoPostPitch — la scelta esce con i pulsanti', () => {
     expect(eventi(calls, 'lancio_scelta_pulsanti')[0].payload).toMatchObject({ conversationId: 42, modo: 'notte', inviato: true });
   });
 
-  it('di giorno: template del giorno, corpo senza la spinta', async () => {
-    vi.stubEnv('LANCIO_SCELTA_GIORNO_TEMPLATE_SID', 'HX_SCELTA_GIORNO');
-    chiedeLaScelta('giorno');
-    const { supabase, calls } = makeSupabase();
-    await turnoPostPitch(supabase, scelta('il progetto finale'), ctx(GIORNO6));
-    expect(templates()[0]).toMatchObject({ contentSid: 'HX_SCELTA_GIORNO' });
-    expect(calls.messages.at(-1).body).toBe(DOMANDA_SCELTA_GIORNO);
-    expect(eventi(calls, 'lancio_scelta_pulsanti')[0].payload).toMatchObject({ modo: 'giorno', inviato: true });
-  });
-
   it('env mancante: si ripiega sul testo fisso (con la spinta), niente template, evento warn', async () => {
     vi.stubEnv('LANCIO_SCELTA_NOTTE_TEMPLATE_SID', '');
     chiedeLaScelta('notte');
@@ -682,25 +617,6 @@ describe('turnoPostPitch — il tocco di un pulsante si classifica prima del mod
     },
   );
 
-  it('di giorno "Chiamami subito" non chiama: testo fuori orario piu le ore, come oggi', async () => {
-    const { supabase } = makeSupabase();
-    expect(await turnoPostPitch(supabase, scelta('Chiamami subito'), ctx(GIORNO6))).toBe('active');
-    expect(genera).not.toHaveBeenCalled();
-    expect(lancioCallNow).not.toHaveBeenCalled();
-    expect(bolle()[0].startsWith(TESTO_CHIAMATA_FUORI_ORARIO)).toBe(true);
-  });
-
-  it.each(['Fissiamo domani', 'Domani mattina', 'Oggi pomeriggio'])(
-    'di giorno "%s" = SLOTS con le ore diurne',
-    async (titolo) => {
-      const { supabase, calls } = makeSupabase();
-      expect(await turnoPostPitch(supabase, scelta(titolo), ctx(GIORNO6))).toBe('active');
-      expect(genera).not.toHaveBeenCalled();
-      expect(bolle()[0]).toMatch(/Per la call ho oggi pomeriggio dalle 15 alle 20/);
-      expect(eventi(calls, 'lancio_scelta_pulsante_tap')[0].payload).toMatchObject({ tag: 'SLOTS', modo: 'giorno' });
-    },
-  );
-
   it('durante il riscaldamento lo stesso testo NON e un tocco: risponde il modello', async () => {
     genera.mockResolvedValueOnce(modello({ visibleReply: 'Ricevuto!' }));
     const { supabase, calls } = makeSupabase();
@@ -708,5 +624,72 @@ describe('turnoPostPitch — il tocco di un pulsante si classifica prima del mod
     expect(genera).toHaveBeenCalledTimes(1);
     expect(bolle()).toEqual(['Ricevuto!']);
     expect(eventi(calls, 'lancio_scelta_pulsante_tap')).toHaveLength(0);
+  });
+});
+
+// Decisione PO del 25/09: i pulsanti di scelta esistono SOLO la sera della live. Dalle 03:00
+// del 6 una chat rimasta in `post_pitch` che riscrive passa a Mario standard: fase
+// `chiuso`, marcatore `mario_dopo_notte` con le risposte della sera, 'handed_to_mario'.
+describe('turnoPostPitch — dopo la notte del webinar passa a Mario standard (PO 25/09)', () => {
+  const faseScritta = () => vi.mocked(impostaFaseLancio).mock.calls[0];
+
+  it('alle 02:59 del 6 e ancora notte: il dopo-pitch risponde come prima', async () => {
+    genera.mockResolvedValueOnce(modello({ visibleReply: 'Ok' }));
+    const { supabase } = makeSupabase();
+    expect(await turnoPostPitch(supabase, base(), ctx(new Date('2026-10-06T02:59:00+02:00')))).toBe('active');
+    expect(genera.mock.calls[0][1].modo).toBe('notte');
+    expect(impostaFaseLancio).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['03:00', '2026-10-06T03:00:00+02:00'],
+    ['05:00 (prima era silenzio fino alle 08:30)', '2026-10-06T05:00:00+02:00'],
+    ['10:00', '2026-10-06T10:00:00+02:00'],
+    ['19:30 del 7', '2026-10-07T19:30:00+02:00'],
+  ])('alle %s: chiuso con il marcatore e le risposte, nessuna bolla, nessun modello, nessun CRM', async (_etichetta, iso) => {
+    const { supabase, calls } = makeSupabase();
+    expect(await turnoPostPitch(supabase, scelta('ci sei?'), ctx(new Date(iso)))).toBe('handed_to_mario');
+    const [, conv, fase, campi] = faseScritta() as unknown as [unknown, number, string, { lancio_info: unknown }];
+    expect(conv).toBe(42);
+    expect(fase).toBe('chiuso');
+    expect(campi.lancio_info).toEqual({
+      risposte: ['studio informatica', 'il progetto finale'],
+      mario_dopo_notte: { da: 'post_pitch', at: new Date(iso).toISOString() },
+    });
+    expect(genera).not.toHaveBeenCalled();
+    expect(sendFreeText).not.toHaveBeenCalled();
+    expect(sendTemplate).not.toHaveBeenCalled();
+    expect(lancioSlots).not.toHaveBeenCalled();
+    expect(lancioBook).not.toHaveBeenCalled();
+    expect(lancioCallNow).not.toHaveBeenCalled();
+    expect(eventi(calls, 'lancio_post_pitch_a_mario')).toHaveLength(1);
+    // Niente traccia qui: a questo inbound risponde Mario nello stesso drain, e la scrive lui.
+    expect(eventi(calls, 'fenice_ai_reply')).toHaveLength(0);
+  });
+
+  it.each(['Chiamami subito', 'Fissiamo domani', 'Oggi pomeriggio', 'Domani mattina'])(
+    'il tocco "%s" di un pulsante della sera, il 6: nessuna chiamata ne ore, la chat va a Mario',
+    async (titolo) => {
+      const { supabase } = makeSupabase();
+      expect(await turnoPostPitch(supabase, scelta(titolo), ctx(GIORNO6))).toBe('handed_to_mario');
+      expect(lancioCallNow).not.toHaveBeenCalled();
+      expect(sendFreeText).not.toHaveBeenCalled();
+      expect(faseScritta()[2]).toBe('chiuso');
+    },
+  );
+
+  it('chi si era congedato resta un no anche dopo le 03:00: nessun passaggio a Mario', async () => {
+    const { supabase } = makeSupabase();
+    const congedato = scelta('ci sei?', { lancioInfo: { risposte: [], congedo_at: '2026-10-05T22:45:00+02:00' } });
+    expect(await turnoPostPitch(supabase, congedato, ctx(GIORNO6))).not.toBe('handed_to_mario');
+    expect(impostaFaseLancio).not.toHaveBeenCalledWith(expect.anything(), 42, 'chiuso', expect.anything());
+    expect(sendFreeText).not.toHaveBeenCalled();
+  });
+
+  it('senza lancio_evento_at non scatta (resta il comportamento di prima)', async () => {
+    genera.mockResolvedValueOnce(modello({ visibleReply: 'Ok' }));
+    const { supabase } = makeSupabase();
+    const stato = await turnoPostPitch(supabase, base(), { settings: { ...SETTINGS, eventoAt: null }, now: GIORNO6 });
+    expect(stato).not.toBe('handed_to_mario');
   });
 });

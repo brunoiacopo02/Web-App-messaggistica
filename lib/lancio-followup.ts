@@ -251,6 +251,45 @@ export function lancioStandardContextNote(videoLiveLink: string | null): string 
 }
 
 /**
+ * Nota di contesto per chi passa a Mario standard DOPO la notte del webinar (decisione PO
+ * 25/09): ha premuto il pulsante dal 6 in poi (`da: 'pulsante'`), oppure l'aveva premuto
+ * la sera e la chat ha attraversato le 03:00 a meta' della scelta (`da: 'post_pitch'`).
+ * Il flusso e' quello standard — Mario fissa la call come per qualunque lead — ma il lead
+ * la live l'ha vista: non glielo si chiede, e quello che ha gia' raccontato la sera non si
+ * richiede. I pulsanti della sera (chiamata subito, fissiamo domani…) non valgono piu'.
+ * Mai null: il contesto della live serve anche senza il link della registrazione.
+ */
+export function pulsanteDopoNotteContextNote(i: {
+  da: 'pulsante' | 'post_pitch';
+  videoLiveLink: string | null;
+  risposte: readonly string[];
+}): string {
+  const righe = [
+    i.da === 'pulsante'
+      ? "CONTESTO LANCIO WEB DEVELOPER AI: questo lead ha seguito la live del percorso Web Developer AI del 5 ottobre e ci ha scritto dal pulsante mostrato alla fine della live: vuole saperne di piu'."
+      : "CONTESTO LANCIO WEB DEVELOPER AI: questo lead ha seguito la live del percorso Web Developer AI del 5 ottobre, la sera stessa ha premuto il pulsante alla fine della live e abbiamo iniziato a parlare. Ora la conversazione prosegue con te.",
+    "La live l'ha vista: non chiedergli se l'ha vista. Parti da quello che l'ha colpito e da cosa vuole capire meglio.",
+  ];
+  if (i.risposte.length > 0) {
+    righe.push(
+      `La sera della live ci aveva gia' detto: ${i.risposte.map((r) => `"${r.slice(0, 200)}"`).join(' / ')}. Non rifargli le stesse domande: usale.`,
+    );
+  }
+  righe.push(
+    "Se in cronologia ci sono pulsanti di scelta della sera della live (chiamata subito, fissiamo domani, oggi pomeriggio, domani mattina), non valgono piu': la call si fissa con te, con il flusso standard.",
+  );
+  const link = i.videoLiveLink?.trim();
+  if (link) {
+    righe.push(
+      `Il video di preparazione da mandargli e' UNO SOLO ed e' la registrazione della live: ${link}`,
+      "Usa questo link al posto dei quattro link conferenza-* del blocco sul video, in ogni punto in cui manderesti il video. Non chiedere se lavora o ha famiglia per scegliere il video: il video e' questo.",
+    );
+  }
+  righe.push("Per il resto il flusso e' quello standard: fissa la call con il consulente come sempre.");
+  return righe.join('\n');
+}
+
+/**
  * Nota di contesto per chi ci scrive dal link "professione dello Sviluppatore AI" (PO
  * 24/09/2026). Il flusso e' quello standard, come dopo il follow-up; cambiano l'apertura
  * e il video. Dopo la live Mario chiede se l'ha vista, e il video di preparazione e' la

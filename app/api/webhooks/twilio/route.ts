@@ -15,8 +15,11 @@ import {
 } from '@/lib/primo-messaggio';
 import {
   LANCIO_SLUG, pulsanteRiportaInPostPitch, pulsanteRiapreChat, pulsanteScriveFase, serveNotaRestituzione,
-  linkSviluppatoreEntraNelLancio,
+  linkSviluppatoreEntraNelLancio, pulsantePassaAMario, conMarioDopoNotte, haCongedo,
 } from '@/lib/lancio-fase';
+import { dopoLaNotteDelLancio } from '@/lib/lancio-scelta';
+import { adessoLancio } from '@/lib/lancio-orologio';
+import type { Json } from '@/lib/supabase/types';
 import { impostaFaseLancio, marcaNotaRestituzione } from '@/lib/lancio-db';
 import { notaInboundDopoRestituzione } from '@/lib/lancio-restituzioni';
 import { getLancioSettings } from '@/lib/lancio-settings';
@@ -251,8 +254,19 @@ export async function POST(req: NextRequest) {
       // riga che legge il resto del lancio). Spento, il marker vale come assente: non
       // arriva a `shouldAdoptInbound`, non arriva a `classificaPrimoMessaggio`, e
       // `pulsanteScriveFase` lo dice con `pulsante_spento`.
-      const pulsanteAttivo = markerPulsante ? (await getLancioSettings(supabase)).pulsanteAttivo : false;
-      const lancioPulsante = markerPulsante && pulsanteAttivo;
+      const settingsPulsante = markerPulsante ? await getLancioSettings(supabase) : null;
+      const pulsanteAttivo = settingsPulsante?.pulsanteAttivo ?? false;
+      // Finita la notte del webinar (dalle 03:00 del giorno dopo, decisione PO 25/09) il
+      // pulsante non porta piu' al dopo-pitch coi pulsanti di scelta: porta a Mario
+      // standard, che fissa l'appuntamento come per qualunque lead, con la nota della live
+      // (fase `chiuso` + marcatore `mario_dopo_notte`). Da quel momento vale anche a
+      // interruttore spento: la frase del pulsante dice senza equivoci "ho visto la live",
+      // e la destinazione e' la stessa di qualunque inbound, solo con piu' contesto — come
+      // il link "professione dello Sviluppatore AI", che un interruttore non ce l'ha. Senza
+      // `lancio_evento_at` non scatta mai (resta il comportamento di prima).
+      const pulsanteDopoNotte = markerPulsante && dopoLaNotteDelLancio(adessoLancio(), settingsPulsante?.eventoAt);
+      const pulsanteVale = pulsanteAttivo || pulsanteDopoNotte;
+      const lancioPulsante = markerPulsante && pulsanteVale;
       if (conv && markerPulsante) {
         // Il gate dell'adozione, valutato qui perche' e' la seconda delle due sole
         // condizioni che autorizzano a scrivere lo stato del lancio (vedi
@@ -273,7 +287,7 @@ export async function POST(req: NextRequest) {
           lancioPulsante,
         });
         const decisione = pulsanteScriveFase({
-          pulsanteAttivo,
+          pulsanteAttivo: pulsanteVale,
           aiOwner: conv.ai_owner,
           aiPausedAt: conv.ai_paused_at,
           handedOffAt: conv.handed_off_at,
@@ -304,7 +318,14 @@ export async function POST(req: NextRequest) {
           // l'elenco delle fasi da cui si rientra e' chiuso (vedi `pulsanteRiportaInPostPitch`)
           // e da `followup_inviato` e `restituito` la fase NON si muove — dopo il follow-up
           // la chat e' del flusso standard di B5, e un restituito e' tornato al GDO.
-          const cambiaFase = pulsanteRiportaInPostPitch(conv.lancio_fase);
+          // Dopo la notte del webinar la destinazione e' Mario standard (`chiuso`), da un
+          // elenco di fasi suo (`pulsantePassaAMario`): la sera resta il dopo-pitch.
+          // Un congedato resta un no anche qui (come la sera, dove il turno del dopo-pitch
+          // lo ri-congeda in silenzio, e come `shouldReopen`): la promessa di non
+          // scrivergli piu' vale finche' non la scioglie una persona.
+          const cambiaFase = pulsanteDopoNotte
+            ? pulsantePassaAMario(conv.lancio_fase) && !haCongedo(conv.lancio_info)
+            : pulsanteRiportaInPostPitch(conv.lancio_fase);
           // Se la chat di Mario era 'closed' (un no di settimane fa, o il congedo del
           // lancio) si riapre: sta scrivendo adesso, e col pulsante. Mai su una chat
           // senza padrone, in pausa o passata a una persona: quelle non arrivano qui — e
@@ -337,7 +358,14 @@ export async function POST(req: NextRequest) {
           // `impostaFaseLancio` (lib/lancio-db.ts) e' l'unico scrittore di `lancio_fase` e
           // si scrive da solo l'evento `lancio_fase_cambiata`. Await e non `after()`: e' un
           // update solo, e la fase deve essere sul posto prima che il drain parta qui sotto.
-          if (cambiaFase) {
+          if (cambiaFase && pulsanteDopoNotte) {
+            // Il marcatore tiene le risposte della sera (se c'erano) e dice al drain di usare
+            // la nota "ha visto la live e ha premuto il pulsante".
+            const info = conMarioDopoNotte(conv.lancio_info, 'pulsante', new Date().toISOString());
+            await impostaFaseLancio(supabase, conversationId, 'chiuso', { lancio_info: info as unknown as Json });
+            conv.lancio_fase = 'chiuso';
+            conv.lancio_info = info as typeof conv.lancio_info;
+          } else if (cambiaFase) {
             await impostaFaseLancio(supabase, conversationId, 'post_pitch');
             conv.lancio_fase = 'post_pitch';
           }
@@ -349,6 +377,7 @@ export async function POST(req: NextRequest) {
               conversationId,
               giaDiMario: conv.ai_owner === 'mario',
               ...(cambiaFase ? {} : { faseInvariata: true }),
+              ...(pulsanteDopoNotte ? { dopoNotte: true } : {}),
             } as never,
             message: `[lancio] ${phone} ha premuto il pulsante del webinar (conv ${conversationId})${cambiaFase ? '' : `, fase ${conv.lancio_fase} invariata`}`,
             level: 'info',
@@ -401,7 +430,7 @@ export async function POST(req: NextRequest) {
           // Il messaggio corrente e' il fallback: se la lettura fallisce o la riga non si
           // vede ancora, e' comunque il primo inbound di questa conversazione.
           const primoMessaggioTesto = primoRigaInbound?.body ?? messageBody;
-          const esito = classificaPrimoMessaggio({ primoInbound: primoMessaggioTesto, inboundCorrente: messageBody, pulsanteAttivo });
+          const esito = classificaPrimoMessaggio({ primoInbound: primoMessaggioTesto, inboundCorrente: messageBody, pulsanteAttivo: pulsanteVale });
           const provenienza = esito.provenienza;
           // Cinque minuti indietro, e non `now`: il messaggio che ha innescato questa
           // adozione e' stato inserito qui sopra col `created_at` di default, cioe'
