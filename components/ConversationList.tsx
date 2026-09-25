@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useState, useTransition } from 'react';
+import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { cn, formatRelativeShort } from '@/lib/utils';
@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { getSupabaseBrowser } from '@/lib/supabase/client';
 import { mondoLabel, type Mondo } from '@/lib/chat-perimetro';
 import { lancioFaseLabel } from '@/lib/lancio-fase';
+import { convDaSegnareLetta } from '@/lib/segna-letta';
 
 type Conv = {
   id: number;
@@ -72,6 +73,21 @@ export function ConversationList({
     const t = setInterval(() => startTransition(() => refresh(true)), 5000);
     return () => clearInterval(t);
   }, [refresh]);
+
+  // La chat aperta si segna letta qui, non solo al render della pagina: /chat non la
+  // segnava mai, e in /inbox e /campagne-chat i messaggi arrivati mentre la chat era
+  // aperta lasciavano il badge acceso anche dopo averli letti. L'endpoint è
+  // `${apiPath}/:id/read` in tutti e tre i pannelli.
+  const letteInviate = useRef(new Map<number, number>());
+  useEffect(() => {
+    const da = convDaSegnareLetta(params.conversationId, items, letteInviate.current);
+    if (!da) return;
+    letteInviate.current.set(da.id, da.count);
+    fetch(`${apiPath}/${da.id}/read`, { method: 'POST' }).catch(() => {
+      // Rete giù: si riprova al prossimo polling.
+      letteInviate.current.delete(da.id);
+    });
+  }, [apiPath, items, params.conversationId]);
 
   // Realtime (istantaneo): token impostato prima della subscribe.
   useEffect(() => {
@@ -138,7 +154,9 @@ export function ConversationList({
                 </div>
                 <div className="flex justify-between items-center mt-0.5">
                   <span className="text-sm text-zinc-500 truncate">{c.preview ?? c.lead?.phone_e164}</span>
-                  {c.unread_count > 0 && (
+                  {/* La chat aperta è letta per definizione: niente badge nemmeno nei
+                      secondi prima che il polling riporti il contatore azzerato. */}
+                  {c.unread_count > 0 && !active && (
                     <Badge className="bg-emerald-500 hover:bg-emerald-500 h-5 px-1.5 text-xs">{c.unread_count}</Badge>
                   )}
                 </div>

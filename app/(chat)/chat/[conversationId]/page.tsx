@@ -11,8 +11,9 @@ import { ChatTakeover } from './_components/ChatTakeover';
 
 export const dynamic = 'force-dynamic';
 
-// Sola lettura finché il bot governa la chat: nessuna scrittura su read_at/unread_count,
-// e il Composer compare solo dopo il fermo manuale (vedi ChatTakeover).
+// Sola lettura finché il bot governa la chat: il Composer compare solo dopo il fermo
+// manuale (vedi ChatTakeover). La marcatura "letto" la fa la lista (ConversationList →
+// /api/chat/conversations/:id/read), e solo sulle chat del bot.
 export default async function ChatConversationPage({
   params,
 }: { params: Promise<{ conversationId: string }> }) {
