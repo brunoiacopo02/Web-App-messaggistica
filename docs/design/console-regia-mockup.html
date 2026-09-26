@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0f1b21">
+<title>D, Regia</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Schibsted+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ============ Pagina di presentazione (neutra, fuori dal design) ============ */
+html,body{margin:0}
+body{background:#e9e9e6;color:#222;font:14px/1.5 system-ui,sans-serif}
+.cartiglio{max-width:1440px;margin:0 auto;padding:24px 20px 16px;display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:24px;align-items:start}
+.cartiglio h1{font-size:18px;font-weight:600;margin:0 0 4px}
+.cartiglio p{margin:0 0 8px;color:#444}
+.cartiglio h2{font-size:13px;font-weight:600;margin:0 0 4px}
+.cartiglio ul{margin:0;padding-left:18px;color:#444}
+.cartiglio .sw{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 10px}
+.cartiglio .sw span{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#444}
+.cartiglio .sw i{width:16px;height:16px;border-radius:4px;border:1px solid rgba(0,0,0,.15);display:inline-block}
+.cartiglio .toggles{display:flex;gap:8px;margin-top:8px}
+.cartiglio button{font:inherit;font-size:13px;border:1px solid #bbb;background:#fff;border-radius:6px;padding:3px 10px;cursor:pointer}
+.cartiglio button:focus-visible,.pick:focus-visible{outline:2px solid #1f6b96;outline-offset:2px}
+.stage{overflow-x:auto;padding:0 20px 8px}
+.frame{width:1440px;margin:0 auto;border-radius:10px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.08),0 16px 40px -16px rgba(0,0,0,.35)}
+.caption{max-width:1440px;margin:28px auto 10px;padding:0 20px;font-size:13px;color:#444}
+.caption b{font-weight:600;color:#222}
+.pickwrap{max-width:1440px;margin:24px auto 64px;padding:0 20px}
+.pick{font:inherit;border:1px solid #222;background:#222;color:#fff;border-radius:6px;padding:6px 14px;cursor:pointer}
+
+/* ============ Direzione D: Regia ============ */
+.console{
+  /* superfici: blu notte petrolio a strati, dal piu' profondo (regia) al piu' alto (selezione) */
+  --s0:#0f1b21; --s1:#13222a; --s2:#172931; --s3:#1d323c; --s4:#24404c;
+  --line:#2b4653; --line2:#213843;
+  /* testo avorio */
+  --fg:#f1ead9; --fg2:#c9c6b6; --fg3:#98a4a3;
+  /* ember = in onda / lancio. ice = selezione, focus, azione primaria */
+  --ember:#f67f2f; --ember-ink:#1b0f07; --ember-soft:#3a2518;
+  --ice:#8ccbf0; --ice-ink:#0f1b21; --ice-soft:#1c3a4b; --ice-line:#3b6780;
+  /* segnali */
+  --red:#ff8f9e; --red-bg:#2f1c24; --red-strong:#ff8f9e; --red-ink:#2a0c12;
+  --amber:#f0c674; --amber-bg:#33291a;
+  --green:#8fd8a8; --green-bg:#17332a;
+  --bar:#5b7581; --bar-hi:#c9c6b6;
+  /* avatar: tinte morbide, iniziali avorio tinto */
+  --av1b:#3a2830; --av1f:#f0bfcd;  /* rosa antico */
+  --av2b:#372f1f; --av2f:#ecd29c;  /* sabbia */
+  --av3b:#213428; --av3f:#b6dcc0;  /* salvia */
+  --av4b:#1e3444; --av4f:#acd0ea;  /* lago */
+  --av5b:#3a2a22; --av5f:#efbb9c;  /* rame */
+  --av6b:#2b2f3d; --av6f:#c6cde6;  /* ardesia */
+  --shadow:0 1px 2px rgba(3,8,11,.5),0 20px 48px -12px rgba(3,8,11,.7);
+  --ease:cubic-bezier(0.23,1,0.32,1);
+  --f:'Schibsted Grotesk',sans-serif;
+  --m:'JetBrains Mono',monospace;
+  color-scheme:dark;
+}
+.console[data-theme="light"]{
+  --s0:#e2e9ea; --s1:#f7f7f3; --s2:#eff2f0; --s3:#e4eaea; --s4:#d5e2e7;
+  --line:#c7d3d5; --line2:#dce4e4;
+  --fg:#13232b; --fg2:#34464d; --fg3:#52636a;
+  --ember:#b8430a; --ember-ink:#fff; --ember-soft:#f6e3d6;
+  --ice:#1f6b96; --ice-ink:#fff; --ice-soft:#d6e7f1; --ice-line:#9cc3da;
+  --red:#b4233c; --red-bg:#fbe5e8; --red-strong:#b4233c; --red-ink:#fff;
+  --amber:#865700; --amber-bg:#f7ecd0;
+  --green:#1b7446; --green-bg:#dff1e5;
+  --bar:#a9b9be; --bar-hi:#34464d;
+  --av1b:#f3dde3; --av1f:#8a3550; --av2b:#f1e6cc; --av2f:#76571a; --av3b:#dcebe0; --av3f:#2f6441;
+  --av4b:#d9e7f1; --av4f:#285a7c; --av5b:#f4e0d4; --av5f:#8a4524; --av6b:#e1e4ee; --av6f:#3f4a6b;
+  --shadow:0 1px 2px rgba(19,35,43,.08),0 20px 48px -16px rgba(19,35,43,.28);
+  color-scheme:light;
+}
+.console{font-family:var(--f);font-size:13px;line-height:20px;color:var(--fg);background:var(--s1);
+  -webkit-font-smoothing:antialiased;caret-color:var(--ice);scrollbar-color:var(--line) transparent;scrollbar-width:thin;
+  font-feature-settings:"tnum" 0}
+.console ::selection{background:var(--ice-soft);color:var(--fg)}
+.console *{box-sizing:border-box}
+.console button{font:inherit;color:inherit}
+.console :focus-visible{outline:2px solid var(--ice);outline-offset:1px;border-radius:6px}
+.num{font-variant-numeric:tabular-nums}
+.mono{font-family:var(--m);font-size:12px;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+.ico{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.muted{color:var(--fg3)}
+kbd{font-family:var(--m);font-size:12px;line-height:18px;padding:0 5px;border-radius:4px;border:1px solid var(--line);color:var(--fg3);background:var(--s1)}
+
+.app{width:1440px;height:900px;display:grid;grid-template-rows:128px minmax(0,1fr)}
+
+/* ---------- Barra di regia ---------- */
+.regia{background:var(--s0);border-bottom:1px solid var(--line);display:grid;grid-template-rows:52px 76px}
+.r1{display:grid;grid-template-columns:212px auto minmax(0,1fr) 300px;align-items:center;border-bottom:1px solid var(--line2)}
+.brand{display:flex;align-items:center;gap:10px;padding:0 16px;height:100%;border-right:1px solid var(--line2)}
+.mark{width:20px;height:20px;flex:none}
+.brand b{font-weight:600;font-size:14px}
+.brand span{color:var(--fg3)}
+.show{display:flex;align-items:baseline;gap:10px;padding:0 20px;white-space:nowrap}
+.show b{font-size:14px;font-weight:600}
+.rundown{position:relative;height:52px;margin:0 28px 0 8px}
+.rd-track{position:absolute;left:0;right:0;top:25px;height:2px;background:var(--line)}
+.rd-past{position:absolute;left:0;top:25px;height:2px;background:var(--fg3);width:66.7%}
+.rd-air{position:absolute;top:24px;height:4px;background:var(--ember);left:66.7%;width:5.2%;border-radius:0 2px 2px 0}
+.rd-tick{position:absolute;top:21px;width:1px;height:10px;background:var(--fg3)}
+.rd-lbl{position:absolute;font-size:12px;line-height:14px;color:var(--fg3);white-space:nowrap;transform:translateX(-50%)}
+.rd-lbl.up{top:4px}.rd-lbl.dn{top:34px}
+.rd-lbl.end{transform:translateX(calc(-100% - 4px))}
+.rd-lbl b{font-weight:500;color:var(--fg2)}
+.rd-head{position:absolute;top:10px;width:2px;height:32px;background:var(--ember);left:71.9%;border-radius:1px}
+.rd-future .rd-lbl{color:var(--fg3)}
+.cmdbtn{display:flex;align-items:center;gap:8px;height:32px;margin-right:16px;padding:0 6px 0 10px;border:1px solid var(--line);border-radius:6px;background:var(--s1);color:var(--fg3);cursor:pointer;text-align:left;transition:border-color 150ms ease,transform 160ms var(--ease)}
+.cmdbtn span{flex:1;white-space:nowrap}
+.cmdbtn:hover{border-color:var(--ice-line);color:var(--fg2)}
+.cmdbtn:active{transform:scale(.98)}
+
+.r2{display:grid;grid-template-columns:212px auto auto auto auto auto minmax(0,1fr);align-items:stretch}
+.onair{padding:10px 16px;border-right:1px solid var(--line2);display:flex;flex-direction:column;justify-content:center;gap:2px}
+.tally{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--ember)}
+.tally i{width:10px;height:10px;border-radius:2px;background:var(--ember);display:inline-block}
+.timecode{font-family:var(--m);font-size:20px;line-height:28px;font-weight:500;color:var(--fg);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.timecode small{font-size:12px;color:var(--fg3);font-weight:400;letter-spacing:0;font-family:var(--f)}
+[data-state="pre"] .tally{color:var(--fg2)}
+[data-state="pre"] .tally i{background:transparent;border:2px solid var(--fg3);border-radius:50%}
+[data-state="pre"] .rd-air,[data-state="pre"] .rd-head{display:none}
+[data-state="pre"] .rd-past{width:0}
+.kpi{padding:10px 20px;border-right:1px solid var(--line2);display:flex;flex-direction:column;justify-content:center;min-width:0}
+.kpi .l{font-size:12px;line-height:16px;color:var(--fg3)}
+.kpi .v{font-size:20px;line-height:28px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.01em;display:flex;align-items:center;gap:10px}
+.kpi .s{font-size:12px;line-height:16px;color:var(--fg3);font-variant-numeric:tabular-nums}
+.kpi.bad .v{color:var(--red)}
+.kpi.bad .s a{color:var(--red);text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px}
+.spark{width:64px;height:22px;overflow:visible}
+.tracker{padding:10px 20px 8px;display:flex;flex-direction:column;justify-content:center;gap:4px;min-width:0}
+.tracker .hd{display:flex;justify-content:space-between;font-size:12px;line-height:16px;color:var(--fg3)}
+.tracker .hd em{font-style:normal;color:var(--red)}
+.bars{display:grid;grid-template-columns:repeat(14,1fr);gap:3px;align-items:end;height:26px}
+.bars div{background:var(--bar);border-radius:2px 2px 0 0;position:relative;min-height:2px;transition:background-color 120ms ease}
+.bars div:hover{background:var(--bar-hi)}
+.bars div.now{background:var(--ember)}
+.bars div.f::before{content:"";position:absolute;left:0;right:0;top:-4px;height:3px;background:var(--red);border-radius:1px}
+.axis{display:grid;grid-template-columns:repeat(14,1fr);gap:3px;font-family:var(--m);font-size:12px;line-height:14px;color:var(--fg3)}
+.axis span:nth-child(even){visibility:hidden}
+.axis span{font-size:11px}
+
+/* ---------- Console a colonne ---------- */
+.deck{display:grid;grid-template-columns:212px 332px minmax(0,1fr) 364px;min-height:0}
+
+/* nav */
+.nav{background:var(--s2);border-right:1px solid var(--line);padding:10px 8px;display:flex;flex-direction:column;gap:1px;overflow:auto}
+.nv{display:grid;grid-template-columns:16px 1fr auto;align-items:center;gap:10px;height:30px;padding:0 8px;border-radius:6px;color:var(--fg2);text-decoration:none;cursor:pointer;transition:background-color 100ms ease}
+.nv:hover{background:var(--s3);color:var(--fg)}
+.nv[aria-current="page"]{background:var(--ice-soft);color:var(--fg)}
+.nv[aria-current="page"] .ico{color:var(--ice)}
+.nv .c{font-size:12px;color:var(--fg3);font-variant-numeric:tabular-nums}
+.nv .c.urg{color:var(--red-ink);background:var(--red-strong);padding:0 6px;border-radius:9px;line-height:18px;font-weight:600}
+.nv.live .ico{color:var(--ember)}
+.grp{font-size:12px;color:var(--fg3);padding:14px 8px 4px}
+.phases{padding:2px 0 6px 26px;display:flex;flex-direction:column}
+.ph{display:grid;grid-template-columns:1fr 24px 36px;align-items:center;gap:6px;white-space:nowrap;height:22px;font-size:12px;color:var(--fg3);padding-right:8px;border-radius:4px;cursor:pointer}
+.ph:hover{color:var(--fg2)}
+.ph .t{height:4px;background:var(--line2);border-radius:2px;overflow:hidden}
+.ph .t i{display:block;height:100%;background:var(--fg3);border-radius:2px}
+.ph .n{text-align:right;font-variant-numeric:tabular-nums}
+.nav .foot{margin-top:auto;display:flex;align-items:center;gap:8px;padding:10px 8px 2px;border-top:1px solid var(--line2);color:var(--fg3);font-size:12px}
+.dot-ok{width:8px;height:8px;border-radius:50%;background:var(--green);flex:none}
+
+/* lista chat */
+.list{background:var(--s2);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.lh{display:flex;align-items:baseline;gap:8px;padding:14px 16px 8px}
+.lh h2{margin:0;font-size:16px;line-height:24px;font-weight:600}
+.lh .sp{flex:1}
+.iconbtn{width:28px;height:28px;display:inline-grid;place-items:center;border:0;background:transparent;color:var(--fg3);border-radius:6px;cursor:pointer;transition:background-color 100ms ease,transform 160ms var(--ease)}
+.iconbtn:hover{background:var(--s3);color:var(--fg)}
+.iconbtn:active{transform:scale(.95)}
+.search{margin:0 12px 8px;display:flex;align-items:center;gap:8px;height:32px;padding:0 10px;border:1px solid var(--line2);border-radius:6px;background:var(--s1);color:var(--fg3)}
+.search input{all:unset;flex:1;font-size:13px;color:var(--fg)}
+.search input::placeholder{color:var(--fg3)}
+.rows{overflow:auto;padding:0 8px 8px;display:flex;flex-direction:column;gap:1px}
+.row{display:grid;grid-template-columns:32px minmax(0,1fr);gap:10px;align-items:center;height:56px;padding:0 10px;border-radius:8px;cursor:pointer;transition:background-color 100ms ease;text-align:left;border:0;background:transparent;width:100%}
+.row:hover{background:var(--s3)}
+.row[aria-selected="true"]{background:var(--ice-soft)}
+.row .l1,.row .l2{display:flex;align-items:center;gap:8px;min-width:0}
+.row .nm{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--fg)}
+.row.unread .nm{font-weight:600}
+.row .ctx{margin-left:auto;font-size:12px;color:var(--fg3);white-space:nowrap}
+.row .tm{font-size:12px;color:var(--fg3);font-variant-numeric:tabular-nums;flex:none}
+.row .pv{font-size:13px;color:var(--fg3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
+.row.unread .pv{color:var(--fg2)}
+.row[aria-selected="true"] .pv{color:var(--fg2)}
+.row .pv b{font-weight:400;color:var(--fg2)}
+.row .un{flex:none;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--ice);color:var(--ice-ink);font-size:12px;line-height:18px;font-weight:600;text-align:center;font-variant-numeric:tabular-nums}
+.tag-serve{font-size:12px;line-height:18px;font-weight:600;padding:0 6px;border-radius:4px;background:var(--red-strong);color:var(--red-ink);white-space:nowrap}
+.ctx.err{color:var(--red)}
+.pv.err{color:var(--red)!important;display:flex;align-items:center;gap:6px}
+.pv.err .ico{width:14px;height:14px}
+.av{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:600;letter-spacing:.01em;flex:none}
+.av.lg{width:36px;height:36px;font-size:13px}
+.a1{background:var(--av1b);color:var(--av1f)}.a2{background:var(--av2b);color:var(--av2f)}.a3{background:var(--av3b);color:var(--av3f)}
+.a4{background:var(--av4b);color:var(--av4f)}.a5{background:var(--av5b);color:var(--av5f)}.a6{background:var(--av6b);color:var(--av6f)}
+.a0{background:var(--s4);color:var(--fg3)}
+
+/* thread */
+.thread{background:var(--s1);display:flex;flex-direction:column;min-width:0;min-height:0}
+.th{display:flex;align-items:center;gap:12px;height:64px;padding:0 20px;border-bottom:1px solid var(--line2);flex:none}
+.th .who b{display:block;font-size:16px;line-height:22px;font-weight:600}
+.th .who span{display:flex;gap:12px;align-items:center;color:var(--fg3);font-size:12px;line-height:16px}
+.th .who .phase{color:var(--ember)}
+.th .sp{flex:1}
+.msgs{flex:1;overflow:auto;padding:20px 24px 12px;display:flex;flex-direction:column;gap:6px}
+.day{display:flex;align-items:center;gap:12px;color:var(--fg3);font-size:12px;margin:0 0 6px}
+.day::before,.day::after{content:"";flex:1;height:1px;background:var(--line2)}
+.sys{align-self:center;display:flex;align-items:center;gap:8px;font-size:12px;line-height:16px;color:var(--fg3);padding:6px 10px;margin:4px 0 10px}
+.sys .mono{color:var(--fg2)}
+.b{max-width:76%;padding:8px 12px;border-radius:12px;font-size:14px;line-height:21px}
+.b.lead{align-self:flex-start;background:var(--s3);border-bottom-left-radius:4px}
+.b.mario{align-self:flex-end;background:var(--s2);border:1px solid var(--line);border-bottom-right-radius:4px}
+.who-lbl{display:flex;align-items:center;gap:6px;font-size:12px;line-height:16px;color:var(--fg3);margin-top:10px}
+.who-lbl.r{align-self:flex-end}
+.who-lbl .ico{width:14px;height:14px}
+.meta{font-size:12px;line-height:16px;color:var(--fg3);font-variant-numeric:tabular-nums}
+.meta.r{align-self:flex-end}
+.typing{align-self:flex-end;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--fg3);margin-top:10px}
+.typing .ico{width:14px;height:14px}
+.composer{border-top:1px solid var(--line2);padding:10px 16px 14px;flex:none;background:var(--s1)}
+.cmp-top{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--fg3);margin-bottom:8px}
+.cmp-top .own{display:flex;align-items:center;gap:6px;color:var(--fg2);font-size:13px}
+.cmp-top .own .ico{color:var(--ice)}
+.cmp-top .sp{flex:1}
+.cmp-top .win{display:flex;align-items:center;gap:6px}
+.cmp-top .win .ico{width:14px;height:14px}
+.cmp{display:flex;gap:8px;align-items:stretch}
+.cmp textarea{flex:1;resize:none;height:40px;border:1px solid var(--line2);border-radius:8px;background:var(--s2);color:var(--fg);font:inherit;font-size:13px;padding:9px 12px}
+.cmp textarea::placeholder{color:var(--fg3)}
+.cmp textarea:disabled{cursor:not-allowed}
+
+/* bottoni */
+.btn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:6px;border:1px solid var(--line);background:var(--s3);color:var(--fg);font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap;transition:background-color 120ms ease,border-color 120ms ease,transform 160ms var(--ease)}
+.btn:hover{background:var(--s4);border-color:var(--ice-line)}
+.btn:active{transform:scale(.97)}
+.btn .ico{width:14px;height:14px;color:var(--fg3)}
+.btn.pri{background:var(--ice);border-color:var(--ice);color:var(--ice-ink)}
+.btn.pri .ico{color:var(--ice-ink)}
+.btn.pri:hover{filter:brightness(1.06)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--fg2)}
+.btn.ghost:hover{background:var(--s3);border-color:var(--line2)}
+.btn.tall{height:40px;padding:0 14px}
+
+/* cabina */
+.cabina{background:var(--s2);border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0;overflow:auto}
+.ch{display:flex;align-items:baseline;gap:8px;padding:14px 16px 8px}
+.ch h2{margin:0;font-size:16px;line-height:24px;font-weight:600}
+.ch .sp{flex:1}
+.ch a{font-size:12px;color:var(--fg3);text-decoration:none}
+.ch a:hover{color:var(--fg);text-decoration:underline;text-underline-offset:3px}
+.alert{padding:12px 16px 12px;border-top:1px solid var(--line2)}
+.alert.crit{background:var(--red-bg)}
+.al-top{display:flex;align-items:center;gap:6px;font-size:12px;line-height:16px;font-weight:500}
+.al-top .ico{width:14px;height:14px}
+.al-top .when{margin-left:auto;color:var(--fg3);font-weight:400}
+.crit .al-top{color:var(--red)}
+.warn .al-top{color:var(--amber)}
+.ok .al-top{color:var(--green)}
+.al-t{font-size:14px;line-height:20px;font-weight:500;margin-top:4px}
+.al-m{font-size:13px;line-height:18px;color:var(--fg2);margin-top:2px}
+.ok .al-t{color:var(--fg2)}
+.ok .al-m{color:var(--fg3)}
+.al-act{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.crit .btn:not(.pri){background:var(--s2)}
+.lead-card{border-top:1px solid var(--line);padding:4px 0 12px}
+.dl{display:grid;grid-template-columns:104px 1fr;margin:0;padding:0 16px}
+.dl dt,.dl dd{margin:0;font-size:13px;line-height:24px}
+.dl dt{color:var(--fg3);font-size:12px}
+.dl dd{display:flex;align-items:center;gap:6px;min-width:0}
+.dl dd .mono{font-size:12px}
+.dl .copy{width:22px;height:22px;margin-left:auto}
+.dl .copy .ico{width:14px;height:14px}
+.dl .ph-v{color:var(--ember)}
+.dl .none{color:var(--fg3)}
+.lc-act{display:flex;gap:6px;padding:10px 16px 4px}
+.hist{padding:10px 16px 0}
+.hist h3{margin:0 0 4px;font-size:12px;line-height:16px;font-weight:500;color:var(--fg3)}
+.hist ol{list-style:none;margin:0;padding:0}
+.hist li{display:grid;grid-template-columns:44px 1fr;gap:8px;font-size:12px;line-height:22px;color:var(--fg2)}
+.hist li .mono{color:var(--fg3)}
+
+/* ---------- Assistente (Ctrl+K) ---------- */
+.palette{width:640px;background:var(--s2);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);overflow:hidden;color:var(--fg);font-family:var(--f)}
+.pl-in{display:flex;align-items:center;gap:10px;height:52px;padding:0 16px;border-bottom:1px solid var(--line2)}
+.pl-in .who{font-size:12px;color:var(--fg3);padding:0 6px;border:1px solid var(--line);border-radius:4px;line-height:18px}
+.pl-in .q{flex:1;font-size:16px;line-height:24px}
+.pl-in .q::after{content:"";display:inline-block;width:2px;height:18px;background:var(--ice);vertical-align:-3px;margin-left:2px}
+.pl-body{padding:12px 16px 4px}
+.tool{display:flex;align-items:center;gap:8px;height:28px;font-size:12px;color:var(--fg3);border-radius:6px;padding:0 6px;margin:0 -6px;cursor:pointer}
+.tool:hover{background:var(--s3)}
+.tool .ico{width:14px;height:14px}
+.tool .mono{color:var(--fg2)}
+.tool .r{margin-left:auto}
+.ans{font-size:14px;line-height:22px;max-width:62ch;margin:10px 0 0}
+.ans p{margin:0 0 10px}
+.ans .mono{font-size:12px;padding:1px 4px;border-radius:4px;background:var(--s3)}
+.cite{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:4px;background:var(--ice-soft);color:var(--ice);font-size:12px;line-height:18px;font-weight:600;text-decoration:none;vertical-align:1px;font-variant-numeric:tabular-nums}
+.cite:hover{background:var(--ice);color:var(--ice-ink)}
+.srcs{display:flex;flex-direction:column;gap:2px;padding:6px 0 12px;border-top:1px solid var(--line2);margin-top:4px}
+.src{display:grid;grid-template-columns:22px 1fr auto;align-items:center;gap:8px;height:28px;font-size:13px;color:var(--fg2);text-decoration:none;border-radius:6px;padding:0 6px;margin:0 -6px}
+.src:hover{background:var(--s3);color:var(--fg)}
+.src .cite{justify-self:start}
+.src .mono{color:var(--fg3)}
+.propose{display:flex;align-items:center;gap:10px;padding:12px 16px;background:var(--s1);border-top:1px solid var(--line2)}
+.propose .txt{flex:1;font-size:13px;line-height:18px;color:var(--fg2)}
+.propose .txt b{display:block;font-weight:500;color:var(--fg)}
+.pl-foot{display:flex;gap:16px;align-items:center;height:36px;padding:0 16px;border-top:1px solid var(--line2);font-size:12px;color:var(--fg3)}
+.pl-foot span{display:flex;align-items:center;gap:6px}
+
+dialog.cmdk{padding:0;border:0;background:transparent;margin:88px auto 0;max-width:none}
+dialog.cmdk::backdrop{background:rgba(6,12,15,.62)}
+
+.shot2{width:1440px;height:560px;background:var(--s0);position:relative;display:grid;grid-template-columns:1fr 640px 1fr;align-items:start;padding-top:48px}
+.shot2 .note{padding:0 28px;font-size:13px;line-height:20px;color:var(--fg3);max-width:340px;justify-self:end}
+.shot2 .note b{display:block;color:var(--fg2);font-weight:500;margin-bottom:4px}
+.shot2 .note.r{justify-self:start}
+
+@media (prefers-reduced-motion: reduce){
+  .console *{transition-property:opacity,background-color,border-color,color!important}
+  .console *:active{transform:none!important}
+}
+</style>
+</head>
+<body>
+
+<!-- ======================= Cartiglio (neutro) ======================= -->
+<header class="cartiglio">
+  <div>
+    <h1>D, Regia</h1>
+    <p>La console come una sala regia la sera del lancio: la barra in alto va in onda, sotto si lavora le chat, a destra la cabina tiene avvisi e scheda del lead a portata di mano.</p>
+    <div class="toggles">
+      <button type="button" id="tgTheme">Tema chiaro</button>
+      <button type="button" id="tgState">Mostra prima della live</button>
+    </div>
+  </div>
+  <div>
+    <h2>Font e palette</h2>
+    <p>Schibsted Grotesk (interfaccia, 400/500/600) e JetBrains Mono 400/500 solo sui dati (telefoni, ID, orari dei log, codici).</p>
+    <div class="sw">
+      <span><i style="background:#0f1b21"></i>regia #0f1b21</span>
+      <span><i style="background:#13222a"></i>fondo #13222a</span>
+      <span><i style="background:#172931"></i>pannelli #172931</span>
+      <span><i style="background:#f1ead9"></i>avorio #f1ead9</span>
+      <span><i style="background:#f67f2f"></i>ember, in onda #f67f2f</span>
+      <span><i style="background:#8ccbf0"></i>ghiaccio, selezione #8ccbf0</span>
+    </div>
+  </div>
+  <div>
+    <h2>Perché è piacevole</h2>
+    <ul>
+      <li>Il blu petrolio a quattro gradini dà profondità senza nero pieno: le colonne si leggono come banchi di una regia.</li>
+      <li>L'arancio compare solo dove c'è la diretta (luce di onda, timecode, scaletta, ora corrente): la sera del 5/10 la barra "si accende".</li>
+      <li>Iniziali tinte con toni morbidi e testo avorio: caldo senza essere crema.</li>
+    </ul>
+    <h2 style="margin-top:8px">Rischi</h2>
+    <ul>
+      <li>Otto ore di scuro in ufficio: il chiaro va curato quanto lo scuro.</li>
+      <li>Ember e ambra sono vicini: l'ambra resta solo sugli avvisi, sempre con icona e parola.</li>
+    </ul>
+  </div>
+</header>
+
+<!-- ======================= Icone (lucide, stroke 1.75) ======================= -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-inbox" viewBox="0 0 24 24"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+    <symbol id="i-tower" viewBox="0 0 24 24"><path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9"/><path d="M7.8 4.7a6.14 6.14 0 0 0-.8 7.5"/><circle cx="12" cy="9" r="2"/><path d="M16.2 4.8c2 2 2.26 5.11.8 7.47"/><path d="M19.1 1.9a9.96 9.96 0 0 1 0 14.1"/><path d="M9.5 18h5"/><path d="m8 22 4-11 4 11"/></symbol>
+    <symbol id="i-cal" viewBox="0 0 24 24"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="m9 16 2 2 4-4"/></symbol>
+    <symbol id="i-headset" viewBox="0 0 24 24"><path d="M3 11h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5Zm0 0a9 9 0 1 1 18 0m0 0v5a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3Z"/><path d="M21 16v2a4 4 0 0 1-4 4h-5"/></symbol>
+    <symbol id="i-bot" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></symbol>
+    <symbol id="i-archive" viewBox="0 0 24 24"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></symbol>
+    <symbol id="i-mega" viewBox="0 0 24 24"><path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></symbol>
+    <symbol id="i-term" viewBox="0 0 24 24"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></symbol>
+    <symbol id="i-ext" viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+    <symbol id="i-ok" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-retry" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></symbol>
+    <symbol id="i-flask" viewBox="0 0 24 24"><path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></symbol>
+    <symbol id="i-panel" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-enter" viewBox="0 0 24 24"><polyline points="9 10 4 15 9 20"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></symbol>
+  </defs>
+</svg>
+
+<!-- ======================= Schermata 1: console ======================= -->
+<div class="stage"><div class="frame">
+<div class="console" id="c1" data-theme="dark" data-state="live">
+<div class="app">
+
+  <!-- Barra di regia -->
+  <section class="regia" aria-label="Regia del lancio">
+    <div class="r1">
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 20 20" aria-hidden="true"><rect width="20" height="20" rx="5" fill="var(--ember)"/><path d="M6.5 15V5h7M6.5 10h5" stroke="var(--ember-ink)" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+        <b>Fenice</b><span>Mario</span>
+      </div>
+      <div class="show"><b>Webinar Web Dev AI</b><span class="muted">domenica 5/10, ore 21:00</span></div>
+      <div class="rundown" aria-label="Scaletta della serata, ora 21:14">
+        <div class="rd-track"></div>
+        <div class="rd-past"></div>
+        <div class="rd-air"></div>
+        <div class="rd-tick" style="left:0.7%"></div><span class="rd-lbl up" style="left:3.5%"><b>18:02</b> benvenuto</span>
+        <div class="rd-tick" style="left:64.8%"></div><span class="rd-lbl up" style="left:60.5%"><b>20:55</b> link</span>
+        <div class="rd-tick" style="left:66.7%"></div><span class="rd-lbl dn end" style="left:66.7%"><b>21:00</b> inizio</span>
+        <div class="rd-tick" style="left:81.5%"></div><span class="rd-lbl dn" style="left:81.5%"><b>21:40</b> pitch</span>
+        <div class="rd-tick" style="left:92.6%"></div><span class="rd-lbl up" style="left:94%"><b>22:10</b> chiusura</span>
+        <div class="rd-head" title="Ora: 21:14"></div>
+      </div>
+      <button class="cmdbtn" type="button" data-open-cmdk>
+        <svg class="ico"><use href="#i-term"/></svg><span>Chiedi o cerca…</span><kbd>Ctrl K</kbd>
+      </button>
+    </div>
+    <div class="r2">
+      <div class="onair">
+        <div class="tally"><i></i><span id="tallyTxt">In onda</span></div>
+        <div class="timecode" id="tc">00:14:32</div>
+      </div>
+      <div class="kpi">
+        <div class="l">Iscritti</div>
+        <div class="v">3.412
+          <svg class="spark" viewBox="0 0 64 22" aria-label="Iscritti negli ultimi 7 giorni, da 1.210 a 3.412"><polyline points="0,18 10.7,15.3 21.3,13 32,10.7 42.7,8.3 53.3,6 64,4.2" fill="none" stroke="var(--fg3)" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/><circle cx="64" cy="4.2" r="2.2" fill="var(--fg)"/></svg>
+        </div>
+        <div class="s">+292 da ieri</div>
+      </div>
+      <div class="kpi">
+        <div class="l">Posto bloccato</div>
+        <div class="v">2.140</div>
+        <div class="s">62,7% degli iscritti</div>
+      </div>
+      <div class="kpi">
+        <div class="l">Link inviati</div>
+        <div class="v">1.980</div>
+        <div class="s">dalle 20:55</div>
+      </div>
+      <div class="kpi">
+        <div class="l">Consegnati oggi</div>
+        <div class="v">3.108</div>
+        <div class="s">98,7% degli invii</div>
+      </div>
+      <div class="kpi bad">
+        <div class="l">Falliti</div>
+        <div class="v">41</div>
+        <div class="s"><a href="#a2">errore 63016</a></div>
+      </div>
+      <div class="tracker">
+        <div class="hd"><span>Consegne ora per ora, oggi</span><em>falliti alle 19, 20, 21</em></div>
+        <div class="bars" role="img" aria-label="Consegne per ora dalle 8 alle 21: picco 640 alle 20">
+          <div style="height:6%" title="08:00 40 consegnati"></div>
+          <div style="height:15%" title="09:00 95 consegnati"></div>
+          <div style="height:20%" title="10:00 130 consegnati"></div>
+          <div style="height:23%" title="11:00 150 consegnati"></div>
+          <div style="height:25%" title="12:00 160 consegnati"></div>
+          <div style="height:27%" title="13:00 170 consegnati"></div>
+          <div style="height:29%" title="14:00 185 consegnati"></div>
+          <div style="height:30%" title="15:00 190 consegnati"></div>
+          <div style="height:33%" title="16:00 210 consegnati"></div>
+          <div style="height:36%" title="17:00 230 consegnati"></div>
+          <div style="height:81%" title="18:00 520 consegnati (benvenuto)"></div>
+          <div class="f" style="height:41%" title="19:00 260 consegnati, 3 falliti"></div>
+          <div class="f" style="height:100%" title="20:00 640 consegnati, 12 falliti (link live)"></div>
+          <div class="f now" style="height:20%" title="21:00 in corso: 128 consegnati, 26 falliti"></div>
+        </div>
+        <div class="axis"><span>08</span><span>09</span><span>10</span><span>11</span><span>12</span><span>13</span><span>14</span><span>15</span><span>16</span><span>17</span><span>18</span><span>19</span><span>20</span><span>21</span></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="deck">
+    <!-- Navigazione -->
+    <nav class="nav" aria-label="Viste">
+      <a class="nv" href="#"><svg class="ico"><use href="#i-user"/></svg><span>Serve te</span><span class="c urg">7</span></a>
+      <a class="nv" href="#"><svg class="ico"><use href="#i-alert"/></svg><span>Con errori</span><span class="c urg">41</span></a>
+      <a class="nv" href="#" aria-current="page"><svg class="ico"><use href="#i-inbox"/></svg><span>Non lette</span><span class="c">1.284</span></a>
+
+      <div class="grp">Lancio 5/10</div>
+      <a class="nv live" href="#"><svg class="ico"><use href="#i-tower"/></svg><span>Lancio</span><span class="c">3.412</span></a>
+      <div class="phases">
+        <div class="ph"><span>In attesa</span><span class="t"><i style="width:37%"></i></span><span class="n">1.272</span></div>
+        <div class="ph"><span>Posto bloccato</span><span class="t"><i style="width:5%"></i></span><span class="n">160</span></div>
+        <div class="ph"><span>Link inviato</span><span class="t"><i style="width:47%"></i></span><span class="n">1.590</span></div>
+        <div class="ph"><span>Dopo il pitch</span><span class="t"><i style="width:10%"></i></span><span class="n">342</span></div>
+        <div class="ph"><span>Scelta fatta</span><span class="t"><i style="width:2%"></i></span><span class="n">48</span></div>
+      </div>
+
+      <div class="grp">Mario</div>
+      <a class="nv" href="#"><svg class="ico"><use href="#i-cal"/></svg><span>Fissati dal bot</span><span class="c">186</span></a>
+      <a class="nv" href="#"><svg class="ico"><use href="#i-headset"/></svg><span>Lead dei GDO</span><span class="c">942</span></a>
+      <a class="nv" href="#"><svg class="ico"><use href="#i-bot"/></svg><span>Mario in corso</span><span class="c">611</span></a>
+      <a class="nv" href="#"><svg class="ico"><use href="#i-archive"/></svg><span>Chiuse e restituite</span><span class="c">2.030</span></a>
+      <a class="nv" href="#"><svg class="ico"><use href="#i-mega"/></svg><span>Campagne</span><span class="c">95</span></a>
+
+      <div class="grp">Sistema</div>
+      <a class="nv" href="#"><svg class="ico"><use href="#i-bell"/></svg><span>Avvisi</span><span class="c urg">3</span></a>
+      <a class="nv" href="#" data-open-cmdk><svg class="ico"><use href="#i-term"/></svg><span>Assistente</span><kbd>Ctrl K</kbd></a>
+
+      <div class="foot"><span class="dot-ok"></span>Mario attivo, risponde in 4 s</div>
+    </nav>
+
+    <!-- Lista chat -->
+    <section class="list" aria-label="Chat non lette">
+      <div class="lh"><h2>Non lette</h2><span class="muted num">1.284</span><span class="sp"></span>
+        <button class="iconbtn" type="button" aria-label="Filtra"><svg class="ico"><use href="#i-filter"/></svg></button>
+      </div>
+      <label class="search"><svg class="ico"><use href="#i-search"/></svg><input placeholder="Nome, telefono o ID lead"><kbd>/</kbd></label>
+      <div class="rows" role="listbox" aria-label="Chat">
+        <button class="row unread" role="option" aria-selected="true">
+          <span class="av a1">GF</span>
+          <span><span class="l1"><span class="nm">Giulia Ferraresi</span><span class="ctx">Posto bloccato</span><span class="tm">21:14</span></span>
+          <span class="l2"><span class="pv">Ma il posto resta bloccato anche se domani non ci sono?</span><span class="un">2</span></span></span>
+        </button>
+        <button class="row" role="option" aria-selected="false">
+          <span class="av a4">MB</span>
+          <span><span class="l1"><span class="nm">Marco Bellandi</span><span class="ctx">Fissato dal bot</span><span class="tm">21:13</span></span>
+          <span class="l2"><span class="pv"><b>Mario:</b> Perfetto Marco, ti ho segnato per giovedì alle 18:30</span></span></span>
+        </button>
+        <button class="row unread" role="option" aria-selected="false">
+          <span class="av a5">ST</span>
+          <span><span class="l1"><span class="nm">Serena Tosatti</span><span class="ctx"><span class="tag-serve">Serve te</span></span><span class="tm">21:12</span></span>
+          <span class="l2"><span class="pv">Vorrei parlare con una persona, non con un bot</span><span class="un">1</span></span></span>
+        </button>
+        <button class="row unread" role="option" aria-selected="false">
+          <span class="av a0"><svg class="ico" style="width:14px;height:14px"><use href="#i-user"/></svg></span>
+          <span><span class="l1"><span class="nm mono" style="font-size:13px;font-weight:500">+39 347 118 2290</span><span class="ctx">Senza nome</span><span class="tm">21:11</span></span>
+          <span class="l2"><span class="pv">Ok grazie</span><span class="un">1</span></span></span>
+        </button>
+        <button class="row" role="option" aria-selected="false">
+          <span class="av a3">DR</span>
+          <span><span class="l1"><span class="nm">Davide Ruggeri</span><span class="ctx">Lead GDO</span><span class="tm">21:09</span></span>
+          <span class="l2"><span class="pv"><b>GDO 105:</b> Ciao Davide, ecco l'agenda della consulenza</span></span></span>
+        </button>
+        <button class="row unread" role="option" aria-selected="false">
+          <span class="av a2">EC</span>
+          <span><span class="l1"><span class="nm">Elena Castaldi</span><span class="ctx">Mario in corso</span><span class="tm">21:08</span></span>
+          <span class="l2"><span class="pv">Quanto costa il percorso completo?</span><span class="un">3</span></span></span>
+        </button>
+        <button class="row" role="option" aria-selected="false">
+          <span class="av a6">PM</span>
+          <span><span class="l1"><span class="nm">Paolo Mancuso</span><span class="ctx">Link inviato</span><span class="tm">21:05</span></span>
+          <span class="l2"><span class="pv"><b>Mario:</b> Il link della live arriva qui alle 20:55</span></span></span>
+        </button>
+        <button class="row" role="option" aria-selected="false">
+          <span class="av a1">CV</span>
+          <span><span class="l1"><span class="nm">Chiara Vannucci</span><span class="ctx err">Errore 63016</span><span class="tm">21:02</span></span>
+          <span class="l2"><span class="pv err"><svg class="ico"><use href="#i-alert"/></svg>Invio non riuscito: fuori dalla finestra 24h</span></span></span>
+        </button>
+        <button class="row unread" role="option" aria-selected="false">
+          <span class="av a4">AP</span>
+          <span><span class="l1"><span class="nm">Andrea Pezzella</span><span class="ctx">Link inviato</span><span class="tm">20:58</span></span>
+          <span class="l2"><span class="pv">Sì ci sono</span><span class="un">1</span></span></span>
+        </button>
+        <button class="row" role="option" aria-selected="false">
+          <span class="av a3">LM</span>
+          <span><span class="l1"><span class="nm">Lorenzo Marchetti</span><span class="ctx">Dopo il pitch</span><span class="tm">20:56</span></span>
+          <span class="l2"><span class="pv"><b>Mario:</b> Ti mando il riepilogo del percorso</span></span></span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Thread -->
+    <section class="thread" aria-label="Chat con Giulia Ferraresi">
+      <div class="th">
+        <span class="av lg a1">GF</span>
+        <div class="who"><b>Giulia Ferraresi</b>
+          <span><span class="mono">+39 333 402 8817</span><span class="phase">Lancio: posto bloccato</span></span>
+        </div>
+        <span class="sp"></span>
+        <button class="iconbtn" type="button" aria-label="Chiudi la scheda lead (])"><svg class="ico"><use href="#i-panel"/></svg></button>
+        <button class="iconbtn" type="button" aria-label="Altre azioni"><svg class="ico"><use href="#i-more"/></svg></button>
+      </div>
+      <div class="msgs">
+        <div class="day">Oggi</div>
+        <div class="sys"><svg class="ico" style="width:14px;height:14px"><use href="#i-tower"/></svg>Iscritta al lancio dalla lista, benvenuto inviato <span class="mono">18:02</span></div>
+
+        <div class="who-lbl r"><svg class="ico"><use href="#i-bot"/></svg>Mario</div>
+        <div class="b mario">Ciao Giulia, il tuo posto per la live di domenica alle 21 è bloccato. Il link arriva qui qualche minuto prima.</div>
+        <div class="meta r">18:02, letto</div>
+
+        <div class="b lead" style="margin-top:12px">Grazie! Ma posso guardarla anche dal telefono?</div>
+        <div class="meta">20:47</div>
+
+        <div class="who-lbl r"><svg class="ico"><use href="#i-bot"/></svg>Mario</div>
+        <div class="b mario">Certo, basta il telefono con Zoom installato.</div>
+        <div class="meta r">20:47, letto</div>
+
+        <div class="b lead" style="margin-top:12px">Ma il posto resta bloccato anche se domani non ci sono?</div>
+        <div class="meta">21:14</div>
+
+        <div class="typing"><svg class="ico"><use href="#i-bot"/></svg>Mario sta scrivendo…</div>
+      </div>
+      <div class="composer">
+        <div class="cmp-top">
+          <span class="own"><svg class="ico"><use href="#i-bot"/></svg>Mario gestisce la chat</span>
+          <span class="sp"></span>
+          <span class="win"><svg class="ico"><use href="#i-clock"/></svg>Finestra 24h: chiude domani 21:14</span>
+        </div>
+        <div class="cmp">
+          <textarea disabled placeholder="Per scrivere tu, metti in pausa Mario"></textarea>
+          <button class="btn tall" type="button"><svg class="ico"><use href="#i-pause"/></svg>Metti in pausa Mario</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Cabina: avvisi + scheda lead -->
+    <aside class="cabina" aria-label="Cabina">
+      <div class="ch"><h2>Avvisi</h2><span class="muted">3 stasera, 1 risolto</span><span class="sp"></span><a href="#">Storico</a></div>
+
+      <div class="alert crit" id="a1">
+        <div class="al-top"><svg class="ico"><use href="#i-alert"/></svg>Critico<span class="when mono">20:40–21:10</span></div>
+        <div class="al-t">38 esiti non arrivati al CRM</div>
+        <div class="al-m">Rifiutati con <span class="mono">403</span>, restano in coda sul bot</div>
+        <div class="al-act">
+          <button class="btn pri" type="button"><svg class="ico"><use href="#i-retry"/></svg>Rinvia 38 esiti</button>
+          <button class="btn" type="button"><svg class="ico"><use href="#i-flask"/></svg>Prova a vuoto</button>
+          <button class="btn" type="button" data-open-cmdk><svg class="ico"><use href="#i-term"/></svg>Chiedi all'Assistente</button>
+        </div>
+      </div>
+
+      <div class="alert warn" id="a2">
+        <div class="al-top"><svg class="ico"><use href="#i-warn"/></svg>Attenzione<span class="when mono">19:12–21:13</span></div>
+        <div class="al-t">41 invii falliti con <span class="mono" style="font-size:13px">63016</span></div>
+        <div class="al-m">Fuori dalla finestra 24h, serve un template</div>
+        <div class="al-act">
+          <button class="btn" type="button">Rinvia con template…</button>
+          <button class="btn" type="button"><svg class="ico"><use href="#i-flask"/></svg>Prova a vuoto</button>
+          <button class="btn ghost" type="button">Vedi 41 chat</button>
+        </div>
+      </div>
+
+      <div class="alert ok">
+        <div class="al-top"><svg class="ico"><use href="#i-ok"/></svg>Risolto<span class="when mono">21:05</span></div>
+        <div class="al-t">Cron lancio-aperture fermo 32 min</div>
+        <div class="al-m">Rilanciato alle 21:05: 120 aperture inviate, 0 errori</div>
+      </div>
+
+      <div class="lead-card">
+        <div class="ch"><h2 style="font-size:14px;line-height:20px">Scheda lead</h2><span class="sp"></span><kbd>]</kbd></div>
+        <dl class="dl">
+          <dt>Telefono</dt><dd><span class="mono">+39 333 402 8817</span><button class="iconbtn copy" type="button" aria-label="Copia telefono"><svg class="ico"><use href="#i-copy"/></svg></button></dd>
+          <dt>ID lead</dt><dd><span class="mono">48213</span></dd>
+          <dt>Numero WA</dt><dd><span class="mono">3199</span><span class="muted">storico</span></dd>
+          <dt>Fase</dt><dd class="ph-v">Posto bloccato</dd>
+          <dt>Stato CRM</dt><dd>Nuovo</dd>
+          <dt>GDO</dt><dd class="none">Nessuno</dd>
+        </dl>
+        <div class="lc-act">
+          <button class="btn" type="button"><svg class="ico"><use href="#i-ext"/></svg>Apri nel CRM</button>
+          <button class="btn" type="button" data-open-cmdk><svg class="ico"><use href="#i-term"/></svg>Chiedi all'Assistente</button>
+        </div>
+        <div class="hist">
+          <h3>Storico</h3>
+          <ol>
+            <li><span class="mono">21:14</span>Domanda sul posto, in attesa di Mario</li>
+            <li><span class="mono">20:47</span>Mario risponde su Zoom da telefono</li>
+            <li><span class="mono">18:02</span>Benvenuto consegnato dal 3199</li>
+            <li><span class="mono">18:01</span>Iscritta al lancio dalla lista Web Dev</li>
+          </ol>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+<dialog class="cmdk" id="cmdk" aria-label="Assistente"></dialog>
+</div>
+</div></div>
+
+<!-- ======================= Schermata 2: Assistente ======================= -->
+<p class="caption"><b>Schermata 2: Assistente con Ctrl+K sull'avviso critico.</b> Nella schermata 1 si apre davvero: premi Ctrl+K o uno dei bottoni "Chiedi all'Assistente". Si apre senza animazione, Esc chiude.</p>
+<div class="stage"><div class="frame">
+<div class="console" id="c2" data-theme="dark">
+  <div class="shot2">
+    <div class="note"><b>Come un terminale, non come una chat</b>La domanda resta in cima come un comando. Sotto, le letture fatte (richiudibili) e la risposta in testo pieno, con le fonti numerate che portano all'avviso e alle righe del log.</div>
+
+    <div class="palette" id="palette">
+      <div class="pl-in">
+        <span class="who">Assistente</span>
+        <span class="q">Perché 38 esiti sono stati rifiutati?</span>
+        <kbd>Esc</kbd>
+      </div>
+      <div class="pl-body">
+        <div class="tool"><svg class="ico"><use href="#i-file"/></svg>Letto <span class="mono">event_log</span> esiti verso il CRM, <span class="mono">20:40–21:10</span><span class="r num">214 righe</span></div>
+        <div class="tool"><svg class="ico"><use href="#i-bell"/></svg>Letto l'avviso critico <span class="mono">AVV-0926-01</span><span class="r num">38 esiti</span></div>
+        <div class="ans">
+          <p>Il CRM ha risposto <span class="mono">403</span> a tutti e 38 perché la firma della richiesta non era valida: alle 20:38 la chiave condivisa è stata cambiata sul CRM ma non sul bot <a class="cite" href="#a1">1</a>. Gli esiti non sono persi, sono ancora in coda sul bot <a class="cite" href="#">2</a>.</p>
+          <p>Con la chiave allineata, un rinvio li porta tutti nel CRM. Ti consiglio prima la prova a vuoto su uno.</p>
+        </div>
+        <div class="srcs">
+          <a class="src" href="#a1"><span class="cite">1</span>Avviso critico, 38 esiti non arrivati al CRM<span class="mono">20:40–21:10</span></a>
+          <a class="src" href="#"><span class="cite">2</span>event_log, 38 righe con stato in coda<span class="mono">outcome_queue</span></a>
+        </div>
+      </div>
+      <div class="propose">
+        <div class="txt"><b>Rinvia 38 esiti al CRM</b>Parte solo quando confermi. Nessun invio reale con la prova a vuoto.</div>
+        <button class="btn" type="button"><svg class="ico"><use href="#i-flask"/></svg>Prova a vuoto</button>
+        <button class="btn pri" type="button">Conferma e rinvia</button>
+      </div>
+      <div class="pl-foot">
+        <span><kbd>Invio</kbd>conferma</span>
+        <span><kbd>Tab</kbd>fonti</span>
+        <span><kbd>Esc</kbd>chiudi</span>
+      </div>
+    </div>
+
+    <div class="note r"><b>Propone, non esegue</b>L'azione è un bottone normale con il numero scritto dentro. Durante il rinvio la riga dell'avviso mostra "Invio… 12/38", poi l'esito resta scritto lì.</div>
+  </div>
+</div>
+</div></div>
+
+<div class="pickwrap"><button data-choice="D" class="pick">Scelgo questa</button></div>
+
+<script>
+(function(){
+  var consoles=[document.getElementById('c1'),document.getElementById('c2')];
+  var tgTheme=document.getElementById('tgTheme'), tgState=document.getElementById('tgState');
+  var meta=document.querySelector('meta[name="theme-color"]');
+  tgTheme.addEventListener('click',function(){
+    var light=consoles[0].getAttribute('data-theme')!=='light';
+    consoles.forEach(function(c){c.setAttribute('data-theme',light?'light':'dark')});
+    tgTheme.textContent=light?'Tema scuro':'Tema chiaro';
+    meta.setAttribute('content',light?'#e2e9ea':'#0f1b21');
+  });
+
+  // Timecode: in onda conta avanti, prima della live conta alla rovescia
+  var c1=consoles[0], tc=document.getElementById('tc'), tally=document.getElementById('tallyTxt');
+  var t={live:14*60+32, pre:23*3600+45*60+28};
+  function fmt(s){var h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return [h,m,x].map(function(n){return String(n).padStart(2,'0')}).join(':')}
+  function draw(){var st=c1.getAttribute('data-state');tc.textContent=fmt(t[st]);tally.textContent=st==='live'?'In onda':'Alla live'}
+  setInterval(function(){ if(c1.getAttribute('data-state')==='live'){t.live++}else{t.pre=Math.max(0,t.pre-1)} draw(); },1000);
+  tgState.addEventListener('click',function(){
+    var pre=c1.getAttribute('data-state')==='live';
+    c1.setAttribute('data-state',pre?'pre':'live');
+    tgState.textContent=pre?'Mostra in onda':'Mostra prima della live';
+    draw();
+  });
+
+  // Ctrl+K: apre l'Assistente, senza animazione
+  var dlg=document.getElementById('cmdk');
+  dlg.appendChild(document.getElementById('palette').cloneNode(true)).removeAttribute('id');
+  function openK(e){ if(e) e.preventDefault(); if(!dlg.open) dlg.showModal(); }
+  document.querySelectorAll('[data-open-cmdk]').forEach(function(b){b.addEventListener('click',openK)});
+  document.addEventListener('keydown',function(e){ if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){openK(e)} });
+  dlg.addEventListener('click',function(e){ if(e.target===dlg) dlg.close(); });
+
+  // Selezione righe (senza animazione, come j/k)
+  var rows=[].slice.call(document.querySelectorAll('#c1 .row'));
+  rows.forEach(function(r){r.addEventListener('click',function(){rows.forEach(function(x){x.setAttribute('aria-selected','false')});r.setAttribute('aria-selected','true')})});
+})();
+</script>
+</body>
+</html>
