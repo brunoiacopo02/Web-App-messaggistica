@@ -17,6 +17,7 @@ import {
   type MessaggioConsegna,
   type SidLancio,
 } from './lancio-monitor';
+import { credenzialiSecondarie } from './twilio-account';
 
 /**
  * Le letture del monitor del lancio: solo `select`, mai una scrittura.
@@ -380,14 +381,14 @@ export async function leggiDettaglio(s: Supa, id: number): Promise<{
   return { chat, aiStatus: chat.aiStatus, messaggi, eventi, colonnaInizio };
 }
 
-/** Il friendly name di un template chiesto a Twilio (account storico, poi il secondo),
+/** Il friendly name di un template chiesto a Twilio (account principale, poi gli slot secondari),
  *  in cache per processo. Best effort: 3 secondi e poi si rinuncia, il SID resta. */
 const _nomiTwilio = new Map<string, string | null>();
 export async function nomeTemplateTwilio(sid: string): Promise<string | null> {
   if (_nomiTwilio.has(sid)) return _nomiTwilio.get(sid)!;
   const account = [
     [process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN],
-    [process.env.TWILIO_ACCOUNT_SID_2, process.env.TWILIO_AUTH_TOKEN_2],
+    ...credenzialiSecondarie().map((c) => [c.sid, c.token]),
   ].filter((x): x is [string, string] => !!x[0] && !!x[1]);
   let risposto = false;
   for (const [accSid, token] of account) {
