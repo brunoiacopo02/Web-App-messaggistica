@@ -276,7 +276,7 @@
 [data-console] .dialog-ft{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--line2);flex:none}
 
 /* ---------- Tooltip (Radix tooltip) ---------- */
-[data-console] .tooltip{max-width:240px;padding:6px 8px;border-radius:6px;border:1px solid var(--line);background:var(--s4);color:var(--fg);font-size:12px;line-height:16px;box-shadow:var(--shadow);z-index:70}
+[data-console] .tooltip{max-width:240px;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--s4);color:var(--fg);font-size:12px;line-height:16px;box-shadow:var(--shadow);z-index:70}
 [data-console] .tooltip-arrow{fill:var(--s4)}
 
 /* ---------- Stati vuoto/errore ---------- */

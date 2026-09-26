@@ -1,13 +1,8 @@
 // @vitest-environment jsdom
-import { it, expect, vi, afterEach } from 'vitest';
-import { render, screen, cleanup, fireEvent, act } from '@testing-library/react';
+import { it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { Errore } from './Stato';
 import { SkeletonRighe } from './Skeleton';
-
-afterEach(() => {
-  cleanup();
-  vi.useRealTimers();
-});
 
 it('Errore mostra titolo, testo e chiama onRiprova al click su Riprova', () => {
   const onRiprova = vi.fn();
@@ -19,18 +14,7 @@ it('Errore mostra titolo, testo e chiama onRiprova al click su Riprova', () => {
   expect(onRiprova).toHaveBeenCalledTimes(1);
 });
 
-it('SkeletonRighe non rende nulla prima di 200 ms', () => {
-  vi.useFakeTimers();
+it('SkeletonRighe è presentazionale: rende subito il numero di righe passato', () => {
   const { container } = render(<SkeletonRighe righe={3} altezza={56} />);
-  expect(container).toBeEmptyDOMElement();
-
-  act(() => {
-    vi.advanceTimersByTime(199);
-  });
-  expect(container).toBeEmptyDOMElement();
-
-  act(() => {
-    vi.advanceTimersByTime(1);
-  });
   expect(container.querySelectorAll('.skel-riga')).toHaveLength(3);
 });

@@ -12,7 +12,7 @@ interface VuotoProps {
 export function Vuoto({ titolo, testo, azione }: VuotoProps) {
   return (
     <div className="stato">
-      <Inbox size={20} strokeWidth={1.75} className="ico" />
+      <Inbox size={16} strokeWidth={1.75} className="ico" />
       <p className="stato-t">{titolo}</p>
       <p className="stato-m">{testo}</p>
       {azione}
@@ -30,11 +30,11 @@ interface ErroreProps {
 export function Errore({ titolo, testo, onRiprova }: ErroreProps) {
   return (
     <div className="stato stato-err">
-      <TriangleAlert size={20} strokeWidth={1.75} className="ico" />
+      <TriangleAlert size={16} strokeWidth={1.75} className="ico" />
       <p className="stato-t">{titolo}</p>
       <p className="stato-m">{testo}</p>
       <Button onClick={onRiprova}>
-        <RefreshCw size={14} strokeWidth={1.75} className="ico" />
+        <RefreshCw size={16} strokeWidth={1.75} className="ico" />
         Riprova
       </Button>
     </div>
