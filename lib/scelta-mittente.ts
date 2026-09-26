@@ -21,6 +21,7 @@ import { numeroPrimario, numeriSecondari } from './mittente';
 import { getTettiNumeri, tettoDi } from './tetti-numeri';
 import { chatNateOggi } from './bot2-tetto';
 import { spedibileDa } from './spedibilita';
+import { OPENING_ENV_KEYS } from './persona';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -43,12 +44,29 @@ async function log(supabase: Supa, type: string, level: 'info' | 'warn', payload
   await supabase.from('event_log').insert({ type, level, payload: payload as never, message }).then(() => undefined, () => undefined);
 }
 
-/** I template d'apertura che una chat di Mario puo' ricevere: devono esserci TUTTI sul numero scelto. */
+/**
+ * I template d'apertura che una chat NUOVA puo' davvero ricevere: devono esserci TUTTI
+ * sul numero scelto.
+ *
+ * Con l'A/B acceso (`NEW_OPENING_ENABLED=1`) `fenice-enroll.ts` sceglie il SID in base a
+ * funnel e variante, una delle chiavi in `OPENING_ENV_KEYS` (lib/persona.ts). Se la
+ * env di QUELLA variante manca, non salta l'invio: ripiega INTERO sul legacy
+ * `FENICE_OPENING_TEMPLATE_SID` (evento `opening_config_error`). Quindi:
+ * - se TUTTE le `OPENING_ENV_KEYS` sono valorizzate, nessun lead puo' finire sul
+ *   legacy: il suo SID non va verificato (spesso non esiste nemmeno sull'account
+ *   nuovo, ed escluderebbe il numero per sempre senza motivo);
+ * - se ne manca anche una sola, un lead puo' ricevere il legacy: va verificato anche
+ *   lui, se configurato.
+ * Con l'A/B spento resta il solo legacy, come prima del 26/09/2026.
+ */
 export function sidAperturaMario(): string[] {
   if (process.env.NEW_OPENING_ENABLED === '1') {
-    return Object.entries(process.env)
-      .filter(([k, v]) => k.startsWith('OPENING_SID_') && Boolean(v))
-      .map(([, v]) => String(v));
+    const valori = OPENING_ENV_KEYS
+      .map((k) => process.env[k])
+      .filter((v): v is string => Boolean(v));
+    const mancaQualcuna = valori.length < OPENING_ENV_KEYS.length;
+    const legacy = process.env.FENICE_OPENING_TEMPLATE_SID;
+    return mancaQualcuna && legacy ? [...valori, legacy] : valori;
   }
   const legacy = process.env.FENICE_OPENING_TEMPLATE_SID;
   return legacy ? [legacy] : [];
@@ -66,7 +84,11 @@ export async function scegliMittenteNuovo(
 
   const secondari = numeriSecondari();
   if (secondari.length === 0) return alPrimario('nessun_secondario');
-  if (i.templateSids.length === 0) return alPrimario('nessun_candidato');
+  if (i.templateSids.length === 0) {
+    await log(supabase, 'mittente_ripiego', 'warn', { ...base, motivo: 'nessun_template' },
+      `[numeri] nessun template da verificare: ${i.chiave} nasce sul numero storico`);
+    return alPrimario('nessun_candidato');
+  }
 
   const tetti = i.ignoraTetti ? null : await getTettiNumeri(supabase);
   if (!i.ignoraTetti && tetti === null) {
@@ -115,7 +137,9 @@ export async function scegliMittenteNuovo(
   }
 
   if (candidati.length === 0) return alPrimario('nessun_candidato', scartati);
-  // Meno chat oggi vince; a parita' resta l'ordine della lista (sort stabile).
+  // Meno chat oggi vince; a parita' resta l'ordine della lista (sort stabile). Con
+  // `ignoraTetti` ogni `oggi` resta 0 per tutti (il conteggio non si fa): vince il
+  // primo secondario spedibile nell'ordine della lista, senza bilanciamento.
   candidati.sort((a, b) => a.oggi - b.oggi);
   return { from: candidati[0].numero, secondario: true, scartati, motivo: 'scelto' };
 }

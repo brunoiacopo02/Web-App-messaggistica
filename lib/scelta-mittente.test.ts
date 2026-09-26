@@ -8,6 +8,7 @@ import { scegliMittenteNuovo, sidAperturaMario } from './scelta-mittente';
 import { spedibileDa } from './spedibilita';
 import { chatNateOggi } from './bot2-tetto';
 import { getTettiNumeri, parseTettiNumeri } from './tetti-numeri';
+import { OPENING_ENV_KEYS } from './persona';
 
 const P = 'whatsapp:+393520413199';
 const ELIXIR = 'whatsapp:+393522018718';
@@ -23,8 +24,8 @@ const scegli = (s: any, extra: Partial<Parameters<typeof scegliMittenteNuovo>[1]
   scegliMittenteNuovo(s, { templateSids: ['HX_A'], chiave: '+393331234567', ...extra });
 
 beforeEach(() => {
-  process.env.TWILIO_WHATSAPP_NUMBER_FENICE = P;
-  process.env.BOT_NUMERI_SECONDARI = `${N0047},${ELIXIR},${N8061}`;
+  vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', P);
+  vi.stubEnv('BOT_NUMERI_SECONDARI', `${N0047},${ELIXIR},${N8061}`);
   vi.mocked(spedibileDa).mockReset().mockImplementation(async (sid: string) => ({ ok: true, sidTradotto: sid }));
   vi.mocked(chatNateOggi).mockReset().mockResolvedValue(0);
   // Anche questo va azzerato a ogni test: senza reset le chiamate si sommano fra i
@@ -32,7 +33,7 @@ beforeEach(() => {
   // secondario configurato" — che verifica una NON chiamata — vede quelle di prima.
   vi.mocked(getTettiNumeri).mockReset();
 });
-afterEach(() => { delete process.env.BOT_NUMERI_SECONDARI; });
+afterEach(() => { vi.unstubAllEnvs(); });
 
 describe('scegliMittenteNuovo', () => {
   it('prende il secondario con meno chat oggi', async () => {
@@ -97,7 +98,7 @@ describe('scegliMittenteNuovo', () => {
   });
 
   it('nessun secondario configurato: 3199 senza query', async () => {
-    process.env.BOT_NUMERI_SECONDARI = '';
+    vi.stubEnv('BOT_NUMERI_SECONDARI', '');
     tetti({});
     const r = await scegli(supa().s);
     expect(r).toMatchObject({ from: P, motivo: 'nessun_secondario' });
@@ -108,25 +109,43 @@ describe('scegliMittenteNuovo', () => {
     tetti({ [ELIXIR]: 0 });
     vi.mocked(spedibileDa).mockImplementation(async (sid, n) =>
       n === N0047 ? { ok: false, motivo: 'template_bloccato', sidTradotto: sid, errore: 'x' } : { ok: true, sidTradotto: sid });
+    // Con ignoraTetti nessun conteggio si fa: tutti restano a `oggi: 0` e vince il
+    // primo spedibile nell'ordine di BOT_NUMERI_SECONDARI (N0047 escluso dal
+    // template, ELIXIR prima di N8061).
     const r = await scegli(supa().s, { ignoraTetti: true });
-    expect([ELIXIR, N8061]).toContain(r.from);
+    expect(r.from).toBe(ELIXIR);
   });
 
   it('senza template da verificare: 3199 (non si apre un numero alla cieca)', async () => {
     tetti({ [ELIXIR]: 150 });
-    expect((await scegli(supa().s, { templateSids: [] })).from).toBe(P);
+    const { s, eventi } = supa();
+    const r = await scegli(s, { templateSids: [] });
+    expect(r.from).toBe(P);
+    expect(eventi).toMatchObject([{ type: 'mittente_ripiego', level: 'warn', payload: { motivo: 'nessun_template' } }]);
   });
 });
 
 describe('sidAperturaMario', () => {
-  afterEach(() => { for (const k of Object.keys(process.env)) if (k.startsWith('OPENING_SID_')) delete process.env[k]; delete process.env.NEW_OPENING_ENABLED; });
-  it('con le aperture A/B accese: tutti gli OPENING_SID_* presenti', () => {
-    process.env.NEW_OPENING_ENABLED = '1';
-    process.env.OPENING_SID_C1 = 'HX1'; process.env.OPENING_SID_T2 = 'HX2';
-    expect(sidAperturaMario().sort()).toEqual(['HX1', 'HX2']);
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('A/B acceso, tutte le OPENING_ENV_KEYS valorizzate: solo quelle, mai il legacy', () => {
+    vi.stubEnv('NEW_OPENING_ENABLED', '1');
+    vi.stubEnv('FENICE_OPENING_TEMPLATE_SID', 'HX_LEG');
+    OPENING_ENV_KEYS.forEach((k, i) => vi.stubEnv(k, `HX${i}`));
+    expect(sidAperturaMario().sort()).toEqual(OPENING_ENV_KEYS.map((_, i) => `HX${i}`).sort());
   });
+
+  it('A/B acceso, una OPENING_ENV_KEYS manca: quel lead puo prendere il legacy, si verifica anche lui', () => {
+    vi.stubEnv('NEW_OPENING_ENABLED', '1');
+    vi.stubEnv('FENICE_OPENING_TEMPLATE_SID', 'HX_LEG');
+    const [, ...resto] = OPENING_ENV_KEYS; // la prima chiave resta non configurata
+    resto.forEach((k, i) => vi.stubEnv(k, `HX${i}`));
+    const attese = [...resto.map((_, i) => `HX${i}`), 'HX_LEG'];
+    expect(sidAperturaMario().sort()).toEqual(attese.sort());
+  });
+
   it('spente: il template legacy', () => {
-    process.env.FENICE_OPENING_TEMPLATE_SID = 'HX_LEG';
+    vi.stubEnv('FENICE_OPENING_TEMPLATE_SID', 'HX_LEG');
     expect(sidAperturaMario()).toEqual(['HX_LEG']);
   });
 });
