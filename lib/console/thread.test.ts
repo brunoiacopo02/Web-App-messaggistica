@@ -1,5 +1,5 @@
 import { it, expect } from 'vitest';
-import { raggruppa, finestra24h, autoreDi, numeroWa, intercala, leggibile, dataOraBreve, testoEvento, type Gruppo, type Msg } from './thread';
+import { raggruppa, finestra24h, autoreDi, numeroWa, intercala, leggibile, dataOraBreve, testoEvento, fondiMessaggi, cursoreDopo, type Gruppo, type Msg } from './thread';
 
 const m = (id: number, direction: 'in' | 'out', created_at: string, sender: string | null = null): Msg =>
   ({ id, direction, body: 'x', created_at, is_template: false, twilio_status: 'delivered', twilio_error_code: null, sender });
@@ -75,4 +75,22 @@ it('codici leggibili e data breve', () => {
 it('testo degli eventi senza prefisso tecnico', () => {
   expect(testoEvento('[chat] bot fermato sulla conv 3', 'bot_paused')).toBe('bot fermato sulla conv 3');
   expect(testoEvento(null, 'bot_paused')).toBe('bot paused');
+});
+
+it('fondiMessaggi: aggiunge i nuovi, aggiorna per id (stato di consegna), resta in ordine', () => {
+  const a = m(1, 'out', '2026-10-05T18:00:00Z', 'bot');
+  const b = { ...m(2, 'in', '2026-10-05T18:01:00Z'), twilio_status: null };
+  const aLetto = { ...a, twilio_status: 'read' };
+  const c = m(3, 'out', '2026-10-05T18:02:00Z', 'bot');
+  const f = fondiMessaggi([a, b], [c, aLetto]);
+  expect(f.map((x) => x.id)).toEqual([1, 2, 3]);
+  expect(f[0].twilio_status).toBe('read');
+  expect(fondiMessaggi([a], [])).toEqual([a]);
+});
+
+it('cursoreDopo: sovrappone gli ultimi messaggi per rileggerne lo stato', () => {
+  const lista = Array.from({ length: 30 }, (_, i) => m(i + 1, 'out', `2026-10-05T18:${String(i).padStart(2, '0')}:00Z`));
+  expect(cursoreDopo(lista)).toBe(10);
+  expect(cursoreDopo(lista.slice(0, 5))).toBe(0);
+  expect(cursoreDopo([])).toBe(0);
 });

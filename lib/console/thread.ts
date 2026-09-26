@@ -189,3 +189,22 @@ export function dataOraBreve(iso: string | null): string | null {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? null : fmtDataOra.format(d).replace(',', '');
 }
+
+/** Fonde i messaggi riletti con quelli già in pagina: per id vince il più recente (lo stato di
+ *  consegna cambia dopo l'invio), l'ordine resta per `created_at` e poi per id. */
+export function fondiMessaggi(vecchi: readonly Msg[], nuovi: readonly Msg[]): Msg[] {
+  if (nuovi.length === 0) return vecchi as Msg[];
+  const perId = new Map(vecchi.map((m) => [m.id, m]));
+  for (const m of nuovi) perId.set(m.id, m);
+  return [...perId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id);
+}
+
+/** Quanti degli ultimi messaggi il polling rilegge comunque, per vederne cambiare lo stato di
+ *  consegna (inviato → consegnato → letto, o fallito). */
+export const RILETTI_IN_CODA = 20;
+
+/** Il `dopo` del polling: l'id subito prima degli ultimi `RILETTI_IN_CODA` messaggi (0 = tutti). */
+export function cursoreDopo(messaggi: readonly Msg[]): number {
+  const i = messaggi.length - RILETTI_IN_CODA - 1;
+  return i >= 0 ? messaggi[i].id : 0;
+}

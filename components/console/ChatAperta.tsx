@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { convDaSegnareLetta } from '@/lib/segna-letta';
-import type { DettaglioChat, Msg } from '@/lib/console/thread';
+import { cursoreDopo, fondiMessaggi, type DettaglioChat, type Msg } from '@/lib/console/thread';
 import { SkeletonRighe, useCaricamentoVisibile } from './ui/Skeleton';
 import { Errore, Vuoto } from './ui/Stato';
 import { toast } from './ui/toast';
@@ -35,13 +35,11 @@ async function leggiJson<T>(url: string, segnale?: AbortSignal): Promise<T> {
 }
 
 const leggiDettaglio = (id: number, s?: AbortSignal) => leggiJson<DettaglioChat>(`/api/console/chat/${id}`, s);
-const leggiMessaggi = (id: number, s?: AbortSignal) =>
-  leggiJson<{ data: Msg[] }>(`/api/chat/conversations/${id}/messages`, s).then((j) => j.data ?? []);
-
-const ultimoInbound = (m: Msg[] | null) => {
-  for (let i = (m?.length ?? 0) - 1; i >= 0; i--) if (m![i].direction === 'in') return m![i].id;
-  return null;
-};
+/** Gli ultimi 500 (`dopo` assente) o solo quelli con id > `dopo`, sempre crescenti. */
+const leggiMessaggi = (id: number, dopo: number | null, s?: AbortSignal) =>
+  leggiJson<{ messaggi: Msg[] }>(`/api/console/chat/${id}/messaggi${dopo != null ? `?dopo=${dopo}` : ''}`, s).then(
+    (j) => j.messaggi ?? [],
+  );
 
 async function messaggioErrore(r: Response): Promise<string> {
   try {
@@ -64,6 +62,9 @@ export function ChatAperta() {
 
   const datiRef = useRef<Dati | null>(null);
   const inviate = useRef(new Map<number, number>());
+  // Numero d'ordine delle letture: una risposta arrivata dopo una più recente si scarta.
+  const seqMessaggi = useRef(0);
+  const seqDettaglio = useRef(0);
   useEffect(() => {
     datiRef.current = dati;
   });
@@ -74,14 +75,19 @@ export function ChatAperta() {
 
   useTastiera({ onScheda: () => setSchedaAperta((s) => !s) });
 
-  // Apertura: dettaglio e messaggi insieme.
+  // Apertura: dettaglio e ultimi messaggi insieme.
   useEffect(() => {
     if (chat == null) return;
     const ac = new AbortController();
-    Promise.all([leggiDettaglio(chat, ac.signal), leggiMessaggi(chat, ac.signal)]).then(
-      ([dettaglio, messaggi]) => setDati({ id: chat, dettaglio, messaggi, errore: null }),
+    const sm = ++seqMessaggi.current;
+    const sd = ++seqDettaglio.current;
+    Promise.all([leggiDettaglio(chat, ac.signal), leggiMessaggi(chat, null, ac.signal)]).then(
+      ([dettaglio, messaggi]) => {
+        if (sm !== seqMessaggi.current || sd !== seqDettaglio.current) return;
+        setDati({ id: chat, dettaglio, messaggi, errore: null });
+      },
       (e: unknown) => {
-        if ((e as Error).name === 'AbortError') return;
+        if ((e as Error).name === 'AbortError' || sm !== seqMessaggi.current) return;
         const errore: TipoErrore = e instanceof HttpErrore && (e.status === 404 || e.status === 403) ? 'non_trovata' : 'rete';
         setDati({ id: chat, dettaglio: null, messaggi: null, errore });
       },
@@ -89,49 +95,12 @@ export function ChatAperta() {
     return () => ac.abort();
   }, [chat, tentativo]);
 
-  const rileggiDettaglio = useCallback(async (id: number) => {
-    try {
-      const dettaglio = await leggiDettaglio(id);
-      setDati((d) => (d && d.id === id && !d.errore ? { ...d, dettaglio } : d));
-    } catch {
-      // Un giro fallito non svuota la scheda: ci riprova il prossimo.
-    }
-  }, []);
-
-  const rileggiMessaggi = useCallback(
-    async (id: number) => {
-      let messaggi: Msg[];
-      try {
-        messaggi = await leggiMessaggi(id);
-      } catch {
-        return;
-      }
-      const prima = datiRef.current;
-      if (!prima || prima.id !== id || prima.errore) return;
-      const nuovoInbound = ultimoInbound(messaggi) !== ultimoInbound(prima.messaggi);
-      setDati((d) => (d && d.id === id && !d.errore ? { ...d, messaggi } : d));
-      if (nuovoInbound) void rileggiDettaglio(id);
-    },
-    [rileggiDettaglio],
-  );
-
-  // Polling della chat aperta, solo con la scheda del browser in primo piano.
-  useEffect(() => {
-    if (chat == null) return;
-    const visibile = () => document.visibilityState === 'visible';
-    const m = setInterval(() => visibile() && void rileggiMessaggi(chat), OGNI_MESSAGGI);
-    const d = setInterval(() => visibile() && void rileggiDettaglio(chat), OGNI_DETTAGLIO);
-    return () => {
-      clearInterval(m);
-      clearInterval(d);
-    };
-  }, [chat, rileggiMessaggi, rileggiDettaglio]);
-
-  // Letta perché aperta: stessa regola del pannello /chat (la rotta azzera solo le chat di Mario).
-  const nonLetti = attuali?.dettaglio?.conv.unreadCount ?? 0;
-  useEffect(() => {
-    if (chat == null || nonLetti <= 0) return;
-    const da = convDaSegnareLetta(String(chat), [{ id: chat, unread_count: nonLetti }], inviate.current);
+  /** Letta perché aperta: stessa regola del pannello /chat (la rotta azzera solo le chat di Mario).
+   *  Se la richiesta fallisce il conteggio si dimentica, e il prossimo giro di polling ci riprova. */
+  const segnaLetta = useCallback((id: number) => {
+    const d = datiRef.current;
+    if (!d || d.id !== id || !d.dettaglio) return;
+    const da = convDaSegnareLetta(String(id), [{ id, unread_count: d.dettaglio.conv.unreadCount }], inviate.current);
     if (!da) return;
     inviate.current.set(da.id, da.count);
     fetch(`/api/chat/conversations/${da.id}/read`, { method: 'POST' }).then(
@@ -141,7 +110,61 @@ export function ChatAperta() {
       },
       () => inviate.current.delete(da.id),
     );
-  }, [chat, nonLetti]);
+  }, []);
+
+  const rileggiDettaglio = useCallback(async (id: number) => {
+    const n = ++seqDettaglio.current;
+    try {
+      const dettaglio = await leggiDettaglio(id);
+      if (n !== seqDettaglio.current) return;
+      setDati((d) => (d && d.id === id && !d.errore ? { ...d, dettaglio } : d));
+    } catch {
+      // Un giro fallito non svuota la scheda: ci riprova il prossimo.
+    }
+  }, []);
+
+  const rileggiMessaggi = useCallback(
+    async (id: number) => {
+      const prima = datiRef.current;
+      if (!prima || prima.id !== id || prima.errore || !prima.messaggi) return;
+      const n = ++seqMessaggi.current;
+      let nuovi: Msg[];
+      try {
+        // Rilegge anche gli ultimi 20 già in pagina: il loro stato di consegna cambia dopo l'invio.
+        nuovi = await leggiMessaggi(id, cursoreDopo(prima.messaggi));
+      } catch {
+        return;
+      }
+      if (n !== seqMessaggi.current) return;
+      const visti = new Set(prima.messaggi.map((m) => m.id));
+      const nuovoInbound = nuovi.some((m) => m.direction === 'in' && !visti.has(m.id));
+      setDati((d) => (d && d.id === id && !d.errore && d.messaggi ? { ...d, messaggi: fondiMessaggi(d.messaggi, nuovi) } : d));
+      if (nuovoInbound) void rileggiDettaglio(id);
+    },
+    [rileggiDettaglio],
+  );
+
+  // Polling della chat aperta, solo con la scheda del browser in primo piano.
+  useEffect(() => {
+    if (chat == null) return;
+    const visibile = () => document.visibilityState === 'visible';
+    const m = setInterval(() => {
+      if (!visibile()) return;
+      void rileggiMessaggi(chat);
+      segnaLetta(chat);
+    }, OGNI_MESSAGGI);
+    const d = setInterval(() => visibile() && void rileggiDettaglio(chat), OGNI_DETTAGLIO);
+    return () => {
+      clearInterval(m);
+      clearInterval(d);
+    };
+  }, [chat, rileggiMessaggi, rileggiDettaglio, segnaLetta]);
+
+  // Subito all'apertura e a ogni nuovo conteggio di non letti.
+  const nonLetti = attuali?.dettaglio?.conv.unreadCount ?? 0;
+  useEffect(() => {
+    if (chat != null && nonLetti > 0) segnaLetta(chat);
+  }, [chat, nonLetti, segnaLetta]);
 
   const pausa = useCallback(
     async (inPausa: boolean) => {

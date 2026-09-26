@@ -11,12 +11,13 @@ const stato = {
   conv: null as Record<string, unknown> | null,
   crm: null as Record<string, unknown> | null,
   eventi: [] as Record<string, unknown>[],
-  query: [] as { tabella: string; filtri: Filtro[]; limite?: number; ordine?: [string, unknown] }[],
+  query: [] as { tabella: string; colonne?: string; filtri: Filtro[]; limite?: number; ordine?: [string, unknown] }[],
+  conErrori: [] as number[],
 };
 
 /** Query builder finto: registra i filtri e risolve con i dati della tabella. */
 function builder(tabella: string) {
-  const q = { tabella, filtri: [] as Filtro[], limite: undefined as number | undefined, ordine: undefined as [string, unknown] | undefined };
+  const q = { tabella, colonne: undefined as string | undefined, filtri: [] as Filtro[], limite: undefined as number | undefined, ordine: undefined as [string, unknown] | undefined };
   stato.query.push(q);
   const risultato = () => {
     if (tabella === 'conversations') return { data: stato.conv, error: null };
@@ -24,7 +25,7 @@ function builder(tabella: string) {
     return { data: stato.eventi, error: null };
   };
   const b: Record<string, unknown> = {
-    select: () => b,
+    select: (c: string) => ((q.colonne = c), b),
     eq: (c: string, v: unknown) => (q.filtri.push(['eq', c, v]), b),
     in: (c: string, v: unknown) => (q.filtri.push(['in', c, v]), b),
     gte: (c: string, v: unknown) => (q.filtri.push(['gte', c, v]), b),
@@ -37,6 +38,7 @@ function builder(tabella: string) {
 }
 
 vi.mock('@/lib/supabase/admin', () => ({ getSupabaseAdmin: () => ({ from: builder }) }));
+vi.mock('@/lib/console/viste-db', () => ({ idsConErrori: async () => stato.conErrori }));
 vi.mock('@/lib/console/guardia', () => ({ richiediAdmin: async () => stato.admin }));
 vi.mock('@/lib/chat-perimetro', async (orig) => ({
   ...(await orig<typeof import('@/lib/chat-perimetro')>()),
@@ -61,6 +63,7 @@ beforeEach(() => {
   stato.crm = { lead_id: 'abc-123', status: 'NEW', conferme_outcome: null, sales_outcome: null };
   stato.eventi = [{ created_at: '2026-10-05T19:20:00Z', type: 'bot_paused', message: '[chat] bot fermato', level: 'warn' }];
   stato.query = [];
+  stato.conErrori = [];
 });
 
 describe('GET /api/console/chat/[id]', () => {
@@ -116,6 +119,18 @@ describe('GET /api/console/chat/[id]', () => {
     expect(Date.now() - Date.parse(da)).toBeLessThan(31 * 864e5);
     expect(ev.limite).toBe(60);
     expect(ev.ordine).toEqual(['created_at', { ascending: false }]);
+  });
+
+  it("chat con l'ultimo invio fallito: contesto in tono errore, come nella lista", async () => {
+    stato.conv = { ...CONV, lancio_slug: null, lancio_fase: null };
+    stato.conErrori = [42];
+    const j = await (await chiama('42')).json();
+    expect(j.conv.contesto).toEqual({ testo: 'Invio non riuscito', tono: 'errore' });
+  });
+
+  it('crm_lead_status: solo le colonne che servono', async () => {
+    await chiama('42');
+    expect(stato.query.find((q) => q.tabella === 'crm_lead_status')!.colonne).toBe('status, conferme_outcome, sales_outcome');
   });
 
   it('senza crmLeadId non legge crm_lead_status e crm è null', async () => {

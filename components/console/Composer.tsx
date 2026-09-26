@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Bot, Clock, Pause, Send, UserRound } from 'lucide-react';
 import { finestra24h } from '@/lib/console/thread';
 import { Button } from './ui/Button';
@@ -30,15 +30,19 @@ function Finestra({ lastInboundAt, now }: { lastInboundAt: string | null; now: D
 export function Composer({ inPausa, lastInboundAt, now, pausaInCorso, onPausa, onInvia }: ComposerProps) {
   const [testo, setTesto] = useState('');
   const [invio, setInvio] = useState(false);
+  // Guardia sincrona: due Ctrl+Invio nello stesso giro di eventi vedono ancora `invio` a false.
+  const inCorso = useRef(false);
   const aperta = finestra24h(lastInboundAt, now).aperta;
   const puoInviare = inPausa && aperta && testo.trim() !== '' && !invio;
 
   async function invia() {
-    if (!puoInviare) return;
+    if (!puoInviare || inCorso.current) return;
+    inCorso.current = true;
     setInvio(true);
     try {
       if (await onInvia(testo.trim())) setTesto('');
     } finally {
+      inCorso.current = false;
       setInvio(false);
     }
   }

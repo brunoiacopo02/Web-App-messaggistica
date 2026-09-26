@@ -4,6 +4,7 @@ import { richiediAdmin } from '@/lib/console/guardia';
 import { isConversazioneChat, mondoDi } from '@/lib/chat-perimetro';
 import { contestoRiga } from '@/lib/console/viste';
 import { TIPI_EVENTI_THREAD } from '@/lib/console/thread';
+import { idsConErrori } from '@/lib/console/viste-db';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -43,9 +44,9 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   if (!c) return NextResponse.json({ error: 'chat_non_trovata' }, { status: 404 });
 
   const now = new Date();
-  const [crm, eventi] = await Promise.all([
+  const [crm, eventi, errori] = await Promise.all([
     c.crm_lead_id
-      ? s.from('crm_lead_status').select('*').eq('lead_id', c.crm_lead_id).maybeSingle()
+      ? s.from('crm_lead_status').select('status, conferme_outcome, sales_outcome').eq('lead_id', c.crm_lead_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     s
       .from('event_log')
@@ -55,6 +56,8 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
       .gte('created_at', new Date(now.getTime() - TRENTA_GIORNI).toISOString())
       .order('created_at', { ascending: false })
       .limit(MAX_EVENTI),
+    // Stessa fonte della lista (cache 15 s): una chat con l'ultimo invio fallito mostra il tono errore.
+    idsConErrori(s, now).catch(() => [] as number[]),
   ]);
   if (crm.error) return NextResponse.json({ error: 'lettura_fallita', dettaglio: crm.error.message }, { status: 500 });
   if (eventi.error) return NextResponse.json({ error: 'lettura_fallita', dettaglio: eventi.error.message }, { status: 500 });
@@ -79,7 +82,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
       mondo: mondoDi(c),
       // Oltre al contratto del brief: servono a `convDaSegnareLetta` e al Tag dell'intestazione.
       unreadCount: c.unread_count ?? 0,
-      contesto: contestoRiga(c, { now, conErrori: new Set() }),
+      contesto: contestoRiga(c, { now, conErrori: new Set(errori) }),
     },
     lead: { id: c.lead?.id ?? null, nome, telefono: c.lead?.phone_e164 ?? null },
     crm: crm.data ?? null,
