@@ -217,11 +217,95 @@
 [data-console] .btn.pri:hover{filter:brightness(1.06)}
 [data-console] .btn.ghost{background:transparent;border-color:transparent;color:var(--fg2)}
 [data-console] .btn.ghost:hover{background:var(--s3);border-color:var(--line2)}
+[data-console] .btn.danger{background:var(--red-bg);border-color:var(--red-bg);color:var(--red)}
+[data-console] .btn.danger:hover{border-color:var(--red)}
+[data-console] .btn.danger .ico{color:var(--red)}
 [data-console] .btn.tall{height:40px;padding:0 14px}
+[data-console] .btn:disabled{opacity:.6;cursor:not-allowed}
+[data-console] .btn:disabled:hover{background:var(--s3);border-color:var(--line)}
+[data-console] .btn.pri:disabled:hover{background:var(--ice);filter:none}
 [data-console] .iconbtn{width:28px;height:28px;display:inline-grid;place-items:center;border:0;background:transparent;color:var(--fg3);border-radius:6px;cursor:pointer;transition:background-color 100ms ease,transform 160ms var(--ease)}
 [data-console] .iconbtn:hover{background:var(--s3);color:var(--fg)}
 [data-console] .iconbtn:active{transform:scale(.95)}
 [data-console] kbd{font-family:var(--m);font-size:12px;line-height:18px;padding:0 5px;border-radius:4px;border:1px solid var(--line);color:var(--fg3);background:var(--s1)}
+
+/* ---------- Campo di testo ---------- */
+[data-console] .field{display:flex;align-items:center;gap:8px;height:32px;padding:0 10px;border:1px solid var(--line2);border-radius:6px;background:var(--s1);color:var(--fg3)}
+[data-console] .field input{all:unset;flex:1;font-size:13px;color:var(--fg)}
+[data-console] .field input::placeholder{color:var(--fg3)}
+[data-console] .field:focus-within{border-color:var(--ice-line)}
+[data-console] .field:has(input:disabled){opacity:.6}
+
+/* ---------- Tag (badge di solo testo) ---------- */
+[data-console] .tag{display:inline-flex;align-items:center;font-size:12px;line-height:18px;font-weight:600;padding:0 6px;border-radius:4px;white-space:nowrap}
+[data-console] .tag.neutro{background:var(--s3);color:var(--fg2)}
+[data-console] .tag.urgente{background:var(--red-strong);color:var(--red-ink)}
+[data-console] .tag.errore{background:var(--red-bg);color:var(--red)}
+[data-console] .tag.attesa{background:var(--amber-bg);color:var(--amber)}
+[data-console] .tag.ok{background:var(--green-bg);color:var(--green)}
+[data-console] .tag.onda{background:var(--ember-soft);color:var(--ember)}
+
+/* ---------- Menu (Radix dropdown-menu) ---------- */
+[data-console] .menu{min-width:180px;padding:4px;border-radius:8px;border:1px solid var(--line);background:var(--s3);box-shadow:var(--shadow);z-index:50}
+[data-console] .menu-item{display:flex;align-items:center;gap:8px;height:30px;padding:0 8px;border-radius:6px;font-size:13px;color:var(--fg);cursor:pointer;outline:none}
+[data-console] .menu-item:hover,
+[data-console] .menu-item[data-highlighted]{background:var(--s4)}
+[data-console] .menu-item[data-disabled]{color:var(--fg3);cursor:not-allowed}
+[data-console] .menu-item.danger{color:var(--red)}
+[data-console] .menu-item.danger:hover,
+[data-console] .menu-item.danger[data-highlighted]{background:var(--red-bg)}
+[data-console] .menu-sep{height:1px;margin:4px 0;background:var(--line2)}
+
+/* ---------- Overlay, Dialog, Sheet (Radix dialog): fade 120 ms, niente scala/scivolamento ---------- */
+[data-console] .overlay{position:fixed;inset:0;background:rgba(6,12,15,.55);z-index:60}
+[data-console] .overlay[data-state="open"]{animation:console-fade-in 120ms var(--ease)}
+[data-console] .overlay[data-state="closed"]{animation:console-fade-out 120ms var(--ease)}
+[data-console] .dialog{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(480px,calc(100vw - 32px));max-height:calc(100vh - 64px);display:flex;flex-direction:column;border-radius:8px;border:1px solid var(--line);background:var(--s2);box-shadow:var(--shadow);z-index:61;overflow:hidden}
+[data-console] .dialog[data-state="open"]{animation:console-fade-in 120ms var(--ease)}
+[data-console] .dialog[data-state="closed"]{animation:console-fade-out 120ms var(--ease)}
+[data-console] .sheet{position:fixed;top:0;right:0;bottom:0;width:420px;max-width:calc(100vw - 32px);display:flex;flex-direction:column;border-left:1px solid var(--line);background:var(--s2);box-shadow:var(--shadow);z-index:61}
+[data-console] .sheet[data-state="open"]{animation:console-fade-in 120ms var(--ease)}
+[data-console] .sheet[data-state="closed"]{animation:console-fade-out 120ms var(--ease)}
+@keyframes console-fade-in{from{opacity:0}to{opacity:1}}
+@keyframes console-fade-out{from{opacity:1}to{opacity:0}}
+[data-console] .dialog-hd,
+[data-console] .sheet-hd{display:flex;align-items:center;gap:8px;height:52px;padding:0 16px;border-bottom:1px solid var(--line2);flex:none}
+[data-console] .dialog-title{margin:0;font-size:14px;font-weight:600;color:var(--fg);flex:1}
+[data-console] .dialog-body,
+[data-console] .sheet-body{flex:1;overflow:auto;padding:16px}
+[data-console] .dialog-ft{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--line2);flex:none}
+
+/* ---------- Tooltip (Radix tooltip) ---------- */
+[data-console] .tooltip{max-width:240px;padding:6px 8px;border-radius:6px;border:1px solid var(--line);background:var(--s4);color:var(--fg);font-size:12px;line-height:16px;box-shadow:var(--shadow);z-index:70}
+[data-console] .tooltip-arrow{fill:var(--s4)}
+
+/* ---------- Stati vuoto/errore ---------- */
+[data-console] .stato{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:40px 24px;text-align:center;color:var(--fg3);height:100%}
+[data-console] .stato .ico{color:var(--fg3);margin-bottom:2px}
+[data-console] .stato-t{margin:0;font-size:14px;font-weight:500;color:var(--fg2)}
+[data-console] .stato-m{margin:0 0 6px;font-size:13px;color:var(--fg3);max-width:360px}
+[data-console] .stato-err .ico{color:var(--red)}
+[data-console] .stato-err .stato-t{color:var(--fg)}
+
+/* ---------- Skeleton ---------- */
+[data-console] .skel-riga{border-radius:8px;background:var(--s3)}
+
+/* ---------- Toast (sonner, montato in Shell.tsx): sui token, niente colori di default ---------- */
+[data-console] .toaster[data-sonner-toaster]{
+  --normal-bg:var(--s3); --normal-border:var(--line); --normal-text:var(--fg);
+  --success-bg:var(--green-bg); --success-border:var(--green-bg); --success-text:var(--green);
+  --error-bg:var(--red-bg); --error-border:var(--red-bg); --error-text:var(--red);
+  --info-bg:var(--ice-soft); --info-border:var(--ice-soft); --info-text:var(--ice);
+  --warning-bg:var(--amber-bg); --warning-border:var(--amber-bg); --warning-text:var(--amber);
+  --border-radius:8px; --gray4:var(--line2); --gray12:var(--fg);
+  font-family:var(--f);
+}
+[data-console] .toaster [data-sonner-toast]{box-shadow:var(--shadow);font-size:13px}
+[data-console] .toaster [data-sonner-toast] [data-title]{font-weight:500}
+[data-console] .toaster [data-sonner-toast] [data-close-button]{background:var(--s3);border-color:var(--line);color:var(--fg3)}
+
+/* ---------- Utilità ---------- */
+[data-console] .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 
 /* ---------- Cabina ---------- */
 [data-console] .cabina{background:var(--s2);border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0;overflow:auto}

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, type ReactNode } from 'react';
+import { Toaster } from 'sonner';
 import { TemaToggle, useTema } from './TemaToggle';
 
 interface ShellProps {
@@ -36,7 +37,13 @@ export function Shell({ email, regia, nav, children }: ShellProps) {
         </nav>
         <div style={{ minWidth: 0, minHeight: 0, overflow: 'auto' }}>{children}</div>
       </div>
-      <div id="console-toasts" aria-live="polite" />
+      <Toaster
+        className="toaster"
+        theme={tema}
+        position="bottom-right"
+        richColors
+        closeButton
+      />
     </div>
   );
 }
