@@ -29,9 +29,9 @@ export function Shell({ email, regia, nav, children }: ShellProps) {
     <RegiaProvider>
       <div style={{ display: 'grid', gridTemplateRows: 'auto 1fr', height: '100%', minHeight: 0 }}>
         <div>{regia ?? <BarraRegia />}</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '232px 1fr', minHeight: 0 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '232px minmax(0, 1fr)', gridTemplateRows: 'minmax(0, 1fr)', minHeight: 0 }}>
           <nav className="nav" aria-label="Navigazione console">
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <div className="nav-voci">
               {nav ?? (
                 <Suspense fallback={null}>
                   <Nav />

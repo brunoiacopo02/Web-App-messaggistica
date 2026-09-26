@@ -18,7 +18,7 @@ interface ComposerProps {
 function Finestra({ lastInboundAt, now }: { lastInboundAt: string | null; now: Date }) {
   const f = finestra24h(lastInboundAt, now);
   return (
-    <span className={f.aperta ? 'win num' : 'win chiusa'}>
+    <span className={f.aperta ? 'win' : 'win chiusa'}>
       <Clock size={16} strokeWidth={1.75} className="ico" aria-hidden="true" />
       {f.aperta ? `Finestra 24h: chiude ${f.chiudeAlle}` : 'Finestra chiusa: serve un template'}
     </span>

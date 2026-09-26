@@ -141,7 +141,7 @@ function GraficoOre({ perOra }: { perOra: ConsegneOra[] }) {
   return (
     <div className="tracker">
       <div className="hd">
-        <span>Consegne ora per ora, oggi</span>
+        <span>Consegne ora per ora<span className="hd-x">, oggi</span></span>
         {conFalliti.length ? <em>falliti alle {conFalliti.slice(-3).join(', ')}</em> : null}
       </div>
       <svg className="bars-svg" viewBox={`0 0 ${24 * PASSO} ${ALTEZZA}`} preserveAspectRatio="none" role="img" aria-label={descr}>

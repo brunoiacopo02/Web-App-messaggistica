@@ -27,8 +27,9 @@ const ICONA_VISTA: Record<Vista, LucideIcon> = {
   chiuse: Archive,
 };
 
-const GRUPPI: { titolo: string; viste: Vista[] }[] = [
-  { titolo: 'Priorità', viste: ['serve_te', 'non_lette', 'errori'] },
+/** Il primo gruppo non ha titolo, come nel mockup: sono le viste di ogni giorno, in cima. */
+const GRUPPI: { titolo: string | null; viste: Vista[] }[] = [
+  { titolo: null, viste: ['serve_te', 'non_lette', 'errori'] },
   { titolo: 'Lancio 5/10', viste: ['lancio'] },
   { titolo: 'Mondi', viste: ['fissati_bot', 'mario', 'gdo', 'campagne', 'chiuse'] },
 ];
@@ -46,8 +47,6 @@ const SISTEMA: { etichetta: string; href: string; icona: LucideIcon; kbd?: strin
 
 /** Le sotto-fasi del lancio mostrate sotto "Lancio" (le terminali e il follow-up restano nella vista). */
 const SOTTO_FASI: LancioFase[] = ['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch', 'scelta_fatta'];
-
-const COLONNA = { display: 'flex', flexDirection: 'column', gap: 1 } as const;
 
 const fmt = new Intl.NumberFormat('it-IT');
 
@@ -80,8 +79,8 @@ export function Nav() {
   return (
     <>
       {GRUPPI.map((g) => (
-        <div key={g.titolo} style={COLONNA}>
-          <div className="grp">{g.titolo}</div>
+        <div key={g.titolo ?? 'priorita'} className="nav-grp">
+          {g.titolo ? <div className="grp">{g.titolo}</div> : null}
           {g.viste.map((v) => {
             const Icona = ICONA_VISTA[v];
             const n = conteggi?.[v];
@@ -128,7 +127,7 @@ export function Nav() {
         </div>
       ))}
 
-      <div style={COLONNA}>
+      <div className="nav-grp">
         <div className="grp">Sistema</div>
         {SISTEMA.map((s) => {
           const Icona = s.icona;

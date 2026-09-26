@@ -74,23 +74,27 @@ export function Thread({ dettaglio, messaggi, now, pausaInCorso, onPausa, onInvi
       <div className="th">
         <Avatar nome={lead.nome} telefono={lead.telefono} grande />
         <div className="who">
-          <b className={secondario ? 'mono' : undefined}>{principale}</b>
-          <span>
-            {telefono && !secondario && <span className="mono">{telefono}</span>}
-            {secondario && <span>{secondario}</span>}
-            {conv.contesto && <Tag tono={conv.contesto.tono}>{conv.contesto.testo}</Tag>}
-          </span>
+          <div className="who-l1">
+            <b className={secondario ? 'mono' : undefined}>{principale}</b>
+            {telefono && !secondario && <span className="mono tel">{telefono}</span>}
+            {secondario && <span className="sec">{secondario}</span>}
+          </div>
+          {conv.contesto && (
+            <div className="who-l2">
+              <Tag tono={conv.contesto.tono}>{conv.contesto.testo}</Tag>
+            </div>
+          )}
         </div>
         <span className="sp" />
         {inPausa ? (
           <Button variante="primario" caricamento={pausaInCorso} onClick={() => onPausa(false)}>
             <Play size={16} strokeWidth={1.75} className="ico" aria-hidden="true" />
-            Ridai a Mario
+            <span className="th-lbl">Ridai a Mario</span>
           </Button>
         ) : (
           <Button caricamento={pausaInCorso} onClick={() => onPausa(true)}>
             <Pause size={16} strokeWidth={1.75} className="ico" aria-hidden="true" />
-            Metti in pausa Mario
+            <span className="th-lbl">Metti in pausa Mario</span>
           </Button>
         )}
         <Tooltip contenuto={schedaAperta ? 'Chiudi la scheda lead (])' : 'Apri la scheda lead (])'}>
