@@ -4,7 +4,7 @@ import {
   mittenteDiConversazione,
   eNumeroDelBot,
   numeriDelBot,
-  quotaSecondo,
+  numeriSecondari,
 } from './mittente';
 
 const PRIMARIO = 'whatsapp:+393520413199';
@@ -14,6 +14,7 @@ const CHIAVI = [
   'TWILIO_WHATSAPP_NUMBER_FENICE',
   'TWILIO_WHATSAPP_NUMBER_FENICE_2',
   'FENICE_NUMERO2_QUOTA',
+  'BOT_NUMERI_SECONDARI',
 ] as const;
 
 let salvate: Record<string, string | undefined>;
@@ -23,6 +24,7 @@ beforeEach(() => {
   process.env.TWILIO_WHATSAPP_NUMBER_FENICE = PRIMARIO;
   process.env.TWILIO_WHATSAPP_NUMBER_FENICE_2 = SECONDO;
   delete process.env.FENICE_NUMERO2_QUOTA;
+  delete process.env.BOT_NUMERI_SECONDARI;
 });
 
 afterEach(() => {
@@ -35,61 +37,19 @@ afterEach(() => {
 /** Un sorteggio fisso: `Math.random` che torna sempre lo stesso valore in [0, 1). */
 const sorteggio = (v: number) => () => v;
 
-describe('quotaSecondo', () => {
-  it('assente o vuota vale 0', () => {
-    expect(quotaSecondo()).toBe(0);
-    process.env.FENICE_NUMERO2_QUOTA = '   ';
-    expect(quotaSecondo()).toBe(0);
-  });
-
-  it('legge una percentuale, anche con spazi e decimali', () => {
-    process.env.FENICE_NUMERO2_QUOTA = ' 30 ';
-    expect(quotaSecondo()).toBe(30);
-    process.env.FENICE_NUMERO2_QUOTA = '12.5';
-    expect(quotaSecondo()).toBe(12.5);
-  });
-
-  // Fail-closed: una env scritta male non deve spostare traffico.
-  it('illeggibile o fuori da 0-100 vale 0', () => {
-    for (const v of ['abc', '30%', '-5', '101', 'NaN', 'Infinity']) {
-      process.env.FENICE_NUMERO2_QUOTA = v;
-      expect(quotaSecondo(), `quota "${v}"`).toBe(0);
-    }
-  });
-});
+// Il sorteggio FENICE_NUMERO2_QUOTA e' stato tolto da mittentePerNuovaConversazione
+// (vedi describe piu' sotto e il commento nel modulo): quotaSecondo() e' sparita con lui.
 
 describe('mittentePerNuovaConversazione', () => {
-  it('quota assente: sempre il primario, qualunque sia il sorteggio', () => {
+  it('sempre il primario, qualunque sia il sorteggio o la quota', () => {
+    process.env.FENICE_NUMERO2_QUOTA = '100';
     expect(mittentePerNuovaConversazione(sorteggio(0))).toBe(PRIMARIO);
     expect(mittentePerNuovaConversazione(sorteggio(0.999))).toBe(PRIMARIO);
   });
 
-  it('quota 0: sempre il primario', () => {
-    process.env.FENICE_NUMERO2_QUOTA = '0';
-    expect(mittentePerNuovaConversazione(sorteggio(0))).toBe(PRIMARIO);
-  });
-
-  it('quota 100: sempre il secondo', () => {
-    process.env.FENICE_NUMERO2_QUOTA = '100';
-    expect(mittentePerNuovaConversazione(sorteggio(0))).toBe(SECONDO);
-    expect(mittentePerNuovaConversazione(sorteggio(0.999999))).toBe(SECONDO);
-  });
-
-  it('quota 30: il secondo sotto la soglia, il primario sopra', () => {
-    process.env.FENICE_NUMERO2_QUOTA = '30';
-    expect(mittentePerNuovaConversazione(sorteggio(0.29))).toBe(SECONDO);
-    expect(mittentePerNuovaConversazione(sorteggio(0.3))).toBe(PRIMARIO);
-    expect(mittentePerNuovaConversazione(sorteggio(0.9))).toBe(PRIMARIO);
-  });
-
-  it('secondo numero assente: il primario anche con quota alta', () => {
+  it('secondo numero assente: resta il primario', () => {
     delete process.env.TWILIO_WHATSAPP_NUMBER_FENICE_2;
     process.env.FENICE_NUMERO2_QUOTA = '100';
-    expect(mittentePerNuovaConversazione(sorteggio(0))).toBe(PRIMARIO);
-  });
-
-  it('quota illeggibile: il primario', () => {
-    process.env.FENICE_NUMERO2_QUOTA = 'cento';
     expect(mittentePerNuovaConversazione(sorteggio(0))).toBe(PRIMARIO);
   });
 
@@ -98,11 +58,43 @@ describe('mittentePerNuovaConversazione', () => {
     expect(mittentePerNuovaConversazione(sorteggio(0.5))).toBeUndefined();
   });
 
-  it('di default sorteggia con Math.random e resta dentro i due numeri', () => {
+  it('di default (senza sorteggio esplicito) resta il primario', () => {
     process.env.FENICE_NUMERO2_QUOTA = '50';
     for (let i = 0; i < 20; i++) {
-      expect([PRIMARIO, SECONDO]).toContain(mittentePerNuovaConversazione());
+      expect(mittentePerNuovaConversazione()).toBe(PRIMARIO);
     }
+  });
+});
+
+describe('numeri secondari', () => {
+  it('senza BOT_NUMERI_SECONDARI vale il solo numero 2 di sempre', () => {
+    delete process.env.BOT_NUMERI_SECONDARI;
+    process.env.TWILIO_WHATSAPP_NUMBER_FENICE_2 = 'whatsapp:+393522070047';
+    expect(numeriSecondari()).toEqual(['whatsapp:+393522070047']);
+  });
+
+  it('con BOT_NUMERI_SECONDARI vale l elenco, pulito da spazi e vuoti', () => {
+    process.env.BOT_NUMERI_SECONDARI = ' whatsapp:+393522070047, whatsapp:+393522018718 ,,whatsapp:+393520158061 ';
+    expect(numeriSecondari()).toEqual([
+      'whatsapp:+393522070047', 'whatsapp:+393522018718', 'whatsapp:+393520158061',
+    ]);
+  });
+
+  it('il primario non compare due volte anche se messo per errore fra i secondari', () => {
+    process.env.BOT_NUMERI_SECONDARI = 'whatsapp:+393520413199,whatsapp:+393522018718';
+    expect(numeriDelBot()).toEqual(['whatsapp:+393520413199', 'whatsapp:+393522018718']);
+  });
+
+  it('eNumeroDelBot riconosce tutti i secondari, con e senza prefisso', () => {
+    process.env.BOT_NUMERI_SECONDARI = 'whatsapp:+393522018718,whatsapp:+393520158061';
+    expect(eNumeroDelBot('whatsapp:+393522018718')).toBe(true);
+    expect(eNumeroDelBot('+393520158061')).toBe(true);
+    expect(eNumeroDelBot('whatsapp:+15559919332')).toBe(false);
+  });
+
+  it('una chat nuova senza scelta esplicita nasce sempre sul primario, qualunque quota', () => {
+    process.env.FENICE_NUMERO2_QUOTA = '100';
+    expect(mittentePerNuovaConversazione(() => 0)).toBe('whatsapp:+393520413199');
   });
 });
 
