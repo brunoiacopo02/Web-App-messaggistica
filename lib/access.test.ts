@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { areaForEmail, canAccess, landingPath, puoModificareLancio, puoVedereMonitorLancio } from './access';
+import { areaForEmail, canAccess, landingPath, puoModificareLancio, puoVedereMonitorLancio, puoUsareConsole } from './access';
 
 describe('access map', () => {
   it('fenicebot vede solo fenice', () => {
@@ -11,9 +11,9 @@ describe('access map', () => {
 
   it('utente normale vede CRM + fenice', () => {
     expect(areaForEmail('brunoiacopo02@gmail.com')).toBe('all');
-    expect(canAccess('brunoiacopo02@gmail.com', '/inbox')).toBe(true);
+    expect(canAccess('brunoiacopo02@gmail.com', '/console')).toBe(true);
     expect(canAccess('brunoiacopo02@gmail.com', '/fenice')).toBe(true);
-    expect(landingPath('brunoiacopo02@gmail.com')).toBe('/inbox');
+    expect(landingPath('brunoiacopo02@gmail.com')).toBe('/console');
   });
 
   it('email sconosciuta: default CRM', () => {
@@ -101,5 +101,19 @@ describe('puoVedereMonitorLancio — chi apre /fenice/lancio', () => {
     expect(puoVedereMonitorLancio('FeniceBot@Fenice.com')).toBe(false);
     expect(puoVedereMonitorLancio('campagne@fenice.com')).toBe(false);
     expect(puoVedereMonitorLancio('fenice@academy.com')).toBe(false);
+  });
+});
+
+describe('console', () => {
+  it('solo l\'area all usa la console', () => {
+    expect(puoUsareConsole('admin@fenice.com')).toBe(true);
+    expect(puoUsareConsole('fenice@academy.com')).toBe(false);
+    expect(puoUsareConsole('campagne@fenice.com')).toBe(false);
+    expect(puoUsareConsole('fenicebot@fenice.com')).toBe(false);
+    expect(puoUsareConsole(null)).toBe(false);
+  });
+  it('l\'admin atterra sulla console', () => {
+    expect(landingPath('admin@fenice.com')).toBe('/console');
+    expect(landingPath('fenice@academy.com')).toBe('/chat');
   });
 });

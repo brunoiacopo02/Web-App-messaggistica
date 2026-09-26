@@ -45,11 +45,17 @@ export function puoVedereMonitorLancio(email: string | null | undefined): boolea
   return areaForEmail(email) === 'all';
 }
 
+/** La console /console: solo l'area `all`. Un email assente non è mai admin. */
+export function puoUsareConsole(email: string | null | undefined): boolean {
+  if (!email) return false;
+  return areaForEmail(email) === 'all';
+}
+
 /** Dove mandare l'utente dopo il login. */
 export function landingPath(email: string | null | undefined): string {
   const area = areaForEmail(email);
   if (area === 'fenice') return '/fenice';
   if (area === 'campagne') return '/campagne-chat';
   if (area === 'chat') return '/chat';
-  return '/inbox';
+  return '/console';
 }
