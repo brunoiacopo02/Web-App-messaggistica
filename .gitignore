@@ -60,3 +60,6 @@ test-results
 
 # local design references (Stitch mockups, screenshots)
 design-reference/
+
+# screenshot QA della console (Task 16)
+.screens/

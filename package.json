@@ -14,7 +14,8 @@
     "format": "prettier --write \"**/*.{ts,tsx,md,json}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,md,json}\"",
     "supabase:gen-types": "supabase gen types typescript --project-id $SUPABASE_PROJECT_ID > lib/supabase/types.ts",
-    "check:slop": "node scripts/detect-slop.mjs \"app/(console)\" components/console --min=P1"
+    "check:slop": "node scripts/detect-slop.mjs \"app/(console)\" components/console --min=P1",
+    "screens": "bun scripts/screenshot-console.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.2",
