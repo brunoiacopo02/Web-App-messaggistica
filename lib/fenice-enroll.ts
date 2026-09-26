@@ -120,8 +120,9 @@ export async function enrollLeadIntoMario(
     lastName: args.lastName ?? undefined,
     email: args.email ?? undefined,
   }, { mittente: mittenteImposto });
-  // Il numero della chat: sorteggiato se e' appena nata, il suo se esisteva gia'. Il
-  // `?? primario` e' solo per il tipo — col primario configurato non e' mai undefined.
+  // Il numero della chat: quello scelto da `scegliMittenteNuovo` se e' appena nata, il
+  // suo se esisteva gia'. Il `?? primario` e' solo per il tipo — col primario
+  // configurato non e' mai undefined.
   const from = mittenteDiConversazione({ wa_number: waNumber }) ?? primario;
 
   // Non si lascia cadere un'apertura sopra una conversazione gia' avviata: il lead

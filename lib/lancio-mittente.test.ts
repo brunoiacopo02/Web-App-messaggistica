@@ -120,8 +120,21 @@ describe('spedibileDa', () => {
 
 describe('mittenteBenvenutoLancio', () => {
   const ELIXIR = 'whatsapp:+393522018718';
+  /** Supabase finto: raccoglie le righe di `event_log`. */
+  let eventi: any[];
+  let supabase: any;
+
+  beforeEach(() => {
+    eventi = [];
+    supabase = {
+      from: (table: string) => ({
+        insert: (riga: any) => { eventi.push({ table, ...riga }); return Promise.resolve({ error: null }); },
+      }),
+    };
+  });
+
   const scegli = (settings: any, chiave = IN_QUOTA) =>
-    mittenteBenvenutoLancio({} as any, { settings, chiave, templateSid: WELCOME, primario: PRIMARIO });
+    mittenteBenvenutoLancio(supabase, { settings, chiave, templateSid: WELCOME, primario: PRIMARIO, crmLeadId: 'crm-1' });
 
   it('principale e fuori quota: primario, senza chiedere niente a nessuno', async () => {
     const r = await scegli(impostazioni(0, 'principale'));
@@ -138,7 +151,8 @@ describe('mittenteBenvenutoLancio', () => {
 
   it('sender secondario: ignora i tetti', async () => {
     vi.mocked(scegliMittenteNuovo).mockResolvedValueOnce({ from: ELIXIR, secondario: true, scartati: [], motivo: 'scelto' });
-    await scegli(impostazioni(0, 'secondario'), FUORI_QUOTA);
+    const r = await scegli(impostazioni(0, 'secondario'), FUORI_QUOTA);
+    expect(r).toEqual({ from: ELIXIR, secondario: true, scelta: 'sender', ripiego: null });
     expect(vi.mocked(scegliMittenteNuovo).mock.calls[0][1]).toMatchObject({ ignoraTetti: true });
   });
 
@@ -157,6 +171,45 @@ describe('mittenteBenvenutoLancio', () => {
   it('nessun secondario configurato: primario con il motivo', async () => {
     vi.mocked(scegliMittenteNuovo).mockResolvedValueOnce({ from: PRIMARIO, secondario: false, scartati: [], motivo: 'nessun_secondario' });
     expect(await scegli(impostazioni(9))).toMatchObject({ from: PRIMARIO, secondario: false, ripiego: 'nessun_secondario' });
+  });
+
+  // Fix round 1 (revisione Task 6): un ripiego silenzioso sul lancio e' un benvenuto che
+  // cambia numero senza che nessuno se ne accorga. Solo qui, non su `scegliMittenteNuovo`:
+  // su Mario "nessun secondario" e' lo stato ordinario e non sarebbe una notizia.
+  describe('event_log: lancio_mittente_ripiego', () => {
+    it('a) in quota ma scegliMittenteNuovo non ha un secondario: una riga warn, scelta quota', async () => {
+      vi.mocked(scegliMittenteNuovo).mockResolvedValueOnce(
+        { from: PRIMARIO, secondario: false, scartati: [], motivo: 'nessun_secondario' },
+      );
+      await scegli(impostazioni(9));
+      expect(eventi).toHaveLength(1);
+      expect(eventi[0]).toMatchObject({ table: 'event_log', type: 'lancio_mittente_ripiego', level: 'warn' });
+      expect(eventi[0].payload).toMatchObject({
+        chiave: IN_QUOTA, crmLeadId: 'crm-1', scelta: 'quota', motivo: 'nessun_secondario', scartati: [],
+      });
+    });
+
+    it('b) sender ma nessun candidato spedibile: la riga porta scelta sender e gli scartati', async () => {
+      const scartati = [{ numero: ELIXIR, motivo: 'tetto_raggiunto' as const, oggi: 5, tetto: 5 }];
+      vi.mocked(scegliMittenteNuovo).mockResolvedValueOnce(
+        { from: PRIMARIO, secondario: false, scartati, motivo: 'nessun_candidato' },
+      );
+      await scegli(impostazioni(0, 'secondario'), FUORI_QUOTA);
+      expect(eventi).toHaveLength(1);
+      expect(eventi[0].payload).toMatchObject({ scelta: 'sender', motivo: 'nessun_candidato', scartati });
+    });
+
+    it('c) scegliMittenteNuovo sceglie un secondario: nessuna riga', async () => {
+      vi.mocked(scegliMittenteNuovo).mockResolvedValueOnce({ from: ELIXIR, secondario: true, scartati: [], motivo: 'scelto' });
+      await scegli(impostazioni(9));
+      expect(eventi).toHaveLength(0);
+    });
+
+    it('d) fuori quota: nessuna riga, e scegliMittenteNuovo non si chiama nemmeno', async () => {
+      await scegli(impostazioni(9), FUORI_QUOTA);
+      expect(eventi).toHaveLength(0);
+      expect(scegliMittenteNuovo).not.toHaveBeenCalled();
+    });
   });
 });
 

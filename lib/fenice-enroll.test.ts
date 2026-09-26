@@ -35,8 +35,6 @@ function makeSupabase(
     outboundCount?: number;
     /** La select su `conversations` va in errore: "non lo so", non "e' nullo". */
     convErrore?: boolean;
-    /** Quante chat sono gia' nate oggi sul numero nuovo (tetto `puoAprireSuBot2`). */
-    aperturaOggiSulSecondo?: number;
     /** Lo stato del lancio gia' scritto sulla riga, come lo rilegge `enrollLancio`.
      *  Assente = chat mai entrata in nessun lancio. */
     lancioRow?: { lancio_slug: string | null; lancio_fase: string | null; lancio_benvenuto_at?: string | null };
@@ -48,7 +46,6 @@ function makeSupabase(
   const convRow = guardia.convRow ?? { ai_owner: null, ai_status: null, crm_lead_id: null };
   const outboundCount = guardia.outboundCount ?? 0;
   const convErrore = guardia.convErrore === true;
-  const aperturaOggiSulSecondo = guardia.aperturaOggiSulSecondo ?? 0;
   const supabase: any = {
     from(table: string) {
       if (table === 'conversations') {
@@ -62,17 +59,10 @@ function makeSupabase(
           // Due letture sulla stessa select: `single()` è quella della guardia
           // `apreSopraChatViva`, `maybeSingle()` quella della guardia anti-doppione
           // (chat senza un leadId già registrato: lascia passare).
-          // Tre letture sulla stessa select: `single()` e' quella della guardia
-          // `apreSopraChatViva`, `maybeSingle()` quella della guardia anti-doppione, e
-          // con `head: true` e' il conteggio del tetto giornaliero del numero nuovo
-          // (`puoAprireSuBot2`), che chiude su `.eq(...).gte(...)`.
           // Le `maybeSingle()` sulla stessa select sono due e si distinguono dalle
           // colonne chieste: `lancio_slug...` e' la rilettura dello stato del lancio
           // (ri-arruolamento), il resto e' la guardia anti-doppione.
-          select(colonne?: string, opzioni?: { head?: boolean }) {
-            if (opzioni?.head) {
-              return { eq: () => ({ gte: async () => ({ count: aperturaOggiSulSecondo, error: null }) }) };
-            }
+          select(colonne?: string) {
             const chiedeIlLancio = (colonne ?? '').includes('lancio_slug');
             return {
               eq() {

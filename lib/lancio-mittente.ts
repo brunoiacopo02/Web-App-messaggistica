@@ -26,11 +26,14 @@
  * benvenuto mandato dal numero nuovo con un template che di la' non esiste (404) o che
  * `UTILITY_ONLY=1` blocca e' un lead che non riceve niente e nessuno che se ne accorge:
  * e' esattamente l'incidente del 24-28 agosto, 75 righe `failed` senza SID.
- * Questo file non verifica piu' da solo: la verifica di spedibilita', i tetti e il
- * ripiego sono tutti dentro `scegliMittenteNuovo`, che sceglie un secondario SOLO se e'
- * spedibile davvero. Un secondario scelto da `scegliMittenteNuovo` e' gia' passato da
- * tutti quei controlli; se non lo sceglie, qui si ripiega sul numero storico col motivo
- * che lui restituisce.
+ * Questo file non verifica piu' da solo: la verifica di spedibilita' e i tetti sono
+ * dentro `scegliMittenteNuovo`, che sceglie un secondario SOLO se e' spedibile davvero
+ * (e logga lui i numeri scartati). Un secondario scelto da `scegliMittenteNuovo` e' gia'
+ * passato da tutti quei controlli; se non lo sceglie qui si ripiega sul numero storico
+ * col motivo che lui restituisce, e SOLO sul lancio si scrive anche
+ * `lancio_mittente_ripiego`: il lancio VOLEVA un secondario (sender o quota), a
+ * differenza di Mario dove "nessun secondario" e' lo stato ordinario e non e' una
+ * notizia.
  *
  * ── Una chat che esiste gia' non cambia numero ─────────────────────────────────────
  * La quota si applica SOLO alla prima apertura. Da li' in poi comanda
@@ -142,7 +145,22 @@ export async function mittenteBenvenutoLancio(
     ignoraTetti: perSender,
   });
   if (!r.secondario) {
-    return { from: i.primario, secondario: false, scelta, ripiego: motivoRipiego(r.motivo) };
+    const ripiego = motivoRipiego(r.motivo);
+    // Il lancio VOLEVA un secondario (sender o quota, non e' il caso ordinario di
+    // `scegliMittenteNuovo` su Mario dove "nessun secondario" e' lo stato normale): un
+    // ripiego silenzioso qui e' un benvenuto che si sposta di numero senza che nessuno
+    // se ne accorga. Best-effort come il resto del repo: un insert fallito non deve
+    // impedire l'invio dal numero storico.
+    await supabase
+      .from('event_log')
+      .insert({
+        type: 'lancio_mittente_ripiego',
+        level: 'warn',
+        payload: { chiave: i.chiave, crmLeadId: i.crmLeadId ?? null, scelta, motivo: ripiego, scartati: r.scartati } as never,
+        message: `[lancio] benvenuto da mandare dal numero secondario (${scelta}) ma resta sul numero storico: ${ripiego}`,
+      })
+      .then(() => undefined, () => undefined);
+    return { from: i.primario, secondario: false, scelta, ripiego };
   }
   return { from: r.from, secondario: true, scelta, ripiego: null };
 }
