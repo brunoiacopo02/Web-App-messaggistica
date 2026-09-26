@@ -9,6 +9,8 @@ import { Tag } from './ui/Tag';
 interface RigaChatProps {
   riga: RigaLista;
   selezionata: boolean;
+  /** Evidenziata dal cursore da tastiera (j/k), che non apre la chat. */
+  cursore: boolean;
   /** La riga è appena arrivata o risalita: evidenziazione di 600 ms, solo opacità di uno sfondo. */
   appena: boolean;
   now: Date;
@@ -31,15 +33,16 @@ function Contesto({ contesto, secondario }: { contesto: RigaLista['contesto']; s
   return null;
 }
 
-export const RigaChat = memo(function RigaChat({ riga, selezionata, appena, now, onApri }: RigaChatProps) {
+export const RigaChat = memo(function RigaChat({ riga, selezionata, cursore, appena, now, onApri }: RigaChatProps) {
   const { principale, secondario } = nomeRiga(riga);
   const nonLetta = riga.nonLetti > 0;
   const anteprima = prefissoAnteprima(riga.anteprima);
-  const classi = ['row', nonLetta && 'unread', appena && 'appena'].filter(Boolean).join(' ');
+  const classi = ['row', nonLetta && 'unread', cursore && 'cursore', appena && 'appena'].filter(Boolean).join(' ');
 
   return (
     <button
       type="button"
+      id={`riga-chat-${riga.id}`}
       role="option"
       aria-selected={selezionata}
       className={classi}

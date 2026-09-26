@@ -60,7 +60,7 @@ export function Nav() {
   function vai(e: MouseEvent, v: Vista) {
     if (!suConsole || conModificatori(e)) return;
     e.preventDefault();
-    void setStato({ vista: v, fase: null, q: null });
+    void setStato({ vista: v, fase: null, q: null, solo: null });
   }
 
   return (

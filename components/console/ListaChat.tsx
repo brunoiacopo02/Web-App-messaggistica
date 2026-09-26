@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { VList, type VListHandle } from 'virtua';
 import { Search } from 'lucide-react';
 import { ETICHETTA_FASE, VISTA_META } from '@/lib/console/viste';
@@ -13,7 +13,7 @@ import { RigaChat } from './RigaChat';
 import { useStatoConsole } from './statoUrl';
 import { rinfrescaConteggi, useConteggi } from './useConteggi';
 import { useArrivi } from './useArrivi';
-import { useTastiera } from './useTastiera';
+import { useCursoreLista } from './useCursoreLista';
 import { useOra } from './useOra';
 
 /** Altezza della riga (56) più 1 px di stacco, come il `gap` del mockup. */
@@ -33,6 +33,12 @@ const fmt = new Intl.NumberFormat('it-IT');
 
 function Ricerca({ iniziale, onCambia, inputRef }: { iniziale: string; onCambia: (q: string) => void; inputRef: React.RefObject<HTMLInputElement | null> }) {
   const [testo, setTesto] = useState(iniziale);
+  const [visto, setVisto] = useState(iniziale);
+  // Ricerca azzerata da fuori (la Nav cambia vista o la riseleziona): il campo si svuota.
+  if (iniziale !== visto) {
+    setVisto(iniziale);
+    if (iniziale === '') setTesto('');
+  }
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
     if (timer.current) clearTimeout(timer.current);
@@ -77,6 +83,7 @@ export function ListaChat() {
   const chiaveRef = useRef(chiave);
   const datiRef = useRef<Dati | null>(null);
   const altroInVolo = useRef(false);
+  const aggiornaInVolo = useRef(false);
   const ancora = useRef<{ id: number; scarto: number } | null>(null);
   const ultimoAggiornamento = useRef(0);
   const rilettura = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -133,13 +140,17 @@ export function ListaChat() {
   const aggiorna = useCallback(async () => {
     const k = chiaveRef.current;
     const prima = datiRef.current;
+    if (aggiornaInVolo.current) return; // una risposta vecchia non deve sovrascriverne una nuova
     if (!prima || prima.chiave !== k || prima.errore || document.visibilityState !== 'visible') return;
+    aggiornaInVolo.current = true;
     ultimoAggiornamento.current = Date.now();
     let p: Pagina;
     try {
       p = await leggi(null);
     } catch {
       return; // un giro di polling fallito non svuota la lista: ci riprova il prossimo
+    } finally {
+      aggiornaInVolo.current = false;
     }
     const ora = datiRef.current;
     if (chiaveRef.current !== k || !ora || ora.chiave !== k) return;
@@ -166,7 +177,15 @@ export function ListaChat() {
 
   useEffect(() => {
     const id = setInterval(() => void aggiorna(), OGNI);
-    return () => clearInterval(id);
+    // Al ritorno sulla scheda si rilegge subito, senza aspettare il prossimo giro.
+    const suVisibilita = () => {
+      if (document.visibilityState === 'visible') void aggiorna();
+    };
+    document.addEventListener('visibilitychange', suVisibilita);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', suVisibilita);
+    };
   }, [aggiorna]);
 
   useEffect(
@@ -217,29 +236,28 @@ export function ListaChat() {
     if (attuali?.prossimo) vicinoAlFondo();
   }, [attuali, vicinoAlFondo]);
 
-  const apri = useCallback((id: number) => void setStato({ chat: id }), [setStato]);
-
-  function sposta(passo: 1 | -1) {
-    if (righe.length === 0) return;
-    const i = righe.findIndex((r) => r.id === chat);
-    const j = i < 0 ? 0 : Math.min(righe.length - 1, Math.max(0, i + passo));
-    listaRef.current?.scrollToIndex(j, { align: 'nearest' });
-    void setStato({ chat: righe[j].id });
-  }
-
-  useTastiera({
-    onGiu: () => sposta(1),
-    onSu: () => sposta(-1),
-    onApri: () => {
-      // Invio su una riga col focus apre quella; altrimenti, senza chat aperta, la prima della lista.
-      const riga = document.activeElement?.closest<HTMLElement>('[data-chat-id]');
-      if (riga) apri(Number(riga.dataset.chatId));
-      else if (chat == null && righe[0]) apri(righe[0].id);
-    },
-    onEsc: () => void setStato({ chat: null }),
+  const ids = useMemo(() => righe.map((r) => r.id), [righe]);
+  const { cursore, punta } = useCursoreLista({
+    ids,
+    chiave,
+    chat,
+    apri: (id) => void setStato({ chat: id }),
+    chiudi: () => void setStato({ chat: null }),
     onCerca: () => ricercaRef.current?.focus(),
+    mostra: (i) => listaRef.current?.scrollToIndex(i, { align: 'nearest' }),
   });
-
+  const puntaRef = useRef(punta);
+  useEffect(() => {
+    puntaRef.current = punta;
+  });
+  // Clic su una riga: la apre e ci porta il cursore (stabile, per non ridisegnare le righe memo).
+  const apri = useCallback(
+    (id: number) => {
+      puntaRef.current(id);
+      void setStato({ chat: id });
+    },
+    [setStato],
+  );
   const filtrata = !!(fase || solo || q);
   const totale = filtrata
     ? attuali && !attuali.errore
@@ -282,12 +300,14 @@ export function ListaChat() {
         itemSize={ALTEZZA_VOCE}
         role="listbox"
         aria-label={`Chat: ${titolo}`}
+        aria-activedescendant={cursore != null ? `riga-chat-${cursore}` : undefined}
+        tabIndex={0}
         style={{ flex: 1, minHeight: 0 }}
         onScroll={vicinoAlFondo}
       >
         {(r: RigaLista) => (
           <div key={r.id} style={{ padding: '0 8px 1px' }}>
-            <RigaChat riga={r} selezionata={r.id === chat} appena={appena.has(r.id)} now={now} onApri={apri} />
+            <RigaChat riga={r} selezionata={r.id === chat} cursore={r.id === cursore} appena={appena.has(r.id)} now={now} onApri={apri} />
           </div>
         )}
       </VList>

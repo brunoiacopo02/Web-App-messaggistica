@@ -72,3 +72,26 @@ it('smonta il listener', () => {
   premi('j');
   expect(g.onGiu).not.toHaveBeenCalled();
 });
+
+it('Invio su un bottone o un link resta al browser: niente onApri, niente preventDefault', () => {
+  const g = gestori();
+  renderHook(() => useTastiera(g));
+  const b = document.createElement('button');
+  const a = document.createElement('a');
+  a.href = '/console/avvisi';
+  document.body.append(b, a);
+  b.focus();
+  const e1 = premi('Enter', {}, b);
+  const e2 = premi('Enter', {}, a);
+  expect(g.onApri).not.toHaveBeenCalled();
+  expect(e1.defaultPrevented).toBe(false);
+  expect(e2.defaultPrevented).toBe(false);
+});
+
+it('un gestore che torna false lascia il tasto al browser', () => {
+  const onEsc = vi.fn(() => false);
+  renderHook(() => useTastiera({ onEsc }));
+  const e = premi('Escape');
+  expect(onEsc).toHaveBeenCalledTimes(1);
+  expect(e.defaultPrevented).toBe(false);
+});

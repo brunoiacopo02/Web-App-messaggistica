@@ -18,20 +18,30 @@ export function useArrivi(onNuovoInbound: (conversationId: number) => void) {
     let ch: ReturnType<typeof sb.channel> | null = null;
     let attivo = true;
     (async () => {
-      const { data } = await sb.auth.getSession();
-      sb.realtime.setAuth(data.session?.access_token ?? null);
-      if (!attivo) return;
-      ch = sb
-        .channel('console-inbound')
-        .on(
-          'postgres_changes',
-          { event: 'INSERT', schema: 'public', table: 'messages', filter: 'direction=eq.in' },
-          (payload) => {
-            const id = Number((payload.new as { conversation_id?: unknown }).conversation_id);
-            if (Number.isInteger(id)) ref.current(id);
-          },
-        )
-        .subscribe();
+      try {
+        const { data } = await sb.auth.getSession();
+        sb.realtime.setAuth(data.session?.access_token ?? null);
+        if (!attivo) return;
+        ch = sb
+          .channel('console-inbound')
+          .on(
+            'postgres_changes',
+            {
+              event: 'INSERT',
+              schema: 'public',
+              table: 'messages',
+              filter: 'direction=eq.in',
+            },
+            (payload) => {
+              const id = Number((payload.new as { conversation_id?: unknown }).conversation_id);
+              if (Number.isInteger(id)) ref.current(id);
+            },
+          )
+          .subscribe();
+      } catch (e) {
+        // Senza Realtime la lista resta viva col polling da 10 s: niente crash, solo un avviso in console.
+        console.warn('[console] arrivi in tempo reale non disponibili', e);
+      }
     })();
     return () => {
       attivo = false;

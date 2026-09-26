@@ -390,3 +390,6 @@
 [data-console] .btn.hist-tutti{margin:4px 0 0 -10px;font-size:12px;height:24px}
 [data-console] .consegna .ico{width:12px;height:12px}
 [data-console] .sys .ico{width:14px;height:14px}
+/* Cursore da tastiera (j/k): anello, non sfondo, così resta distinto dalla chat aperta (--s4). */
+[data-console] .row.cursore{box-shadow:inset 0 0 0 1px var(--ice-line)}
+[data-console] [role="listbox"]:focus-visible{outline-offset:-2px}

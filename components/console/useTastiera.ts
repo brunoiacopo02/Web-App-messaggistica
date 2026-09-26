@@ -2,15 +2,27 @@
 
 import { useEffect, useRef } from 'react';
 
+/** Un gestore che restituisce `false` dice "non ho fatto niente": il tasto torna al browser
+ *  (niente preventDefault). `undefined`/`true` = gestito. */
+type Gestore = () => boolean | void;
+
 export interface GestoriTastiera {
-  onSu?: () => void;
-  onGiu?: () => void;
-  onApri?: () => void;
-  onEsc?: () => void;
-  onPalette?: () => void;
-  onScheda?: () => void;
+  onSu?: Gestore;
+  onGiu?: Gestore;
+  onApri?: Gestore;
+  onEsc?: Gestore;
+  onPalette?: Gestore;
+  onScheda?: Gestore;
   /** `/`: porta il focus sulla ricerca. */
-  onCerca?: () => void;
+  onCerca?: Gestore;
+}
+
+/** Elementi che il browser attiva da solo con Invio: link, bottoni (righe della lista comprese,
+ *  che col clic si aprono già), summary. Invio su di loro resta al browser. */
+const ATTIVABILI = 'a[href], button, [role="button"], [role="link"], [role="menuitem"], [role="tab"], summary, input, select, textarea, [contenteditable]';
+
+function suAttivabile(t: EventTarget | null): boolean {
+  return t instanceof Element && !!t.closest(ATTIVABILI);
 }
 
 function staScrivendo(t: EventTarget | null): boolean {
@@ -21,8 +33,10 @@ function staScrivendo(t: EventTarget | null): boolean {
 }
 
 /** Scorciatoie della console: j/k o frecce per scorrere, Enter apre, Escape chiude, `]` scheda
- *  lead, `/` ricerca, Ctrl/Cmd+K palette. Mentre si scrive in un campo tutto tace. Un solo listener
- *  su `document`; i gestori si leggono da un ref, così cambiarli non lo riaggancia. */
+ *  lead, `/` ricerca, Ctrl/Cmd+K palette. Mentre si scrive in un campo tutto tace; Invio su un link
+ *  o un bottone resta al browser. Il default si blocca solo se il gestore ha fatto qualcosa (un
+ *  gestore che torna `false` lascia passare il tasto). Un solo listener su `document`; i gestori si
+ *  leggono da un ref, così cambiarli non lo riaggancia. */
 export function useTastiera(gestori: GestoriTastiera) {
   const ref = useRef(gestori);
   useEffect(() => {
@@ -37,22 +51,20 @@ export function useTastiera(gestori: GestoriTastiera) {
       const mod = e.ctrlKey || e.metaKey;
 
       if (mod && !e.altKey && e.key.toLowerCase() === 'k') {
-        if (!g.onPalette) return;
-        e.preventDefault();
-        g.onPalette();
+        if (g.onPalette && g.onPalette() !== false) e.preventDefault();
         return;
       }
       if (mod || e.altKey) return;
 
-      const azione: Record<string, (() => void) | undefined> = {
+      const azione: Record<string, Gestore | undefined> = {
         j: g.onGiu, ArrowDown: g.onGiu,
         k: g.onSu, ArrowUp: g.onSu,
         Enter: g.onApri, Escape: g.onEsc, ']': g.onScheda, '/': g.onCerca,
       };
       const f = azione[e.key];
       if (!f) return;
-      e.preventDefault();
-      f();
+      if (e.key === 'Enter' && suAttivabile(e.target)) return;
+      if (f() !== false) e.preventDefault();
     }
     document.addEventListener('keydown', suTasto);
     return () => document.removeEventListener('keydown', suTasto);
