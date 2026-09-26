@@ -175,3 +175,51 @@
 ::selection {
   background: color-mix(in oklch, var(--brand) 30%, transparent);
 }
+/* ── Monitor del lancio (/fenice/lancio) ─────────────────────────────
+   Console densa: neutri caldi (scala Radix "sand") e l'ember del marchio come unico
+   accento, per la selezione. Rosso, ambra e verde sono solo segnali e stanno sempre
+   accanto a una parola. Scoped su .lm: il resto di /fenice non cambia. */
+.lm {
+  --lm-bg: #fdfdfc;
+  --lm-panel: #f9f9f8;
+  --lm-hover: #f1f0ef;
+  --lm-sel: #e9e8e6;
+  --lm-line: #e2e1de;
+  --lm-line-strong: #cfceca;
+  --lm-muted: #63635e;
+  --lm-fg: #21201c;
+  --lm-accent: var(--brand);
+  --lm-red: #ce2c31;
+  --lm-red-bg: #feebec;
+  --lm-amber: #9a5b00;
+  --lm-amber-bg: #fff7c2;
+  --lm-green: #218358;
+  --lm-green-bg: #e9f6e9;
+  --lm-bubble-in: #f1f0ef;
+  --lm-bubble-out: #fbf3ec;
+  background: var(--lm-bg);
+  color: var(--lm-fg);
+  font-variant-numeric: tabular-nums;
+}
+.dark .lm {
+  --lm-bg: #111110;
+  --lm-panel: #191918;
+  --lm-hover: #222221;
+  --lm-sel: #2a2a28;
+  --lm-line: #31312e;
+  --lm-line-strong: #494844;
+  --lm-muted: #b5b3ad;
+  --lm-fg: #eeeeec;
+  --lm-red: #ff9592;
+  --lm-red-bg: #3b1219;
+  --lm-amber: #ffca16;
+  --lm-amber-bg: #302008;
+  --lm-green: #3dd68c;
+  --lm-green-bg: #132d21;
+  --lm-bubble-in: #222221;
+  --lm-bubble-out: #2a211b;
+}
+.lm ::selection { background: color-mix(in oklch, var(--lm-accent) 28%, transparent); }
+.lm :focus-visible { outline: 2px solid var(--lm-accent); outline-offset: 1px; }
+.lm * { scrollbar-width: thin; scrollbar-color: var(--lm-line-strong) transparent; }
+.lm .lm-rows > * { content-visibility: auto; contain-intrinsic-size: auto 60px; }

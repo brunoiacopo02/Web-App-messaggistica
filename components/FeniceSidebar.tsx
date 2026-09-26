@@ -2,7 +2,8 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import { Flame, Bot, Radio, MessagesSquare, Users, Settings, LogOut } from 'lucide-react';
+import { Flame, Bot, Radio, MessagesSquare, Users, Settings, LogOut, Activity } from 'lucide-react';
+import { puoVedereMonitorLancio } from '@/lib/access';
 import { signOutAction } from '@/app/(auth)/login/actions';
 import { ThemeToggle } from '@/components/ThemeToggle';
 
@@ -11,6 +12,7 @@ const NAV = [
   { href: '/fenice/live', label: 'Live', desc: 'Auto-risposta e nuovi lead', icon: Radio },
   { href: '/fenice/conversazioni', label: 'Conversazioni', desc: 'Storico chat e riassunti', icon: MessagesSquare },
   { href: '/fenice/lead', label: 'Lead', desc: 'Pipeline, report e analisi', icon: Users },
+  { href: '/fenice/lancio', label: 'Monitor lancio', desc: 'Chat, pulsante e avvisi del 5/10', icon: Activity, soloAdmin: true },
   { href: '/fenice/impostazioni', label: 'Impostazioni', desc: 'Lancio: interruttori, link, mittente', icon: Settings },
 ];
 
@@ -38,6 +40,9 @@ function BrandMark({ className }: { className?: string }) {
 
 export function FeniceSidebar({ userEmail }: { userEmail: string }) {
   const isActive = useActive();
+  // Il monitor del lancio e' solo per gli admin: agli altri la voce non si mostra
+  // (e la pagina e la sua API rispondono comunque "solo admin").
+  const nav = NAV.filter((item) => !('soloAdmin' in item && item.soloAdmin) || puoVedereMonitorLancio(userEmail));
 
   return (
     <>
@@ -48,7 +53,7 @@ export function FeniceSidebar({ userEmail }: { userEmail: string }) {
         </div>
 
         <nav className="flex-1 space-y-1 px-3">
-          {NAV.map((item) => {
+          {nav.map((item) => {
             const active = isActive(item);
             const Icon = item.icon;
             return (
@@ -115,7 +120,7 @@ export function FeniceSidebar({ userEmail }: { userEmail: string }) {
           </div>
         </div>
         <nav className="-mx-1 flex gap-1 overflow-x-auto pb-0.5">
-          {NAV.map((item) => {
+          {nav.map((item) => {
             const active = isActive(item);
             const Icon = item.icon;
             return (
