@@ -51,8 +51,12 @@ Oggi il codice conosce **due** numeri, in due posti che devono restare d'accordo
   da virgole, forma `whatsapp:+39…`). Se `BOT_NUMERI_SECONDARI` è assente vale il comportamento di
   oggi (`TWILIO_WHATSAPP_NUMBER_FENICE_2`), così il deploy del codice **non cambia niente** finché non
   si scrive l'env.
-- `eNumeroDelBot` / `numeriDelBot` riconoscono tutti i numeri della lista: è ciò che serve al webhook
-  in ingresso per svegliare Mario su una risposta arrivata a elixir o al 8061.
+- `eNumeroDelBot` / `numeriDelBot` riconoscono l'**unione** di primario, `BOT_NUMERI_SECONDARI`,
+  `TWILIO_WHATSAPP_NUMBER_FENICE_2` e `TWILIO_WHATSAPP_NUMBERS_2`/`_3` (deduplicati, forma
+  `whatsapp:+…`): è ciò che serve al webhook in ingresso per svegliare Mario su una risposta arrivata
+  a elixir o al 8061. `BOT_NUMERI_SECONDARI` resta la lista dei **sceglibili** (`numeriSecondari`,
+  voci normalizzate a `whatsapp:+…`): riconosciuto e sceglibile sono separati, così dimenticare il
+  0047 nella lista non rompe le sue chat.
 - `lib/template-account.ts`: la traduzione per `friendly_name` vale per **qualunque** account diverso
   dal principale (oggi solo per il secondo). Per il 8061 non si traduce niente: stesso account.
 
@@ -73,9 +77,9 @@ Nuova chiave `app_settings.tetti_numeri`, per esempio:
 
 ### 4.3 La scelta del numero per una chat che nasce adesso
 
-Un solo modulo, `lib/scelta-mittente.ts`, usato da tutti i punti di nascita:
-`enrollLeadIntoMario`, `enrollLancio` e il sorteggio di default di `findOrCreateLeadConversation`
-(`lib/messaging.ts`, che oggi chiama `mittentePerNuovaConversazione`).
+Un solo modulo, `lib/scelta-mittente.ts`, usato da `enrollLeadIntoMario` ed `enrollLancio`.
+`findOrCreateLeadConversation` (`lib/messaging.ts`) non sceglie: usa il mittente che riceve, e senza
+mittente fa nascere la chat sul primario (`mittentePerNuovaConversazione`, sorteggio tolto).
 
 ```
 scegliMittenteNuovo(supabase, { templateSid, chiave, ignoraTetti? }) → { from, motivo, scartati[] }
@@ -85,13 +89,17 @@ scegliMittenteNuovo(supabase, { templateSid, chiave, ignoraTetti? }) → { from,
 2. Per ciascuno conta le conversazioni **nate oggi** (giorno civile di Roma) con quel `wa_number`
    — la stessa prova usata oggi da `bot2-tetto.ts`, che si generalizza da un numero a N. Scarta chi
    ha raggiunto il tetto.
-3. Sui rimasti verifica che il template d'apertura sia **spedibile** da quel numero
+3. Scarta i numeri dichiarati su un altro account (`TWILIO_WHATSAPP_NUMBERS_N`) di cui mancano
+   SID/TOKEN dello slot: le credenziali ripiegherebbero sul principale, che non possiede il numero
+   (401). Motivo `credenziali_mancanti`, riga `mittente_ripiego`.
+4. Sui rimasti verifica che il template d'apertura sia **spedibile** da quel numero
    (`spedibileDa`: traduzione riuscita + presidio `UTILITY_ONLY`). Scarta chi non lo è.
-4. Fra i rimasti prende **quello con meno chat nate oggi** (a parità, ordine della lista): i numeri
+5. Fra i rimasti prende **quello con meno chat nate oggi** (a parità, ordine della lista): i numeri
    nuovi si riempiono in modo bilanciato invece che uno dopo l'altro.
-5. Nessun candidato → **3199**. Ogni scarto dovuto a un problema (non al tetto pieno, che è normale)
+6. Nessun candidato → **3199**. Ogni scarto dovuto a un problema (non al tetto pieno, che è normale)
    finisce in `event_log` come `mittente_ripiego` con numero, motivo ed errore; il tetto pieno come
-   `mittente_tetto` a livello `info`, una volta per numero al giorno.
+   `mittente_tetto` a livello `info`, una volta per numero al giorno (prima di scriverla si contano le
+   righe di oggi con lo stesso `payload->>numero`; conteggio fallito = non si scrive).
 
 Il conteggio fra la lettura e l'INSERT non è atomico: due intake concorrenti possono sforare il tetto
 di qualche unità. È accettato (il tetto protegge la qualità, non un contratto): più sicuro di un lock.
@@ -109,8 +117,9 @@ di qualche unità. È accettato (il tetto protegge la qualità, non un contratto
 
 - `lancio_sender='principale'` (valore attuale): invariato, tutti i benvenuti dal 3199.
 - `lancio_sender='secondario'` e `lancio_quota_secondario`: invece di "il 0047" vogliono dire "un
-  secondario scelto da `scegliMittenteNuovo`". `secondario` scelto a mano **ignora i tetti** (come
-  oggi: decisione umana dal pannello), la quota automatica li rispetta.
+  secondario scelto da `scegliMittenteNuovo`". `secondario` scelto a mano **ignora i tetti giornalieri** (come
+  oggi: decisione umana dal pannello) ma **non il riposo**: un numero a tetto 0 resta escluso. La
+  quota automatica rispetta i tetti.
 - La decisione su quale numero usare il 5/10 resta del PO e non fa parte di questo lavoro.
 
 ### 4.6 Il numero di default `TWILIO_WHATSAPP_NUMBER` (oggi = 8061)
@@ -125,27 +134,69 @@ parla solo quando lo sceglie `scegliMittenteNuovo`, e nessun flusso di default p
 
 ## 5. Accensione (ordine, un passo alla volta)
 
-1. **Deploy del codice con le env nuove assenti**: comportamento identico a oggi (§4.1). Verifica:
-   aperture dal 3199 e dal 0047 come prima, zero `mittente_ripiego`.
-2. **Riposo del 0047**: `tetti_numeri = {"whatsapp:+393522070047": 0}` + env `BOT_NUMERI_SECONDARI`
-   col solo 0047. Lato CRM `BOT2_DAILY_CAP=0`, `BOT_WARMUP` spento.
-3. **8061**:
-   0. `TWILIO_WHATSAPP_NUMBER` → `whatsapp:+393520413199` su Vercel (§4.6);
-   a. messaggio di prova dal 8061 al telefono del PO: il PO conferma di leggere **"Fenice Academy"**
-      (la console e l'API non valgono: ci siamo già cascati il 19/09);
-   b. il PO risponde e verifica che Mario risponda dal 8061;
-   c. aggiunta del 8061 a `BOT_NUMERI_SECONDARI` e tetto 150.
+1. **Deploy del codice con le env nuove assenti** (`BOT_NUMERI_SECONDARI` e
+   `tetti_numeri` non scritti). Con `TWILIO_WHATSAPP_NUMBER_FENICE_2` impostata il
+   `0047` resta l'unico secondario sceglibile, ma `tetti_numeri` assente vuol dire
+   tetto 0 (fail-closed): il `0047` va a riposo **subito, al deploy**. È voluto
+   (il `0047` è a riposo per decisione PO). Verifica:
+   - `0047`: zero chat nuove; le risposte sulle chat esistenti del `0047` sono
+     ancora gestite (Mario risponde da lì);
+   - aperture nuove tutte dal `3199`; zero `mittente_ripiego`;
+   - `app_settings.lancio_quota_secondario`: se è > 0, ogni benvenuto in quota
+     scrive un `lancio_mittente_ripiego` (`warn`) perché non trova un secondario
+     disponibile. Va letto prima del deploy e deciso col PO (0, o righe accettate).
+2. **Riposo del `0047`**: `tetti_numeri = {"whatsapp:+393522070047": 0}` + env
+   `BOT_NUMERI_SECONDARI` col solo `0047` (mette per iscritto lo stato del passo
+   1). Lato CRM `BOT2_DAILY_CAP=0`, `BOT_WARMUP` spento.
+3. **`8061`**:
+   0. `TWILIO_WHATSAPP_NUMBER` → `whatsapp:+393520413199` su Vercel (§4.6 della
+      spec: Serenamente è sospeso e si tratta come se non esistesse);
+   a. **prima di metterlo in lista**: contare le chat con
+      `wa_number = 'whatsapp:+393520158061'` che hanno risposte recenti del lead.
+      Dal passo b il `8061` è un numero del bot: se `INBOUND_ADOPTION_ENABLED=1`
+      Mario prenderebbe in carico quelle chat alla prossima risposta. Se ce ne
+      sono, si decide col PO prima di proseguire;
+   b. aggiunta dell'`8061` a `BOT_NUMERI_SECONDARI` **con tetto 0**
+      (`"whatsapp:+393520158061": 0` in `tetti_numeri`): è riconosciuto dal
+      webhook e Mario risponde da lì, ma non viene mai scelto per una chat nuova;
+   c. messaggio di prova dal `8061` al telefono del PO: il PO conferma di
+      leggere **"Fenice Academy"** (la console e l'API non valgono: ci siamo già
+      cascati il 19/09);
+   d. il PO risponde e verifica che Mario risponda dal `8061`;
+   e. solo dopo il test: tetto 150 in `tetti_numeri`.
 4. **Elixir** (quando Meta ha approvato):
-   a. controllo categoria template per template: quelli mandati UTILITY devono essere UTILITY.
-      Se uno è stato riclassificato MARKETING, si decide col PO prima di proseguire;
-   b. webhook del sender `+393522018718` puntato a `https://web-app-messaggistica.vercel.app/api/webhooks/twilio`
+   a. verifica su elixir, template per template, di **presenza e categoria di
+      tutti i template che una chat può ricevere** — non solo l'apertura:
+      aperture (`OPENING_SID_*`), sequenza (`MARTA_SEQ_*`), NR, agenda,
+      promemoria, video, riaggancio, lancio. Quelli mandati UTILITY devono
+      essere UTILITY; se uno manca o è stato riclassificato MARKETING si decide
+      col PO prima di proseguire. La fa il controller con uno script sulla
+      Content API dell'account elixir. Limite noto: la rotta
+      `/api/admin/secondo-numero` non serve qui, guarda solo lo slot 2 (`0047`)
+      e in questo giro non è stata generalizzata agli altri slot;
+   b. webhook del sender `+393522018718` puntato a
+      `https://web-app-messaggistica.vercel.app/api/webhooks/twilio`
       (callback e status callback);
-   c. env `TWILIO_ACCOUNT_SID_3`, `TWILIO_AUTH_TOKEN_3`, `TWILIO_WHATSAPP_NUMBERS_3` su Vercel;
-   d. test sul telefono del PO: apertura, risposta, risposta di Mario, agenda — tutto da elixir;
-   e. credito e ricarica automatica di elixir attivi (li imposta il PO);
-   f. aggiunta a `BOT_NUMERI_SECONDARI` e tetto 150.
-5. **Lunedì 28/09**: lettura qualità dei 4 numeri, chat nate per numero, `mittente_ripiego`; decisione
-   PO su tetti e sul 0047.
+   c. env `TWILIO_ACCOUNT_SID_3`, `TWILIO_AUTH_TOKEN_3`,
+      `TWILIO_WHATSAPP_NUMBERS_3` su Vercel (da qui elixir è già riconosciuto
+      come numero del bot, perché `numeriDelBot` legge anche
+      `TWILIO_WHATSAPP_NUMBERS_3`, ma non è sceglibile);
+   d. aggiunta a `BOT_NUMERI_SECONDARI` **con tetto 0**
+      (`"whatsapp:+393522018718": 0` in `tetti_numeri`): mai scelto per una
+      chat nuova finché il tetto resta 0;
+   e. test sul telefono del PO: apertura, risposta, risposta di Mario, agenda
+      — tutto da elixir;
+   f. credito e ricarica automatica di elixir attivi (li imposta il PO);
+   g. solo dopo il test: tetto 150 in `tetti_numeri`.
+5. **Lunedì 28/09**: lettura qualità dei 4 numeri, chat nate per numero,
+   `mittente_ripiego`; decisione PO su tetti e sul `0047`.
+
+**Regola**: mai togliere da `BOT_NUMERI_SECONDARI` un numero che ha chat vive.
+Per fermarlo si mette il suo tetto a 0: resta riconosciuto e le sue chat
+continuano. Vale anche se dal 26/09 il riconoscimento non dipende più solo da
+quella env (`numeriDelBot` unisce anche `TWILIO_WHATSAPP_NUMBER_FENICE_2` e
+`TWILIO_WHATSAPP_NUMBERS_2`/`_3`): l'`8061`, che sta sul principale, è
+riconosciuto solo finché è in lista.
 
 ## 6. Test
 
