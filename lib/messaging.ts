@@ -15,8 +15,9 @@ export type LeadInfo = {
 export type NascitaConversazione = {
   /**
    * Il numero da scrivere in `wa_number` se la conversazione nasce adesso.
-   * - assente (`undefined`): si sorteggia fra i numeri del bot (`mittentePerNuovaConversazione`),
-   *   che e' il caso di ogni arruolamento in Mario;
+   * - assente (`undefined`): nasce sul primario (`mittentePerNuovaConversazione`). Chi
+   *   vuole un secondario lo sceglie prima con `scegliMittenteNuovo`
+   *   (lib/scelta-mittente.ts) e lo passa qui come stringa;
    * - una stringa: quel numero, perche' chi chiama sa gia' da dove mandera';
    * - `null`: nessun numero, perche' la conversazione non nasce dal bot Fenice.
    * Su una conversazione gia' esistente non ha nessun effetto: il numero e' il suo.
@@ -61,7 +62,7 @@ export async function findOrCreateLeadConversation(
     return { leadId: leadRow.id, conversationId: convExisting.id, waNumber: convExisting.wa_number ?? null };
   }
 
-  // Il sorteggio si fa SOLO qui, sulla riga che sta nascendo: rifarlo su una chat
+  // Il numero si decide SOLO qui, sulla riga che sta nascendo: rifarlo su una chat
   // esistente vorrebbe dire cambiarle numero.
   const waNumber = nascita.mittente === undefined ? (mittentePerNuovaConversazione() ?? null) : nascita.mittente;
   const { data: convNew, error: convErr } = await supabase

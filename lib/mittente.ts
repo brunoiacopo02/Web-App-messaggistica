@@ -42,27 +42,48 @@ export function numeroSecondo(): string | undefined {
   return n || undefined;
 }
 
+/** La forma di env e di `wa_number`: `whatsapp:+39…`, qualunque sia quella scritta. */
+function inFormaWhatsapp(n: string): string {
+  return `whatsapp:${soloNumero(n)}`;
+}
+
 /**
- * I numeri secondari del bot, da `BOT_NUMERI_SECONDARI` (separati da virgola).
- * Assente = il solo `TWILIO_WHATSAPP_NUMBER_FENICE_2`, com'era fino al 26/09/2026:
- * cosi' il deploy di questo codice non cambia niente finche' non si scrive l'env.
- * Essere nell'elenco vuol dire due cose: il webhook sveglia Mario sulle risposte
- * a quel numero, e il numero PUO' essere scelto per una chat nuova — se ha un
- * tetto in `app_settings.tetti_numeri` (lib/tetti-numeri.ts).
+ * Normalizza e deduplica un elenco di numeri (confronto senza prefisso),
+ * togliendo quelli in `escludi` (per chiave `soloNumero`).
+ */
+function pulisci(lista: (string | undefined)[], escludi: Set<string> = new Set()): string[] {
+  const visti = new Set(escludi);
+  const fuori: string[] = [];
+  for (const grezzo of lista) {
+    const k = soloNumero(grezzo);
+    if (!k || visti.has(k)) continue;
+    visti.add(k);
+    fuori.push(inFormaWhatsapp(k));
+  }
+  return fuori;
+}
+
+/** Un elenco separato da virgola in una env; assente = vuoto. */
+function elencoEnv(chiave: string): string[] {
+  return (process.env[chiave] ?? '').split(',').map((n) => n.trim()).filter(Boolean);
+}
+
+/**
+ * I numeri secondari SCEGLIBILI per una chat nuova, da `BOT_NUMERI_SECONDARI`
+ * (separati da virgola). Assente = il solo `TWILIO_WHATSAPP_NUMBER_FENICE_2`,
+ * com'era fino al 26/09/2026: cosi' il deploy di questo codice non cambia niente
+ * finche' non si scrive l'env. Vuota (`""`) = nessun secondario sceglibile.
+ *
+ * Essere qui vuol dire che il numero PUO' essere scelto per una chat nuova — se ha
+ * un tetto in `app_settings.tetti_numeri` (lib/tetti-numeri.ts). Essere
+ * RICONOSCIUTO dal bot (webhook, chat esistenti) e' un'altra cosa, piu' larga:
+ * vedi `numeriDelBot`. Ogni voce esce in forma `whatsapp:+…`, anche se in env e'
+ * scritta `+39…`: e' la forma che finisce in `wa_number` e nei filtri.
  */
 export function numeriSecondari(): string[] {
   const grezzo = process.env.BOT_NUMERI_SECONDARI;
-  const lista = grezzo === undefined
-    ? [numeroSecondo()].filter((n): n is string => Boolean(n))
-    : grezzo.split(',').map((n) => n.trim()).filter(Boolean);
-  const primario = soloNumero(numeroPrimario());
-  const visti = new Set<string>();
-  return lista.filter((n) => {
-    const k = soloNumero(n);
-    if (!k || k === primario || visti.has(k)) return false;
-    visti.add(k);
-    return true;
-  });
+  const lista = grezzo === undefined ? [numeroSecondo()] : grezzo.split(',').map((n) => n.trim());
+  return pulisci(lista, new Set([soloNumero(numeroPrimario())].filter(Boolean)));
 }
 
 /**
@@ -96,20 +117,35 @@ export function mittenteDiConversazione(conv: { wa_number?: string | null } | nu
 }
 
 /**
- * I numeri del bot cosi' come stanno in env (`whatsapp:+39…`), primario per primo.
+ * TUTTI i numeri che il bot RICONOSCE come suoi, in forma `whatsapp:+39…`,
+ * primario per primo: il primario, i sceglibili (`numeriSecondari`), il
+ * `TWILIO_WHATSAPP_NUMBER_FENICE_2` e i numeri dichiarati sugli altri account
+ * (`TWILIO_WHATSAPP_NUMBERS_2` / `_3`, lib/twilio-account.ts), deduplicati.
  *
- * Grezzi apposta: e' la forma che Twilio mette nel `To` e che il webhook copia in
- * `conversations.wa_number`, quindi e' quella che serve ai filtri `.in('wa_number', …)`
- * delle rotte che cercano "le chat sui nostri numeri". Il confronto tollerante sta in
+ * Piu' largo dei sceglibili apposta: un numero puo' essere a riposo per le chat
+ * nuove (fuori da `BOT_NUMERI_SECONDARI`, o con tetto 0) e avere ancora chat vive.
+ * Se non fosse riconosciuto, il webhook non sveglierebbe Mario sulle risposte a
+ * quel numero e `mittenteDiConversazione` riporterebbe la chat sul primario,
+ * spezzandola. Dimenticare il 0047 in `BOT_NUMERI_SECONDARI` non deve costare le
+ * sue chat.
+ *
+ * La forma `whatsapp:+…` e' quella che Twilio mette nel `To` e che il webhook
+ * copia in `conversations.wa_number`: serve ai filtri `.in('wa_number', …)` delle
+ * rotte che cercano "le chat sui nostri numeri". Il confronto tollerante sta in
  * `eNumeroDelBot`.
  */
 export function numeriDelBot(): string[] {
-  const primario = numeroPrimario();
-  return [...(primario ? [primario] : []), ...numeriSecondari()];
+  return pulisci([
+    numeroPrimario(),
+    ...numeriSecondari(),
+    numeroSecondo(),
+    ...elencoEnv('TWILIO_WHATSAPP_NUMBERS_2'),
+    ...elencoEnv('TWILIO_WHATSAPP_NUMBERS_3'),
+  ]);
 }
 
 /**
- * Questo numero e' uno dei nostri (primario o uno dei secondari)?
+ * Questo numero e' uno dei nostri (uno qualunque di `numeriDelBot`)?
  *
  * Serve al webhook in ingresso per decidere se svegliare il bot: deve conoscere TUTTI
  * i numeri, altrimenti chi risponde a un secondario scrive nel vuoto. Accetta sia

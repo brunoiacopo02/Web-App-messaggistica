@@ -15,6 +15,8 @@ const CHIAVI = [
   'TWILIO_WHATSAPP_NUMBER_FENICE_2',
   'FENICE_NUMERO2_QUOTA',
   'BOT_NUMERI_SECONDARI',
+  'TWILIO_WHATSAPP_NUMBERS_2',
+  'TWILIO_WHATSAPP_NUMBERS_3',
 ] as const;
 
 let salvate: Record<string, string | undefined>;
@@ -25,6 +27,8 @@ beforeEach(() => {
   process.env.TWILIO_WHATSAPP_NUMBER_FENICE_2 = SECONDO;
   delete process.env.FENICE_NUMERO2_QUOTA;
   delete process.env.BOT_NUMERI_SECONDARI;
+  delete process.env.TWILIO_WHATSAPP_NUMBERS_2;
+  delete process.env.TWILIO_WHATSAPP_NUMBERS_3;
 });
 
 afterEach(() => {
@@ -82,7 +86,9 @@ describe('numeri secondari', () => {
 
   it('il primario non compare due volte anche se messo per errore fra i secondari', () => {
     process.env.BOT_NUMERI_SECONDARI = 'whatsapp:+393520413199,whatsapp:+393522018718';
-    expect(numeriDelBot()).toEqual(['whatsapp:+393520413199', 'whatsapp:+393522018718']);
+    // Il 0047 in coda: fuori dai sceglibili ma riconosciuto, perche' sta in FENICE_2.
+    expect(numeriDelBot()).toEqual(['whatsapp:+393520413199', 'whatsapp:+393522018718', 'whatsapp:+393522070047']);
+    expect(numeriSecondari()).toEqual(['whatsapp:+393522018718']);
   });
 
   it('eNumeroDelBot riconosce tutti i secondari, con e senza prefisso', () => {
@@ -171,5 +177,53 @@ describe('numeriDelBot', () => {
   it('salta quelli assenti', () => {
     delete process.env.TWILIO_WHATSAPP_NUMBER_FENICE_2;
     expect(numeriDelBot()).toEqual([PRIMARIO]);
+  });
+});
+
+// Riconosciuto (il webhook sveglia Mario, la chat continua dal suo numero) e
+// sceglibile (puo' far nascere chat nuove) sono due cose diverse: dimenticare un
+// numero in BOT_NUMERI_SECONDARI non deve rompere le chat vive che ha gia'.
+describe('riconosciuti vs sceglibili', () => {
+  const ELIXIR = 'whatsapp:+393522018718';
+  const N8061 = 'whatsapp:+393520158061';
+
+  it('0047 non in BOT_NUMERI_SECONDARI ma in FENICE_2: riconosciuto, la sua chat continua da li', () => {
+    process.env.BOT_NUMERI_SECONDARI = ELIXIR;
+    expect(numeriSecondari()).toEqual([ELIXIR]);
+    expect(eNumeroDelBot(SECONDO)).toBe(true);
+    expect(mittenteDiConversazione({ wa_number: SECONDO })).toBe(SECONDO);
+  });
+
+  it('un numero dichiarato solo in TWILIO_WHATSAPP_NUMBERS_3 e riconosciuto (anche senza prefisso)', () => {
+    process.env.BOT_NUMERI_SECONDARI = '';
+    process.env.TWILIO_WHATSAPP_NUMBERS_3 = '+393522018718';
+    expect(eNumeroDelBot(ELIXIR)).toBe(true);
+    expect(numeriDelBot()).toContain(ELIXIR);
+    expect(numeriSecondari()).toEqual([]);
+  });
+
+  it('BOT_NUMERI_SECONDARI vuota: nessun sceglibile, ma il 0047 di FENICE_2 resta riconosciuto', () => {
+    process.env.BOT_NUMERI_SECONDARI = '';
+    expect(numeriSecondari()).toEqual([]);
+    expect(eNumeroDelBot(SECONDO)).toBe(true);
+    expect(mittenteDiConversazione({ wa_number: SECONDO })).toBe(SECONDO);
+  });
+
+  it('numeriDelBot: unione deduplicata, primario per primo, tutti in forma whatsapp:+', () => {
+    process.env.BOT_NUMERI_SECONDARI = `${ELIXIR},+393520158061`;
+    process.env.TWILIO_WHATSAPP_NUMBERS_2 = '+393522070047';
+    process.env.TWILIO_WHATSAPP_NUMBERS_3 = `+393522018718, ${PRIMARIO}`;
+    expect(numeriDelBot()).toEqual([PRIMARIO, ELIXIR, N8061, SECONDO]);
+  });
+
+  it('una voce senza prefisso in BOT_NUMERI_SECONDARI diventa whatsapp:+…', () => {
+    process.env.BOT_NUMERI_SECONDARI = '+393522018718, whatsapp:+393520158061';
+    expect(numeriSecondari()).toEqual([ELIXIR, N8061]);
+  });
+
+  it('anche il ripiego FENICE_2 senza prefisso viene normalizzato', () => {
+    process.env.TWILIO_WHATSAPP_NUMBER_FENICE_2 = '+393522070047';
+    expect(numeriSecondari()).toEqual([SECONDO]);
+    expect(numeriDelBot()).toEqual([PRIMARIO, SECONDO]);
   });
 });

@@ -88,9 +88,6 @@ export function eSuAltroAccount(from?: string | null): boolean {
   return slotDi(from) !== null;
 }
 
-/** Nome storico, usato ancora dai chiamanti del secondo numero. */
-export const eDelSecondoAccount = eSuAltroAccount;
-
 /** Le credenziali degli account secondari configurati, in ordine di slot. */
 export function credenzialiSecondarie(): CredenzialiTwilio[] {
   return SLOT.map((n) => slot(n).cred).filter((c): c is CredenzialiTwilio => c !== null);

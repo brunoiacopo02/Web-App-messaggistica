@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { inizioGiornataRoma, chatNateOggi } from './bot2-tetto';
 
 const NUM = 'whatsapp:+393522070047';
@@ -18,8 +18,6 @@ function finto(risposta: { count?: number | null; error?: unknown; lancia?: bool
     }),
   } as never;
 }
-
-afterEach(() => { delete process.env.BOT2_DAILY_CAP; });
 
 describe('inizioGiornataRoma', () => {
   it('il giorno si conta su Roma, non su UTC', () => {

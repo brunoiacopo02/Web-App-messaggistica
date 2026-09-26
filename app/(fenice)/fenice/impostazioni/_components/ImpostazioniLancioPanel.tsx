@@ -62,7 +62,7 @@ const CAMPI_TESTO: Array<{ key: LancioSettingKey; label: string; hint: string; p
   {
     key: 'lancio_quota_secondario',
     label: 'Benvenuti verso i numeri secondari (%)',
-    hint: 'Quota di riscaldamento verso i numeri secondari, solo sui benvenuti del lancio: 9 vuol dire uno da un secondario ogni dieci dal principale (la scelta fra i secondari e i loro tetti e’ di scegliMittenteNuovo). 0 (o vuoto) = tutti dal numero storico. Lo stesso lead finisce sempre sullo stesso numero, e se il template non e’ spedibile da nessun secondario parte comunque dal principale.',
+    hint: 'Quota di riscaldamento verso i numeri secondari, solo sui benvenuti del lancio: 9 vuol dire uno da un secondario ogni dieci dal principale. La quota rispetta i tetti giornalieri dei numeri: un secondario pieno o a riposo (tetto 0) non viene usato, e quel benvenuto parte dal principale. 0 (o vuoto) = tutti dal numero storico. Lo stesso lead finisce sempre sullo stesso numero, e se il template non e’ spedibile da nessun secondario parte comunque dal principale.',
     placeholder: '0',
   },
   {
@@ -83,8 +83,8 @@ const CAMPI_SCELTA: Array<{ key: LancioSettingKey; label: string; hint: string; 
   {
     key: 'lancio_sender',
     label: 'Mittente del lancio',
-    hint: 'Vale sui benvenuti: “secondario” li manda tutti dal numero nuovo e batte la quota qui sotto. Blast Zoom e follow-up non sanno ancora partire dal secondario: lasciano un avviso nei log e partono dal principale.',
-    opzioni: [{ value: 'principale', label: 'Numero principale' }, { value: 'secondario', label: 'Numero secondario' }],
+    hint: 'Vale sui benvenuti: “secondario” li manda tutti dai numeri secondari e batte la quota qui sotto. Scavalca i tetti giornalieri, ma non i numeri a riposo (tetto 0): se nessun secondario e’ disponibile partono dal principale. Blast Zoom e follow-up non sanno ancora partire dal secondario: lasciano un avviso nei log e partono dal principale.',
+    opzioni: [{ value: 'principale', label: 'Numero principale' }, { value: 'secondario', label: 'Numeri secondari' }],
   },
 ];
 

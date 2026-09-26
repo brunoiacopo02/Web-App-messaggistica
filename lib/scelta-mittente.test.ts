@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('./spedibilita', () => ({ spedibileDa: vi.fn(async (sid: string) => ({ ok: true, sidTradotto: sid })) }));
-vi.mock('./bot2-tetto', () => ({ chatNateOggi: vi.fn(async () => 0) }));
+vi.mock('./bot2-tetto', async (orig) => ({ ...(await orig<typeof import('./bot2-tetto')>()), chatNateOggi: vi.fn(async () => 0) }));
 vi.mock('./tetti-numeri', async (orig) => ({ ...(await orig<typeof import('./tetti-numeri')>()), getTettiNumeri: vi.fn() }));
 
 import { scegliMittenteNuovo, sidAperturaMario } from './scelta-mittente';
@@ -15,9 +15,36 @@ const ELIXIR = 'whatsapp:+393522018718';
 const N8061 = 'whatsapp:+393520158061';
 const N0047 = 'whatsapp:+393522070047';
 
-function supa() {
+/**
+ * Un finto Supabase: `insert` registra le righe di event_log; il conteggio
+ * `select(..., head).eq().eq().gte()` (la guardia "una riga mittente_tetto per
+ * numero al giorno") conta le righe gia' registrate con quei filtri, e ricorda i
+ * filtri usati. `conteggioRotto` fa fallire il conteggio.
+ */
+function supa(o: { conteggioRotto?: boolean } = {}) {
   const eventi: any[] = [];
-  return { eventi, s: { from: () => ({ insert: (r: any) => { eventi.push(r); return Promise.resolve({ error: null }); } }) } as any };
+  const filtri: [string, unknown][][] = [];
+  const s = {
+    from: () => ({
+      insert: (r: any) => { eventi.push(r); return Promise.resolve({ error: null }); },
+      select: () => {
+        const f: [string, unknown][] = [];
+        filtri.push(f);
+        const catena: any = {
+          eq: (k: string, v: unknown) => { f.push([k, v]); return catena; },
+          gte: async (k: string, v: unknown) => {
+            f.push([k, v]);
+            if (o.conteggioRotto) return { count: null, error: { message: 'giu' } };
+            const tipo = f.find(([c]) => c === 'type')?.[1];
+            const numero = f.find(([c]) => c === 'payload->>numero')?.[1];
+            return { count: eventi.filter((e) => e.type === tipo && e.payload?.numero === numero).length, error: null };
+          },
+        };
+        return catena;
+      },
+    }),
+  } as any;
+  return { eventi, filtri, s };
 }
 const tetti = (o: Record<string, number>) => vi.mocked(getTettiNumeri).mockResolvedValue(parseTettiNumeri(o));
 const scegli = (s: any, extra: Partial<Parameters<typeof scegliMittenteNuovo>[1]> = {}) =>
@@ -26,6 +53,10 @@ const scegli = (s: any, extra: Partial<Parameters<typeof scegliMittenteNuovo>[1]
 beforeEach(() => {
   vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', P);
   vi.stubEnv('BOT_NUMERI_SECONDARI', `${N0047},${ELIXIR},${N8061}`);
+  vi.stubEnv('TWILIO_ACCOUNT_SID', 'AC_primo');
+  vi.stubEnv('TWILIO_AUTH_TOKEN', 'tok_primo');
+  vi.stubEnv('TWILIO_WHATSAPP_NUMBERS_2', '');
+  vi.stubEnv('TWILIO_WHATSAPP_NUMBERS_3', '');
   vi.mocked(spedibileDa).mockReset().mockImplementation(async (sid: string) => ({ ok: true, sidTradotto: sid }));
   vi.mocked(chatNateOggi).mockReset().mockResolvedValue(0);
   // Anche questo va azzerato a ogni test: senza reset le chiamate si sommano fra i
@@ -33,7 +64,7 @@ beforeEach(() => {
   // secondario configurato" — che verifica una NON chiamata — vede quelle di prima.
   vi.mocked(getTettiNumeri).mockReset();
 });
-afterEach(() => { vi.unstubAllEnvs(); });
+afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 describe('scegliMittenteNuovo', () => {
   it('prende il secondario con meno chat oggi', async () => {
@@ -105,15 +136,90 @@ describe('scegliMittenteNuovo', () => {
     expect(getTettiNumeri).not.toHaveBeenCalled();
   });
 
-  it('ignoraTetti: sceglie anche un numero pieno o a tetto zero, ma non uno con template mancante', async () => {
-    tetti({ [ELIXIR]: 0 });
+  // ignoraTetti (lancio_sender='secondario') scavalca i tetti giornalieri, NON il
+  // riposo: un numero a tetto 0 o assente dalla mappa resta fuori.
+  it('ignoraTetti: un numero a tetto zero o assente resta escluso', async () => {
+    tetti({ [ELIXIR]: 0, [N8061]: 150 });
+    const r = await scegli(supa().s, { ignoraTetti: true });
+    expect(r.from).toBe(N8061);
+    expect(r.scartati).toEqual(expect.arrayContaining([
+      { numero: ELIXIR, motivo: 'tetto_zero' },
+      { numero: N0047, motivo: 'tetto_zero' },
+    ]));
+  });
+
+  it('ignoraTetti: un numero pieno viene scelto lo stesso, senza contare', async () => {
+    tetti({ [ELIXIR]: 150 });
+    vi.mocked(chatNateOggi).mockResolvedValue(150);
+    const r = await scegli(supa().s, { ignoraTetti: true });
+    expect(r).toMatchObject({ from: ELIXIR, secondario: true, motivo: 'scelto' });
+    expect(chatNateOggi).not.toHaveBeenCalled();
+  });
+
+  it('ignoraTetti: non sceglie un numero con template mancante', async () => {
+    tetti({ [N0047]: 150, [ELIXIR]: 150, [N8061]: 150 });
     vi.mocked(spedibileDa).mockImplementation(async (sid, n) =>
       n === N0047 ? { ok: false, motivo: 'template_bloccato', sidTradotto: sid, errore: 'x' } : { ok: true, sidTradotto: sid });
-    // Con ignoraTetti nessun conteggio si fa: tutti restano a `oggi: 0` e vince il
-    // primo spedibile nell'ordine di BOT_NUMERI_SECONDARI (N0047 escluso dal
-    // template, ELIXIR prima di N8061).
-    const r = await scegli(supa().s, { ignoraTetti: true });
-    expect(r.from).toBe(ELIXIR);
+    // Nessun conteggio: tutti a `oggi: 0`, vince il primo spedibile nell'ordine della lista.
+    expect((await scegli(supa().s, { ignoraTetti: true })).from).toBe(ELIXIR);
+  });
+
+  it('ignoraTetti con tetti illeggibili: 3199 e un warn, come nel caso normale', async () => {
+    vi.mocked(getTettiNumeri).mockResolvedValue(null);
+    const { s, eventi } = supa();
+    const r = await scegli(s, { ignoraTetti: true });
+    expect(r).toMatchObject({ from: P, secondario: false, motivo: 'tetti_illeggibili' });
+    expect(eventi).toMatchObject([{ type: 'mittente_ripiego', level: 'warn', payload: { motivo: 'tetti_illeggibili' } }]);
+  });
+
+  // Spec §4.3: una sola riga mittente_tetto per numero per giorno di Roma.
+  it('mittente_tetto: la prima volta si scrive, la seconda nello stesso giorno no', async () => {
+    tetti({ [ELIXIR]: 150 });
+    vi.mocked(chatNateOggi).mockResolvedValue(150);
+    const { s, eventi, filtri } = supa();
+    await scegli(s);
+    await scegli(s);
+    expect(eventi.filter((e) => e.type === 'mittente_tetto')).toHaveLength(1);
+    expect(filtri[0]).toEqual([
+      ['type', 'mittente_tetto'],
+      ['payload->>numero', ELIXIR],
+      ['created_at', expect.stringMatching(/T00:00:00[+-]\d{2}:\d{2}$/)],
+    ]);
+  });
+
+  it('mittente_tetto: se il conteggio fallisce non si scrive (e solo un log)', async () => {
+    tetti({ [ELIXIR]: 150 });
+    vi.mocked(chatNateOggi).mockResolvedValue(150);
+    const { s, eventi } = supa({ conteggioRotto: true });
+    const r = await scegli(s);
+    expect(r.from).toBe(P);
+    expect(eventi.filter((e) => e.type === 'mittente_tetto')).toHaveLength(0);
+  });
+
+  // Numero dichiarato sull'account elixir ma senza SID/TOKEN dello slot: le
+  // credenziali ripiegano sul principale, che non possiede il numero (401).
+  it('credenziali dello slot mancanti: scartato prima della verifica template', async () => {
+    tetti({ [ELIXIR]: 150, [N8061]: 150 });
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBERS_3', ELIXIR);
+    vi.stubEnv('TWILIO_ACCOUNT_SID_3', '');
+    vi.stubEnv('TWILIO_AUTH_TOKEN_3', '');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { s, eventi } = supa();
+    const r = await scegli(s);
+    expect(r.from).toBe(N8061);
+    expect(r.scartati).toContainEqual({ numero: ELIXIR, motivo: 'credenziali_mancanti' });
+    expect(vi.mocked(spedibileDa).mock.calls.map((c) => c[1])).not.toContain(ELIXIR);
+    expect(eventi.find((e) => e.type === 'mittente_ripiego')).toMatchObject({
+      level: 'warn', payload: { numero: ELIXIR, motivo: 'credenziali_mancanti' },
+    });
+  });
+
+  it('credenziali dello slot presenti: il numero resta candidato', async () => {
+    tetti({ [ELIXIR]: 150 });
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBERS_3', ELIXIR);
+    vi.stubEnv('TWILIO_ACCOUNT_SID_3', 'AC_terzo');
+    vi.stubEnv('TWILIO_AUTH_TOKEN_3', 'tok_terzo');
+    expect((await scegli(supa().s)).from).toBe(ELIXIR);
   });
 
   it('senza template da verificare: 3199 (non si apre un numero alla cieca)', async () => {

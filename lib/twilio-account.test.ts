@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { credenzialiPerMittente, eDelSecondoAccount, eSuAltroAccount, credenzialiSecondarie } from './twilio-account';
+import { credenzialiPerMittente, eSuAltroAccount, credenzialiSecondarie } from './twilio-account';
 
 const CHIAVI = [
   'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN',
@@ -79,17 +79,17 @@ describe('credenzialiPerMittente', () => {
   });
 });
 
-describe('eDelSecondoAccount', () => {
+describe('eSuAltroAccount', () => {
   it('true solo per i numeri elencati', () => {
-    expect(eDelSecondoAccount('+393522070047')).toBe(true);
-    expect(eDelSecondoAccount('whatsapp:+393522070047')).toBe(true);
-    expect(eDelSecondoAccount('+393520413199')).toBe(false);
+    expect(eSuAltroAccount('+393522070047')).toBe(true);
+    expect(eSuAltroAccount('whatsapp:+393522070047')).toBe(true);
+    expect(eSuAltroAccount('+393520413199')).toBe(false);
   });
 
   it('false senza numero', () => {
-    expect(eDelSecondoAccount()).toBe(false);
-    expect(eDelSecondoAccount('')).toBe(false);
-    expect(eDelSecondoAccount(null)).toBe(false);
+    expect(eSuAltroAccount()).toBe(false);
+    expect(eSuAltroAccount('')).toBe(false);
+    expect(eSuAltroAccount(null)).toBe(false);
   });
 });
 
@@ -114,10 +114,9 @@ describe('terzo account', () => {
     expect(eSuAltroAccount('whatsapp:+393520158061')).toBe(false);
   });
 
-  it('eSuAltroAccount vale per secondo e terzo; eDelSecondoAccount e un alias', () => {
+  it('eSuAltroAccount vale per secondo e terzo', () => {
     expect(eSuAltroAccount('+393522018718')).toBe(true);
     expect(eSuAltroAccount('+393522070047')).toBe(true);
-    expect(eDelSecondoAccount('+393522018718')).toBe(true);
   });
 
   it('terzo account senza credenziali: ripiega sul primo', () => {
