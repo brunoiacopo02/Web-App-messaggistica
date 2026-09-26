@@ -1,4 +1,5 @@
 import { mondoDi } from '@/lib/chat-perimetro';
+import { LANCIO_FASI_TERMINALI, isLancioFase, type LancioFase } from '@/lib/lancio-fase';
 
 export const VISTE = ['serve_te', 'non_lette', 'lancio', 'fissati_bot', 'gdo', 'mario', 'chiuse', 'campagne', 'errori'] as const;
 export type Vista = (typeof VISTE)[number];
@@ -15,7 +16,7 @@ export const VISTA_META: Record<Vista, { etichetta: string; urgente: boolean; gr
   chiuse: { etichetta: 'Chiuse e restituite', urgente: false, gruppo: 'mondi' },
 };
 
-export const ETICHETTA_FASE: Record<string, string> = {
+export const ETICHETTA_FASE: Record<LancioFase, string> = {
   attesa: 'In attesa', posto_bloccato: 'Posto bloccato', link_inviato: 'Link inviato',
   post_pitch: 'Dopo il pitch', scelta_fatta: 'Scelta fatta', followup_inviato: 'Follow-up inviato',
   restituito: 'Restituito', chiuso: 'Chiuso',
@@ -31,7 +32,6 @@ export type CtxVista = { now: Date; conErrori: ReadonlySet<number> };
 
 const SETTE_GIORNI = 7 * 24 * 3600_000;
 const ESITI_CHIUSI = ['DA_SCARTARE', 'NON_RISPOSTO', 'INTERROTTO', 'RICHIAMO'];
-const FASI_TERMINALI = ['chiuso', 'restituito'];
 
 export function isVista(x: unknown): x is Vista {
   return typeof x === 'string' && (VISTE as readonly string[]).includes(x);
@@ -48,13 +48,16 @@ export function inVista(r: RigaVista, v: Vista, ctx: CtxVista): boolean {
     case 'lancio': return r.lancio_slug != null;
     case 'fissati_bot': return r.bot_outcome === 'APPUNTAMENTO';
     case 'gdo': return mondoDi(r) === 'GDO';
-    case 'campagne': return mondoDi(r) === 'CAMPAGNA';
+    case 'campagne':
+      // ai_owner è sempre 'mario' o null (vedi lib/chat-perimetro.ts)
+      return mondoDi(r) === 'CAMPAGNA';
     case 'mario':
+      // ai_owner è sempre 'mario' o null (vedi lib/chat-perimetro.ts)
       return r.ai_owner === 'mario' && r.gdo_agenda_at == null && r.bot_outcome == null
         && (r.ai_status == null || r.ai_status === 'active' || r.ai_status === 'replying')
-        && (r.lancio_fase == null || !FASI_TERMINALI.includes(r.lancio_fase));
+        && (r.lancio_fase == null || !(LANCIO_FASI_TERMINALI as readonly string[]).includes(r.lancio_fase));
     case 'chiuse':
-      return r.ai_status === 'closed' || (r.lancio_fase != null && FASI_TERMINALI.includes(r.lancio_fase))
+      return r.ai_status === 'closed' || (r.lancio_fase != null && (LANCIO_FASI_TERMINALI as readonly string[]).includes(r.lancio_fase))
         || (r.bot_outcome != null && ESITI_CHIUSI.includes(r.bot_outcome));
     case 'errori': return ctx.conErrori.has(r.id);
   }
@@ -76,9 +79,9 @@ export function applicaVista<Q>(q: Q, v: Vista, ctx: { now: Date; conErrori: rea
     case 'mario':
       return x.eq('ai_owner', 'mario').is('gdo_agenda_at', null).is('bot_outcome', null)
         .or('ai_status.is.null,ai_status.in.(active,replying)')
-        .or('lancio_fase.is.null,lancio_fase.not.in.(chiuso,restituito)');
+        .or(`lancio_fase.is.null,lancio_fase.not.in.(${LANCIO_FASI_TERMINALI.join(',')})`);
     case 'chiuse':
-      return x.or(`ai_status.eq.closed,lancio_fase.in.(chiuso,restituito),bot_outcome.in.(${ESITI_CHIUSI.join(',')})`);
+      return x.or(`ai_status.eq.closed,lancio_fase.in.(${LANCIO_FASI_TERMINALI.join(',')}),bot_outcome.in.(${ESITI_CHIUSI.join(',')})`);
     case 'errori':
       return ctx.conErrori.length === 0 ? null : x.in('id', [...ctx.conErrori]);
   }
@@ -88,7 +91,7 @@ export function contestoRiga(r: RigaVista, ctx: CtxVista): { testo: string; tono
   if (inVista(r, 'serve_te', ctx)) return { testo: 'Serve te', tono: 'urgente' };
   if (ctx.conErrori.has(r.id)) return { testo: 'Invio non riuscito', tono: 'errore' };
   if (r.bot_outcome === 'APPUNTAMENTO') return { testo: 'Fissato dal bot', tono: 'neutro' };
-  if (r.lancio_slug) return { testo: ETICHETTA_FASE[r.lancio_fase ?? ''] ?? 'Lancio', tono: 'onda' };
+  if (r.lancio_slug) return { testo: (isLancioFase(r.lancio_fase) ? ETICHETTA_FASE[r.lancio_fase] : 'Lancio'), tono: 'onda' };
   const m = mondoDi(r);
   if (m === 'GDO') return { testo: 'Lead GDO', tono: 'neutro' };
   if (m === 'CAMPAGNA') return { testo: 'Campagna', tono: 'neutro' };
