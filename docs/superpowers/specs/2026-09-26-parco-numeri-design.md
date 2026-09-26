@@ -1,6 +1,6 @@
 # Parco numeri del bot: da "bot 1 / bot 2" a N numeri, scelti dal bot
 
-Data: 2026-09-26 · Stato: bozza da approvare (PO) · Repo: bot (`whatsapp-lead`), tocco minimo sul CRM
+Data: 2026-09-26 · Stato: approvata dal PO il 26/09 (strada 1, "fai la strada migliore") · Repo: bot (`whatsapp-lead`), tocco minimo sul CRM
 
 ## 1. Perché
 
@@ -113,21 +113,15 @@ di qualche unità. È accettato (il tetto protegge la qualità, non un contratto
   oggi: decisione umana dal pannello), la quota automatica li rispetta.
 - La decisione su quale numero usare il 5/10 resta del PO e non fa parte di questo lavoro.
 
-### 4.6 Il numero di default `TWILIO_WHATSAPP_NUMBER` (= 8061) — PUNTO APERTO
+### 4.6 Il numero di default `TWILIO_WHATSAPP_NUMBER` (oggi = 8061)
 
-Il 8061 è ancora il mittente di default di `sendTemplate` senza `from`, usato da:
-`/api/send-template` (anche dal CRM per i messaggi **Serenamente**, NR e autoconferma), le campagne di
-`send-batch` e le conversazioni nate dal webhook ActiveCampaign. Da settembre da lì non è partito
-niente di tutto questo (verificato su Twilio: solo i 5 promemoria sbagliati del 18/09).
+Il 8061 è ancora il mittente di default di `sendTemplate` senza `from` (`/api/send-template`, anche
+dal CRM per Serenamente; `send-batch`; conversazioni nate dal webhook ActiveCampaign). Da settembre da
+lì non è partito niente di tutto questo (verificato su Twilio: solo i 5 promemoria sbagliati del 18/09).
 
-Problema: il 8061 ora si presenta come "Fenice Academy". Se il flusso Serenamente si riaccende, un
-lead Serenamente riceve un messaggio da Fenice; e con il 8061 fra i numeri del bot, una risposta a
-quel messaggio arriva su un numero dove risponde Mario (solo se la chat è arruolata, quindi di fatto
-no, ma è un giunto da non lasciare aperto).
-
-**Da decidere col PO prima di accendere il 8061**: il WhatsApp Serenamente è ancora in uso? Se no,
-`TWILIO_WHATSAPP_NUMBER` va portato al 3199 e il 8061 resta solo al bot. Se sì, serve un numero
-Serenamente separato (il `+15559919332` è l'unico rimasto con quel nome, prefisso USA).
+**Decisione PO 26/09: Serenamente è un progetto sospeso, si tratta come se non esistesse.** Quindi
+`TWILIO_WHATSAPP_NUMBER` si porta al **3199** prima di accendere il 8061: da quel momento il 8061
+parla solo quando lo sceglie `scegliMittenteNuovo`, e nessun flusso di default può mandare da lì.
 
 ## 5. Accensione (ordine, un passo alla volta)
 
@@ -135,7 +129,8 @@ Serenamente separato (il `+15559919332` è l'unico rimasto con quel nome, prefis
    aperture dal 3199 e dal 0047 come prima, zero `mittente_ripiego`.
 2. **Riposo del 0047**: `tetti_numeri = {"whatsapp:+393522070047": 0}` + env `BOT_NUMERI_SECONDARI`
    col solo 0047. Lato CRM `BOT2_DAILY_CAP=0`, `BOT_WARMUP` spento.
-3. **8061** (dopo la decisione §4.6):
+3. **8061**:
+   0. `TWILIO_WHATSAPP_NUMBER` → `whatsapp:+393520413199` su Vercel (§4.6);
    a. messaggio di prova dal 8061 al telefono del PO: il PO conferma di leggere **"Fenice Academy"**
       (la console e l'API non valgono: ci siamo già cascati il 19/09);
    b. il PO risponde e verifica che Mario risponda dal 8061;
