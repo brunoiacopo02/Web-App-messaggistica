@@ -356,3 +356,37 @@
 @keyframes riga-arrivata{from{opacity:1}to{opacity:0}}
 [data-console] .btn.filtro{height:24px;padding:0 8px;font-size:12px;align-self:center}
 [data-console] .btn.filtro[aria-pressed="true"]{background:var(--ice-soft);border-color:var(--ice-line);color:var(--fg)}
+
+/* ---------- Thread, composer e scheda lead (Task 7) ---------- */
+[data-console] .th .who{min-width:0}
+[data-console] .th .who b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+[data-console] .th .who b.mono{font-size:15px}
+[data-console] .b{white-space:pre-wrap;overflow-wrap:anywhere}
+[data-console] .meta{display:flex;align-items:center;gap:6px}
+[data-console] .consegna{display:inline-flex;align-items:center;gap:4px}
+[data-console] .consegna.letto .ico{color:var(--ice)}
+[data-console] .consegna.ko{color:var(--red);border-radius:4px}
+[data-console] .consegna.ko .mono{color:var(--red)}
+[data-console] .sys .ico{flex:none}
+[data-console] .sys.warn .ico{color:var(--amber)}
+[data-console] .sys.error .ico{color:var(--red)}
+[data-console] .sys span:first-of-type{max-width:60ch}
+[data-console] .msgs-vuoto{margin:auto;color:var(--fg3);font-size:13px}
+[data-console] .cmp textarea{height:auto;min-height:40px;max-height:160px;field-sizing:content;line-height:20px}
+[data-console] .cmp textarea:focus-visible{outline:2px solid var(--ice);outline-offset:1px;border-color:transparent}
+[data-console] .cmp-top .win.chiusa{color:var(--amber)}
+[data-console] .cmp-top .own .ico{color:var(--ice)}
+[data-console] .ch .ch-sub{font-size:14px;line-height:20px}
+[data-console] .dl dd .muted{font-size:12px}
+[data-console] .riassunto{padding:10px 16px 0}
+[data-console] .riassunto h3,
+[data-console] .hist h3{margin:0 0 4px;font-size:12px;line-height:16px;font-weight:500;color:var(--fg3)}
+[data-console] .riassunto p{margin:0;font-size:13px;line-height:19px;color:var(--fg2)}
+[data-console] .lc-act{flex-wrap:wrap}
+[data-console] a.btn{text-decoration:none}
+[data-console] .inline-trigger{display:inline-flex;border-radius:6px}
+[data-console] .hist li .hist-t{min-width:0;overflow-wrap:anywhere}
+[data-console] .hist-vuoto{margin:0;font-size:12px;color:var(--fg3)}
+[data-console] .btn.hist-tutti{margin:4px 0 0 -10px;font-size:12px;height:24px}
+[data-console] .consegna .ico{width:12px;height:12px}
+[data-console] .sys .ico{width:14px;height:14px}

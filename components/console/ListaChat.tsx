@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { VList, type VListHandle } from 'virtua';
 import { Search } from 'lucide-react';
 import { ETICHETTA_FASE, VISTA_META } from '@/lib/console/viste';
@@ -14,6 +14,7 @@ import { useStatoConsole } from './statoUrl';
 import { rinfrescaConteggi, useConteggi } from './useConteggi';
 import { useArrivi } from './useArrivi';
 import { useTastiera } from './useTastiera';
+import { useOra } from './useOra';
 
 /** Altezza della riga (56) più 1 px di stacco, come il `gap` del mockup. */
 const ALTEZZA_VOCE = 57;
@@ -29,19 +30,6 @@ type Dati = { chiave: string; righe: RigaLista[]; prossimo: string | null; error
 const NESSUNA: RigaLista[] = [];
 
 const fmt = new Intl.NumberFormat('it-IT');
-
-/** Ora corrente che avanza ogni 30 s: basta per "21:14" / "Ieri" e non ridisegna la lista a vuoto. */
-let oraCorrente = new Date();
-function iscriviOra(f: () => void) {
-  const id = setInterval(() => {
-    oraCorrente = new Date();
-    f();
-  }, 30_000);
-  return () => clearInterval(id);
-}
-function useOra(): Date {
-  return useSyncExternalStore(iscriviOra, () => oraCorrente, () => oraCorrente);
-}
 
 function Ricerca({ iniziale, onCambia, inputRef }: { iniziale: string; onCambia: (q: string) => void; inputRef: React.RefObject<HTMLInputElement | null> }) {
   const [testo, setTesto] = useState(iniziale);
