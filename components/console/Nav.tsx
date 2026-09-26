@@ -2,16 +2,18 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import type { MouseEvent } from 'react';
+import { Fragment, type MouseEvent } from 'react';
 import {
   Archive, Bell, Bot, CalendarCheck, ChartLine, Clapperboard, FlaskConical, Headset, Inbox,
   Megaphone, RadioTower, ScrollText, Send, Settings, SquareTerminal, TriangleAlert, UserRound,
   type LucideIcon,
 } from 'lucide-react';
-import { VISTA_META, type Vista } from '@/lib/console/viste';
+import { ETICHETTA_FASE, VISTA_META, type Vista } from '@/lib/console/viste';
+import type { LancioFase } from '@/lib/lancio-fase';
 import { Kbd } from './ui/Kbd';
 import { useConteggi } from './useConteggi';
 import { useStatoConsole } from './statoUrl';
+import { useRegia } from './RegiaProvider';
 
 const ICONA_VISTA: Record<Vista, LucideIcon> = {
   serve_te: UserRound,
@@ -42,6 +44,9 @@ const SISTEMA: { etichetta: string; href: string; icona: LucideIcon; kbd?: strin
   { etichetta: 'Log', href: '/console/log', icona: ScrollText },
 ];
 
+/** Le sotto-fasi del lancio mostrate sotto "Lancio" (le terminali e il follow-up restano nella vista). */
+const SOTTO_FASI: LancioFase[] = ['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch', 'scelta_fatta'];
+
 const COLONNA = { display: 'flex', flexDirection: 'column', gap: 1 } as const;
 
 const fmt = new Intl.NumberFormat('it-IT');
@@ -56,11 +61,20 @@ export function Nav() {
   const suConsole = pathname === '/console';
   const [{ vista, fase }, setStato] = useStatoConsole();
   const { conteggi } = useConteggi();
+  const { regia } = useRegia();
+  const perFase = regia?.attivo ? regia.perFase : null;
+  const iscritti = regia?.numeri.iscritti ?? 0;
 
   function vai(e: MouseEvent, v: Vista) {
     if (!suConsole || conModificatori(e)) return;
     e.preventDefault();
     void setStato({ vista: v, fase: null, q: null, solo: null });
+  }
+
+  function vaiAFase(e: MouseEvent, f: LancioFase) {
+    if (!suConsole || conModificatori(e)) return;
+    e.preventDefault();
+    void setStato({ vista: 'lancio', fase: f, q: null, solo: null });
   }
 
   return (
@@ -74,19 +88,41 @@ export function Nav() {
             const urgente = VISTA_META[v].urgente && (n ?? 0) > 0;
             const corrente = suConsole && vista === v && !fase;
             return (
-              <Link
-                key={v}
-                href={`/console?vista=${v}`}
-                className={v === 'lancio' ? 'nv live' : 'nv'}
-                aria-current={corrente ? 'page' : undefined}
-                onClick={(e) => vai(e, v)}
-              >
-                <Icona size={16} strokeWidth={1.75} className="ico" aria-hidden="true" />
-                <span>{VISTA_META[v].etichetta}</span>
-                <span className={urgente ? 'c urg' : 'c'} aria-label={n === undefined ? undefined : `${n} chat`}>
-                  {n === undefined ? '' : fmt.format(n)}
-                </span>
-              </Link>
+              <Fragment key={v}>
+                <Link
+                  href={`/console?vista=${v}`}
+                  className={v === 'lancio' ? 'nv live' : 'nv'}
+                  aria-current={corrente ? 'page' : undefined}
+                  onClick={(e) => vai(e, v)}
+                >
+                  <Icona size={16} strokeWidth={1.75} className="ico" aria-hidden="true" />
+                  <span>{VISTA_META[v].etichetta}</span>
+                  <span className={urgente ? 'c urg' : 'c'} aria-label={n === undefined ? undefined : `${n} chat`}>
+                    {n === undefined ? '' : fmt.format(n)}
+                  </span>
+                </Link>
+                {v === 'lancio' && perFase ? (
+                  <div className="phases">
+                    {SOTTO_FASI.map((f) => {
+                      const nf = perFase[f] ?? 0;
+                      const larghezza = iscritti > 0 ? Math.round((nf / iscritti) * 100) : 0;
+                      return (
+                        <Link
+                          key={f}
+                          href={`/console?vista=lancio&fase=${f}`}
+                          className="ph"
+                          aria-current={suConsole && vista === 'lancio' && fase === f ? 'page' : undefined}
+                          onClick={(e) => vaiAFase(e, f)}
+                        >
+                          <span>{ETICHETTA_FASE[f]}</span>
+                          <span className="t" aria-hidden="true"><i style={{ width: `${larghezza}%` }} /></span>
+                          <span className="n" aria-label={`${nf} chat`}>{fmt.format(nf)}</span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </Fragment>
             );
           })}
         </div>

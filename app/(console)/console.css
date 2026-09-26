@@ -115,6 +115,23 @@
 [data-console] .axis{display:grid;grid-template-columns:repeat(14,1fr);gap:3px;font-family:var(--m);font-size:12px;line-height:14px;color:var(--fg3)}
 [data-console] .axis span:nth-child(even){visibility:hidden}
 [data-console] .axis span{font-size:11px}
+/* grafico SVG a 24 ore (Task 8): stesso aspetto delle barre del mockup */
+[data-console] .bars-svg{display:block;width:100%;height:26px}
+[data-console] .bars-svg .b{fill:var(--bar);transition:fill 120ms ease}
+[data-console] .bars-svg .b.now{fill:var(--bar-hi)}
+[data-console] .bars-svg g:hover .b{fill:var(--bar-hi)}
+[data-console] .bars-svg .ko{fill:var(--red)}
+[data-console] .axis24{display:grid;grid-template-columns:repeat(24,1fr);font-family:var(--m);font-size:11px;line-height:14px;color:var(--fg3);text-align:center;font-variant-numeric:tabular-nums}
+/* dopo la live: luce spenta, niente testina */
+[data-console] [data-state="post"] .tally{color:var(--fg3)}
+[data-console] [data-state="post"] .tally i{background:transparent;border:2px solid var(--fg3);border-radius:50%}
+[data-console] [data-state="post"] .rd-head{display:none}
+/* barra ridotta a lancio spento */
+[data-console] .regia-min{height:36px;display:flex;align-items:center;background:var(--s0);border-bottom:1px solid var(--line);color:var(--fg3)}
+[data-console] .regia-min .brand{width:212px}
+[data-console] .regia-min .msg{padding:0 20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+[data-console] .regia-min a,[data-console] .kpi .s a{color:var(--fg2);text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px}
+[data-console] .regia-min a:hover{color:var(--fg)}
 
 /* ---------- Nav ---------- */
 [data-console] .nav{background:var(--s2);border-right:1px solid var(--line);padding:10px 8px;display:flex;flex-direction:column;gap:1px;overflow:auto}
@@ -132,6 +149,9 @@
 [data-console] .ph .t{height:4px;background:var(--line2);border-radius:2px;overflow:hidden}
 [data-console] .ph .t i{display:block;height:100%;background:var(--fg3);border-radius:2px}
 [data-console] .ph .n{text-align:right;font-variant-numeric:tabular-nums}
+[data-console] a.ph{text-decoration:none}
+[data-console] .ph[aria-current="page"]{color:var(--fg)}
+[data-console] .ph[aria-current="page"] .t i{background:var(--ice)}
 [data-console] .nav .foot{margin-top:auto;display:flex;align-items:center;gap:8px;padding:10px 8px 2px;border-top:1px solid var(--line2);color:var(--fg3);font-size:12px}
 [data-console] .dot-ok{width:8px;height:8px;border-radius:50%;background:var(--green);flex:none}
 
