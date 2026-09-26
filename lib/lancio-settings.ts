@@ -54,8 +54,9 @@ export function parseSender(raw: unknown): LancioSender {
  *
  * E' il rapporto 1 a 10 chiesto dal PO (9 = uno dal nuovo ogni dieci dal vecchio):
  * scalda il numero nuovo senza esporlo, finche' non e' accertata la sua capacita'.
- * Non c'entra col riscaldamento ordinario del bot (`FENICE_NUMERO2_QUOTA` e il tetto
- * `BOT2_DAILY_CAP`), che e' un'altra regola e non si tocca.
+ * Non c'entra con la scelta ordinaria di un secondario (`scegliMittenteNuovo` in
+ * lib/scelta-mittente.ts, tetti in `app_settings.tetti_numeri`), che e' un'altra regola
+ * e non si tocca.
  *
  * Fail-closed, come tutte le manopole che spostano traffico su un numero che potrebbe
  * non essere pronto: assente, vuota, non intera o fuori da 0-100 vale **0**, cioe' tutto

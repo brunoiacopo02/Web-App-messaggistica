@@ -4,6 +4,7 @@ vi.mock('./twilio', () => ({ assertTemplateSendable: vi.fn(async () => undefined
 vi.mock('./template-account', () => ({
   traduciTemplate: vi.fn(async (sid: string) => ({ sid: `${sid}_2`, tradotto: true })),
 }));
+vi.mock('./scelta-mittente', () => ({ scegliMittenteNuovo: vi.fn() }));
 
 import {
   posizioneQuota,
@@ -14,6 +15,7 @@ import {
 import { mittenteDiConversazione } from './mittente';
 import { assertTemplateSendable } from './twilio';
 import { traduciTemplate } from './template-account';
+import { scegliMittenteNuovo } from './scelta-mittente';
 
 const PRIMARIO = 'whatsapp:+393520413199';
 const SECONDO = 'whatsapp:+393522070047';
@@ -33,41 +35,15 @@ const FUORI_QUOTA = (() => {
   throw new Error('impossibile');
 })();
 
-/** Supabase finto: raccoglie gli eventi e risponde al conteggio del tetto bot2. */
-function makeSupabase(aperturaOggiSulSecondo = 0, conteggioKo = false) {
-  const eventi: any[] = [];
-  const supabase: any = {
-    from(table: string) {
-      if (table === 'conversations') {
-        return {
-          select: () => ({
-            eq: () => ({
-              gte: () => Promise.resolve(
-                conteggioKo
-                  ? { count: null, error: { message: 'timeout' } }
-                  : { count: aperturaOggiSulSecondo, error: null },
-              ),
-            }),
-          }),
-        };
-      }
-      return { insert: (riga: any) => { eventi.push(riga); return Promise.resolve({ error: null }); } };
-    },
-  };
-  return { supabase, eventi };
-}
-
 const impostazioni = (quotaSecondario: number, sender: 'principale' | 'secondario' = 'principale') =>
   ({ sender, quotaSecondario }) as const;
-
-const scegli = (supabase: any, chiave: string, settings: any, secondo: string | undefined = SECONDO) =>
-  mittenteBenvenutoLancio(supabase, { settings, chiave, templateSid: WELCOME, primario: PRIMARIO, secondo });
 
 beforeEach(() => {
   vi.mocked(assertTemplateSendable).mockReset().mockResolvedValue(undefined);
   vi.mocked(traduciTemplate).mockReset().mockImplementation(
     async (sid: string) => ({ sid: `${sid}_2`, tradotto: true }),
   );
+  vi.mocked(scegliMittenteNuovo).mockReset();
 });
 afterEach(() => { vi.unstubAllEnvs(); });
 
@@ -143,111 +119,44 @@ describe('spedibileDa', () => {
 });
 
 describe('mittenteBenvenutoLancio', () => {
-  it('quota 0: tutti dal numero storico, e non si tocca nemmeno la rete', async () => {
-    const { supabase, eventi } = makeSupabase();
-    for (let i = 0; i < 200; i++) {
-      const esito = await scegli(supabase, tel(i), impostazioni(0));
-      expect(esito).toEqual({ from: PRIMARIO, secondario: false, scelta: 'principale', ripiego: null });
-    }
-    expect(traduciTemplate).not.toHaveBeenCalled();
-    expect(assertTemplateSendable).not.toHaveBeenCalled();
-    expect(eventi).toHaveLength(0);
+  const ELIXIR = 'whatsapp:+393522018718';
+  const scegli = (settings: any, chiave = IN_QUOTA) =>
+    mittenteBenvenutoLancio({} as any, { settings, chiave, templateSid: WELCOME, primario: PRIMARIO });
+
+  it('principale e fuori quota: primario, senza chiedere niente a nessuno', async () => {
+    const r = await scegli(impostazioni(0, 'principale'));
+    expect(r).toEqual({ from: PRIMARIO, secondario: false, scelta: 'principale', ripiego: null });
+    expect(scegliMittenteNuovo).not.toHaveBeenCalled();
   });
 
-  it('quota 9: chi e in quota parte dal numero nuovo, gli altri dal vecchio', async () => {
-    const { supabase, eventi } = makeSupabase();
-    expect(await scegli(supabase, IN_QUOTA, impostazioni(9))).toEqual(
-      { from: SECONDO, secondario: true, scelta: 'quota', ripiego: null },
-    );
-    expect(await scegli(supabase, FUORI_QUOTA, impostazioni(9))).toEqual(
-      { from: PRIMARIO, secondario: false, scelta: 'principale', ripiego: null },
-    );
-    expect(eventi).toHaveLength(0);
+  it('in quota: chiede la scelta rispettando i tetti', async () => {
+    vi.mocked(scegliMittenteNuovo).mockResolvedValueOnce({ from: ELIXIR, secondario: true, scartati: [], motivo: 'scelto' });
+    const r = await scegli(impostazioni(9));
+    expect(r).toMatchObject({ from: ELIXIR, secondario: true, scelta: 'quota', ripiego: null });
+    expect(vi.mocked(scegliMittenteNuovo).mock.calls[0][1]).toMatchObject({ templateSids: [WELCOME], ignoraTetti: false });
   });
 
-  it('e stabile: lo stesso lead ha sempre lo stesso numero, run dopo run', async () => {
-    const { supabase } = makeSupabase();
-    for (let i = 0; i < 20; i++) {
-      expect((await scegli(supabase, IN_QUOTA, impostazioni(9))).from).toBe(SECONDO);
-      expect((await scegli(supabase, FUORI_QUOTA, impostazioni(9))).from).toBe(PRIMARIO);
-    }
+  it('sender secondario: ignora i tetti', async () => {
+    vi.mocked(scegliMittenteNuovo).mockResolvedValueOnce({ from: ELIXIR, secondario: true, scartati: [], motivo: 'scelto' });
+    await scegli(impostazioni(0, 'secondario'), FUORI_QUOTA);
+    expect(vi.mocked(scegliMittenteNuovo).mock.calls[0][1]).toMatchObject({ ignoraTetti: true });
   });
 
-  it('template non spedibile dal numero nuovo: si ripiega sul vecchio e resta scritto', async () => {
-    vi.mocked(assertTemplateSendable).mockRejectedValue(
-      new Error('template bloccato: categoria MARKETING con UTILITY_ONLY attivo.'),
-    );
-    const { supabase, eventi } = makeSupabase();
-    const esito = await scegli(supabase, IN_QUOTA, impostazioni(9));
-    expect(esito).toEqual({ from: PRIMARIO, secondario: false, scelta: 'quota', ripiego: 'template_bloccato' });
-    expect(eventi).toHaveLength(1);
-    expect(eventi[0]).toMatchObject({ type: 'lancio_mittente_ripiego', level: 'warn' });
-    expect(eventi[0].payload).toMatchObject({
-      motivo: 'template_bloccato', numero: SECONDO, templateSid: WELCOME, sidTradotto: `${WELCOME}_2`,
-    });
-    expect(String(eventi[0].payload.errore)).toContain('MARKETING');
+  it('nessun candidato: primario con il motivo', async () => {
+    vi.mocked(scegliMittenteNuovo).mockResolvedValueOnce({ from: PRIMARIO, secondario: false, scartati: [], motivo: 'nessun_candidato' });
+    expect(await scegli(impostazioni(9))).toMatchObject({ from: PRIMARIO, secondario: false, ripiego: 'nessun_candidato' });
   });
 
-  it('template che sul secondo account non esiste: stesso ripiego, motivo diverso', async () => {
-    vi.mocked(traduciTemplate).mockResolvedValue({ sid: WELCOME, tradotto: false });
-    const { supabase, eventi } = makeSupabase();
-    expect(await scegli(supabase, IN_QUOTA, impostazioni(9))).toMatchObject(
-      { from: PRIMARIO, ripiego: 'template_non_tradotto' },
-    );
-    expect(eventi[0].payload).toMatchObject({ motivo: 'template_non_tradotto' });
+  // I tre motivi di `scegliMittenteNuovo` sulla mancata scelta: la mappatura verso
+  // `MotivoRipiego` non li confonde tra loro.
+  it('tetti illeggibili: primario con il motivo', async () => {
+    vi.mocked(scegliMittenteNuovo).mockResolvedValueOnce({ from: PRIMARIO, secondario: false, scartati: [], motivo: 'tetti_illeggibili' });
+    expect(await scegli(impostazioni(9))).toMatchObject({ from: PRIMARIO, secondario: false, ripiego: 'tetti_illeggibili' });
   });
 
-  it('numero nuovo non configurato: numero storico, e l avviso resta nei log', async () => {
-    // Niente `secondo` iniettato e env vuota: e' il caso "non configurato".
-    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE_2', '');
-    const { supabase, eventi } = makeSupabase();
-    const esito = await mittenteBenvenutoLancio(supabase, {
-      settings: impostazioni(9), chiave: IN_QUOTA, templateSid: WELCOME, primario: PRIMARIO,
-    });
-    expect(esito).toMatchObject({ from: PRIMARIO, ripiego: 'numero_assente' });
-    expect(eventi[0]).toMatchObject({ type: 'lancio_mittente_ripiego' });
-  });
-
-  it('tetto giornaliero del numero nuovo raggiunto: la quota si ferma li', async () => {
-    const { supabase, eventi } = makeSupabase(150);
-    expect(await scegli(supabase, IN_QUOTA, impostazioni(9))).toEqual(
-      { from: PRIMARIO, secondario: false, scelta: 'quota', ripiego: 'tetto_bot2' },
-    );
-    expect(eventi[0].payload).toMatchObject({
-      motivo: 'tetto_bot2', tettoMotivo: 'tetto_raggiunto', tetto: 150, oggi: 150,
-    });
-  });
-
-  it('conteggio del tetto illeggibile: numero storico (fail-closed)', async () => {
-    const { supabase } = makeSupabase(0, true);
-    expect(await scegli(supabase, IN_QUOTA, impostazioni(9))).toMatchObject({ ripiego: 'tetto_bot2' });
-  });
-
-  it('lancio_sender=secondario vince sulla quota: va tutto sul numero nuovo', async () => {
-    const { supabase } = makeSupabase();
-    for (const chiave of [IN_QUOTA, FUORI_QUOTA]) {
-      expect(await scegli(supabase, chiave, impostazioni(0, 'secondario'))).toEqual(
-        { from: SECONDO, secondario: true, scelta: 'sender', ripiego: null },
-      );
-    }
-  });
-
-  it('lancio_sender=secondario passa comunque dalla verifica del template', async () => {
-    vi.mocked(assertTemplateSendable).mockRejectedValue(new Error('bloccato'));
-    const { supabase, eventi } = makeSupabase();
-    expect(await scegli(supabase, FUORI_QUOTA, impostazioni(0, 'secondario'))).toMatchObject(
-      { from: PRIMARIO, scelta: 'sender', ripiego: 'template_bloccato' },
-    );
-    expect(eventi[0].type).toBe('lancio_mittente_ripiego');
-  });
-
-  // Il tetto e' la manopola del riscaldamento ordinario: una scelta umana dal pannello
-  // non se la deve vedere rimangiare a meta' giornata, in silenzio.
-  it('lancio_sender=secondario non passa dal tetto del riscaldamento', async () => {
-    const { supabase } = makeSupabase(150);
-    expect(await scegli(supabase, FUORI_QUOTA, impostazioni(0, 'secondario'))).toMatchObject(
-      { from: SECONDO, secondario: true },
-    );
+  it('nessun secondario configurato: primario con il motivo', async () => {
+    vi.mocked(scegliMittenteNuovo).mockResolvedValueOnce({ from: PRIMARIO, secondario: false, scartati: [], motivo: 'nessun_secondario' });
+    expect(await scegli(impostazioni(9))).toMatchObject({ from: PRIMARIO, secondario: false, ripiego: 'nessun_secondario' });
   });
 });
 

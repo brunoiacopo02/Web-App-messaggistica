@@ -12,9 +12,9 @@ import { benvenutoLancioChiuso } from './lancio-aperture';
 import { componiBenvenutoLancio, messaggioBenvenutoNonComponibile } from './lancio-benvenuto';
 import { leggiTettoOrario, sottoTettoOrario } from './lancio-tetto';
 import { contaBenvenutiUltimaOra } from './lancio-db';
-import { mittenteDiConversazione, numeroPrimario, numeroSecondo } from './mittente';
-import { puoAprireSuBot2 } from './bot2-tetto';
+import { mittenteDiConversazione, numeroPrimario } from './mittente';
 import { mittenteBenvenutoLancio } from './lancio-mittente';
+import { scegliMittenteNuovo, sidAperturaMario } from './scelta-mittente';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -104,33 +104,16 @@ export async function enrollLeadIntoMario(
   }
 
   const firstName = args.firstName ?? undefined;
-  // Un lead di riscaldamento nasce SUL numero che stiamo scaldando; tutti gli
-  // altri lasciano decidere alla quota (`undefined` = sorteggio). Cosi' si puo'
-  // tenere la quota a zero — ordinari tutti sul numero storico — e mandare al
-  // numero nuovo soltanto i lead del test.
-  // Se il secondo numero non e' configurato si ricade sul sorteggio: meglio un
-  // lead che parte dal numero di sempre che un lead che non parte.
-  // Il numero che apre la chat e' una scelta esplicita, non un sorteggio: il
-  // CRM dice quale dei due, e qui si verifica che il numero nuovo non abbia
-  // gia' fatto il suo giorno. Il tetto e' l'ultimo controllo prima di Twilio, e
-  // nel dubbio dice no (vedi lib/bot2-tetto.ts).
-  const secondo = numeroSecondo();
-  const vuoleSecondo = args.numeroBot === 2 || args.riscaldamento === true;
-  let mittenteImposto: string | undefined = primario;
-  if (vuoleSecondo) {
-    const tetto = await puoAprireSuBot2(supabase as never, secondo);
-    if (tetto.consentito && secondo) {
-      mittenteImposto = secondo;
-    } else {
-      mittenteImposto = primario;
-      await supabase.from('event_log').insert({
-        type: 'bot2_tetto',
-        payload: { phone: args.phone, crmLeadId: args.crmLeadId ?? null, ...tetto } as never,
-        message: `[bot2] ${args.phone} doveva aprire sul numero nuovo ma non si puo' (${tetto.motivo}, ${tetto.oggi}/${tetto.tetto}): apre dal numero storico`,
-        level: tetto.motivo === 'tetto_raggiunto' ? 'info' : 'warn',
-      });
-    }
-  }
+  // Da quale numero nasce la chat lo decide il bot, e solo il bot (26/09/2026):
+  // `numeroBot` e `riscaldamento` del CRM non forzano piu' niente. Vedi
+  // lib/scelta-mittente.ts. Su una chat che esiste gia' la scelta non ha effetto:
+  // `findOrCreateLeadConversation` tiene il suo numero.
+  const scelta = await scegliMittenteNuovo(supabase, {
+    templateSids: sidAperturaMario(),
+    chiave: args.phone,
+    crmLeadId: args.crmLeadId ?? null,
+  });
+  const mittenteImposto: string | undefined = scelta.from;
   const { conversationId, waNumber } = await findOrCreateLeadConversation(supabase, {
     phone: args.phone,
     firstName,
@@ -480,52 +463,20 @@ async function enrollLancio(
   }
 
   const firstName = args.firstName ?? undefined;
-  // Un lead di riscaldamento nasce SUL numero che stiamo scaldando; tutti gli
-  // altri lasciano decidere alla quota (`undefined` = sorteggio). Cosi' si puo'
-  // tenere la quota a zero — ordinari tutti sul numero storico — e mandare al
-  // numero nuovo soltanto i lead del test.
-  // Se il secondo numero non e' configurato si ricade sul sorteggio: meglio un
-  // lead che parte dal numero di sempre che un lead che non parte.
-  // Il numero che apre la chat e' una scelta esplicita, non un sorteggio: il
-  // CRM dice quale dei due, e qui si verifica che il numero nuovo non abbia
-  // gia' fatto il suo giorno. Il tetto e' l'ultimo controllo prima di Twilio, e
-  // nel dubbio dice no (vedi lib/bot2-tetto.ts).
-  const secondo = numeroSecondo();
-  const vuoleSecondo = args.numeroBot === 2 || args.riscaldamento === true;
   // Le impostazioni si leggono PRIMA della nascita della chat: da `lancio_sender` e
   // `lancio_quota_secondario` dipende il numero che finisce in `conversations.wa_number`,
   // e quel numero si scrive una volta sola, nell'INSERT.
   const settings = await getLancioSettings(supabase);
-  let mittenteImposto: string | undefined = primario;
-  if (vuoleSecondo) {
-    const tetto = await puoAprireSuBot2(supabase as never, secondo);
-    if (tetto.consentito && secondo) {
-      mittenteImposto = secondo;
-    } else {
-      mittenteImposto = primario;
-      await supabase.from('event_log').insert({
-        type: 'bot2_tetto',
-        payload: { phone: args.phone, crmLeadId: args.crmLeadId ?? null, ...tetto } as never,
-        message: `[bot2] ${args.phone} doveva aprire sul numero nuovo ma non si puo' (${tetto.motivo}, ${tetto.oggi}/${tetto.tetto}): apre dal numero storico`,
-        level: tetto.motivo === 'tetto_raggiunto' ? 'info' : 'warn',
-      });
-    }
-  } else {
-    // Nessuna richiesta esplicita del CRM: decide il lancio. `lancio_sender` vince, e
-    // sotto c'e' il rivolo di riscaldamento (1 benvenuto su ~10 dal numero nuovo).
-    // La scelta e' deterministica sul telefono e verifica prima che il benvenuto sia
-    // davvero spedibile dal numero nuovo: se non lo e', si ripiega sul numero storico e
-    // resta un `lancio_mittente_ripiego` in `event_log` (vedi lib/lancio-mittente.ts).
-    const scelta = await mittenteBenvenutoLancio(supabase, {
-      settings,
-      chiave: args.phone,
-      templateSid,
-      primario,
-      secondo,
-      crmLeadId: args.crmLeadId ?? null,
-    });
-    mittenteImposto = scelta.from;
-  }
+  // Nessuna richiesta del CRM conta piu' (26/09/2026): decide il lancio
+  // (`lancio_sender`, `lancio_quota_secondario`) e sotto la scelta unica dei numeri.
+  const sceltaLancio = await mittenteBenvenutoLancio(supabase, {
+    settings,
+    chiave: args.phone,
+    templateSid,
+    primario,
+    crmLeadId: args.crmLeadId ?? null,
+  });
+  const mittenteImposto: string | undefined = sceltaLancio.from;
   const { conversationId, waNumber } = await findOrCreateLeadConversation(supabase, {
     phone: args.phone,
     firstName,

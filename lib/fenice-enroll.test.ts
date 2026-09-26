@@ -9,12 +9,18 @@ vi.mock('./lancio-settings', () => ({
   getLancioSettings: vi.fn(async () => ({ attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null, offertaDelMeseLink: null, eventoAt: null, blastPerimetro: 'tutti', sender: 'principale', quotaSecondario: 0 })),
 }));
 
+vi.mock('./scelta-mittente', () => ({
+  scegliMittenteNuovo: vi.fn(async () => ({ from: 'whatsapp:+393520413199', secondario: false, scartati: [], motivo: 'nessun_secondario' })),
+  sidAperturaMario: vi.fn(() => ['HX_OPEN']),
+}));
+
 import { apreSopraChatViva, enrollGdoLeadAsPostino, enrollLeadIntoMario } from './fenice-enroll';
 import { findOrCreateLeadConversation, sendTemplateAndLog } from './messaging';
 import { getLancioSettings } from './lancio-settings';
 import { lancioBenvenutoText } from './lancio-fase';
 import { decideAperturaLancio, riassumiOutboundLancio } from './lancio-aperture';
 import { openingBody } from './persona';
+import { scegliMittenteNuovo } from './scelta-mittente';
 
 /** Fake del client Supabase: traccia update su conversations ed insert su event_log.
  *  `benvenutiUltimaOra` è il numero che il tetto orario del lancio legge da `messages`.
@@ -134,6 +140,22 @@ beforeEach(() => {
   vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers(); });
+
+describe('mittente di una chat nuova (parco numeri)', () => {
+  it('Mario: il numero scelto finisce nella nascita della chat', async () => {
+    vi.mocked(scegliMittenteNuovo).mockResolvedValueOnce({ from: 'whatsapp:+393522018718', secondario: true, scartati: [], motivo: 'scelto' });
+    await enrollLeadIntoMario(makeSupabase().supabase as never, { phone: '+393331234567', firstName: 'Anna' });
+    expect(vi.mocked(findOrCreateLeadConversation).mock.calls[0][2]).toEqual({ mittente: 'whatsapp:+393522018718' });
+    expect(vi.mocked(scegliMittenteNuovo).mock.calls[0][1]).toMatchObject({ templateSids: ['HX_OPEN'], chiave: '+393331234567' });
+  });
+
+  // Review Focus 3: CRM vecchio.
+  it('numeroBot 2 e riscaldamento non forzano piu nessun numero', async () => {
+    await enrollLeadIntoMario(makeSupabase().supabase as never, { phone: '+393331234567', numeroBot: 2, riscaldamento: true });
+    expect(vi.mocked(findOrCreateLeadConversation).mock.calls[0][2]).toEqual({ mittente: 'whatsapp:+393520413199' });
+    expect(vi.mocked(scegliMittenteNuovo)).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('enrollLeadIntoMario — apertura differita fuori fascia', () => {
   it('in fascia (12:00 Rome) → invio apertura, update conv, event fenice_enroll', async () => {
@@ -1236,6 +1258,9 @@ describe('enrollLeadIntoMario — ramo lancio (B1)', () => {
       (vi.mocked(findOrCreateLeadConversation).mock.calls[0][2] as { mittente?: string | null })?.mittente;
 
     beforeEach(() => {
+      // `mittenteDiConversazione` (codice vero, non mockato) riconosce un numero come
+      // "del bot" solo se e' fra quelli in env: senza questa stub SECONDO non e'
+      // `eNumeroDelBot` e l'invio ricadrebbe sul primario anche a scelta fatta.
       vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE_2', SECONDO);
       // Come la funzione vera: il numero scelto alla nascita finisce in `wa_number`, ed
       // e' da li' che ogni invio successivo lo rilegge.
@@ -1243,37 +1268,46 @@ describe('enrollLeadIntoMario — ramo lancio (B1)', () => {
         async (_s: unknown, _i: unknown, nascita?: { mittente?: string | null }) =>
           ({ leadId: 7, conversationId: 42, waNumber: nascita?.mittente ?? null }) as never,
       );
+      // Chi sceglie il secondario ora e' `scegliMittenteNuovo` (Task 5): il default vince
+      // quando la quota/il sender chiedono davvero un secondario, i singoli test lo
+      // sovrascrivono per i casi di ripiego.
+      vi.mocked(scegliMittenteNuovo).mockResolvedValue({ from: SECONDO, secondario: true, scartati: [], motivo: 'scelto' });
     });
 
-    it('quota 0: tutti dal numero storico, come prima', async () => {
+    it('quota 0: tutti dal numero storico, come prima (scegliMittenteNuovo non si chiama nemmeno)', async () => {
       impostazioni(0);
       const { supabase } = makeSupabase();
       await enrollLeadIntoMario(supabase, ARGS);
       expect(mittenteAllaNascita()).toBe('whatsapp:+390000000000');
       expect(mittenteUsato()).toBe('whatsapp:+390000000000');
+      expect(scegliMittenteNuovo).not.toHaveBeenCalled();
     });
 
-    it('quota 100: la chat nasce sul numero nuovo e il benvenuto parte di li', async () => {
+    it('quota 100: la chat nasce sul numero che sceglie scegliMittenteNuovo', async () => {
       impostazioni(100);
       const { supabase } = makeSupabase();
       await enrollLeadIntoMario(supabase, ARGS);
       expect(mittenteAllaNascita()).toBe(SECONDO);
       expect(mittenteUsato()).toBe(SECONDO);
+      expect(vi.mocked(scegliMittenteNuovo).mock.calls[0][1]).toMatchObject({ ignoraTetti: false });
     });
 
-    it('quota 100 ma tetto giornaliero del numero nuovo esaurito: numero storico + avviso', async () => {
+    it('quota 100 ma scegliMittenteNuovo non trova candidati: numero storico', async () => {
       impostazioni(100);
-      const { supabase, calls } = makeSupabase(0, false, { aperturaOggiSulSecondo: 150 });
+      vi.mocked(scegliMittenteNuovo).mockResolvedValueOnce(
+        { from: 'whatsapp:+390000000000', secondario: false, scartati: [], motivo: 'nessun_candidato' },
+      );
+      const { supabase } = makeSupabase();
       await enrollLeadIntoMario(supabase, ARGS);
       expect(mittenteUsato()).toBe('whatsapp:+390000000000');
-      expect(calls.events.some((e) => e.type === 'lancio_mittente_ripiego')).toBe(true);
     });
 
-    it('lancio_sender=secondario manda tutto dal numero nuovo, quota o non quota', async () => {
+    it('lancio_sender=secondario manda tutto dal numero nuovo, e ignora i tetti', async () => {
       impostazioni(0, 'secondario');
       const { supabase } = makeSupabase();
       await enrollLeadIntoMario(supabase, ARGS);
       expect(mittenteUsato()).toBe(SECONDO);
+      expect(vi.mocked(scegliMittenteNuovo).mock.calls[0][1]).toMatchObject({ ignoraTetti: true });
     });
 
     // La regola che non si tocca: il numero di una chat si sceglie alla nascita e non
