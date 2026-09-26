@@ -64,6 +64,29 @@ type Supa = {
 };
 
 /**
+ * Quante conversazioni sono NATE oggi (giorno di Roma) con quel `wa_number`.
+ * E' la prova di cosa e' davvero partito, non un contatore a parte. null =
+ * conteggio non riuscito: chi chiama deve trattarlo come "numero chiuso".
+ */
+export async function chatNateOggi(supabase: Supa, numero: string, adesso: Date = new Date()): Promise<number | null> {
+  try {
+    const { count, error } = await supabase
+      .from('conversations')
+      .select('id', { count: 'exact', head: true })
+      .eq('wa_number', numero)
+      .gte('created_at', inizioGiornataRoma(adesso));
+    if (error || count === null || count === undefined) {
+      console.error(`[numeri] conteggio di oggi per ${numero} non riuscito`, error);
+      return null;
+    }
+    return count;
+  } catch (e) {
+    console.error(`[numeri] conteggio di oggi per ${numero} esploso`, e);
+    return null;
+  }
+}
+
+/**
  * Si puo' aprire un'altra conversazione sul numero nuovo, oggi?
  *
  * Conta le conversazioni NATE oggi con quel `wa_number`, che e' la prova di
@@ -79,22 +102,8 @@ export async function puoAprireSuBot2(
   if (!numeroSecondo) {
     return { consentito: false, oggi: 0, tetto, motivo: 'numero_assente' };
   }
-  try {
-    const { count, error } = await supabase
-      .from('conversations')
-      .select('id', { count: 'exact', head: true })
-      .eq('wa_number', numeroSecondo)
-      .gte('created_at', inizioGiornataRoma(adesso));
-    if (error || count === null || count === undefined) {
-      console.error('[bot2] conteggio del giorno non riuscito: si ripiega sul numero storico', error);
-      return { consentito: false, oggi: 0, tetto, motivo: 'conteggio_fallito' };
-    }
-    if (count >= tetto) {
-      return { consentito: false, oggi: count, tetto, motivo: 'tetto_raggiunto' };
-    }
-    return { consentito: true, oggi: count, tetto, motivo: 'ok' };
-  } catch (e) {
-    console.error('[bot2] conteggio del giorno esploso: si ripiega sul numero storico', e);
-    return { consentito: false, oggi: 0, tetto, motivo: 'conteggio_fallito' };
-  }
+  const count = await chatNateOggi(supabase, numeroSecondo, adesso);
+  if (count === null) return { consentito: false, oggi: 0, tetto, motivo: 'conteggio_fallito' };
+  if (count >= tetto) return { consentito: false, oggi: count, tetto, motivo: 'tetto_raggiunto' };
+  return { consentito: true, oggi: count, tetto, motivo: 'ok' };
 }
