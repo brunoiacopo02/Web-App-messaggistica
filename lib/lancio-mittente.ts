@@ -37,11 +37,16 @@
  */
 
 import type { getSupabaseAdmin } from './supabase/admin';
-import { assertTemplateSendable } from './twilio';
-import { traduciTemplate } from './template-account';
 import { numeroSecondo } from './mittente';
 import { puoAprireSuBot2 } from './bot2-tetto';
 import type { LancioSettings } from './lancio-settings';
+import { spedibileDa } from './spedibilita';
+
+// `spedibileDa` e' nata qui ma vive in `lib/spedibilita.ts`: la userà anche
+// `scelta-mittente.ts`, e questo file importera' a sua volta `scelta-mittente.ts`
+// (task 6) — tenerla qui avrebbe creato un ciclo di import. Il re-export mantiene
+// invariati i chiamanti esistenti e questo stesso file di test.
+export { spedibileDa, type EsitoSpedibilita } from './spedibilita';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -77,57 +82,6 @@ export type MotivoRipiego =
   | 'template_non_tradotto'
   | 'template_bloccato'
   | 'tetto_bot2';
-
-export type EsitoSpedibilita =
-  | { ok: true; sidTradotto: string }
-  | { ok: false; motivo: 'template_non_tradotto' | 'template_bloccato'; sidTradotto: string; errore: string | null };
-
-/**
- * Questo template puo' davvero partire da questo numero?
- *
- * Due domande in una, perche' due sono i modi di perdere il messaggio:
- * 1. il template non esiste sull'account che possiede il numero (`traduciTemplate` lo
- *    dice con `tradotto: false`; `sendTemplate` non lo guarda e manderebbe il SID
- *    dell'altro account, cioe' un 404);
- * 2. il presidio categoria lo rifiuta (`UTILITY_ONLY=1` e copia MARKETING).
- *
- * Fallisce chiuso: qualunque cosa vada storta qui vale "non spedibile", e il chiamante
- * ripiega sul numero storico. Le due letture sono in cache per processo
- * (`template-account.ts`, `getTemplateCategory`), quindi costano una volta sola.
- */
-export async function spedibileDa(templateSid: string, numero: string): Promise<EsitoSpedibilita> {
-  let sidTradotto = templateSid;
-  try {
-    const traduzione = await traduciTemplate(templateSid, numero);
-    sidTradotto = traduzione.sid;
-    if (!traduzione.tradotto) {
-      return {
-        ok: false,
-        motivo: 'template_non_tradotto',
-        sidTradotto,
-        errore: `il template ${templateSid} non esiste sull'account di ${numero}`,
-      };
-    }
-  } catch (e) {
-    return {
-      ok: false,
-      motivo: 'template_non_tradotto',
-      sidTradotto,
-      errore: (e as { message?: string } | null)?.message ?? 'traduzione fallita',
-    };
-  }
-  try {
-    await assertTemplateSendable(sidTradotto, numero, templateSid);
-  } catch (e) {
-    return {
-      ok: false,
-      motivo: 'template_bloccato',
-      sidTradotto,
-      errore: (e as { message?: string } | null)?.message ?? 'template non spedibile',
-    };
-  }
-  return { ok: true, sidTradotto };
-}
 
 /** Il numero scelto, e perche'. `ripiego` valorizzato = si voleva il nuovo e non si e' potuto. */
 export type EsitoMittenteLancio = {
