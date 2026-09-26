@@ -18,20 +18,19 @@ export interface BotIntakePayload {
   /** Lead del lancio (contratto v1.6). Null/assente = flusso normale. */
   lancio?: LancioIntake | null;
   /**
-   * Lead del riscaldamento del numero nuovo: la chat deve nascere SUL numero
-   * che stiamo scaldando, non su quello sorteggiato dalla quota.
-   *
-   * Serve perche' la quota e' globale: alzarla manderebbe li' anche i lead
-   * ordinari, abbassarla terrebbe fuori anche questi. L'unico modo di mandare
-   * al numero nuovo *solo* i lead del riscaldamento e' che il CRM lo dica.
+   * Campo del contratto v1.7, ancora accettato in lettura. Dal 26/09/2026 il
+   * bot ignora questo campo per scegliere il mittente: decide da solo
+   * `scegliMittenteNuovo` (lib/scelta-mittente.ts), guardando i tetti di
+   * `app_settings.tetti_numeri`. Un CRM non ancora aggiornato che lo manda
+   * ancora non forza piu' nessun numero.
    */
   riscaldamento?: boolean;
   /**
-   * Quale dei due numeri del bot deve aprire la chat: 1 = storico, 2 = nuovo.
-   *
-   * Il CRM lo decide perche' e' lui che conosce il volume della giornata. Qui
-   * resta comunque un tetto suo (`lib/bot2-tetto.ts`): due controlli
-   * indipendenti, perche' bruciare il numero nuovo costa mesi.
+   * Campo del contratto v1.7, ancora accettato in lettura. Dal 26/09/2026 il
+   * bot ignora questo campo per scegliere il mittente: decide da solo
+   * `scegliMittenteNuovo` (lib/scelta-mittente.ts), guardando i tetti di
+   * `app_settings.tetti_numeri`. Un CRM non ancora aggiornato che manda
+   * `numeroBot: 2` non forza piu' il numero a riposo.
    */
   numeroBot?: 1 | 2;
 }

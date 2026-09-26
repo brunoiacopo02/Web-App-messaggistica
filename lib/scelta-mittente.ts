@@ -105,8 +105,7 @@ export async function scegliMittenteNuovo(
       const tetto = tettoDi(tetti!, numero);
       if (tetto <= 0) { scartati.push({ numero, motivo: 'tetto_zero' }); continue; }
       // `chatNateOggi` ha un tipo `Supa` minimale (solo la catena che usa); il client
-      // vero non vi si assegna strutturalmente. Stesso cast di `puoAprireSuBot2` nelle
-      // altre chiamate del repo (lancio-mittente.ts, fenice-enroll.ts).
+      // vero non vi si assegna strutturalmente, da qui il cast.
       const n = await chatNateOggi(supabase as never, numero, i.adesso);
       if (n === null) {
         scartati.push({ numero, motivo: 'conteggio_fallito' });

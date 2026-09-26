@@ -27,9 +27,11 @@ export type EnrollArgs = {
   crmFunnel?: string | null;
   /** Lead del lancio (contratto v1.6): benvenuto del lancio al posto dell'apertura. */
   lancio?: LancioIntake | null;
-  /** Lead del riscaldamento: la chat nasce sul numero nuovo, non su quello sorteggiato. */
+  /** Nel contratto v1.7. Dal 26/09/2026 il bot ignora questo campo per scegliere il
+   *  mittente: decide `scegliMittenteNuovo` (lib/scelta-mittente.ts) guardando i tetti. */
   riscaldamento?: boolean;
-  /** Quale numero del bot apre la chat: 1 = storico, 2 = nuovo. */
+  /** Nel contratto v1.7. Dal 26/09/2026 il bot ignora questo campo per scegliere il
+   *  mittente: decide `scegliMittenteNuovo` (lib/scelta-mittente.ts) guardando i tetti. */
   numeroBot?: 1 | 2;
 };
 

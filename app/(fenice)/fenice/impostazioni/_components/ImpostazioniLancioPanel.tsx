@@ -61,8 +61,8 @@ const CAMPI_TESTO: Array<{ key: LancioSettingKey; label: string; hint: string; p
   },
   {
     key: 'lancio_quota_secondario',
-    label: 'Benvenuti dal numero nuovo (%)',
-    hint: 'Quota di riscaldamento del numero nuovo, solo sui benvenuti del lancio: 9 vuol dire uno dal nuovo ogni dieci dal vecchio. 0 (o vuoto) = tutti dal numero storico. Lo stesso lead finisce sempre sullo stesso numero, e se il template non e’ spedibile dal nuovo parte comunque dal vecchio.',
+    label: 'Benvenuti verso i numeri secondari (%)',
+    hint: 'Quota di riscaldamento verso i numeri secondari, solo sui benvenuti del lancio: 9 vuol dire uno da un secondario ogni dieci dal principale (la scelta fra i secondari e i loro tetti e’ di scegliMittenteNuovo). 0 (o vuoto) = tutti dal numero storico. Lo stesso lead finisce sempre sullo stesso numero, e se il template non e’ spedibile da nessun secondario parte comunque dal principale.',
     placeholder: '0',
   },
   {
