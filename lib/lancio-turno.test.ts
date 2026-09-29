@@ -17,7 +17,7 @@ import { sendOutcome } from './bot-outcome';
 import { turnoAssistenza } from './lancio-assistenza';
 import { turnoPostPitch, turnoDopoScelta } from './lancio-post-pitch';
 import { getLancioSettings } from './lancio-settings';
-import { TESTO_POSTO_BLOCCATO, TESTO_CONGEDO, TESTO_CHIUSURA_DOMANDE, TESTO_NIENTE_PASSAGGIO } from './lancio-fase';
+import { TESTO_POSTO_BLOCCATO, TESTO_CONGEDO, TESTO_CHIUSURA_DOMANDE, TESTO_NIENTE_PASSAGGIO, MAX_SCAMBI_DOMANDE } from './lancio-fase';
 
 type Row = { direction: string; body: string | null; template_sid: string | null };
 const WELCOME: Row = { direction: 'out', body: "Ciao Anna, sono l'assistente virtuale...", template_sid: 'HX_W' };
@@ -192,18 +192,31 @@ describe('eseguiTurnoLancio — domanda', () => {
     expect(calls.convUpdates.some((u) => u.lancio_fase === 'posto_bloccato')).toBe(true);
   });
 
-  it('alla terza risposta aggiunge "Ci sentiamo il 5!" nella stessa bolla', async () => {
+  it('dopo tre domande risponde ancora (PO 29/09: prima della live il bot ci parla)', async () => {
     genera.mockResolvedValueOnce({ classe: 'domanda', passToHuman: false, visibleReply: 'Sì, dal telefono va benissimo.' });
     const { supabase } = makeSupabase();
-    const rows = [WELCOME, inb('costa?'), outLibero('No.'), inb('a che ora?'), outLibero('Alle 21.'), inb('posso dal telefono?')];
+    const rows = [WELCOME, inb('a?'), outLibero('1'), inb('b?'), outLibero('2'), inb('c?'), outLibero('3'), inb('posso dal telefono?')];
+    await eseguiTurnoLancio(supabase, base({ rows, inboundBody: 'posso dal telefono?' }));
+    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe('Sì, dal telefono va benissimo.');
+  });
+
+  /** Una chat con `n` scambi di domande già risposti; l'ultima risposta chiude se `chiusa`. */
+  const scambi = (n: number, chiusa = false) => Array.from({ length: n }, (_, k) => [
+    inb(`d${k}?`), outLibero(chiusa && k === n - 1 ? `${k}\n${TESTO_CHIUSURA_DOMANDE}` : `${k}`),
+  ]).flat();
+
+  it('all\'ultima risposta prima del fusibile aggiunge "Ci sentiamo il 5!" nella stessa bolla', async () => {
+    genera.mockResolvedValueOnce({ classe: 'domanda', passToHuman: false, visibleReply: 'Sì, dal telefono va benissimo.' });
+    const { supabase } = makeSupabase();
+    const rows = [WELCOME, ...scambi(MAX_SCAMBI_DOMANDE - 1), inb('posso dal telefono?')];
     await eseguiTurnoLancio(supabase, base({ rows, inboundBody: 'posso dal telefono?' }));
     expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe(`Sì, dal telefono va benissimo.\n${TESTO_CHIUSURA_DOMANDE}`);
   });
 
-  it('dalla quarta domanda tace fino al link: niente modello, niente invio, traccia scritta', async () => {
+  it('oltre il fusibile tace fino al link: niente modello, niente invio, traccia scritta', async () => {
     const { supabase, calls } = makeSupabase();
-    const rows = [WELCOME, inb('a?'), outLibero('1'), inb('b?'), outLibero('2'), inb('c?'), outLibero(`3\n${TESTO_CHIUSURA_DOMANDE}`), inb('d?')];
-    await eseguiTurnoLancio(supabase, base({ rows, inboundBody: 'd?' }));
+    const rows = [WELCOME, ...scambi(MAX_SCAMBI_DOMANDE, true), inb('ancora?')];
+    await eseguiTurnoLancio(supabase, base({ rows, inboundBody: 'ancora?' }));
     expect(genera).not.toHaveBeenCalled();
     expect(sendFreeText).not.toHaveBeenCalled();
     expect(calls.events.some((e) => e.type === 'lancio_silenzio' && e.payload.motivo === 'domande_esaurite')).toBe(true);
@@ -282,9 +295,10 @@ describe('eseguiTurnoLancio — niente modello quando non serve', () => {
     expect(calls.events.some((e) => e.type === 'fenice_ai_reply')).toBe(true);
   });
 
-  it('un incerto dopo il terzo scambio non paga una chiamata al modello', async () => {
+  it('un incerto oltre il fusibile non paga una chiamata al modello', async () => {
     const { supabase, calls } = makeSupabase();
-    const rows = [WELCOME, inb('a?'), outLibero('1'), inb('b?'), outLibero('2'), inb('c?'), outLibero('3'), inb('mah')];
+    const giaRisposte = Array.from({ length: MAX_SCAMBI_DOMANDE }, (_, k) => [inb(`d${k}?`), outLibero(`${k}`)]).flat();
+    const rows = [WELCOME, ...giaRisposte, inb('mah')];
     await eseguiTurnoLancio(supabase, base({ rows, inboundBody: 'mah' }));
     expect(genera).not.toHaveBeenCalled();
     expect(sendFreeText).not.toHaveBeenCalled();
