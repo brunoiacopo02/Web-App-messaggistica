@@ -17,34 +17,68 @@ const COLONNE =
  * Le chat con l'ultimo messaggio in uscita non consegnato, nelle ultime 48h.
  *
  * "Ultimo" per chat: una `failed` seguita da una `delivered` di un retry manuale non deve
- * restare marcata come errore. Cache 15s: la vista "Con errori" e i contatori la
- * interrogano nello stesso giro di rendering, e senza cache raddoppierebbe la lettura di
- * `messages`.
+ * restare marcata come errore. Due letture piccole invece di tutte le uscite delle 48h
+ * (~10.000 righe in 11 pagine a offset crescente):
+ *  1. le uscite `failed`/`undelivered` delle 48h: per chat, l'istante dell'ultimo fallimento;
+ *  2. per le chat candidate (blocchi da 200), le uscite NON fallite dopo il primo di quegli
+ *     istanti; una chat che ne ha una dopo il suo ultimo fallimento non è in errore.
+ * "Non fallita" è qualunque stato diverso da failed/undelivered, compreso null (letti in
+ * produzione il 30/09/2026 su 30 giorni: read, delivered, sent, queued, undelivered, failed;
+ * Twilio può scrivere anche accepted, sending, scheduled). A parità esatta di `created_at`
+ * vince il fallimento (il vecchio ordine lì non era definito). Ordine: prima le chat con il
+ * fallimento più recente (la vista "Con errori" ne mostra al massimo `MAX_ID_ERRORI`).
+ *
+ * Cache 15s: la vista "Con errori" e i contatori la interrogano nello stesso giro di
+ * rendering, e senza cache raddoppierebbe la lettura di `messages`.
  */
+const STATI_FALLITI = ['failed', 'undelivered'];
+const BLOCCO = 200;
 let cacheErrori: { at: number; p: Promise<number[]> } | null = null;
 export function idsConErrori(s: Supa, now: Date): Promise<number[]> {
   if (cacheErrori && now.getTime() - cacheErrori.at < TTL) return cacheErrori.p;
   const da = new Date(now.getTime() - 48 * 3600_000).toISOString();
-  const p = fetchAllRows<{ conversation_id: number; twilio_status: string | null }>(
-    (a, b) =>
-      s
-        .from('messages')
-        .select('conversation_id, twilio_status')
-        .eq('direction', 'out')
-        .gte('created_at', da)
-        .order('created_at', { ascending: false })
-        .range(a, b) as never,
-    { max: 30_000 },
-  ).then((righe) => {
-    const visti = new Set<number>();
-    const ko: number[] = [];
-    for (const m of righe) {
-      if (visti.has(m.conversation_id)) continue;
-      visti.add(m.conversation_id);
-      if (m.twilio_status === 'failed' || m.twilio_status === 'undelivered') ko.push(m.conversation_id);
+  const p = (async () => {
+    const falliti = await fetchAllRows<{ conversation_id: number; created_at: string }>(
+      (a, b) =>
+        s
+          .from('messages')
+          .select('conversation_id, created_at')
+          .eq('direction', 'out')
+          .in('twilio_status', STATI_FALLITI)
+          .gte('created_at', da)
+          .order('created_at', { ascending: false })
+          .range(a, b) as never,
+      { max: 30_000 },
+    );
+    const ultimoFallito = new Map<number, string>();
+    for (const m of falliti) {
+      const t = ultimoFallito.get(m.conversation_id);
+      if (!t || Date.parse(m.created_at) > Date.parse(t)) ultimoFallito.set(m.conversation_id, m.created_at);
     }
-    return ko;
-  });
+    const candidate = [...ultimoFallito.keys()];
+    const recuperate = new Set<number>();
+    for (let i = 0; i < candidate.length; i += BLOCCO) {
+      const ids = candidate.slice(i, i + BLOCCO);
+      const dal = ids.map((id) => ultimoFallito.get(id)!).reduce((x, y) => (Date.parse(y) < Date.parse(x) ? y : x));
+      const dopo = await fetchAllRows<{ conversation_id: number; created_at: string }>(
+        (a, b) =>
+          s
+            .from('messages')
+            .select('conversation_id, created_at')
+            .eq('direction', 'out')
+            .in('conversation_id', ids)
+            .gt('created_at', dal)
+            .or(`twilio_status.is.null,twilio_status.not.in.(${STATI_FALLITI.join(',')})`)
+            .order('created_at', { ascending: false })
+            .range(a, b) as never,
+        { max: 30_000 },
+      );
+      for (const m of dopo) {
+        if (Date.parse(m.created_at) > Date.parse(ultimoFallito.get(m.conversation_id)!)) recuperate.add(m.conversation_id);
+      }
+    }
+    return candidate.filter((id) => !recuperate.has(id));
+  })();
   cacheErrori = { at: now.getTime(), p };
   p.catch(() => {
     if (cacheErrori?.p === p) cacheErrori = null;

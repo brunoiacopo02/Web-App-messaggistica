@@ -65,6 +65,12 @@ describe('applicaVista', () => {
     applicaVista(q, 'errori', { now, conErrori: [3, 4] });
     expect(calls).toContain('in("id",[3,4])');
   });
+  it('errori oltre 200: in() riceve solo i primi 200 (i fallimenti più recenti)', () => {
+    const { q, calls } = fq();
+    const ids = Array.from({ length: 450 }, (_, i) => 1000 - i);
+    applicaVista(q, 'errori', { now, conErrori: ids });
+    expect(calls).toContain(`in("id",${JSON.stringify(ids.slice(0, 200))})`);
+  });
   it('non lette usa gt', () => {
     const { q, calls } = fq();
     applicaVista(q, 'non_lette', { now, conErrori: [] });

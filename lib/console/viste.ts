@@ -31,6 +31,8 @@ export type RigaVista = {
 export type CtxVista = { now: Date; conErrori: ReadonlySet<number> };
 
 const SETTE_GIORNI = 7 * 24 * 3600_000;
+/** Tetto degli id nel filtro `in()` della vista "Con errori" (lunghezza dell'URL PostgREST). */
+export const MAX_ID_ERRORI = 200;
 const ESITI_CHIUSI = ['DA_SCARTARE', 'NON_RISPOSTO', 'INTERROTTO', 'RICHIAMO'];
 
 export function isVista(x: unknown): x is Vista {
@@ -83,7 +85,9 @@ export function applicaVista<Q>(q: Q, v: Vista, ctx: { now: Date; conErrori: rea
     case 'chiuse':
       return x.or(`ai_status.eq.closed,lancio_fase.in.(${LANCIO_FASI_TERMINALI.join(',')}),bot_outcome.in.(${ESITI_CHIUSI.join(',')})`);
     case 'errori':
-      return ctx.conErrori.length === 0 ? null : x.in('id', [...ctx.conErrori]);
+      // Oltre 200 chat la vista mostra le 200 con il fallimento più recente (`idsConErrori` le
+      // ordina così): un solo filtro `in()`, compatibile con il cursore della lista e con il conteggio.
+      return ctx.conErrori.length === 0 ? null : x.in('id', ctx.conErrori.slice(0, MAX_ID_ERRORI));
   }
 }
 
