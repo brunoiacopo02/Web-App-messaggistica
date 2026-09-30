@@ -1,4 +1,4 @@
-/** Contenitore per i Portal di Radix (Menu, Dialog, Sheet, Tooltip). Le variabili dei token
+/** Contenitore per i Portal di Radix (Dialog, Sheet, Tooltip). Le variabili dei token
  *  (`--s0`, `--line`, `--shadow`, …) sono dichiarate su `[data-console]`: un Portal senza `container`
  *  esplicito finirebbe su `document.body`, fuori da quello scope, e uscirebbe senza stile.
  *  Lettura sincrona durante il render (stato derivato, niente `useEffect`+`setState`): su `document`
