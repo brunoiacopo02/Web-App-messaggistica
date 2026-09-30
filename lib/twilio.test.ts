@@ -196,6 +196,12 @@ describe('validateTwilioSignature', () => {
       expect(await validateTwilioSignature({ url, signature: firmaCon('token-account-2'), params })).toBe(true);
     });
 
+    it('accetta la firma del terzo account (elixir)', async () => {
+      process.env.TWILIO_AUTH_TOKEN_3 = 'token-account-3';
+      expect(await validateTwilioSignature({ url, signature: firmaCon('token-account-3'), params })).toBe(true);
+      delete process.env.TWILIO_AUTH_TOKEN_3;
+    });
+
     it('rifiuta una firma che non viene da nessuno dei due', async () => {
       expect(await validateTwilioSignature({ url, signature: firmaCon('token-a-caso'), params })).toBe(false);
     });
