@@ -58,7 +58,7 @@ function Apri({ domanda }: { domanda?: string }) {
   );
 }
 
-function monta(conComposer: { id: number; inPausa: boolean } | null) {
+function monta(conComposer: { id: number; inPausa: boolean; lastInboundAt?: string } | null) {
   return render(
     <div data-console>
       <ComposerBridgeProvider>
@@ -68,7 +68,7 @@ function monta(conComposer: { id: number; inPausa: boolean } | null) {
             <Composer
               conversationId={conComposer.id}
               inPausa={conComposer.inPausa}
-              lastInboundAt={new Date().toISOString()}
+              lastInboundAt={conComposer.lastInboundAt ?? new Date().toISOString()}
               now={new Date()}
               pausaInCorso={false}
               onPausa={() => {}}
@@ -134,4 +134,13 @@ it('bozza su un altra chat aperta: il bottone non compare', async () => {
   monta({ id: 9, inPausa: true });
   await chiedi();
   expect(screen.queryByRole('button', { name: 'Metti nel composer' })).toBeNull();
+});
+
+it('bozza con la finestra 24h chiusa: niente "Metti nel composer" né toast, dice perché', async () => {
+  const dueGiorniFa = new Date(Date.now() - 48 * 3600_000).toISOString();
+  monta({ id: 7, inPausa: true, lastInboundAt: dueGiorniFa });
+  await chiedi();
+  expect(screen.queryByRole('button', { name: 'Metti nel composer' })).toBeNull();
+  expect(screen.getByText(/finestra 24h di questa chat è chiusa/)).toBeTruthy();
+  expect((screen.getByLabelText('Messaggio al lead') as HTMLTextAreaElement).value).toBe('');
 });

@@ -132,7 +132,7 @@ function Bozza({ b, onMessa }: { b: BozzaAssistente; onMessa: () => void }) {
   const aperta = composer?.conversationId === b.conversationId;
 
   function metti() {
-    if (!composer || !aperta) return;
+    if (!composer || !aperta || !composer.inPausa || !composer.finestraAperta) return;
     composer.impostaBozza(b.testo);
     toast.ok('Bozza nel composer: rileggila e inviala tu.');
     onMessa();
@@ -147,10 +147,14 @@ function Bozza({ b, onMessa }: { b: BozzaAssistente; onMessa: () => void }) {
       <p className="as-bozza-testo">{b.testo}</p>
       <div className="as-bozza-act">
         {aperta ? (
-          composer.inPausa ? (
-            <Button onClick={metti}>Metti nel composer</Button>
-          ) : (
+          !composer.inPausa ? (
             <span className="muted">Mario è attivo su questa chat: mettilo in pausa per usare la bozza.</span>
+          ) : !composer.finestraAperta ? (
+            <span className="muted">
+              La finestra 24h di questa chat è chiusa: il testo libero non parte, serve un template. La bozza resta qui da copiare.
+            </span>
+          ) : (
+            <Button onClick={metti}>Metti nel composer</Button>
           )
         ) : (
           <Link className="btn ghost" href={`/console?chat=${b.conversationId}`}>

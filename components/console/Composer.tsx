@@ -34,14 +34,16 @@ export function Composer({ conversationId, inPausa, lastInboundAt, now, pausaInC
   const [testo, setTesto] = useState('');
   const [invio, setInvio] = useState(false);
   const campo = useRef<HTMLTextAreaElement>(null);
+  const aperta = finestra24h(lastInboundAt, now).aperta;
   // Una bozza dell'Assistente riempie il campo e basta: l'invio resta un gesto dell'admin.
-  useRegistraComposer(conversationId, inPausa, (bozza) => {
+  // A finestra chiusa il campo è disabilitato: la bozza non entra (l'Assistente lo dice).
+  useRegistraComposer(conversationId, inPausa, aperta, (bozza) => {
+    if (!aperta) return;
     setTesto(bozza.slice(0, 4096));
     campo.current?.focus();
   });
   // Guardia sincrona: due Ctrl+Invio nello stesso giro di eventi vedono ancora `invio` a false.
   const inCorso = useRef(false);
-  const aperta = finestra24h(lastInboundAt, now).aperta;
   const puoInviare = inPausa && aperta && testo.trim() !== '' && !invio;
 
   async function invia() {

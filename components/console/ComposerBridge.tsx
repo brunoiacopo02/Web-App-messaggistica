@@ -3,8 +3,14 @@
 import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 
 /** Il composer della chat aperta, visto da fuori (l'Assistente): di quale chat è, se Mario è in
- *  pausa, e come mettergli un testo nel campo. `impostaBozza` riempie soltanto: non invia mai. */
-export type ComposerAperto = { conversationId: number; inPausa: boolean; impostaBozza: (testo: string) => void };
+ *  pausa, se la finestra 24h è aperta (a finestra chiusa il testo libero non parte) e come
+ *  mettergli un testo nel campo. `impostaBozza` riempie soltanto: non invia mai. */
+export type ComposerAperto = {
+  conversationId: number;
+  inPausa: boolean;
+  finestraAperta: boolean;
+  impostaBozza: (testo: string) => void;
+};
 
 type Store = {
   registra: (c: ComposerAperto) => () => void;
@@ -52,7 +58,12 @@ export function useComposerBridge(): ComposerAperto | null {
 }
 
 /** Usato dal Composer: si registra finché è montato su una chat. Fuori dal provider non fa niente. */
-export function useRegistraComposer(conversationId: number | undefined, inPausa: boolean, imposta: (testo: string) => void) {
+export function useRegistraComposer(
+  conversationId: number | undefined,
+  inPausa: boolean,
+  finestraAperta: boolean,
+  imposta: (testo: string) => void,
+) {
   const store = useContext(Ctx);
   const impostaRef = useRef(imposta);
   useEffect(() => {
@@ -60,8 +71,8 @@ export function useRegistraComposer(conversationId: number | undefined, inPausa:
   });
   useEffect(() => {
     if (!store || conversationId == null) return;
-    return store.registra({ conversationId, inPausa, impostaBozza: (t) => impostaRef.current(t) });
-  }, [store, conversationId, inPausa]);
+    return store.registra({ conversationId, inPausa, finestraAperta, impostaBozza: (t) => impostaRef.current(t) });
+  }, [store, conversationId, inPausa, finestraAperta]);
 }
 
 /** Dopo un'azione eseguita fuori dalla chat (palette, Assistente): la chat aperta rilegge subito il

@@ -65,7 +65,7 @@ it('ComposerBridge: impostaBozza riempie il campo della chat aperta e non invia'
       <Sonda onComposer={(c) => (visto = c)} />
     </ComposerBridgeProvider>,
   );
-  expect(visto).toMatchObject({ conversationId: 42, inPausa: true });
+  expect(visto).toMatchObject({ conversationId: 42, inPausa: true, finestraAperta: true });
   act(() => visto!.impostaBozza('Ciao Giulia, ti richiamo alle 18'));
   const campo = screen.getByLabelText('Messaggio al lead') as HTMLTextAreaElement;
   expect(campo.value).toBe('Ciao Giulia, ti richiamo alle 18');
@@ -87,4 +87,17 @@ it('ComposerBridge: smontato il composer, nessuna chat aperta', () => {
     </ComposerBridgeProvider>,
   );
   expect(visto).toBeNull();
+});
+
+it('ComposerBridge: a finestra 24h chiusa lo dice, e una bozza non riempie il campo', () => {
+  let visto: ComposerAperto | null = null;
+  render(
+    <ComposerBridgeProvider>
+      <Composer conversationId={42} inPausa lastInboundAt="2026-10-03T19:14:00Z" now={now} pausaInCorso={false} onPausa={() => {}} onInvia={async () => true} />
+      <Sonda onComposer={(c) => (visto = c)} />
+    </ComposerBridgeProvider>,
+  );
+  expect(visto).toMatchObject({ conversationId: 42, inPausa: true, finestraAperta: false });
+  act(() => visto!.impostaBozza('Ciao'));
+  expect((screen.getByLabelText('Messaggio al lead') as HTMLTextAreaElement).value).toBe('');
 });
