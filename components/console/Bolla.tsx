@@ -49,7 +49,12 @@ export const Bolla = memo(function Bolla({ m, primo, consegna = true }: BollaPro
   return (
     <>
       <div className={lead ? 'b lead' : 'b mario'} style={lead && primo ? { marginTop: 12 } : undefined}>
-        {m.body}
+        {m.body.trim() !== '' ? (
+          m.body
+        ) : (
+          // Allegati, vocali e sticker arrivano senza testo e il bot non ne salva il contenuto.
+          <span className="b-vuota">Messaggio senza testo: un allegato, un vocale o uno sticker, che qui non si vede.</span>
+        )}
       </div>
       <div className={lead ? 'meta' : 'meta r'}>
         <time dateTime={m.created_at}>{oraRoma(m.created_at)}</time>
