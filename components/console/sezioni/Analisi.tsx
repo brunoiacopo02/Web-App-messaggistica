@@ -13,6 +13,7 @@ import { dataOraBreve } from '@/lib/console/thread';
 import { formattaTelefono } from '@/lib/console/riga';
 import { BarList } from '../ui/BarList';
 import { SkeletonRighe, useCaricamentoVisibile } from '../ui/Skeleton';
+import { Cifre } from '../ui/Cifre';
 import { Errore, Vuoto } from '../ui/Stato';
 import { Tag } from '../ui/Tag';
 
@@ -26,7 +27,6 @@ const PARSER = {
   periodo: parseAsStringLiteral(PERIODI).withDefault('all'),
 };
 
-const fmt = new Intl.NumberFormat('it-IT');
 
 type Dati =
   | { tipo: 'lista'; conteggi: Conteggi; righe: RigaSegmento[] }
@@ -118,7 +118,7 @@ export function Analisi() {
                 onClick={() => void setStato({ scheda: s })}
               >
                 {ETICHETTA_SCHEDA[s]}
-                {n != null && <span className="num seg-n">{fmt.format(n)}</span>}
+                {n != null && <span className="num seg-n"><Cifre n={n} /></span>}
               </button>
             );
           })}
@@ -193,13 +193,13 @@ function ReportLead({ report, periodo }: { report: Report; periodo: Periodo }) {
   return (
     <>
       <dl className="an-kv">
-        <div><dt>Totale lead</dt><dd className="num">{fmt.format(report.total)}</dd></div>
-        <div><dt>Presi</dt><dd className="num">{fmt.format(report.presi)}</dd></div>
-        <div><dt>Non presi</dt><dd className="num">{fmt.format(report.nonPresi)}</dd></div>
+        <div><dt>Totale lead</dt><dd className="num"><Cifre n={report.total} /></dd></div>
+        <div><dt>Presi</dt><dd className="num"><Cifre n={report.presi} /></dd></div>
+        <div><dt>Non presi</dt><dd className="num"><Cifre n={report.nonPresi} /></dd></div>
         <div><dt>Conversione</dt><dd className="num">{percentuale(report.conversionRate)}</dd></div>
       </dl>
       <p className="an-nota">
-        Mai risposto: <b className="num">{fmt.format(report.maiRisposto)}</b>, il{' '}
+        Mai risposto: <b className="num"><Cifre n={report.maiRisposto} /></b>, il{' '}
         <b className="num">{percentuale(report.maiRispostoShareOfNonPresi, 0)}</b> dei non presi
         {periodo === 'all' ? '.' : ` (${ETICHETTA_PERIODO[periodo].toLowerCase()}).`}
       </p>
@@ -222,8 +222,8 @@ function ReportLead({ report, periodo }: { report: Report; periodo: Periodo }) {
                 {report.byFunnel.map((f) => (
                   <tr key={f.funnel}>
                     <td>{f.funnel}</td>
-                    <td className="r num">{fmt.format(f.presi)}</td>
-                    <td className="r num">{fmt.format(f.total)}</td>
+                    <td className="r num"><Cifre n={f.presi} /></td>
+                    <td className="r num"><Cifre n={f.total} /></td>
                     <td className="r num">{f.total ? percentuale(f.presi / f.total) : '–'}</td>
                   </tr>
                 ))}

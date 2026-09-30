@@ -6,8 +6,8 @@ import { statoOnda, type ConsegneOra, type Regia, type VoceScaletta } from '@/li
 import { GraficoOre } from './GraficoOre';
 import { useRegia } from './RegiaProvider';
 import { useOra } from './useOra';
+import { Cifre } from './ui/Cifre';
 
-const fmt = new Intl.NumberFormat('it-IT');
 const pct = new Intl.NumberFormat('it-IT', { style: 'percent', maximumFractionDigits: 1 });
 const FMT_HM = new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 const FMT_GIORNO = new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', weekday: 'long', day: 'numeric', month: 'numeric' });
@@ -130,7 +130,7 @@ function Kpi({ etichetta, valore, sotto, grave }: { etichetta: string; valore: n
   return (
     <div className={grave ? 'kpi bad' : 'kpi'}>
       <div className="l">{etichetta}</div>
-      <div className="v">{fmt.format(valore)}</div>
+      <div className="v"><Cifre n={valore} /></div>
       <div className="s">{sotto}</div>
     </div>
   );

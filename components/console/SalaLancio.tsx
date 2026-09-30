@@ -9,6 +9,7 @@ import { LANCIO_FASI } from '@/lib/lancio-fase';
 import { GraficoOre } from './GraficoOre';
 import { useRegia } from './RegiaProvider';
 import { RigaAvviso } from './RigaAvviso';
+import { Cifre } from './ui/Cifre';
 import { Vuoto } from './ui/Stato';
 import { useAvvisi } from './useAvvisi';
 
@@ -26,7 +27,7 @@ function Numero({ etichetta, valore, grave, children }: { etichetta: string; val
   return (
     <div className={grave ? 'sala-n bad' : 'sala-n'}>
       <dt>{etichetta}</dt>
-      <dd>{fmt.format(valore)}</dd>
+      <dd><Cifre n={valore} /></dd>
       {children ? <dd className="sala-n-s">{children}</dd> : null}
     </div>
   );

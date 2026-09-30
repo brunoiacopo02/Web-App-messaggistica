@@ -57,6 +57,8 @@
 
 /* ---------- Base (num/ico/muted, reset bottoni) ---------- */
 [data-console] .num{font-variant-numeric:tabular-nums}
+/* il punto delle migliaia dentro un numero tabellare torna stretto (vedi ui/Cifre.tsx) */
+[data-console] .sep{font-variant-numeric:normal}
 [data-console] .ico{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
 [data-console] .muted{color:var(--fg3)}
 [data-console] button{font:inherit;color:inherit}

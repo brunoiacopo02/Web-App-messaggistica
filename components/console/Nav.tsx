@@ -14,6 +14,7 @@ import { Kbd } from './ui/Kbd';
 import { useConteggi } from './useConteggi';
 import { useStatoConsole } from './statoUrl';
 import { useRegia } from './RegiaProvider';
+import { Cifre } from './ui/Cifre';
 
 export const ICONA_VISTA: Record<Vista, LucideIcon> = {
   serve_te: UserRound,
@@ -48,7 +49,6 @@ export const SISTEMA: { etichetta: string; href: string; icona: LucideIcon; kbd?
 /** Le sotto-fasi del lancio mostrate sotto "Lancio" (le terminali e il follow-up restano nella vista). */
 const SOTTO_FASI: LancioFase[] = ['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch', 'scelta_fatta'];
 
-const fmt = new Intl.NumberFormat('it-IT');
 
 const conModificatori = (e: MouseEvent) => e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0;
 
@@ -97,7 +97,7 @@ export function Nav() {
                   <Icona size={16} strokeWidth={1.75} className="ico" aria-hidden="true" />
                   <span>{VISTA_META[v].etichetta}</span>
                   <span className={urgente ? 'c urg' : 'c'} aria-label={n === undefined ? undefined : `${n} chat`}>
-                    {n === undefined ? '' : fmt.format(n)}
+                    {n === undefined ? '' : <Cifre n={n} />}
                   </span>
                 </Link>
                 {v === 'lancio' && perFase ? (
@@ -115,7 +115,7 @@ export function Nav() {
                         >
                           <span>{ETICHETTA_FASE[f]}</span>
                           <span className="t" aria-hidden="true"><i style={{ width: `${larghezza}%` }} /></span>
-                          <span className="n" aria-label={`${nf} chat`}>{fmt.format(nf)}</span>
+                          <span className="n" aria-label={`${nf} chat`}><Cifre n={nf} /></span>
                         </Link>
                       );
                     })}

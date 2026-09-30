@@ -15,6 +15,7 @@ import { rinfrescaConteggi, useConteggi } from './useConteggi';
 import { useArrivi } from './useArrivi';
 import { useCursoreLista } from './useCursoreLista';
 import { useOra } from './useOra';
+import { Cifre } from './ui/Cifre';
 
 /** Altezza della riga (56) più 1 px di stacco, come il `gap` del mockup. */
 const ALTEZZA_VOCE = 57;
@@ -29,7 +30,6 @@ type Dati = { chiave: string; righe: RigaLista[]; prossimo: string | null; error
 
 const NESSUNA: RigaLista[] = [];
 
-const fmt = new Intl.NumberFormat('it-IT');
 
 function Ricerca({ iniziale, onCambia, inputRef }: { iniziale: string; onCambia: (q: string) => void; inputRef: React.RefObject<HTMLInputElement | null> }) {
   const [testo, setTesto] = useState(iniziale);
@@ -261,11 +261,11 @@ export function ListaChat() {
   const filtrata = !!(fase || solo || q);
   const totale = filtrata
     ? attuali && !attuali.errore
-      ? `${fmt.format(righe.length)}${attuali.prossimo ? '+' : ''}`
-      : ''
+      ? <Cifre n={righe.length} suffisso={attuali.prossimo ? '+' : undefined} />
+      : null
     : conteggi
-      ? fmt.format(conteggi[vista])
-      : '';
+      ? <Cifre n={conteggi[vista]} />
+      : null;
   const titolo = fase ? `${VISTA_META[vista].etichetta}: ${ETICHETTA_FASE[fase].toLowerCase()}` : VISTA_META[vista].etichetta;
 
   let corpo: React.ReactNode;

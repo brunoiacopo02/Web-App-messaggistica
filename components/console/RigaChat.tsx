@@ -3,6 +3,7 @@
 import { memo } from 'react';
 import type { RigaLista } from '@/lib/console/viste-db';
 import { nomeRiga, orarioRiga, prefissoAnteprima } from '@/lib/console/riga';
+import { Orario } from './ui/Cifre';
 import { Avatar } from './ui/Avatar';
 import { Tag } from './ui/Tag';
 
@@ -55,7 +56,7 @@ export const RigaChat = memo(function RigaChat({ riga, selezionata, cursore, app
           <span className={secondario ? 'nm mono nm-tel' : 'nm'}>{principale}</span>
           <Contesto contesto={riga.contesto} secondario={secondario} />
           <span className="tm" style={riga.contesto || secondario ? undefined : { marginLeft: 'auto' }}>
-            {orarioRiga(riga.ultimoAt, now)}
+            <Orario testo={orarioRiga(riga.ultimoAt, now)} />
           </span>
         </span>
         <span className="l2">
