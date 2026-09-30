@@ -13,7 +13,11 @@ export const maxDuration = 300;
 
 const Corpo = z.object({ azione: z.enum(ID_AZIONI), params: z.unknown().optional() });
 
-/** Prova a vuoto: dice cosa succederebbe e restituisce il token monouso per confermare. Non scrive niente. */
+/**
+ * Prova a vuoto: dice cosa succederebbe e restituisce il token firmato per confermare.
+ * Non manda niente ai lead né al CRM, ma non è a scrittura zero: la prova di `agenda-delivery`
+ * in `arretrati` lascia comunque la sua riga di riepilogo in event_log.
+ */
 export async function POST(req: Request) {
   const admin = await richiediAdmin();
   if (!admin.ok) return admin.risposta;

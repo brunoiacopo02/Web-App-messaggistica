@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import type { getSupabaseAdmin } from '@/lib/supabase/admin';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -13,9 +13,14 @@ import {
 } from '@/lib/lancio-settings';
 import { getAutoReply, setAutoReply } from '@/lib/fenice-settings';
 import { isConversazioneChat } from '@/lib/chat-perimetro';
-import { ID_CRON, type IdAzione, type IdCron } from './azioni-tipi';
+import { ID_AZIONI, ID_CRON, type IdAzione, type IdCron } from './azioni-tipi';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
+// Le letture di event_log per chiave JSON (`payload->>nonce`) non sono tipizzate: lo stesso
+// cast di `avvisi-db`.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Grezzo = { from: (t: string) => any };
+const grezzo = (s: Supa) => s as unknown as Grezzo;
 
 export type Anteprima = {
   azione: IdAzione;
@@ -35,12 +40,19 @@ export type CodiceErrore =
   | 'anteprima_scaduta'
   | 'gia_eseguita'
   | 'conteggio_cambiato'
+  | 'azione_in_corso'
   | 'nessun_esito'
+  | 'esito_senza_data'
   | 'chat_fuori_perimetro'
   | 'cron_secret_mancante';
 
 export class ErroreAzione extends Error {
-  constructor(public readonly codice: CodiceErrore, public readonly nuovaAnteprima?: Anteprima) {
+  constructor(
+    public readonly codice: CodiceErrore,
+    public readonly nuovaAnteprima?: Anteprima,
+    /** Il testo per l'admin, quando il codice da solo non basta (`azione_in_corso`). */
+    public readonly spiegazione?: string,
+  ) {
     super(codice);
     this.name = 'ErroreAzione';
   }
@@ -89,86 +101,137 @@ const EVENTO_GIRO: Record<IdCron, string> = {
 
 // Le uniche due rotte cron con una prova a vuoto vera: POST { esegui:false } non manda niente.
 const CRON_CON_PROVA: readonly IdCron[] = ['riapri-mute', 'adotta-mai-risposti'];
+// Il `max` di default delle due rotte quando il corpo non lo dice (la console non lo manda):
+// app/api/cron/riapri-mute (50) e app/api/cron/adotta-mai-risposti (25).
+const TETTO_GIRO: Partial<Record<IdCron, number>> = { 'riapri-mute': 50, 'adotta-mai-risposti': 25 };
+// Gli esiti che il contratto non accetta senza data (`DATE_REQUIRED` in lib/bot-contract.ts).
+const ESITI_CON_DATA: readonly string[] = ['APPUNTAMENTO', 'RICHIAMO'];
 
 const VALIDITA_MS = 5 * 60_000;
+// Oltre questo tempo un avvio senza chiusura non blocca piu': la rotta muore a 300 s.
+const FINESTRA_IN_CORSO_MS = 6 * 60_000;
 const TIMEOUT_MS = 280_000;
 // La rotta `esegui` muore a 300 s: prova a vuoto di controllo + giro vero devono starci dentro.
 const BUDGET_ESEGUI_MS = 290_000;
 const SOGLIA_CAMBIO = 0.2;
 const MAX_RIGHE = 10;
 
-type Voce = {
+// ---------------------------------------------------------------------------------------
+// Token firmato, senza stato: anteprima ed esegui girano su funzioni Vercel diverse.
+
+type Carico = {
   azione: IdAzione;
   params: Record<string, unknown>;
   conteggio: number | null;
   descrizione: string;
   scadeAt: number;
-  usato: boolean;
+  nonce: string;
 };
-const token = new Map<string, Voce>();
 
-/** Solo per i test, come `_svuotaCacheMonitor`. */
-export function _svuotaToken(): void {
-  token.clear();
+function segreto(): string {
+  const s = process.env.CRON_SECRET;
+  if (!s) throw new ErroreAzione('cron_secret_mancante');
+  return s;
 }
 
-function pulisciScaduti(now: number): void {
-  for (const [k, v] of token) if (v.scadeAt <= now) token.delete(k);
+function hmac(corpo: string): string {
+  return createHmac('sha256', segreto()).update(corpo).digest('base64url');
+}
+
+function firmaToken(c: Carico): string {
+  const corpo = Buffer.from(JSON.stringify(c)).toString('base64url');
+  return `${corpo}.${hmac(corpo)}`;
+}
+
+/** Firma sbagliata, token malformato o scaduto sono tutti "anteprima scaduta": si rifà. */
+function leggiToken(t: string, now: Date): Carico {
+  const parti = t.split('.');
+  if (parti.length !== 2) throw new ErroreAzione('anteprima_scaduta');
+  const [corpo, firma] = parti;
+  const attesa = Buffer.from(hmac(corpo));
+  const data = Buffer.from(firma);
+  if (attesa.length !== data.length || !timingSafeEqual(attesa, data)) throw new ErroreAzione('anteprima_scaduta');
+  let c: Carico;
+  try {
+    c = JSON.parse(Buffer.from(corpo, 'base64url').toString('utf8')) as Carico;
+  } catch {
+    throw new ErroreAzione('anteprima_scaduta');
+  }
+  const valido = c && (ID_AZIONI as readonly string[]).includes(c.azione)
+    && PARAMS[c.azione].safeParse(c.params).success
+    && typeof c.scadeAt === 'number' && typeof c.nonce === 'string' && c.nonce !== ''
+    && (c.conteggio === null || typeof c.conteggio === 'number');
+  if (!valido || c.scadeAt <= now.getTime()) throw new ErroreAzione('anteprima_scaduta');
+  return c;
 }
 
 type Bozza = Omit<Anteprima, 'azione' | 'params' | 'token' | 'scadeAt'>;
+
+function registra(azione: IdAzione, params: Record<string, unknown>, b: Bozza, now: Date): Anteprima {
+  const scadeAt = now.getTime() + VALIDITA_MS;
+  const token = firmaToken({ azione, params, conteggio: b.conteggio, descrizione: b.descrizione, scadeAt, nonce: randomUUID() });
+  return { azione, params, ...b, token, scadeAt: new Date(scadeAt).toISOString() };
+}
+
+// ---------------------------------------------------------------------------------------
+// API
 
 export async function anteprima(azione: IdAzione, params: unknown, ctx: Contesto): Promise<Anteprima> {
   const schema = PARAMS[azione];
   if (!schema) throw new Error('azione_sconosciuta');
   const p = schema.parse(params ?? {}) as Record<string, unknown>;
+  segreto();
+  await rifiutaSeInCorso(ctx, azione, p, null);
   const bozza = await calcolaAnteprima(azione, p, ctx, TIMEOUT_MS);
   return registra(azione, p, bozza, ctx.now);
 }
 
-function registra(azione: IdAzione, params: Record<string, unknown>, b: Bozza, now: Date): Anteprima {
-  pulisciScaduti(now.getTime());
-  const id = randomUUID();
-  const scadeAt = now.getTime() + VALIDITA_MS;
-  token.set(id, { azione, params, conteggio: b.conteggio, descrizione: b.descrizione, scadeAt, usato: false });
-  return { azione, params, ...b, token: id, scadeAt: new Date(scadeAt).toISOString() };
-}
-
 export async function esegui(t: string, ctx: Contesto): Promise<Esito> {
   const inizio = Date.now();
-  const voce = token.get(t);
-  if (!voce || voce.scadeAt <= ctx.now.getTime()) throw new ErroreAzione('anteprima_scaduta');
-  if (voce.usato) throw new ErroreAzione('gia_eseguita');
-  // Marcato prima di qualunque effetto: un doppio clic non deve mai partire due volte.
-  voce.usato = true;
+  const c = leggiToken(t, ctx.now);
+  // Lo stesso nonce si esclude: un secondo clic sullo stesso token e' `gia_eseguita`, non "in corso".
+  await rifiutaSeInCorso(ctx, c.azione, c.params, c.nonce);
+  await prendiIlNonce(ctx, c);
 
+  // Da qui ogni uscita chiude l'avvio con una riga `console_azione`, anche i rifiuti:
+  // un avvio senza chiusura bloccherebbe la stessa azione per 6 minuti.
   const restante = () => Math.max(5_000, Math.min(TIMEOUT_MS, BUDGET_ESEGUI_MS - (Date.now() - inizio)));
-
-  if (voce.conteggio !== null && haProvaAVuoto(voce)) {
-    const nuova = await calcolaAnteprima(voce.azione, voce.params, ctx, restante());
-    if (cambiatoTroppo(voce.conteggio, nuova.conteggio)) {
-      throw new ErroreAzione('conteggio_cambiato', registra(voce.azione, voce.params, nuova, ctx.now));
-    }
-  }
-
   let esito: Esito;
+  let rifiuto: ErroreAzione | null = null;
   try {
-    esito = await eseguiAzione(voce, ctx, restante);
+    if (c.conteggio !== null && haProvaAVuoto(c)) {
+      let nuova: Bozza;
+      try {
+        nuova = await calcolaAnteprima(c.azione, c.params, ctx, restante());
+      } catch (e) {
+        if (e instanceof ErroreAzione) throw e;
+        throw new Error(`prova a vuoto di controllo fallita, niente è partito: ${messaggioDi(e)}`);
+      }
+      if (cambiatoTroppo(c.conteggio, nuova.conteggio)) {
+        throw new ErroreAzione('conteggio_cambiato', registra(c.azione, c.params, nuova, ctx.now));
+      }
+    }
+    esito = await eseguiAzione(c, ctx, restante);
   } catch (e) {
-    if (e instanceof ErroreAzione) throw e;
-    esito = { ok: false, fatti: 0, falliti: 0, dettagli: [], messaggio: `Errore imprevisto: ${messaggioDi(e)}` };
+    if (e instanceof ErroreAzione) {
+      rifiuto = e;
+      esito = { ok: false, fatti: 0, falliti: 0, dettagli: [], messaggio: `rifiutata (${e.codice}), niente è partito` };
+    } else {
+      esito = { ok: false, fatti: 0, falliti: 0, dettagli: [], messaggio: `Non riuscita: ${messaggioDi(e)}` };
+    }
   }
 
   // Il registro non blocca l'azione: se la riga non si scrive, l'esito resta comunque vero.
   try {
     await ctx.s.from('event_log').insert({
       type: 'console_azione',
-      level: esito.ok ? 'info' : 'error',
-      message: `[console] ${voce.azione} da ${ctx.email}: ${esito.messaggio}`,
+      level: rifiuto ? 'warn' : esito.ok ? 'info' : 'error',
+      message: `[console] ${c.azione} da ${ctx.email}: ${esito.messaggio}`,
       payload: {
-        azione: voce.azione,
-        params: voce.params,
-        anteprima: { conteggio: voce.conteggio, descrizione: voce.descrizione },
+        nonce: c.nonce,
+        azione: c.azione,
+        params: c.params,
+        anteprima: { conteggio: c.conteggio, descrizione: c.descrizione },
         esito,
         by: ctx.email,
       } as never,
@@ -176,12 +239,69 @@ export async function esegui(t: string, ctx: Contesto): Promise<Esito> {
   } catch {
     // best effort
   }
+  if (rifiuto) throw rifiuto;
   return esito;
 }
 
-function haProvaAVuoto(v: Voce): boolean {
-  if (v.azione === 'rinvia_esiti_403' || v.azione === 'recupera_agende_consegnate') return true;
-  return v.azione === 'rilancia_cron' && CRON_CON_PROVA.includes(v.params.cron as IdCron);
+/**
+ * Monouso senza memoria: la riga d'avvio si scrive PRIMA di qualunque effetto, poi vince
+ * la prima riga con quel nonce. Due conferme simultanee scrivono due righe, una sola parte.
+ */
+async function prendiIlNonce(ctx: Contesto, c: Carico): Promise<void> {
+  const { data: mia, error } = await grezzo(ctx.s).from('event_log').insert({
+    type: 'console_azione_avviata',
+    level: 'info',
+    message: `[console] avvio ${c.azione} da ${ctx.email}`,
+    payload: { nonce: c.nonce, azione: c.azione, params: c.params, by: ctx.email },
+  }).select('id').single();
+  if (error || !mia) throw new Error(`registro_non_scritto: ${error?.message ?? 'nessuna riga'}. Niente è partito.`);
+  const { data: prime, error: e2 } = await grezzo(ctx.s).from('event_log').select('id')
+    .eq('type', 'console_azione_avviata').eq('payload->>nonce', c.nonce)
+    .order('id', { ascending: true }).limit(1);
+  if (e2) throw new Error(`registro_non_letto: ${e2.message}. Niente è partito.`);
+  if ((prime ?? [])[0]?.id !== mia.id) throw new ErroreAzione('gia_eseguita');
+}
+
+type RigaAvvio = { id: number; created_at: string; payload: { nonce?: unknown; params?: unknown } | null };
+
+/** Un avvio della stessa azione con gli stessi parametri, negli ultimi 6 minuti e ancora senza chiusura. */
+async function rifiutaSeInCorso(ctx: Contesto, azione: IdAzione, params: Record<string, unknown>, escludi: string | null): Promise<void> {
+  const da = new Date(ctx.now.getTime() - FINESTRA_IN_CORSO_MS).toISOString();
+  const { data, error } = await grezzo(ctx.s).from('event_log').select('id, created_at, payload')
+    .eq('type', 'console_azione_avviata').eq('payload->>azione', azione).gte('created_at', da)
+    .order('id', { ascending: true });
+  if (error) throw new Error(`registro_non_letto: ${error.message}`);
+  const canon = canonico(params);
+  const stesse = ((data ?? []) as RigaAvvio[]).filter((r) =>
+    typeof r.payload?.nonce === 'string' && r.payload.nonce !== escludi && canonico(r.payload.params ?? {}) === canon);
+  if (stesse.length === 0) return;
+  const nonce = [...new Set(stesse.map((r) => String(r.payload!.nonce)))];
+  const { data: chiuse, error: e2 } = await grezzo(ctx.s).from('event_log').select('payload')
+    .eq('type', 'console_azione').in('payload->>nonce', nonce);
+  if (e2) throw new Error(`registro_non_letto: ${e2.message}`);
+  const finite = new Set(((chiuse ?? []) as { payload: { nonce?: unknown } | null }[]).map((r) => String(r.payload?.nonce)));
+  const aperta = stesse.find((r) => !finite.has(String(r.payload!.nonce)));
+  if (aperta) {
+    throw new ErroreAzione('azione_in_corso', undefined, `Questa azione è già in corso da ${oraRoma(aperta.created_at)}. Aspetta che finisca.`);
+  }
+}
+
+/** JSON con le chiavi ordinate: `{a,b}` e `{b,a}` sono la stessa azione. */
+export function canonico(x: unknown): string {
+  if (Array.isArray(x)) return `[${x.map(canonico).join(',')}]`;
+  if (x && typeof x === 'object') {
+    return `{${Object.keys(x as object).sort().map((k) => `${JSON.stringify(k)}:${canonico((x as Record<string, unknown>)[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(x ?? null);
+}
+
+function oraRoma(iso: string): string {
+  return new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
+}
+
+function haProvaAVuoto(c: Carico): boolean {
+  if (c.azione === 'rinvia_esiti_403' || c.azione === 'recupera_agende_consegnate') return true;
+  return c.azione === 'rilancia_cron' && CRON_CON_PROVA.includes(c.params.cron as IdCron);
 }
 
 function cambiatoTroppo(prima: number, dopo: number | null): boolean {
@@ -202,7 +322,8 @@ async function calcolaAnteprima(azione: IdAzione, p: Record<string, unknown>, ct
         descrizione: azione === 'rinvia_esiti_403'
           ? 'Rimanda al CRM, come nota, gli esiti rifiutati con 403 perché il lead era già tornato a una persona. Scrive al CRM, non ai lead.'
           : "Avvisa il CRM delle agende GDO consegnate di cui non ha mai saputo niente. Scrive al CRM, non ai lead.",
-        conteggio: numero(j.candidate) ?? 0,
+        // Per le agende conta chi ha davvero una consegna: le altre candidate si saltano.
+        conteggio: numero(azione === 'rinvia_esiti_403' ? j.candidate : j.consegnate) ?? 0,
         righe: righeDa(j.esempi),
         avvertenza: null,
       };
@@ -212,12 +333,10 @@ async function calcolaAnteprima(azione: IdAzione, p: Record<string, unknown>, ct
       const c = await leggiConversazione(ctx.s, id);
       const e = c ? esitoDa(c) : null;
       if (!c || !e) {
-        return {
-          descrizione: `Rinvia al CRM l'esito della chat ${id}.`,
-          conteggio: 0,
-          righe: [],
-          avvertenza: 'Nessun esito da rinviare su questa chat',
-        };
+        return { descrizione: `Rinvia al CRM l'esito della chat ${id}.`, conteggio: 0, righe: [], avvertenza: 'Nessun esito da rinviare su questa chat' };
+      }
+      if (e.senzaData) {
+        return { descrizione: `Rinvia al CRM l'esito ${e.outcome} della chat ${id}.`, conteggio: 0, righe: [e.outcome], avvertenza: 'Esito senza data: non si può rinviare' };
       }
       return {
         descrizione: `Rinvia al CRM l'esito ${e.outcome} della chat ${id}${c.crm_lead_id ? ` (lead ${c.crm_lead_id})` : ''}.`,
@@ -233,19 +352,15 @@ async function calcolaAnteprima(azione: IdAzione, p: Record<string, unknown>, ct
       if (CRON_CON_PROVA.includes(cron)) {
         const r = await chiamaCron(ctx, cron, 'POST', { esegui: false }, timeout);
         const j = richiediJsonOk(r, cron);
+        const candidate = numero(j.candidate) ?? 0;
         return {
           descrizione: DESCRIZIONE_CRON[cron],
-          conteggio: numero(j.candidate) ?? 0,
-          righe: [...righeGiro, ...righeDa(j.esempi)].slice(0, MAX_RIGHE),
+          conteggio: candidate,
+          righe: [`Questo giro ne manda al massimo ${TETTO_GIRO[cron]} su ${candidate}.`, ...righeGiro, ...righeDa(j.esempi)].slice(0, MAX_RIGHE),
           avvertenza: 'Manda messaggi WhatsApp ai lead.',
         };
       }
-      return {
-        descrizione: DESCRIZIONE_CRON[cron],
-        conteggio: null,
-        righe: righeGiro,
-        avvertenza: 'Questo giro non ha una prova a vuoto: parte davvero.',
-      };
+      return { descrizione: DESCRIZIONE_CRON[cron], conteggio: null, righe: righeGiro, avvertenza: 'Questo giro non ha una prova a vuoto: parte davvero.' };
     }
     case 'interruttore': {
       const chiave = p.chiave as string;
@@ -280,40 +395,44 @@ async function calcolaAnteprima(azione: IdAzione, p: Record<string, unknown>, ct
 // ---------------------------------------------------------------------------------------
 // Esecuzioni
 
-async function eseguiAzione(v: Voce, ctx: Contesto, timeout: () => number): Promise<Esito> {
-  const p = v.params;
-  switch (v.azione) {
+async function eseguiAzione(c: Carico, ctx: Contesto, timeout: () => number): Promise<Esito> {
+  const p = c.params;
+  const dettagli: string[] = [];
+  switch (c.azione) {
     case 'rinvia_esiti_403':
     case 'recupera_agende_consegnate': {
-      const r = await chiamaCronSicura(ctx, 'arretrati', 'POST', { cosa: cosaArretrati(v.azione), esegui: true, max: 1000 }, timeout());
+      const r = await chiamaCronSicura(ctx, 'arretrati', 'POST', { cosa: cosaArretrati(c.azione), esegui: true, max: 1000 }, timeout());
       if ('esito' in r) return r.esito;
       const j = r.json ?? {};
       if (!r.ok || j.ok === false) return fallitoHttp(r);
-      const fatti = numero(v.azione === 'rinvia_esiti_403' ? j.inviate : j.avvisate) ?? 0;
+      const esiti = c.azione === 'rinvia_esiti_403';
+      const fatti = numero(esiti ? j.inviate : j.avvisate) ?? 0;
       const falliti = numero(j.fallite) ?? 0;
-      const verbo = v.azione === 'rinvia_esiti_403' ? 'rinviati al CRM' : 'avvisi accettati dal CRM';
       return {
         ok: true, fatti, falliti, dettagli: righeDa(j.esempi),
-        messaggio: `${fatti} ${verbo}, ${falliti} falliti su ${numero(j.candidate) ?? '?'} candidati`,
+        messaggio: esiti
+          ? `${fatti} rinviati al CRM, ${falliti} falliti su ${numero(j.candidate) ?? '?'} candidati`
+          : `${fatti} avvisi accettati dal CRM, ${falliti} falliti su ${numero(j.consegnate) ?? '?'} consegnate`,
       };
     }
     case 'rinvia_esito': {
       const id = p.conversationId as number;
-      const c = await leggiConversazione(ctx.s, id);
-      const e = c ? esitoDa(c) : null;
+      const conv = await leggiConversazione(ctx.s, id);
+      const e = conv ? esitoDa(conv) : null;
       if (!e) throw new ErroreAzione('nessun_esito');
+      if (e.senzaData) throw new ErroreAzione('esito_senza_data');
       const res = await sendOutcome(ctx.s, id, { outcome: e.outcome, date: e.date });
       // La stessa riga di app/api/cron/resend-outcome: chi legge il registro non deve
       // distinguere un rinvio dalla console da uno a mano.
-      await ctx.s.from('event_log').insert({
+      await scriviAudit(ctx.s, {
         type: 'admin_resend_outcome',
-        payload: { conversationId: id, outcome: e.outcome, result: res } as never,
+        payload: { conversationId: id, outcome: e.outcome, result: res },
         message: `[admin] resend-outcome conv ${id}: ${e.outcome} → ${res.sent ? 'ok' : res.error ?? res.status}`,
         level: res.sent ? 'info' : 'error',
-      });
+      }, dettagli);
       return res.sent
-        ? { ok: true, fatti: 1, falliti: 0, dettagli: [], messaggio: `Esito ${e.outcome} della chat ${id} accettato dal CRM` }
-        : { ok: false, fatti: 0, falliti: 1, dettagli: [], messaggio: `Il CRM non ha preso l'esito ${e.outcome} della chat ${id}: ${res.error ?? `HTTP ${res.status}`}` };
+        ? { ok: true, fatti: 1, falliti: 0, dettagli, messaggio: `Esito ${e.outcome} della chat ${id} accettato dal CRM` }
+        : { ok: false, fatti: 0, falliti: 1, dettagli, messaggio: `Il CRM non ha preso l'esito ${e.outcome} della chat ${id}: ${res.error ?? `HTTP ${res.status}`}` };
     }
     case 'rilancia_cron': {
       const cron = p.cron as IdCron;
@@ -336,54 +455,85 @@ async function eseguiAzione(v: Voce, ctx: Contesto, timeout: () => number): Prom
       if (chiave === 'fenice_ai_autoreply') {
         const prima = await getAutoReply(ctx.s);
         await setAutoReply(ctx.s, valore);
-        await ctx.s.from('event_log').insert({
+        await scriviAudit(ctx.s, {
           type: 'console_autoreply_cambiata',
-          payload: { key: chiave, old: prima, new: valore, who: ctx.email } as never,
+          payload: { key: chiave, old: prima, new: valore, who: ctx.email },
           message: `[console] ${chiave}: ${prima} → ${valore} (${ctx.email})`,
           level: 'info',
-        });
-        return { ok: true, fatti: 1, falliti: 0, dettagli: [], messaggio: `${chiave}: ${statoLeggibile(prima)} → ${statoLeggibile(valore)}` };
+        }, dettagli);
+        return { ok: true, fatti: 1, falliti: 0, dettagli, messaggio: `${chiave}: ${statoLeggibile(prima)} → ${statoLeggibile(valore)}` };
       }
       const valid = validateLancioSettingInput(chiave, valore);
-      if (!valid.ok) return { ok: false, fatti: 0, falliti: 1, dettagli: [], messaggio: `Valore non accettato per ${chiave}: ${valid.reason}` };
+      if (!valid.ok) return { ok: false, fatti: 0, falliti: 1, dettagli, messaggio: `Valore non accettato per ${chiave}: ${valid.reason}` };
       const k = chiave as LancioSettingKey;
       const prima = await getLancioSettingValue(ctx.s, k);
       const scritto = await setLancioSetting(ctx.s, k, valid.value);
       if (!scritto.ok) {
-        return { ok: false, fatti: 0, falliti: 1, dettagli: [], messaggio: `${chiave} NON salvata: ${scritto.error}. Il valore è rimasto quello di prima.` };
+        // Come app/api/fenice/lancio-settings: la scrittura fallita lascia la sua riga.
+        await scriviAudit(ctx.s, {
+          type: 'lancio_setting_scrittura_fallita',
+          payload: { key: k, value: valid.value, who: ctx.email, error: scritto.error },
+          message: `[lancio] impostazione ${k} NON salvata: ${scritto.error}`,
+          level: 'error',
+        }, dettagli);
+        return { ok: false, fatti: 0, falliti: 1, dettagli, messaggio: `${chiave} NON salvata: ${scritto.error}. Il valore è rimasto quello di prima.` };
       }
       // Stesso formato di app/api/fenice/lancio-settings: prima, dopo e chi.
       const leggibile = valid.value === '' ? '(vuoto)' : String(valid.value);
-      await ctx.s.from('event_log').insert({
+      const audit = await scriviAudit(ctx.s, {
         type: 'lancio_setting_cambiata',
-        payload: { key: k, old: prima ?? null, new: valid.value, who: ctx.email } as never,
+        payload: { key: k, old: prima ?? null, new: valid.value, who: ctx.email },
         message: `[lancio] ${k}: ${prima === null || prima === undefined ? '(vuoto)' : String(prima)} → ${leggibile} (${ctx.email})`,
         level: 'info',
-      });
-      return { ok: true, fatti: 1, falliti: 0, dettagli: [], messaggio: `${chiave}: ${statoLeggibile(isAttivo(prima))} → ${statoLeggibile(valore)}` };
+      }, dettagli);
+      if (!audit) {
+        await scriviAudit(ctx.s, {
+          type: 'lancio_setting_audit_fallito',
+          payload: { key: k, value: valid.value, who: ctx.email },
+          message: `[lancio] ${k} salvata, ma la riga di registro non è stata scritta (${ctx.email})`,
+          level: 'warn',
+        }, dettagli);
+      }
+      return { ok: true, fatti: 1, falliti: 0, dettagli, messaggio: `${chiave}: ${statoLeggibile(isAttivo(prima))} → ${statoLeggibile(valore)}` };
     }
     case 'pausa_mario':
     case 'riprendi_mario': {
       const id = p.conversationId as number;
       await richiediPerimetro(ctx.s, id);
-      const pausa = v.azione === 'pausa_mario';
+      const pausa = c.azione === 'pausa_mario';
       const pausedAt = pausa ? ctx.now.toISOString() : null;
       const { error } = await ctx.s.from('conversations').update({ ai_paused_at: pausedAt }).eq('id', id);
       if (error) {
-        return { ok: false, fatti: 0, falliti: 1, dettagli: [], messaggio: `La chat ${id} non è stata aggiornata: ${error.message}` };
+        return { ok: false, fatti: 0, falliti: 1, dettagli, messaggio: `La chat ${id} non è stata aggiornata: ${error.message}` };
       }
       // Stesso formato di app/api/chat/pause.
-      await ctx.s.from('event_log').insert({
+      await scriviAudit(ctx.s, {
         type: pausa ? 'bot_paused' : 'bot_resumed',
-        payload: { conversationId: id, by: ctx.email } as never,
+        payload: { conversationId: id, by: ctx.email },
         message: pausa
           ? `[chat] bot fermato sulla conv ${id} da ${ctx.email}`
           : `[chat] bot riattivato sulla conv ${id} da ${ctx.email}`,
         level: 'warn',
-      });
-      return { ok: true, fatti: 1, falliti: 0, dettagli: [], messaggio: pausa ? `Mario fermato sulla chat ${id}` : `Mario riattivato sulla chat ${id}` };
+      }, dettagli);
+      return { ok: true, fatti: 1, falliti: 0, dettagli, messaggio: pausa ? `Mario fermato sulla chat ${id}` : `Mario riattivato sulla chat ${id}` };
     }
   }
+}
+
+/** Una riga di registro: se non si scrive lo si dice nei dettagli dell'esito, senza fermare l'azione. */
+async function scriviAudit(
+  s: Supa,
+  riga: { type: string; payload: Record<string, unknown>; message: string; level: string },
+  dettagli: string[],
+): Promise<boolean> {
+  try {
+    const { error } = await s.from('event_log').insert({ ...riga, payload: riga.payload as never });
+    if (!error) return true;
+  } catch {
+    // come un errore restituito
+  }
+  dettagli.push(`La riga di registro ${riga.type} non è stata scritta.`);
+  return false;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -394,13 +544,12 @@ type Risposta = { ok: boolean; status: number; json: Record<string, unknown> | n
 async function chiamaCron(
   ctx: Contesto, cron: IdCron | 'arretrati', metodo: 'GET' | 'POST', corpo: unknown, timeout: number,
 ): Promise<Risposta> {
-  const segreto = process.env.CRON_SECRET;
-  if (!segreto) throw new ErroreAzione('cron_secret_mancante');
+  const bearer = segreto();
   const f = ctx.fetch ?? fetch;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeout);
   try {
-    const headers: Record<string, string> = { authorization: `Bearer ${segreto}` };
+    const headers: Record<string, string> = { authorization: `Bearer ${bearer}` };
     if (metodo === 'POST') headers['content-type'] = 'application/json';
     const r = await f(`${ctx.origin}/api/cron/${cron}`, {
       method: metodo,
@@ -472,14 +621,15 @@ async function leggiConversazione(s: Supa, id: number): Promise<RigaConv | null>
 
 const ESITI: readonly string[] = ['APPUNTAMENTO', 'DA_SCARTARE', 'RICHIAMO', 'NON_RISPOSTO', 'INTERROTTO', 'NOTA', 'CONTATTO_UMANO'];
 
-function esitoDa(c: RigaConv): { outcome: BotOutcome; date: string | undefined } | null {
-  if (c.bot_outcome && ESITI.includes(c.bot_outcome)) {
-    return { outcome: c.bot_outcome as BotOutcome, date: c.bot_outcome === 'APPUNTAMENTO' ? c.bot_scheduled_at ?? undefined : undefined };
-  }
-  if (!c.bot_outcome && c.ai_status === 'booked' && c.bot_scheduled_at) {
-    return { outcome: 'APPUNTAMENTO', date: c.bot_scheduled_at };
-  }
-  return null;
+type EsitoRicavato = { outcome: BotOutcome; date: string | undefined; senzaData: boolean };
+
+function esitoDa(c: RigaConv): EsitoRicavato | null {
+  let outcome: BotOutcome | null = null;
+  if (c.bot_outcome && ESITI.includes(c.bot_outcome)) outcome = c.bot_outcome as BotOutcome;
+  else if (!c.bot_outcome && c.ai_status === 'booked') outcome = 'APPUNTAMENTO';
+  if (!outcome) return null;
+  if (!ESITI_CON_DATA.includes(outcome)) return { outcome, date: undefined, senzaData: false };
+  return { outcome, date: c.bot_scheduled_at ?? undefined, senzaData: !c.bot_scheduled_at };
 }
 
 async function ultimoGiro(s: Supa, cron: IdCron): Promise<{ created_at: string; message: string } | null> {
