@@ -405,6 +405,28 @@ describe('interruttore', () => {
   });
 });
 
+describe('azioni su una chat nel thread', () => {
+  it('console_azione_avviata e console_azione portano conversationId al primo livello', async () => {
+    const c = clienteFinto({ conv: { ai_paused_at: null } });
+    const a = await anteprima('pausa_mario', { conversationId: 77 }, ctxCon(c));
+    await esegui(a.token, ctxCon(c));
+    const avvio = soloTipo(c.scritture, 'console_azione_avviata')[0].riga.payload as Record<string, unknown>;
+    const fine = soloTipo(c.scritture, 'console_azione')[0].riga.payload as Record<string, unknown>;
+    expect(avvio.conversationId).toBe(77);
+    expect(fine.conversationId).toBe(77);
+    // Il thread filtra su payload->>conversationId: l'azione compare tra gli eventi della chat.
+    expect(c.eventi.filter((e) => (e.payload as Record<string, unknown>)?.conversationId === 77).map((e) => e.type))
+      .toEqual(expect.arrayContaining(['console_azione_avviata', 'console_azione', 'bot_paused']));
+  });
+  it('senza conversationId nei params il payload non ne ha uno', async () => {
+    const c = clienteFinto({ settings: { lancio_attivo: false } });
+    const a = await anteprima('interruttore', { chiave: 'lancio_attivo', valore: true }, ctxCon(c));
+    await esegui(a.token, ctxCon(c));
+    expect(soloTipo(c.scritture, 'console_azione')[0].riga.payload).not.toHaveProperty('conversationId');
+    expect(soloTipo(c.scritture, 'console_azione_avviata')[0].riga.payload).not.toHaveProperty('conversationId');
+  });
+});
+
 describe('pausa e ripresa di Mario', () => {
   it('pausa: ai_paused_at ISO ed evento bot_paused come /api/chat/pause', async () => {
     const c = clienteFinto({ conv: { ai_paused_at: null } });

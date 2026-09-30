@@ -232,6 +232,7 @@ export async function esegui(t: string, ctx: Contesto): Promise<Esito> {
       payload: {
         nonce: c.nonce,
         azione: c.azione,
+        ...dellaChat(c.params),
         params: c.params,
         anteprima: { conteggio: c.conteggio, descrizione: c.descrizione },
         esito,
@@ -254,7 +255,7 @@ async function prendiIlNonce(ctx: Contesto, c: Carico): Promise<void> {
     type: 'console_azione_avviata',
     level: 'info',
     message: `[console] avvio ${c.azione} da ${ctx.email}`,
-    payload: { nonce: c.nonce, azione: c.azione, params: c.params, by: ctx.email },
+    payload: { nonce: c.nonce, azione: c.azione, ...dellaChat(c.params), params: c.params, by: ctx.email },
   }).select('id').single();
   if (error || !mia) throw new Error(`registro_non_scritto: ${error?.message ?? 'nessuna riga'}. Niente è partito.`);
   const { data: prime, error: e2 } = await grezzo(ctx.s).from('event_log').select('id')
@@ -262,6 +263,11 @@ async function prendiIlNonce(ctx: Contesto, c: Carico): Promise<void> {
     .order('id', { ascending: true }).limit(1);
   if (e2) throw new Error(`registro_non_letto: ${e2.message}. Niente è partito.`);
   if ((prime ?? [])[0]?.id !== mia.id) throw new ErroreAzione('gia_eseguita');
+}
+
+/** `conversationId` al primo livello del payload: il thread legge gli eventi su `payload->>conversationId`. */
+function dellaChat(params: Record<string, unknown>): { conversationId?: number } {
+  return typeof params.conversationId === 'number' ? { conversationId: params.conversationId } : {};
 }
 
 type RigaAvvio = { id: number; created_at: string; payload: { nonce?: unknown; params?: unknown } | null };
