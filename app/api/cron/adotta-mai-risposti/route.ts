@@ -4,7 +4,7 @@ import { fetchAllRows } from '@/lib/supabase/paginate';
 import { sendTemplateAndLog } from '@/lib/messaging';
 import { classificaPrimoMessaggio, vaRiagganciato, LANCIO_INGRESSO_LINK_SVILUPPATORE } from '@/lib/primo-messaggio';
 import { LANCIO_SLUG, conMarioDopoNotte } from '@/lib/lancio-fase';
-import { dopoLaNotteDelLancio } from '@/lib/lancio-scelta';
+import { dallaLiveDelLancio, dopoLaNotteDelLancio } from '@/lib/lancio-scelta';
 import { adessoLancio } from '@/lib/lancio-orologio';
 import type { Json } from '@/lib/supabase/types';
 import { impostaFaseLancio } from '@/lib/lancio-db';
@@ -78,7 +78,8 @@ export async function POST(req: NextRequest) {
   // Dopo la notte del webinar (PO 25/09) il pulsante porta a Mario standard e vale anche a
   // interruttore spento, come nel webhook: qui si decide una volta per run.
   const pulsanteDopoNotte = dopoLaNotteDelLancio(adessoLancio(), settingsLancio.eventoAt);
-  const pulsanteAttivo = settingsLancio.pulsanteAttivo || pulsanteDopoNotte;
+  // Dall'ora della live vale da solo, senza interruttore (PO 30/09), come nel webhook.
+  const pulsanteAttivo = settingsLancio.pulsanteAttivo || dallaLiveDelLancio(adessoLancio(), settingsLancio.eventoAt) || pulsanteDopoNotte;
 
   // Candidati: nessun padrone, il lead ha scritto, su uno dei numeri del bot, nessuno
   // l'ha presa in mano. Il filtro sugli outbound si fa dopo, in memoria: PostgREST non

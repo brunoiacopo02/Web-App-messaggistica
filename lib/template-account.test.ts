@@ -305,3 +305,24 @@ describe('terzo account', () => {
     expect(spia).not.toHaveBeenCalled();
   });
 });
+
+// I pulsanti della sera del webinar sono MARKETING ma partono solo dentro la finestra delle
+// 24 ore, come risposta al pulsante premuto: il presidio li lascia passare (PO 30/09).
+describe('template a pulsanti del lancio sbloccati', () => {
+  it('LANCIO_SCELTA_NOTTE/GIORNO passano anche con UTILITY_ONLY e lista vuota', async () => {
+    const { assertTemplateSendable } = await import('./twilio');
+    const salva = { u: process.env.UTILITY_ONLY, a: process.env.UTILITY_ONLY_ALLOW, n: process.env.LANCIO_SCELTA_NOTTE_TEMPLATE_SID, g: process.env.LANCIO_SCELTA_GIORNO_TEMPLATE_SID };
+    process.env.UTILITY_ONLY = '1';
+    process.env.UTILITY_ONLY_ALLOW = '';
+    process.env.LANCIO_SCELTA_NOTTE_TEMPLATE_SID = 'HXnotte';
+    process.env.LANCIO_SCELTA_GIORNO_TEMPLATE_SID = 'HXgiorno';
+    try {
+      await expect(assertTemplateSendable('HXnotte')).resolves.toBeUndefined();
+      await expect(assertTemplateSendable('HXtradotto', '+393522070047', 'HXgiorno')).resolves.toBeUndefined();
+    } finally {
+      const rimetti = (k: string, v: string | undefined) => { if (v === undefined) delete process.env[k]; else process.env[k] = v; };
+      rimetti('UTILITY_ONLY', salva.u); rimetti('UTILITY_ONLY_ALLOW', salva.a);
+      rimetti('LANCIO_SCELTA_NOTTE_TEMPLATE_SID', salva.n); rimetti('LANCIO_SCELTA_GIORNO_TEMPLATE_SID', salva.g);
+    }
+  });
+});

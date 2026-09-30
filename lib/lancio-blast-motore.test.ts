@@ -15,7 +15,8 @@ vi.mock('./twilio', () => ({
   sendTemplate: (...a: unknown[]) => sendTemplate(...(a as [])),
   assertTemplateSendable: (...a: unknown[]) => assertTemplateSendable(...(a as [])),
 }));
-vi.mock('./lancio-db', () => ({ impostaFaseLancio: async () => {} }));
+const impostaFase = vi.fn(async () => {});
+vi.mock('./lancio-db', () => ({ impostaFaseLancio: (...a: unknown[]) => impostaFase(...(a as [])) }));
 // Il freno spegne `lancio_attivo`: qui serve poter far fallire quella scrittura.
 const setLancioSetting = vi.fn(async (): Promise<{ ok: boolean; error?: string }> => ({ ok: true }));
 vi.mock('./lancio-settings', () => ({ setLancioSetting: () => setLancioSetting() }));
@@ -129,7 +130,7 @@ describe('eventoStantio — due regimi, perche i cron non vivono tutti prima del
   it('le tolleranze sono quelle dichiarate e non si spostano per sbaglio', () => {
     expect(GIORNI_CONFIG_STANTIA).toBe(14);
     expect(TOLLERANZA_GIORNI_EVENTO).toEqual({
-      'lancio-aperture': 0, 'lancio-zoom': 0, 'lancio-followup': 14, 'lancio-restituzioni': 14,
+      'lancio-aperture': 0, 'lancio-zoom': 0, 'lancio-inizio': 0, 'lancio-followup': 14, 'lancio-restituzioni': 14,
     });
   });
 });
@@ -191,6 +192,7 @@ describe('timbroUpdate', () => {
   it('produce l oggetto con la sola colonna chiesta', () => {
     expect(timbroUpdate('lancio_link_inviato_at', 'T')).toEqual({ lancio_link_inviato_at: 'T' });
     expect(timbroUpdate('lancio_followup_inviato_at', null)).toEqual({ lancio_followup_inviato_at: null });
+    expect(timbroUpdate('lancio_inizio_inviato_at', 'T')).toEqual({ lancio_inizio_inviato_at: 'T' });
     expect(timbroCampi('lancio_followup_inviato_at', 'T')).toEqual({ lancio_followup_inviato_at: 'T' });
   });
 });
@@ -429,5 +431,47 @@ describe('inviaTemplateTimbrato: il mittente si verifica prima di Twilio', () =>
     assertTemplateSendable.mockRejectedValue(new Error('bloccato'));
     await manda(SECONDO, 'lancio_zoom', 'link Zoom');
     expect(ripiego()!.payload).toMatchObject({ origine: 'lancio_zoom' });
+  });
+});
+
+
+// "La live sta iniziando" (cron lancio-inizio): il messaggio NON sposta la fase. Il
+// motore deve timbrare e mandare come sempre, ma senza mai chiamare impostaFaseLancio.
+describe('inviaTemplateTimbrato senza faseDopo (lancio-inizio)', () => {
+  beforeEach(() => {
+    chiamate.length = 0;
+    sendTemplate.mockClear();
+    impostaFase.mockClear();
+  });
+
+  const manda = (giaSpedito: boolean) =>
+    inviaTemplateTimbrato(supabase, nuovoStatoRun(), {
+      conv: { id: 9, crm_lead_id: 'crm-9', phone: '+393330000009', nome: 'anna' },
+      colonna: 'lancio_inizio_inviato_at',
+      sid: 'HX_INIZIO',
+      from: 'whatsapp:+390000000000',
+      costruisci: () => ({ vars: { '1': 'Anna', '2': 'https://zoom' }, body: 'Promemoria evento' }),
+      giaSpedito,
+      prefisso: 'lancio_inizio',
+      etichetta: 'inizio live',
+    });
+
+  it('manda, timbra lancio_inizio_inviato_at col compare-and-set e non tocca la fase', async () => {
+    expect(await manda(false)).toBe('sent');
+    expect(sendTemplate).toHaveBeenCalledTimes(1);
+    const claim = chiamate.find((c) => c.table === 'conversations' && c.op === 'update'
+      && (c.arg as Record<string, unknown>).lancio_inizio_inviato_at);
+    expect(claim).toBeDefined();
+    expect(claim!.filtri).toContainEqual({ m: 'is', args: ['lancio_inizio_inviato_at', null] });
+    expect(impostaFase).not.toHaveBeenCalled();
+  });
+
+  it('riparazione: rimette solo il timbro se manca, senza fase e senza rimandare', async () => {
+    expect(await manda(true)).toBe('riparato');
+    expect(sendTemplate).not.toHaveBeenCalled();
+    expect(impostaFase).not.toHaveBeenCalled();
+    const upd = chiamate.filter((c) => c.table === 'conversations' && c.op === 'update');
+    expect(upd).toHaveLength(1);
+    expect(upd[0].filtri).toContainEqual({ m: 'is', args: ['lancio_inizio_inviato_at', null] });
   });
 });

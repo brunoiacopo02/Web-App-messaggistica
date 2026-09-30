@@ -88,6 +88,21 @@ export function dopoLaNotteDelLancio(now: Date, eventoAtIso: string | null | und
   return now.getTime() >= fineNotteLancio(new Date(t));
 }
 
+/**
+ * La live e' cominciata (dall'ora dell'evento in poi)? Da quel momento il pulsante del
+ * webinar vale da solo, senza aspettare che qualcuno accenda `lancio_pulsante_attivo` a
+ * mano (PO 30/09: la scelta "chiamata subito / videocall domani" e' il cuore della serata,
+ * non puo' dipendere da un interruttore dimenticato). L'interruttore resta per accenderlo
+ * PRIMA, in prova. Prima dell'evento no: la frase del pulsante contiene "live web developer
+ * ai", e chi la scrive in attesa della live non deve ricevere il pitch.
+ */
+export function dallaLiveDelLancio(now: Date, eventoAtIso: string | null | undefined): boolean {
+  if (!eventoAtIso) return false;
+  const t = Date.parse(eventoAtIso);
+  if (Number.isNaN(t)) return false;
+  return now.getTime() >= t;
+}
+
 /** Notte = dall'inizio dell'evento alle 03:00 del giorno dopo: il lead sta scrivendo ora. */
 export function modoPostPitch(now: Date, eventoAt: Date): ModoPostPitch {
   const ms = now.getTime();
@@ -237,20 +252,20 @@ export function testoSlots(
   // poi rifiutata dalla regola dell'anticipo.
   const ddTesto = ore.dopodomani.length > 0 ? `${n.dopodomaniMattina} ${fasciaOre(ore.dopodomani)}` : null;
   if (mattina.length > 0 && ore.pomeriggio.length > 0) {
-    return `Per la call ho libero ${n.mattinaDopo} ${elencoOre(mattina)}, oppure ${n.pomDopo} ${fasciaOre(ore.pomeriggio)}: che ora preferisci?`;
+    return `Per la videocall ho libero ${n.mattinaDopo} ${elencoOre(mattina)}, oppure ${n.pomDopo} ${fasciaOre(ore.pomeriggio)}: che ora preferisci?`;
   }
   if (ore.pomeriggio.length > 0) {
     // "Domattina è tutto pieno" si dice solo se la mattina era da proporre: di giorno non
     // si nomina nemmeno per dire che è piena.
     const testa = mattinaProponibile ? `${maiuscola(n.mattinaDopo)} è tutto pieno. ` : '';
     const coda = ddTesto ? ` Se puoi solo la mattina, ho ${ddTesto}.` : '';
-    return `${testa}Per la call ho ${n.pomDopo} ${fasciaOre(ore.pomeriggio)}: che ora preferisci?${coda}`;
+    return `${testa}Per la videocall ho ${n.pomDopo} ${fasciaOre(ore.pomeriggio)}: che ora preferisci?${coda}`;
   }
   // Il 7 il giorno "senza più ore libere" sarebbe ieri: non si nomina, si propongono e
   // basta le ore che restano.
   if (ddTesto) {
     return modo === 'dopodomani'
-      ? `Per la call ho ${ddTesto}: che ora preferisci?`
+      ? `Per la videocall ho ${ddTesto}: che ora preferisci?`
       : `Per ${n.giornoDopo} non ho più ore libere. Ho ${ddTesto}: che ora preferisci?`;
   }
   return 'Per questi due giorni non ho più ore libere: ti fa richiamare un nostro consulente, lascio nota.';
@@ -292,9 +307,19 @@ export function testoConfermaChiamata(nomeVenditore: string): string {
   return `Perfetto, ti chiama ${nomeVenditore} tra pochissimo.`;
 }
 
+/**
+ * Il giorno dopo non e' una telefonata: e' una videocall su Google Meet (PO 30/09). La
+ * mattina l'invito parte subito dal calendario del venditore, all'email del lead; il
+ * pomeriggio e il 7 l'appuntamento passa dalle Conferme, che lo confermano e mandano il
+ * link. Prima diceva "tieni il telefono a portata di mano": il lead aspettava una
+ * chiamata che non arrivava e non guardava l'invito.
+ */
 export function testoConfermaPrenotazione(kind: LancioKind, at: string, nomeVenditore?: string | null): string {
-  const chi = kind === 'mattina' && nomeVenditore ? `ti chiama ${nomeVenditore}` : 'ti chiama un nostro consulente';
-  return `Perfetto, ci sentiamo ${oraLeggibile(at)}: ${chi}. Tieni il telefono a portata di mano.`;
+  const conChi = kind === 'mattina' && nomeVenditore ? ` con ${nomeVenditore}` : ' con un nostro consulente';
+  const link = kind === 'mattina'
+    ? 'il link per collegarti ti arriva per email'
+    : 'prima ti contattiamo per confermarla e mandarti il link';
+  return `Perfetto, ci vediamo in videocall ${oraLeggibile(at)}${conChi}: ${link}.`;
 }
 
 export function testoOraEsaurita(
@@ -316,8 +341,8 @@ export function testoAtNonValido(
   return `Quell'ora non riesco a fissarla. ${testoSlots(ore, giorni, modo, mattinaProponibile)}`;
 }
 
-export const TESTO_NESSUN_VENDITORE = 'Stasera i consulenti sono tutti occupati: fissiamo domani?';
-export const TESTO_CHIAMATA_FUORI_ORARIO = 'A quest\'ora fissiamo direttamente la call.';
+export const TESTO_NESSUN_VENDITORE = 'Stasera i consulenti sono tutti occupati: fissiamo una videocall domani?';
+export const TESTO_CHIAMATA_FUORI_ORARIO = 'A quest\'ora fissiamo direttamente la videocall.';
 export const TESTO_ERRORE_CRM = 'Ho un problema tecnico a registrare la scelta in questo momento: riscrivimi tra qualche minuto e la fisso subito.';
 export const TESTO_DOPO_SCELTA = 'Ricevuto, lo passo al consulente che ti chiama.';
 export const TESTO_CONGEDO_POST_PITCH = 'Nessun problema, grazie per aver seguito la live! Se ci ripensi, scrivimi qui.';

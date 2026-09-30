@@ -197,11 +197,11 @@ describe('calcolaAvvisi', () => {
     expect(ids(calcolaAvvisi(input({ now: alle('20:00'), ultimiRun: { zoom: fresco } })))).not.toContain('zoom_cron_fermo');
   });
 
-  it('pulsante ancora spento dopo le 21:10 del 5/10, e solo quella notte', () => {
+  it("pulsante spento: allarme solo se manca l'ora dell'evento (dal 30/09 si accende da solo alla live)", () => {
     const s = settings({ pulsanteAttivo: false });
-    expect(ids(calcolaAvvisi(input({ now: alle('21:05'), settings: s })))).not.toContain('pulsante_spento');
-    expect(ids(calcolaAvvisi(input({ now: alle('21:15'), settings: s })))).toContain('pulsante_spento');
-    expect(ids(calcolaAvvisi(input({ now: alle('10:00', '2026-10-06'), settings: s })))).not.toContain('pulsante_spento');
+    expect(ids(calcolaAvvisi(input({ now: alle('21:15'), settings: s })))).not.toContain('pulsante_spento');
+    const senzaEvento = settings({ pulsanteAttivo: false, eventoAt: null });
+    expect(ids(calcolaAvvisi(input({ now: alle('21:15'), settings: senzaEvento })))).toContain('pulsante_spento');
   });
 
   it('video della live vuoto a live finita', () => {

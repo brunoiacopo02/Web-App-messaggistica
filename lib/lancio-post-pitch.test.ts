@@ -67,7 +67,7 @@ const SETTINGS: LancioSettings = {
 const NOTTE = new Date('2026-10-05T22:40:00+02:00');
 const GIORNO6 = new Date('2026-10-06T10:00:00+02:00');
 const SLOTS: LancioSlots = { date: '2026-10-06', mattina: [{ hour: 9, liberi: 1 }, { hour: 11, liberi: 2 }, { hour: 14, liberi: 1 }], pomeriggio: { aperto: true, ore: [15, 16, 17, 18, 19, 20] }, mattinaEsaurita: false };
-const SLOT_TEXT_NOTTE = 'Per la call ho libero domattina alle 9, alle 11 o alle 14, oppure domani pomeriggio dalle 15 alle 20: che ora preferisci?';
+const SLOT_TEXT_NOTTE = 'Per la videocall ho libero domattina alle 9, alle 11 o alle 14, oppure domani pomeriggio dalle 15 alle 20: che ora preferisci?';
 
 const genera = vi.fn();
 const modello = (over: Record<string, unknown>) => ({ classe: 'domanda', passToHuman: false, visibleReply: 'ok', lancioTag: null, ...over });
@@ -222,7 +222,7 @@ describe('turnoPostPitch — [LANCIO:PRENOTA|iso]', () => {
     const { supabase, calls } = makeSupabase();
     expect(await turnoPostPitch(supabase, scelta('domattina alle 9'), ctx())).toBe('closed');
     expect(lancioBook).toHaveBeenCalledWith({ leadId: 'crm-L1', at: AT9, info: { risposte: ['studio informatica', 'il progetto finale', 'domattina alle 9'] }, note: NOTA_SCELTA });
-    expect(bolle()).toEqual(['Perfetto, ci sentiamo martedì 6 ottobre alle 9:00: ti chiama Luca. Tieni il telefono a portata di mano.']);
+    expect(bolle()).toEqual(['Perfetto, ci vediamo in videocall martedì 6 ottobre alle 9:00 con Luca: il link per collegarti ti arriva per email.']);
     expect(impostaFaseLancio).toHaveBeenCalledWith(expect.anything(), 42, 'scelta_fatta', expect.objectContaining({ lancio_info: expect.anything() }));
     expect(eventi(calls, 'lancio_scelta')[0].payload).toMatchObject({ tipo: 'prenota', at: AT9, kind: 'mattina' });
   });
@@ -232,7 +232,7 @@ describe('turnoPostPitch — [LANCIO:PRENOTA|iso]', () => {
     vi.mocked(lancioBook).mockResolvedValueOnce({ ok: true, kind: 'pomeriggio' });
     const { supabase } = makeSupabase();
     await turnoPostPitch(supabase, scelta('alle 17'), ctx());
-    expect(bolle()).toEqual(['Perfetto, ci sentiamo martedì 6 ottobre alle 17:00: ti chiama un nostro consulente. Tieni il telefono a portata di mano.']);
+    expect(bolle()).toEqual(['Perfetto, ci vediamo in videocall martedì 6 ottobre alle 17:00 con un nostro consulente: prima ti contattiamo per confermarla e mandarti il link.']);
   });
 
   it('409 ora_esaurita: ripropone dagli slot AGGIORNATI del CRM, non da quelli letti prima', async () => {
@@ -240,7 +240,7 @@ describe('turnoPostPitch — [LANCIO:PRENOTA|iso]', () => {
     vi.mocked(lancioBook).mockResolvedValueOnce({ ok: false, motivo: 'ora_esaurita', slots: { date: '2026-10-06', mattina: [{ hour: 11, liberi: 1 }], pomeriggio: { aperto: true, ore: [15, 16, 17, 18, 19, 20] }, mattinaEsaurita: false } });
     const { supabase, calls } = makeSupabase();
     expect(await turnoPostPitch(supabase, scelta('alle 9'), ctx())).toBe('active');
-    expect(bolle()).toEqual(['Le 9 si sono appena riempite. Per la call ho libero domattina alle 11, oppure domani pomeriggio dalle 15 alle 20: che ora preferisci?']);
+    expect(bolle()).toEqual(['Le 9 si sono appena riempite. Per la videocall ho libero domattina alle 11, oppure domani pomeriggio dalle 15 alle 20: che ora preferisci?']);
     expect(lancioSlots).toHaveBeenCalledTimes(1);
     expect(infoSalvata(calls).slotsMostratiAt).toBe(NOTTE.toISOString());
     expect(impostaFaseLancio).not.toHaveBeenCalled();
@@ -282,7 +282,7 @@ describe('turnoPostPitch — [LANCIO:PRENOTA|iso]', () => {
     }
     expect(lancioBook).not.toHaveBeenCalled();
     expect(bolle()).toHaveLength(3);
-    for (const b of bolle()) expect(b).toMatch(/^Quell'ora non riesco a fissarla\. Per la call ho libero domattina/);
+    for (const b of bolle()) expect(b).toMatch(/^Quell'ora non riesco a fissarla\. Per la videocall ho libero domattina/);
     expect(eventi(calls, 'lancio_at_non_valido').map((e) => e.payload.motivo)).toEqual(['ora_non_tonda', 'giorno_non_ammesso', 'giorno_non_ammesso']);
   });
 
@@ -409,7 +409,7 @@ describe('turnoPostPitch — [LANCIO:SLOTS], [LANCIO:NO], finestra', () => {
     const { supabase } = makeSupabase();
     await turnoPostPitch(supabase, scelta('una call'), ctx(new Date('2026-10-05T20:40:00+02:00')));
     expect(genera.mock.calls[0][1].modo).toBe('giorno');
-    expect(bolle()[0]).toBe('Per la call ho domani pomeriggio dalle 15 alle 20: che ora preferisci? Se puoi solo la mattina, ho mercoledì 7 ottobre dalle 9 alle 14.');
+    expect(bolle()[0]).toBe('Per la videocall ho domani pomeriggio dalle 15 alle 20: che ora preferisci? Se puoi solo la mattina, ho mercoledì 7 ottobre dalle 9 alle 14.');
   });
 
   // Alle 02:00 del 6 le due decisioni divergono: la chiamata immediata c'e' ancora
@@ -420,7 +420,7 @@ describe('turnoPostPitch — [LANCIO:SLOTS], [LANCIO:NO], finestra', () => {
     const { supabase } = makeSupabase();
     await turnoPostPitch(supabase, scelta('una call'), ctx(new Date('2026-10-06T02:00:00+02:00')));
     expect(genera.mock.calls[0][1].modo).toBe('notte');
-    expect(bolle()[0]).toBe('Per la call ho libero stamattina alle 9, alle 11 o alle 14, oppure oggi pomeriggio dalle 15 alle 20: che ora preferisci?');
+    expect(bolle()[0]).toBe('Per la videocall ho libero stamattina alle 9, alle 11 o alle 14, oppure oggi pomeriggio dalle 15 alle 20: che ora preferisci?');
   });
 
   it('modello vuoto senza tag: silenzio definitivo', async () => {
