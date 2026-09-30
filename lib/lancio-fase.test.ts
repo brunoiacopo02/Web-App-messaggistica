@@ -83,7 +83,8 @@ describe('decideLancioTurno — fase posto_bloccato', () => {
   });
   it('le domande si rispondono ancora, col solito tetto', () => {
     expect(decideLancioTurno({ ...base, classe: 'domanda' })).toEqual({ kind: 'domanda', chiudi: false });
-    expect(decideLancioTurno({ ...base, classe: 'domanda', scambiDomande: 3 }).kind).toBe('silenzio');
+    expect(decideLancioTurno({ ...base, classe: 'domanda', scambiDomande: 3 }).kind).toBe('domanda');
+    expect(decideLancioTurno({ ...base, classe: 'domanda', scambiDomande: MAX_SCAMBI_DOMANDE }).kind).toBe('silenzio');
   });
   it('un no dopo il posto bloccato è comunque un congedo', () => {
     expect(decideLancioTurno({ ...base, classe: 'no' }).kind).toBe('congedo');

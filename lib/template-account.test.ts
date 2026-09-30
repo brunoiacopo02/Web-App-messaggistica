@@ -5,33 +5,41 @@ const CHIAVI = [
   'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN',
   'TWILIO_ACCOUNT_SID_2', 'TWILIO_AUTH_TOKEN_2',
   'TWILIO_WHATSAPP_NUMBERS_2',
+  'TWILIO_ACCOUNT_SID_3', 'TWILIO_AUTH_TOKEN_3',
+  'TWILIO_WHATSAPP_NUMBERS_3',
 ] as const;
 
 let salvate: Record<string, string | undefined>;
 const PRIMARIO = '+393520413199';
 const SECONDO = '+393522070047';
+const TERZO = '+393522018718';
 
-/** Le risposte che darebbe l'API Content dei due account. */
+/** Le risposte che darebbe l'API Content dei due (o tre) account. */
 function fingiApi(opts: {
   nomeSuAccount1?: string | null;
   contenutiAccount2?: Array<{ friendly_name: string; sid: string }>;
+  contenutiAccount3?: Array<{ friendly_name: string; sid: string }>;
   approvazioni?: Record<string, { status: string; category: string }>;
 }) {
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: any) => {
     const auth = String(init?.headers?.Authorization ?? '');
     const eSecondo = auth.includes(Buffer.from('AC_secondo:tok_secondo').toString('base64'));
+    const eTerzo = auth.includes(Buffer.from('AC_terzo:tok_terzo').toString('base64'));
 
     if (url.includes('/ApprovalRequests')) {
       const sid = url.split('/Content/')[1]?.split('/')[0] ?? '';
       const a = opts.approvazioni?.[sid];
       return { ok: true, status: 200, json: async () => (a ? { whatsapp: a } : {}) };
     }
-    if (!eSecondo && url.includes('/Content/')) {
+    if (!eSecondo && !eTerzo && url.includes('/Content/')) {
       if (opts.nomeSuAccount1 === null) return { ok: false, status: 404, json: async () => ({}) };
       return { ok: true, status: 200, json: async () => ({ friendly_name: opts.nomeSuAccount1 }) };
     }
     if (eSecondo && url.includes('/Content?')) {
       return { ok: true, status: 200, json: async () => ({ contents: opts.contenutiAccount2 ?? [], meta: {} }) };
+    }
+    if (eTerzo && url.includes('/Content?')) {
+      return { ok: true, status: 200, json: async () => ({ contents: opts.contenutiAccount3 ?? [], meta: {} }) };
     }
     return { ok: false, status: 404, json: async () => ({}) };
   }));
@@ -267,5 +275,33 @@ describe('copie _u per la categoria UTILITY', () => {
       approvazioni: { HXancoramkt: { status: 'approved', category: 'MARKETING' } },
     });
     expect(await traduciTemplate('HXoriginale', SECONDO)).toEqual({ sid: 'HXmarketing', tradotto: true });
+  });
+});
+
+// Il terzo account ("account elixir", +393522018718, 26/09/2026) funziona
+// esattamente come il secondo: stesso schema di traduzione per friendly_name.
+describe('terzo account', () => {
+  beforeEach(() => {
+    process.env.TWILIO_ACCOUNT_SID_3 = 'AC_terzo';
+    process.env.TWILIO_AUTH_TOKEN_3 = 'tok_terzo';
+    process.env.TWILIO_WHATSAPP_NUMBERS_3 = TERZO;
+  });
+
+  it('dal terzo numero traduce sul SID omonimo, con le credenziali del terzo account', async () => {
+    fingiApi({
+      nomeSuAccount1: 'fenice_agenda_gdo_v3',
+      contenutiAccount3: [
+        { friendly_name: 'fenice_open_c1_marta_v1', sid: 'HXaltro' },
+        { friendly_name: 'fenice_agenda_gdo_v3', sid: 'HXtradotto' },
+      ],
+    });
+    expect(await traduciTemplate('HX_ORIG', TERZO)).toEqual({ sid: 'HXtradotto', tradotto: true });
+  });
+
+  it('un numero secondario che sta sul principale (8061) non traduce e non tocca la rete', async () => {
+    const spia = vi.fn();
+    vi.stubGlobal('fetch', spia);
+    expect(await traduciTemplate('HX_ORIG', 'whatsapp:+393520158061')).toEqual({ sid: 'HX_ORIG', tradotto: true });
+    expect(spia).not.toHaveBeenCalled();
   });
 });

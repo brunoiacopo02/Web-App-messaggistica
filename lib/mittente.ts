@@ -4,20 +4,23 @@
  * `lib/twilio-account.ts` risponde a un'altra domanda — con quali credenziali si
  * manda da un dato numero. Qui si decide il numero, e la regola e' una sola:
  *
- *   una conversazione NUOVA puo' nascere sul secondo numero, secondo una quota;
- *   una conversazione GIA' AVVIATA continua SEMPRE con il numero con cui e' nata.
+ *   una conversazione GIA' AVVIATA continua SEMPRE con il numero con cui e' nata;
+ *   una conversazione NUOVA nasce sul primario, a meno che `scegliMittenteNuovo`
+ *   (lib/scelta-mittente.ts) non scelga esplicitamente un secondario, guardando
+ *   i tetti in `app_settings.tetti_numeri`.
  *
- * La seconda meta' non e' un dettaglio. Cambiare numero a chat aperta la spezza in due
+ * La prima meta' non e' un dettaglio. Cambiare numero a chat aperta la spezza in due
  * thread agli occhi del lead e chiude la finestra delle 24 ore, che WhatsApp tiene per
  * coppia (numero azienda, numero lead): da quel momento il bot non puo' piu' rispondere
  * in testo libero. Il numero della chat sta in `conversations.wa_number`, scritto alla
  * nascita (vedi `findOrCreateLeadConversation`) e riscritto dal webhook in ingresso a
  * ogni messaggio del lead.
  *
- * Perche' un secondo numero: quello storico (`+393520413199`) e' a qualita' LOW, e il
- * nuovo sta su un WABA diverso — quindi e' un ripiego vero, non lo stesso punto di
- * rottura con un altro nome. Il PO lo vuole scaldare con ~100 lead nuovi al giorno: la
- * quota e' la manopola.
+ * Perche' dei numeri secondari: il primario (`+393520413199`) e' a qualita' LOW, e i
+ * secondari stanno su WABA diversi — un ripiego vero, non lo stesso punto di rottura
+ * con un altro nome. Fino al 26/09/2026 c'era un solo secondario scelto per quota
+ * casuale (`FENICE_NUMERO2_QUOTA`, ora tolta); da qui in poi l'elenco viene da
+ * `BOT_NUMERI_SECONDARI` e la scelta passa dai tetti, non dal caso.
  *
  * Modulo puro: legge solo le env, niente DB, niente rete. Testato in mittente.test.ts.
  */
@@ -39,40 +42,59 @@ export function numeroSecondo(): string | undefined {
   return n || undefined;
 }
 
-/**
- * La quota del secondo numero sulle conversazioni nuove, in percentuale (0-100), da
- * `FENICE_NUMERO2_QUOTA`.
- *
- * Fail-closed: assente, vuota, illeggibile o fuori dall'intervallo vale 0. Una env
- * scritta male non deve spostare traffico su un numero che magari non e' ancora
- * pronto — il costo di sbagliare in quella direzione e' un lead che scrive nel vuoto,
- * nell'altra e' solo un riscaldamento che parte piu' tardi.
- */
-export function quotaSecondo(): number {
-  const grezzo = (process.env.FENICE_NUMERO2_QUOTA ?? '').trim();
-  if (grezzo === '') return 0;
-  const n = Number(grezzo);
-  if (!Number.isFinite(n) || n < 0 || n > 100) return 0;
-  return n;
+/** La forma di env e di `wa_number`: `whatsapp:+39…`, qualunque sia quella scritta. */
+function inFormaWhatsapp(n: string): string {
+  return `whatsapp:${soloNumero(n)}`;
 }
 
 /**
- * Il mittente di una conversazione che nasce ADESSO.
- *
- * Il secondo numero con probabilita' `FENICE_NUMERO2_QUOTA`%, altrimenti il primario.
- * Senza il secondo numero, o con quota 0, e' sempre il primario. Torna `undefined`
- * solo se manca anche il primario: li' chi chiama deve fallire in modo esplicito, come
- * ha sempre fatto con la env assente.
- *
- * `sorteggio` e' iniettabile per i test: di default `Math.random`, cioe' un numero in
- * [0, 1). Con quota 100 il confronto `< 100` e' sempre vero, con quota 0 mai.
+ * Normalizza e deduplica un elenco di numeri (confronto senza prefisso),
+ * togliendo quelli in `escludi` (per chiave `soloNumero`).
  */
-export function mittentePerNuovaConversazione(sorteggio: () => number = Math.random): string | undefined {
-  const primario = numeroPrimario();
-  const secondo = numeroSecondo();
-  const quota = quotaSecondo();
-  if (!secondo || quota <= 0) return primario;
-  return sorteggio() * 100 < quota ? secondo : primario;
+function pulisci(lista: (string | undefined)[], escludi: Set<string> = new Set()): string[] {
+  const visti = new Set(escludi);
+  const fuori: string[] = [];
+  for (const grezzo of lista) {
+    const k = soloNumero(grezzo);
+    if (!k || visti.has(k)) continue;
+    visti.add(k);
+    fuori.push(inFormaWhatsapp(k));
+  }
+  return fuori;
+}
+
+/** Un elenco separato da virgola in una env; assente = vuoto. */
+function elencoEnv(chiave: string): string[] {
+  return (process.env[chiave] ?? '').split(',').map((n) => n.trim()).filter(Boolean);
+}
+
+/**
+ * I numeri secondari SCEGLIBILI per una chat nuova, da `BOT_NUMERI_SECONDARI`
+ * (separati da virgola). Assente = il solo `TWILIO_WHATSAPP_NUMBER_FENICE_2`,
+ * com'era fino al 26/09/2026: cosi' il deploy di questo codice non cambia niente
+ * finche' non si scrive l'env. Vuota (`""`) = nessun secondario sceglibile.
+ *
+ * Essere qui vuol dire che il numero PUO' essere scelto per una chat nuova — se ha
+ * un tetto in `app_settings.tetti_numeri` (lib/tetti-numeri.ts). Essere
+ * RICONOSCIUTO dal bot (webhook, chat esistenti) e' un'altra cosa, piu' larga:
+ * vedi `numeriDelBot`. Ogni voce esce in forma `whatsapp:+…`, anche se in env e'
+ * scritta `+39…`: e' la forma che finisce in `wa_number` e nei filtri.
+ */
+export function numeriSecondari(): string[] {
+  const grezzo = process.env.BOT_NUMERI_SECONDARI;
+  const lista = grezzo === undefined ? [numeroSecondo()] : grezzo.split(',').map((n) => n.trim());
+  return pulisci(lista, new Set([soloNumero(numeroPrimario())].filter(Boolean)));
+}
+
+/**
+ * Il mittente di una conversazione che nasce senza una scelta esplicita: il
+ * primario. Dal 26/09/2026 una chat nasce su un secondario solo passando da
+ * `scegliMittenteNuovo` (lib/scelta-mittente.ts), che guarda tetti e template.
+ * Il vecchio sorteggio `FENICE_NUMERO2_QUOTA` lo scavalcava: tolto.
+ * `sorteggio` resta nella firma per non rompere i chiamanti.
+ */
+export function mittentePerNuovaConversazione(_sorteggio: () => number = Math.random): string | undefined {
+  return numeroPrimario();
 }
 
 /**
@@ -95,23 +117,39 @@ export function mittenteDiConversazione(conv: { wa_number?: string | null } | nu
 }
 
 /**
- * I numeri del bot cosi' come stanno in env (`whatsapp:+39…`), primario per primo.
+ * TUTTI i numeri che il bot RICONOSCE come suoi, in forma `whatsapp:+39…`,
+ * primario per primo: il primario, i sceglibili (`numeriSecondari`), il
+ * `TWILIO_WHATSAPP_NUMBER_FENICE_2` e i numeri dichiarati sugli altri account
+ * (`TWILIO_WHATSAPP_NUMBERS_2` / `_3`, lib/twilio-account.ts), deduplicati.
  *
- * Grezzi apposta: e' la forma che Twilio mette nel `To` e che il webhook copia in
- * `conversations.wa_number`, quindi e' quella che serve ai filtri `.in('wa_number', …)`
- * delle rotte che cercano "le chat sui nostri numeri". Il confronto tollerante sta in
+ * Piu' largo dei sceglibili apposta: un numero puo' essere a riposo per le chat
+ * nuove (fuori da `BOT_NUMERI_SECONDARI`, o con tetto 0) e avere ancora chat vive.
+ * Se non fosse riconosciuto, il webhook non sveglierebbe Mario sulle risposte a
+ * quel numero e `mittenteDiConversazione` riporterebbe la chat sul primario,
+ * spezzandola. Dimenticare il 0047 in `BOT_NUMERI_SECONDARI` non deve costare le
+ * sue chat.
+ *
+ * La forma `whatsapp:+…` e' quella che Twilio mette nel `To` e che il webhook
+ * copia in `conversations.wa_number`: serve ai filtri `.in('wa_number', …)` delle
+ * rotte che cercano "le chat sui nostri numeri". Il confronto tollerante sta in
  * `eNumeroDelBot`.
  */
 export function numeriDelBot(): string[] {
-  return [numeroPrimario(), numeroSecondo()].filter((n): n is string => Boolean(n));
+  return pulisci([
+    numeroPrimario(),
+    ...numeriSecondari(),
+    numeroSecondo(),
+    ...elencoEnv('TWILIO_WHATSAPP_NUMBERS_2'),
+    ...elencoEnv('TWILIO_WHATSAPP_NUMBERS_3'),
+  ]);
 }
 
 /**
- * Questo numero e' uno dei nostri (primario o secondo)?
+ * Questo numero e' uno dei nostri (uno qualunque di `numeriDelBot`)?
  *
- * Serve al webhook in ingresso per decidere se svegliare il bot: deve conoscere
- * ENTRAMBI i numeri, altrimenti chi risponde al secondo scrive nel vuoto. Accetta
- * sia `whatsapp:+39…` (com'e' nel `To` di Twilio e in `wa_number`) sia `+39…`.
+ * Serve al webhook in ingresso per decidere se svegliare il bot: deve conoscere TUTTI
+ * i numeri, altrimenti chi risponde a un secondario scrive nel vuoto. Accetta sia
+ * `whatsapp:+39…` (com'e' nel `To` di Twilio e in `wa_number`) sia `+39…`.
  */
 export function eNumeroDelBot(to: string | null | undefined): boolean {
   const numero = soloNumero(to);

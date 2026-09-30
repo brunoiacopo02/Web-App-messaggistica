@@ -128,7 +128,7 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
   let classe: ClasseLancio = classificaLancio(testoLead);
   let modello: LancioReplyParsed | null = null;
   // Il modello si interpella solo se puo' ancora rispondere: nelle fasi di B4/B5 il
-  // turno e' silenzio comunque, dopo il terzo scambio si tace, e su un inbound senza
+  // turno e' silenzio comunque, oltre il fusibile degli scambi si tace, e su un inbound senza
   // testo (una foto, un audio) non c'e' niente da leggere. Chiedere una risposta per poi
   // buttarla costa e basta — e su una fase non gestita un [PASSAGGIO_UMANO] pensato per
   // l'attesa uscirebbe su una chat che sta gia' oltre il link.

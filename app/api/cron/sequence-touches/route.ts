@@ -122,10 +122,10 @@ export async function GET(req: NextRequest) {
   const now = Date.now();
 
   // Il mittente — dell'apertura differita, dei touch e dei nudge — e' quello della
-  // singola chat (`wa_number`, sorteggiato all'arruolamento, vedi lib/mittente.ts).
+  // singola chat (`wa_number`, scelto all'arruolamento, vedi lib/mittente.ts).
   // `TWILIO_WHATSAPP_NUMBER_FOLLOWUP` non si legge piu': un numero "dei follow-up"
   // diverso da quello dell'apertura e' proprio il thread spezzato che questa regola
-  // chiude, e sull'apertura differita avrebbe ignorato il sorteggio dell'intake.
+  // chiude, e sull'apertura differita avrebbe ignorato la scelta dell'intake.
   const openingSid = process.env.FENICE_OPENING_TEMPLATE_SID;
   const maxPerRun = Math.max(1, Number(process.env.SEQUENCE_MAX_PER_RUN) || 25);
 

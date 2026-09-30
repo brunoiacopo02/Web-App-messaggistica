@@ -48,8 +48,8 @@ export async function POST(req: NextRequest) {
   const supabase = getSupabaseAdmin();
 
   // Il mittente, in tre casi:
-  //  - `from: 'fenice'` → il numero della chat (lib/mittente.ts): sorteggiato fra i
-  //    numeri del bot se la chat nasce adesso, il suo se esisteva gia'. Prima era sempre
+  //  - `from: 'fenice'` → il numero della chat (lib/mittente.ts): il primario se la chat
+  //    nasce adesso, il suo se esisteva gia'. Prima era sempre
   //    il numero storico, e con due numeri avrebbe spezzato le chat nate sul secondo;
   //  - `from: '+39…'` → quel numero, scritto in `wa_number` se la chat nasce adesso;
   //  - `from` assente → il numero di default di `sendTemplate` (`TWILIO_WHATSAPP_NUMBER`),

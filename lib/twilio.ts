@@ -269,9 +269,14 @@ export type ValidateSigInput = {
  * bocciava con 403 tutti i messaggi in arrivo sul secondo numero — e li'
  * finisce anche il flusso dopo l'agenda: video, solleciti e risposte del lead
  * passano tutti da qui. Sarebbero spariti in silenzio.
+ *
+ * Dal 29/09/2026 c'e' anche il terzo account, "account elixir" (+393522018718):
+ * il 30/09 era rimasto fuori da questa lista e ogni risposta dei lead su quel
+ * numero tornava a Twilio con 403 (errore 11200 lato Twilio), insieme agli stati
+ * di consegna. Un account aggiunto in `twilio-account.ts` va aggiunto anche qui.
  */
 function tokenAmmessi(): string[] {
-  return [process.env.TWILIO_AUTH_TOKEN, process.env.TWILIO_AUTH_TOKEN_2]
+  return [process.env.TWILIO_AUTH_TOKEN, process.env.TWILIO_AUTH_TOKEN_2, process.env.TWILIO_AUTH_TOKEN_3]
     .map((t) => (t ?? '').trim())
     .filter(Boolean);
 }

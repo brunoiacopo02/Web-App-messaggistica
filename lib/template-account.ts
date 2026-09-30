@@ -23,7 +23,7 @@
  * messaggio che non era quello previsto.
  */
 
-import { credenzialiPerMittente, eDelSecondoAccount } from './twilio-account';
+import { credenzialiPerMittente, eSuAltroAccount } from './twilio-account';
 
 /** SID di partenza → SID sull'account del mittente. Chiave: `${accountSid}:${sidOriginale}`. */
 const _cache = new Map<string, string>();
@@ -118,7 +118,7 @@ export interface TraduzioneTemplate {
  * distinguerle: mandava il SID dell'altro account e il messaggio moriva.
  */
 export async function traduciTemplate(contentSid: string, from?: string | null): Promise<TraduzioneTemplate> {
-    if (!eDelSecondoAccount(from)) return { sid: contentSid, tradotto: true };
+    if (!eSuAltroAccount(from)) return { sid: contentSid, tradotto: true };
 
     const dest = credenzialiPerMittente(from);
     if (!dest) return { sid: contentSid, tradotto: true };

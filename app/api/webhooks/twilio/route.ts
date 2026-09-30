@@ -216,9 +216,10 @@ export async function POST(req: NextRequest) {
     });
 
     // Auto-risposta Mario (solo numeri del bot + lead arruolato + switch ON).
-    // "Del bot" e non "Fenice": dal secondo numero (`TWILIO_WHATSAPP_NUMBER_FENICE_2`)
-    // partono conversazioni intere, e chi risponde li' scriverebbe nel vuoto se il gate
-    // conoscesse solo il numero storico. Il nome `toMatchesFenice` resta perche' e' il
+    // "Del bot" e non "Fenice": dai numeri secondari partono conversazioni intere, e chi
+    // risponde li' scriverebbe nel vuoto se il gate conoscesse solo il numero storico.
+    // `eNumeroDelBot` riconosce tutti i numeri di `numeriDelBot` (primario, secondari,
+    // FENICE_2, numeri degli altri account), anche quelli a riposo per le chat nuove. Il nome `toMatchesFenice` resta perche' e' il
     // campo delle guardie pure (`shouldAutoReply`, `shouldAdoptInbound`).
     const toMatchesFenice = eNumeroDelBot(params.To);
     if (toMatchesFenice) {

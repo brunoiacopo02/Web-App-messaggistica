@@ -308,8 +308,15 @@ export const TESTO_PASSAGGIO_UMANO = 'Certo, ti faccio contattare da una persona
 export const TESTO_NIENTE_PASSAGGIO =
   'Prima della live non posso metterti in contatto con nessuno: ne parliamo dopo la live, e alla fine potrai parlare con un nostro consulente.';
 
-/** Dopo tre scambi di domande il bot chiude e tace fino al link (spec §5.2). */
-export const MAX_SCAMBI_DOMANDE = 3;
+/**
+ * Quante risposte a domande prima che il bot chiuda e taccia fino al link.
+ *
+ * Era 3 (spec §5.2). Il 29/09/2026 il PO: "non deve fissare l'app ma può tranquillamente
+ * parlarci" — prima della live il bot parla quanto serve. Resta un tetto solo come
+ * fusibile contro i loop (un risponditore automatico dall'altra parte), non come regola
+ * di conversazione: nessun iscritto vero fa trenta domande prima di una live.
+ */
+export const MAX_SCAMBI_DOMANDE = 30;
 
 export type ClasseLancio = 'si' | 'no' | 'domanda' | 'incerto';
 

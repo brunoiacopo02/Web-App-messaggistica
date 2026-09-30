@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { credenzialiPerMittente, eDelSecondoAccount } from './twilio-account';
+import { credenzialiPerMittente, eSuAltroAccount, credenzialiSecondarie } from './twilio-account';
 
 const CHIAVI = [
   'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN',
   'TWILIO_ACCOUNT_SID_2', 'TWILIO_AUTH_TOKEN_2',
   'TWILIO_WHATSAPP_NUMBERS_2',
+  'TWILIO_ACCOUNT_SID_3', 'TWILIO_AUTH_TOKEN_3',
+  'TWILIO_WHATSAPP_NUMBERS_3',
 ] as const;
 
 let salvate: Record<string, string | undefined>;
@@ -77,16 +79,54 @@ describe('credenzialiPerMittente', () => {
   });
 });
 
-describe('eDelSecondoAccount', () => {
+describe('eSuAltroAccount', () => {
   it('true solo per i numeri elencati', () => {
-    expect(eDelSecondoAccount('+393522070047')).toBe(true);
-    expect(eDelSecondoAccount('whatsapp:+393522070047')).toBe(true);
-    expect(eDelSecondoAccount('+393520413199')).toBe(false);
+    expect(eSuAltroAccount('+393522070047')).toBe(true);
+    expect(eSuAltroAccount('whatsapp:+393522070047')).toBe(true);
+    expect(eSuAltroAccount('+393520413199')).toBe(false);
   });
 
   it('false senza numero', () => {
-    expect(eDelSecondoAccount()).toBe(false);
-    expect(eDelSecondoAccount('')).toBe(false);
-    expect(eDelSecondoAccount(null)).toBe(false);
+    expect(eSuAltroAccount()).toBe(false);
+    expect(eSuAltroAccount('')).toBe(false);
+    expect(eSuAltroAccount(null)).toBe(false);
+  });
+});
+
+describe('terzo account', () => {
+  beforeEach(() => {
+    process.env.TWILIO_ACCOUNT_SID_3 = 'AC_terzo';
+    process.env.TWILIO_AUTH_TOKEN_3 = 'tok_terzo';
+    process.env.TWILIO_WHATSAPP_NUMBERS_3 = 'whatsapp:+393522018718';
+  });
+
+  it('un numero del terzo account usa le sue credenziali', () => {
+    expect(credenzialiPerMittente('+393522018718')).toEqual({ sid: 'AC_terzo', token: 'tok_terzo' });
+    expect(credenzialiPerMittente('whatsapp:+393522018718')?.sid).toBe('AC_terzo');
+  });
+
+  it('il secondo account resta com era', () => {
+    expect(credenzialiPerMittente('+393522070047')?.sid).toBe('AC_secondo');
+  });
+
+  it('un numero secondario che sta sul principale (8061) usa il principale e non e su un altro account', () => {
+    expect(credenzialiPerMittente('whatsapp:+393520158061')?.sid).toBe('AC_primo');
+    expect(eSuAltroAccount('whatsapp:+393520158061')).toBe(false);
+  });
+
+  it('eSuAltroAccount vale per secondo e terzo', () => {
+    expect(eSuAltroAccount('+393522018718')).toBe(true);
+    expect(eSuAltroAccount('+393522070047')).toBe(true);
+  });
+
+  it('terzo account senza credenziali: ripiega sul primo', () => {
+    delete process.env.TWILIO_AUTH_TOKEN_3;
+    expect(credenzialiPerMittente('+393522018718')?.sid).toBe('AC_primo');
+  });
+
+  it('credenzialiSecondarie elenca solo gli account configurati', () => {
+    expect(credenzialiSecondarie().map((c) => c.sid)).toEqual(['AC_secondo', 'AC_terzo']);
+    delete process.env.TWILIO_ACCOUNT_SID_2;
+    expect(credenzialiSecondarie().map((c) => c.sid)).toEqual(['AC_terzo']);
   });
 });
