@@ -2,7 +2,8 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-vi.mock('next/navigation', () => ({ usePathname: () => '/console' }));
+const cerca = vi.hoisted(() => ({ qs: '' }));
+vi.mock('next/navigation', () => ({ usePathname: () => '/console', useSearchParams: () => new URLSearchParams(cerca.qs) }));
 
 const { AssistenteProvider, PannelloAssistente, useApriAssistente } = await import('./Assistente');
 const { ComposerBridgeProvider } = await import('./ComposerBridge');
@@ -47,6 +48,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  cerca.qs = '';
 });
 
 function Apri({ domanda }: { domanda?: string }) {
@@ -202,4 +204,13 @@ it('i suggerimenti leggono gli avvisi una volta, senza polling', async () => {
   } finally {
     vi.useRealTimers();
   }
+});
+
+it('la fonte chat e la bozza tengono la vista in cui si è', async () => {
+  cerca.qs = 'vista=lancio&fase=attesa&chat=3';
+  monta(null);
+  await chiedi();
+  const link = Array.from(screen.getByLabelText('Fonti').querySelectorAll('a')).map((a) => a.getAttribute('href'));
+  expect(link[0]).toBe('/console?vista=lancio&fase=attesa&chat=7');
+  expect(screen.getByRole('link', { name: 'Apri la chat 7…' }).getAttribute('href')).toBe('/console?vista=lancio&fase=attesa&chat=7');
 });

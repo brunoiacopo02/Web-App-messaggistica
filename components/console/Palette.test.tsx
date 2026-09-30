@@ -4,7 +4,7 @@ import { NuqsTestingAdapter } from 'nuqs/adapters/testing';
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 
 const push = vi.fn();
-vi.mock('next/navigation', () => ({ usePathname: () => '/console/avvisi', useRouter: () => ({ push }) }));
+vi.mock('next/navigation', () => ({ usePathname: () => '/console/avvisi', useRouter: () => ({ push }), useSearchParams: () => new URLSearchParams() }));
 
 const { Palette } = await import('./Palette');
 const { AssistenteProvider, PannelloAssistente } = await import('./Assistente');

@@ -2,7 +2,7 @@
 
 import * as RadixDialog from '@radix-ui/react-dialog';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Bell, ChevronDown, ChevronRight, FileText, MessagesSquare, PenLine, RotateCcw, SquareTerminal, X } from 'lucide-react';
 import type { Citazione } from '@/lib/console/assistente-tools';
@@ -100,18 +100,31 @@ function Passi({ turno }: { turno: Turno }) {
   );
 }
 
-function hrefCitazione(c: Citazione): string {
-  return c.tipo === 'chat' ? `/console?chat=${encodeURIComponent(String(c.id))}` : `/console/avvisi#${encodeURIComponent(String(c.id))}`;
+/** Il link a una chat che tiene la vista in cui si è (e la sua fase): aprire una fonte non
+ *  riporta la lista su "Non lette". */
+export function hrefChat(id: number | string, sp: URLSearchParams | null): string {
+  const q = new URLSearchParams();
+  const vista = sp?.get('vista');
+  const fase = sp?.get('fase');
+  if (vista) q.set('vista', vista);
+  if (vista && fase) q.set('fase', fase);
+  q.set('chat', String(id));
+  return `/console?${q.toString()}`;
+}
+
+function hrefCitazione(c: Citazione, sp: URLSearchParams | null): string {
+  return c.tipo === 'chat' ? hrefChat(c.id, sp) : `/console/avvisi#${encodeURIComponent(String(c.id))}`;
 }
 
 function Fonti({ citazioni, onVai }: { citazioni: Citazione[]; onVai: () => void }) {
+  const sp = useSearchParams();
   if (citazioni.length === 0) return null;
   return (
     <div className="srcs" aria-label="Fonti">
       {citazioni.map((c, i) => {
         const Icona = c.tipo === 'chat' ? MessagesSquare : Bell;
         return (
-          <Link key={`${c.tipo}:${c.id}`} className="src" href={hrefCitazione(c)} onClick={onVai}>
+          <Link key={`${c.tipo}:${c.id}`} className="src" href={hrefCitazione(c, sp)} onClick={onVai}>
             <span className="cite">{i + 1}</span>
             <span className="src-t">
               <Icona size={16} strokeWidth={1.75} className="ico" aria-hidden="true" />
@@ -127,6 +140,7 @@ function Fonti({ citazioni, onVai }: { citazioni: Citazione[]; onVai: () => void
 
 function Bozza({ b, onMessa }: { b: BozzaAssistente; onMessa: () => void }) {
   const composer = useComposerBridge();
+  const sp = useSearchParams();
   const aperta = composer?.conversationId === b.conversationId;
 
   function metti() {
@@ -155,7 +169,7 @@ function Bozza({ b, onMessa }: { b: BozzaAssistente; onMessa: () => void }) {
             <Button onClick={metti}>Metti nel composer</Button>
           )
         ) : (
-          <Link className="btn ghost" href={`/console?chat=${b.conversationId}`}>
+          <Link className="btn ghost" href={hrefChat(b.conversationId, sp)}>
             Apri la chat {b.conversationId}…
           </Link>
         )}
