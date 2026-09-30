@@ -706,3 +706,94 @@
 [data-console] .log-json{margin:0;max-height:360px;overflow:auto;padding:10px 12px;border:1px solid var(--line2);border-radius:6px;background:var(--s1);color:var(--fg2);line-height:18px;white-space:pre-wrap;overflow-wrap:anywhere}
 [data-console] .log-piede{display:flex;align-items:center;gap:12px;margin-top:12px;font-size:12px}
 [data-console] .log-ko{color:var(--red)}
+
+/* ---------- Segment control e BarList (Task 15b) ---------- */
+[data-console] .seg{display:inline-flex;flex-wrap:wrap;gap:2px;padding:2px;border:1px solid var(--line2);border-radius:8px;background:var(--s0)}
+[data-console] .seg [role="tab"]{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:var(--fg3);font-size:13px;font-weight:500;cursor:pointer;transition:background-color 120ms ease,color 120ms ease}
+[data-console] .seg [role="tab"]:hover{color:var(--fg)}
+[data-console] .seg [role="tab"][aria-selected="true"]{background:var(--s4);color:var(--fg)}
+[data-console] .seg-n{font-size:12px;color:var(--fg3)}
+[data-console] .seg [aria-selected="true"] .seg-n{color:var(--fg2)}
+[data-console] .bl{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+[data-console] .bl-riga{display:grid;grid-template-columns:minmax(0,200px) minmax(0,1fr) 48px;align-items:center;gap:12px;height:32px;border-bottom:1px solid var(--line2)}
+[data-console] .bl-nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg2)}
+[data-console] .bl-bar{display:block;width:100%;height:8px;border-radius:2px;overflow:hidden}
+[data-console] .bl-t{fill:var(--line2)}
+[data-console] .bl-f{fill:var(--bar)}
+[data-console] .bl-riga:hover .bl-f{fill:var(--bar-hi)}
+[data-console] .bl-n{text-align:right;font-family:var(--m);font-size:12px;font-variant-numeric:tabular-nums}
+[data-console] .bl-vuoto{margin:0;font-size:13px;color:var(--fg3)}
+
+/* ---------- Analisi (Task 15b) ---------- */
+[data-console] .an{height:100%;overflow:auto}
+[data-console] .an-barra{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin-top:16px}
+[data-console] .an-per{margin-left:auto}
+[data-console] .an-per select{font-family:var(--f);font-size:13px}
+[data-console] .an-pan{padding-top:4px}
+[data-console] .an-leg{margin-top:12px;font-size:13px}
+[data-console] .an-leg summary{display:inline-flex;align-items:center;height:28px;color:var(--fg3);cursor:pointer}
+[data-console] .an-leg summary:hover{color:var(--fg)}
+[data-console] .an-leg dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 16px;margin:6px 0 4px;max-width:720px}
+[data-console] .an-leg dl div{display:contents}
+[data-console] .an-leg dt{color:var(--fg);font-weight:500}
+[data-console] .an-leg dd{margin:0;color:var(--fg2)}
+[data-console] .an-tbl .an-nm{max-width:280px;overflow:hidden;text-overflow:ellipsis}
+[data-console] .an-tbl .r{text-align:right}
+[data-console] .an-tbl .an-apri{text-align:right}
+[data-console] .an-tbl a{color:var(--fg2);text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px}
+[data-console] .an-tbl a:hover{color:var(--fg)}
+[data-console] .an-kv{display:flex;flex-wrap:wrap;gap:8px 32px;margin:16px 0 0}
+[data-console] .an-kv div{display:flex;align-items:baseline;gap:8px}
+[data-console] .an-kv dt{font-size:12px;color:var(--fg3)}
+[data-console] .an-kv dd{margin:0;font-size:20px;line-height:28px;font-weight:600}
+[data-console] .an-nota{margin:10px 0 0;font-size:13px;color:var(--fg2)}
+[data-console] .an-nota b{font-weight:600;color:var(--fg)}
+[data-console] .an-sez{margin-top:24px;min-width:0}
+[data-console] .an-sez h2{margin:0 0 8px;font-size:14px;line-height:20px;font-weight:600}
+[data-console] .an-testo{margin:0;font-size:14px;line-height:22px;max-width:65ch;white-space:pre-wrap;color:var(--fg)}
+[data-console] .an-due{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 32px}
+@media (max-width: 1180px){ [data-console] .an-due{grid-template-columns:minmax(0,1fr)} }
+
+/* ---------- Simulatore (Task 15b): thread del Task 7 a tutta pagina, colonna centrale ---------- */
+[data-console] .sim{height:100%}
+[data-console] .sim .msgs,
+[data-console] .sim .composer{padding-left:max(24px,calc((100% - 760px) / 2));padding-right:max(24px,calc((100% - 760px) / 2))}
+[data-console] .sim-t{margin:0;font-size:16px;line-height:22px;font-weight:600}
+[data-console] .sim-sub{font-size:12px;line-height:16px;color:var(--fg3)}
+[data-console] .sim-attesa{gap:8px}
+[data-console] .sim-salta{height:24px;padding:0 6px;border:0;border-radius:4px;background:transparent;color:var(--fg2);font-size:12px;text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px;cursor:pointer}
+[data-console] .sim-salta:hover{color:var(--fg);background:var(--s3)}
+[data-console] .sim-rapide{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}
+[data-console] .sim-rapide .btn.filtro{align-self:auto}
+[data-console] .sim .cmp-top .tag{flex:none}
+
+/* ---------- Campagne (Task 15b) ---------- */
+[data-console] .cmp-pag{height:100%;overflow:auto}
+[data-console] .cmp-pag .avv-hd{align-items:center}
+[data-console] .cmp-tbl .cmp-nm{font-weight:500;max-width:280px;overflow:hidden;text-overflow:ellipsis}
+[data-console] .cmp-tbl .r{text-align:right}
+[data-console] .cmp-tbl .cmp-x{width:40px;padding:0 4px;text-align:right}
+[data-console] .cmp-form{display:flex;flex-direction:column;gap:16px}
+[data-console] .cmp-campo{display:flex;flex-direction:column;gap:6px;min-width:0;margin:0;padding:0;border:0}
+[data-console] .cmp-campo>label,
+[data-console] .cmp-campo>legend,
+[data-console] .cmp-att label{font-size:13px;font-weight:500;color:var(--fg)}
+[data-console] .cmp-campo>legend{padding:0;margin-bottom:6px}
+[data-console] .cmp-in-mono input{font-family:var(--m);font-size:12px}
+[data-console] .cmp-h{margin:0;font-size:12px;line-height:16px;color:var(--fg3)}
+[data-console] .cmp-vars-l{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+[data-console] .cmp-var{display:flex;align-items:center;gap:6px;width:100%}
+[data-console] .cmp-var-k{width:40px;flex:none;color:var(--fg2)}
+[data-console] .cmp-var select{height:32px;padding:0 8px;border:1px solid var(--line2);border-radius:6px;background:var(--s1);color:var(--fg);font:inherit;font-size:13px}
+[data-console] .cmp-var-in{flex:1;min-width:0}
+[data-console] .cmp-att{display:flex;align-items:center;gap:8px;font-size:12px}
+[data-console] .cmp-err{display:flex;align-items:flex-start;gap:6px;margin:0;font-size:13px;line-height:19px;color:var(--red);overflow-wrap:anywhere}
+[data-console] .cmp-err .ico{margin-top:2px}
+[data-console] .cmp-piede{display:flex;justify-content:flex-end}
+[data-console] .cmp-conf{margin-top:0;max-width:none}
+[data-console] .cmp-diff{display:flex;flex-direction:column;gap:4px;margin:6px 0 0}
+[data-console] .cmp-diff div{display:grid;grid-template-columns:132px minmax(0,1fr);gap:8px}
+[data-console] .cmp-diff dt{font-size:12px;color:var(--fg3)}
+[data-console] .cmp-diff dd{margin:0;color:var(--fg);overflow-wrap:anywhere}
+[data-console] .cmp-conf b.mono{font-weight:500;color:var(--fg);overflow-wrap:anywhere}
+[data-console] .an-testo b{font-weight:600}

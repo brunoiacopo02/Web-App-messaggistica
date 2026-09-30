@@ -39,10 +39,12 @@ interface BollaProps {
   m: Msg;
   /** Primo messaggio del blocco: per il lead apre il blocco con 12 px di stacco (mockup). */
   primo: boolean;
+  /** Stato di consegna sotto i messaggi in uscita (default sì); il simulatore non consegna nulla. */
+  consegna?: boolean;
 }
 
 /** Una bolla con la sua riga di orario (e stato di consegna, se in uscita). */
-export const Bolla = memo(function Bolla({ m, primo }: BollaProps) {
+export const Bolla = memo(function Bolla({ m, primo, consegna = true }: BollaProps) {
   const lead = m.direction === 'in';
   return (
     <>
@@ -52,7 +54,7 @@ export const Bolla = memo(function Bolla({ m, primo }: BollaProps) {
       <div className={lead ? 'meta' : 'meta r'}>
         <time dateTime={m.created_at}>{oraRoma(m.created_at)}</time>
         {m.is_template && <span>template</span>}
-        {!lead && <Consegna m={m} />}
+        {!lead && consegna && <Consegna m={m} />}
       </div>
     </>
   );
