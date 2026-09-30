@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AreaAvviso, AvvisoConsole } from '@/lib/console/avvisi';
 import { ID_CRON, type IdCron } from '@/lib/console/azioni-tipi';
 import { oraRoma } from '@/lib/console/thread';
@@ -76,6 +76,33 @@ function AzioniManuali({ onEseguita }: { onEseguita: () => void }) {
 }
 
 /** Pagina Avvisi: testata con i numeri, avvisi raggruppati, azioni manuali e registro. */
+/** `/console/avvisi#id` (le fonti dell'Assistente): gli avvisi arrivano dopo il caricamento, quindi
+ *  lo scorrimento nativo all'ancora non trova l'elemento. Appena la lista c'è, scorre all'avviso
+ *  e gli dà il focus; una volta sola per ancora, così i giri di polling non riportano lassù. */
+export function useScorriAllAncora(pronto: boolean) {
+  const fatta = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pronto) return;
+    const vai = () => {
+      let id = '';
+      try {
+        id = decodeURIComponent(window.location.hash.slice(1));
+      } catch {
+        return;
+      }
+      if (!id || fatta.current === id) return;
+      const el = document.getElementById(id);
+      if (!el) return;
+      fatta.current = id;
+      el.scrollIntoView({ block: 'start' });
+      el.focus({ preventScroll: true });
+    };
+    vai();
+    window.addEventListener('hashchange', vai);
+    return () => window.removeEventListener('hashchange', vai);
+  }, [pronto]);
+}
+
 export function Avvisi() {
   const avvisi = useAvvisi();
   const registro = useRegistro();
@@ -83,6 +110,7 @@ export function Avvisi() {
   const skeleton = useCaricamentoVisibile(avvisi.dati === null && !avvisi.errore);
 
   const lista = avvisi.dati;
+  useScorriAllAncora(lista !== null && lista.length > 0);
   const critici = lista?.filter((a) => a.gravita === 'critico').length ?? null;
   const oggi = azioniOggi(registro.dati);
   const rileggiTutto = () => {

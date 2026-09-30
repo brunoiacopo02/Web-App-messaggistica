@@ -152,7 +152,7 @@ export function RigaAvviso({ a, onCambio }: RigaAvvisoProps) {
   const nascoste = a.azioni.length - AZIONI_VISIBILI;
 
   return (
-    <article id={a.id} className={`avv-riga ${g.classe}`} aria-labelledby={`${a.id}-t`}>
+    <article id={a.id} tabIndex={-1} className={`avv-riga ${g.classe}`} aria-labelledby={`${a.id}-t`}>
       <div className="avv-corpo">
         <div className="al-top">
           <Icona size={16} strokeWidth={1.75} className="ico" aria-hidden="true" />
