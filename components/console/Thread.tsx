@@ -76,12 +76,13 @@ export function Thread({ dettaglio, messaggi, now, pausaInCorso, onPausa, onInvi
         <div className="who">
           <div className="who-l1">
             <b className={secondario ? 'mono' : undefined}>{principale}</b>
-            {telefono && !secondario && <span className="mono tel">{telefono}</span>}
             {secondario && <span className="sec">{secondario}</span>}
           </div>
-          {conv.contesto && (
+          {/* Il telefono sta sotto, col contesto (come nel mockup): il nome ha tutta la riga. */}
+          {((telefono && !secondario) || conv.contesto) && (
             <div className="who-l2">
-              <Tag tono={conv.contesto.tono}>{conv.contesto.testo}</Tag>
+              {telefono && !secondario && <span className="mono tel">{telefono}</span>}
+              {conv.contesto && <Tag tono={conv.contesto.tono}>{conv.contesto.testo}</Tag>}
             </div>
           )}
         </div>
