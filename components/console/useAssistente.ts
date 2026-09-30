@@ -72,7 +72,7 @@ function storia(turni: Turno[], domanda: string) {
 
 /**
  * La conversazione con l'Assistente (`POST /api/console/assistente`, SSE). Un turno alla volta:
- * una seconda `invia` mentre la prima è in corso si ignora. `riprova` rimanda la domanda dell'ultimo
+ * una seconda `invia` mentre la prima è in corso non parte e restituisce `false`. `riprova` rimanda la domanda dell'ultimo
  * turno finito in errore. I turni in errore non entrano nella storia mandata al modello.
  */
 export function useAssistente() {
@@ -165,12 +165,14 @@ export function useAssistente() {
     }
   }, []);
 
+  /** `true` se il turno è partito; `false` se la domanda è vuota o c'è già un turno in corso. */
   const invia = useCallback(
-    (testo: string) => {
+    (testo: string): boolean => {
       const domanda = testo.trim();
-      if (domanda === '' || occupato.current) return;
+      if (domanda === '' || occupato.current) return false;
       occupato.current = true;
       void avvia(domanda, turniRef.current);
+      return true;
     },
     [avvia],
   );

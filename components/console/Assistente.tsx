@@ -22,7 +22,8 @@ export const PAGINA_ASSISTENTE = '/console/assistente';
 type ContestoAssistente = {
   aperto: boolean;
   /** Apre il pannello (sulla pagina dell'Assistente resta la pagina). `domanda` precompila il campo;
-   *  con `invia: true` parte subito (la palette, dove l'admin l'ha già scritta). */
+   *  con `invia: true` parte subito (la palette, dove l'admin l'ha già scritta), salvo un turno
+   *  già in corso: allora precompila, e la domanda non si perde. */
   apri: (domanda?: string, opz?: { invia?: boolean }) => void;
   chiudi: () => void;
   conversazione: ConversazioneAssistente;
@@ -45,12 +46,9 @@ export function AssistenteProvider({ children }: { children: ReactNode }) {
     (d?: string, opz?: { invia?: boolean }) => {
       if (pathname !== PAGINA_ASSISTENTE) setAperto(true);
       if (d === undefined) return;
-      if (opz?.invia) {
-        invia(d);
-        setDomanda('');
-      } else {
-        setDomanda(d);
-      }
+      // Con un turno già in corso la domanda non parte: resta nel campo, pronta da mandare.
+      if (opz?.invia && invia(d)) setDomanda('');
+      else setDomanda(d);
     },
     [pathname, invia],
   );

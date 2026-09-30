@@ -144,3 +144,46 @@ it('bozza con la finestra 24h chiusa: niente "Metti nel composer" né toast, dic
   expect(screen.getByText(/finestra 24h di questa chat è chiusa/)).toBeTruthy();
   expect((screen.getByLabelText('Messaggio al lead') as HTMLTextAreaElement).value).toBe('');
 });
+
+function ApriEInvia({ domanda }: { domanda: string }) {
+  const { apri } = useApriAssistente();
+  return (
+    <button type="button" onClick={() => apri(domanda, { invia: true })}>
+      {`invia ${domanda}`}
+    </button>
+  );
+}
+
+it('apri(domanda, { invia: true }) con un turno in corso precompila il campo invece di perdere la domanda', async () => {
+  // Uno stream che non finisce mai: il primo turno resta in corso.
+  fetchFinto.mockImplementation(async (url: string) => {
+    if (url === '/api/console/assistente') {
+      return new Response(new ReadableStream<Uint8Array>({ start(c) { c.enqueue(enc.encode(riga({ tipo: 'testo', testo: 'Sto...' }))); } }), { status: 200 });
+    }
+    if (url === '/api/console/viste') return Response.json({ conteggi: {} });
+    if (url === '/api/console/avvisi') return Response.json({ avvisi: [] });
+    return new Response('{}', { status: 404 });
+  });
+  render(
+    <div data-console>
+      <ComposerBridgeProvider>
+        <AssistenteProvider>
+          <ApriEInvia domanda="prima" />
+          <ApriEInvia domanda="seconda" />
+          <PannelloAssistente />
+        </AssistenteProvider>
+      </ComposerBridgeProvider>
+    </div>,
+  );
+  await act(async () => {
+    fireEvent.click(screen.getByText('invia prima'));
+  });
+  await screen.findByText('Sto...');
+  await act(async () => {
+    fireEvent.click(screen.getByText('invia seconda'));
+  });
+  const campo = screen.getByLabelText("Domanda all'Assistente") as HTMLTextAreaElement;
+  expect(campo.value).toBe('seconda');
+  const chiamate = fetchFinto.mock.calls.filter(([u]) => u === '/api/console/assistente');
+  expect(chiamate).toHaveLength(1);
+});
