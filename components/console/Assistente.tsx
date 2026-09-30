@@ -218,7 +218,8 @@ function VistaTurno({ turno, ultimo, conv, onVai }: { turno: Turno; ultimo: bool
 
 function Suggerimenti({ onScegli }: { onScegli: (d: string) => void }) {
   const { conteggi } = useConteggi();
-  const { dati } = useAvvisi();
+  // Un'istantanea basta per tre domande: niente secondo polling accanto a quello della colonna avvisi.
+  const { dati } = useAvvisi({ polling: false });
   const { regia } = useRegia();
   const primo = dati?.find((a) => a.gravita !== 'info') ?? dati?.[0] ?? null;
   const domande = domandeSuggerite({

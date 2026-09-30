@@ -187,3 +187,19 @@ it('apri(domanda, { invia: true }) con un turno in corso precompila il campo inv
   const chiamate = fetchFinto.mock.calls.filter(([u]) => u === '/api/console/assistente');
   expect(chiamate).toHaveLength(1);
 });
+
+it('i suggerimenti leggono gli avvisi una volta, senza polling', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    monta(null);
+    fireEvent.click(screen.getByText('apri'));
+    await screen.findByLabelText("Domanda all'Assistente");
+    await act(async () => {
+      vi.advanceTimersByTime(95_000);
+    });
+    const letture = fetchFinto.mock.calls.filter(([u]) => u === '/api/console/avvisi');
+    expect(letture).toHaveLength(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});

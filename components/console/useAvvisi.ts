@@ -10,7 +10,7 @@ type Lettura<T> = { dati: T | null; errore: boolean; aggiornatoAt: string | null
 
 /** Lettura a polling di un endpoint JSON della console. Un giro fallito non svuota i dati già
  *  in pagina: segna solo `errore`, e il giro dopo ci riprova. */
-function usePolling<T>(url: string, estrai: (j: unknown) => T): Lettura<T> & { rileggi: () => Promise<void> } {
+function usePolling<T>(url: string, estrai: (j: unknown) => T, polling = true): Lettura<T> & { rileggi: () => Promise<void> } {
   const [stato, setStato] = useState<Lettura<T>>({ dati: null, errore: false, aggiornatoAt: null });
   const seq = useRef(0);
   const estraiRef = useRef(estrai);
@@ -34,17 +34,20 @@ function usePolling<T>(url: string, estrai: (j: unknown) => T): Lettura<T> & { r
 
   useEffect(() => {
     void rileggi();
+    if (!polling) return;
     const id = setInterval(() => {
       if (document.visibilityState === 'visible') void rileggi();
     }, OGNI_AVVISI);
     return () => clearInterval(id);
-  }, [rileggi]);
+  }, [rileggi, polling]);
 
   return { ...stato, rileggi };
 }
 
-export function useAvvisi() {
-  return usePolling<AvvisoConsole[]>('/api/console/avvisi', (j) => (j as { avvisi?: AvvisoConsole[] }).avvisi ?? []);
+/** Gli avvisi aperti, riletti ogni 30 s. Con `{ polling: false }` una lettura sola al montaggio:
+ *  per chi ne vuole solo un'istantanea (i suggerimenti dell'Assistente), senza un secondo giro. */
+export function useAvvisi({ polling = true }: { polling?: boolean } = {}) {
+  return usePolling<AvvisoConsole[]>('/api/console/avvisi', (j) => (j as { avvisi?: AvvisoConsole[] }).avvisi ?? [], polling);
 }
 
 export type RigaRegistro = {
