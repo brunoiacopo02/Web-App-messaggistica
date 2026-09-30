@@ -157,3 +157,39 @@ it('in sola lettura gli interruttori sono disabilitati', () => {
   expect(screen.getByText(/vede le impostazioni ma non le cambia/)).toBeTruthy();
   expect((screen.getByRole('switch', { name: 'Lancio attivo' }) as HTMLButtonElement).disabled).toBe(true);
 });
+
+it('durante la POST il "Sì" resta visibile ma disabilitato: il doppio clic non fa una seconda POST', async () => {
+  let rispondi: (r: Response) => void = () => {};
+  const chiamate: string[] = [];
+  vi.stubGlobal('fetch', vi.fn((url: string) => {
+    chiamate.push(url);
+    return new Promise<Response>((ok) => { rispondi = ok; });
+  }));
+  monta();
+  await clic(screen.getByRole('switch', { name: 'Lancio attivo' }));
+  const si = screen.getByRole('button', { name: 'Sì, spegni' }) as HTMLButtonElement;
+  await clic(si);
+  const ancora = screen.getByRole('button', { name: 'Sì, spegni' }) as HTMLButtonElement;
+  expect(ancora.disabled).toBe(true);
+  await clic(ancora);
+  expect(chiamate).toHaveLength(1);
+  await act(async () => {
+    rispondi(risposta({ ok: true, key: 'lancio_attivo', value: false, audit: true }));
+  });
+  expect(chiamate).toHaveLength(1);
+  expect(screen.queryByRole('group', { name: 'Conferma Lancio attivo' })).toBeNull();
+  expect(screen.getByText(/^Salvato/)).toBeTruthy();
+});
+
+it('un campo di testo non cambiato: "Salva…" non apre la conferma e non chiama nulla', async () => {
+  const chiamate = fetchFinto({});
+  monta();
+  const gruppo = screen.getByRole('group', { name: 'Link Zoom della live' });
+  // Stesso valore salvato, anche con spazi attorno: non è un cambio.
+  await act(async () => {
+    fireEvent.change(within(gruppo).getByRole('textbox'), { target: { value: ' https://zoom.us/j/1 ' } });
+  });
+  await clic(within(gruppo).getByRole('button', { name: 'Salva…' }));
+  expect(screen.queryByRole('group', { name: 'Conferma Link Zoom della live' })).toBeNull();
+  expect(chiamate).toHaveLength(0);
+});

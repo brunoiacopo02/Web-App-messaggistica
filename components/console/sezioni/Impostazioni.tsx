@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Lock, TriangleAlert } from 'lucide-react';
 import type { LancioSettingKey, LancioSettings } from '@/lib/lancio-settings';
 import type { ChiaveImpostazione, UltimoCambio } from '@/lib/console/impostazioni';
@@ -193,17 +193,26 @@ export function Impostazioni({
   const [esiti, setEsiti] = useState<Partial<Record<ChiaveImpostazione, Esito>>>({});
   const [busy, setBusy] = useState<ChiaveImpostazione | null>(null);
   const [conferma, setConferma] = useState<Conferma | null>(null);
+  /** Una POST alla volta: il secondo clic di un doppio clic arriva prima del re-render. */
+  const inVolo = useRef(false);
 
   function chiedi(key: ChiaveImpostazione, dopo: string) {
+    if (inVolo.current) return;
+    // Nessun cambio rispetto al valore salvato: niente conferma e niente POST.
+    if (dopo === salvati[key]) {
+      if (conferma?.key === key) setConferma(null);
+      return;
+    }
     setEsiti((s) => ({ ...s, [key]: undefined }));
     setConferma({ key, dopo });
   }
 
   async function confermato() {
-    if (!conferma) return;
+    if (!conferma || inVolo.current) return;
+    inVolo.current = true;
     const { key, dopo } = conferma;
     const prima = salvati[key];
-    setConferma(null);
+    // La striscia resta aperta durante la POST, col "Sì" disabilitato: si vede cosa sta partendo.
     setBusy(key);
     let esito: Salvataggio;
     try {
@@ -212,7 +221,9 @@ export function Impostazioni({
     } catch {
       esito = { ok: false, motivo: 'errore di rete. Il valore non è cambiato: riprova.' };
     } finally {
+      inVolo.current = false;
       setBusy(null);
+      setConferma(null);
     }
     if (!esito.ok) {
       setEsiti((s) => ({ ...s, [key]: { tono: 'errore', testo: `Non salvato: ${esito.motivo}` } }));
@@ -244,8 +255,8 @@ export function Impostazioni({
         </p>
         {testo && <p className="imp-conf-m">{testo}</p>}
         <div className="imp-conf-act">
-          <Button variante="primario" onClick={() => void confermato()}>{verbo}</Button>
-          <Button variante="fantasma" onClick={() => setConferma(null)}>Annulla</Button>
+          <Button variante="primario" caricamento={busy === k} onClick={() => void confermato()}>{verbo}</Button>
+          <Button variante="fantasma" disabled={busy === k} onClick={() => setConferma(null)}>Annulla</Button>
         </div>
       </div>
     );
@@ -338,7 +349,7 @@ export function Impostazioni({
                 onChange={(e) => setBozze((v) => ({ ...v, [key]: e.target.value }))}
               />
               <Button
-                disabled={!puoModificare || busy === key}
+                disabled={!puoModificare || busy === key || bozze[key].trim() === salvati[key]}
                 caricamento={busy === key}
                 onClick={() => chiedi(key, bozze[key].trim())}
               >
