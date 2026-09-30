@@ -11,6 +11,28 @@ export const dynamic = 'force-dynamic';
 
 const TRENTA_GIORNI = 30 * 24 * 3600_000;
 const MAX_EVENTI = 60;
+/** Tetto di tempo per gli eventi: in produzione la query è stata vista a 8,5 s. Oltre, la chat si apre senza. */
+const TETTO_EVENTI_MS = 3000;
+
+type RigaEvento = { created_at: string; type: string; message: string | null; level: string };
+
+/** Legge gli eventi senza mai far fallire la rotta: errore o timeout diventano `null`. */
+async function leggiEventi(s: ReturnType<typeof getSupabaseAdmin>, convId: number, now: Date): Promise<RigaEvento[] | null> {
+  try {
+    const r = await s
+      .from('event_log')
+      .select('created_at, type, message, level')
+      .in('type', [...TIPI_EVENTI_THREAD])
+      .eq('payload->>conversationId', String(convId))
+      .gte('created_at', new Date(now.getTime() - TRENTA_GIORNI).toISOString())
+      .order('created_at', { ascending: false })
+      .limit(MAX_EVENTI)
+      .abortSignal(AbortSignal.timeout(TETTO_EVENTI_MS));
+    return r.error ? null : ((r.data ?? []) as RigaEvento[]);
+  } catch {
+    return null;
+  }
+}
 
 const COLONNE =
   'id, ai_owner, ai_status, ai_paused_at, bot_outcome, bot_scheduled_at, lancio_fase, lancio_slug, wa_number, ' +
@@ -48,19 +70,11 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     c.crm_lead_id
       ? s.from('crm_lead_status').select('status, conferme_outcome, sales_outcome').eq('lead_id', c.crm_lead_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
-    s
-      .from('event_log')
-      .select('created_at, type, message, level')
-      .in('type', [...TIPI_EVENTI_THREAD])
-      .eq('payload->>conversationId', String(convId))
-      .gte('created_at', new Date(now.getTime() - TRENTA_GIORNI).toISOString())
-      .order('created_at', { ascending: false })
-      .limit(MAX_EVENTI),
+    leggiEventi(s, convId, now),
     // Stessa fonte della lista (cache 15 s): una chat con l'ultimo invio fallito mostra il tono errore.
     idsConErrori(s, now).catch(() => [] as number[]),
   ]);
   if (crm.error) return NextResponse.json({ error: 'lettura_fallita', dettaglio: crm.error.message }, { status: 500 });
-  if (eventi.error) return NextResponse.json({ error: 'lettura_fallita', dettaglio: eventi.error.message }, { status: 500 });
 
   const nome = [c.lead?.first_name, c.lead?.last_name].map((x) => x?.trim()).filter(Boolean).join(' ') || null;
 
@@ -86,11 +100,10 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     },
     lead: { id: c.lead?.id ?? null, nome, telefono: c.lead?.phone_e164 ?? null },
     crm: crm.data ?? null,
-    eventi: ((eventi.data ?? []) as { created_at: string; type: string; message: string | null; level: string }[]).map((e) => ({
-      at: e.created_at,
-      tipo: e.type,
-      testo: e.message ?? '',
-      livello: e.level,
-    })),
+    // Dal più vecchio al più recente: la query legge i più recenti (tetto 60), il thread li vuole in ordine.
+    eventi: (eventi ?? [])
+      .map((e) => ({ at: e.created_at, tipo: e.type, testo: e.message ?? '', livello: e.level }))
+      .reverse(),
+    eventiParziali: eventi === null,
   });
 }

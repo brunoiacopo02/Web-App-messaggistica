@@ -1,5 +1,5 @@
-import { it, expect } from 'vitest';
-import { raggruppa, finestra24h, autoreDi, numeroWa, intercala, leggibile, dataOraBreve, testoEvento, fondiMessaggi, cursoreDopo, type Gruppo, type Msg } from './thread';
+import { describe, it, expect } from 'vitest';
+import { raggruppa, finestra24h, autoreDi, numeroWa, intercala, leggibile, dataOraBreve, testoEvento, TIPI_EVENTI_THREAD, fondiMessaggi, cursoreDopo, type Gruppo, type Msg } from './thread';
 
 const m = (id: number, direction: 'in' | 'out', created_at: string, sender: string | null = null): Msg =>
   ({ id, direction, body: 'x', created_at, is_template: false, twilio_status: 'delivered', twilio_error_code: null, sender });
@@ -72,9 +72,56 @@ it('codici leggibili e data breve', () => {
   expect(dataOraBreve(null)).toBeNull();
 });
 
-it('testo degli eventi senza prefisso tecnico', () => {
-  expect(testoEvento('[chat] bot fermato sulla conv 3', 'bot_paused')).toBe('bot fermato sulla conv 3');
-  expect(testoEvento(null, 'bot_paused')).toBe('bot paused');
+describe('testoEvento: frasi italiane per le righe di sistema', () => {
+  const casi: [string, string | null, string][] = [
+    ['bot_intake', '[bot-fissatore] intake lead 5 → conv 9', 'Lead preso in carico dal bot'],
+    ['lancio_intake', '[lancio] x', 'Lead entrato nel lancio'],
+    ['fenice_enroll', 'Lead arruolato (Mario): +39333', 'Lead arruolato da Mario'],
+    ['bot_outcome_sent', '[bot-fissatore] esito APPUNTAMENTO inviato per lead 5', 'Esito Appuntamento inviato al CRM'],
+    ['bot_outcome_sent', '[bot-fissatore] RICHIAMO interim inviato per lead 5 (sequenza in corso)', 'Richiamo provvisorio inviato al CRM'],
+    ['bot_outcome_locked', '[bot-fissatore] esito X intercettato', 'Esito intercettato: il lead era già in appuntamento, nota al CRM'],
+    ['bot_outcome_rejected', '[bot-fissatore] CRM ha rifiutato (403)', "Il CRM ha rifiutato l'esito: chat chiusa in locale"],
+    ['bot_note_sent', '[gdo] nota inviata al CRM per lead 5', 'Nota inviata al CRM'],
+    ['bot_fermo_stato_crm', '[bot-fissatore] conv 3: il bot non risponde, il CRM dice APPOINTMENT', 'Bot fermo: il CRM dice Appointment'],
+    ['bot_contatto_umano_inviato', null, 'Richiesta di contatto umano inviata'],
+    ['bot_appuntamento_rifissato', null, 'Appuntamento rifissato dal bot'],
+    ['bot_paused', '[chat] bot fermato sulla conv 3 da a@b.it', 'Bot fermato da a@b.it'],
+    ['bot_paused', null, 'Bot fermato'],
+    ['bot_resumed', '[chat] bot riattivato sulla conv 3 da a@b.it', 'Bot riattivato da a@b.it'],
+    ['stale_handed_off', 'x', 'Chat passata a persona da oltre 48 ore senza esito: serve chiusura manuale'],
+    ['cancel_requested', 'x', 'Il lead ha chiesto di annullare o spostare: automatismi spenti'],
+    ['inbound_su_altro_numero', 'x', 'Il lead ha risposto a un altro numero: la chat non si sposta'],
+    ['lancio_fase_cambiata', '[lancio] conv 3: fase → posto_bloccato', 'Fase del lancio: posto bloccato'],
+    ['lancio_posto_bloccato', 'x', 'Posto bloccato per il lead'],
+    ['lancio_domanda', '[lancio] conv 3: risposta a domanda 2/3', 'Risposta a domanda 2 di 3'],
+    ['lancio_apertura_inviata', 'x', 'Messaggio di apertura inviato'],
+    ['lancio_silenzio', 'x', 'Il lead non ha risposto'],
+    ['lancio_congedo', 'x', 'Congedo inviato al lead'],
+    ['lancio_ripresa_manuale', 'x', 'Chat ripresa a mano'],
+    ['gdo_video_sent', '[gdo] video inviato a +39 dopo la risposta', 'Video inviato al lead'],
+    ['gdo_video_followup_sent', 'x', 'Sollecito sul video inviato'],
+    ['video_watched', 'x', 'Il lead conferma di aver visto il video'],
+    ['gdo_agenda_sent', 'x', 'Agenda del GDO inviata al lead'],
+    ['gdo_agenda_esito', '[gdo] agenda per il lead 5: inviato', 'Esito invio agenda GDO: inviato'],
+    ['recupero_nr_inviato', 'x', 'Recupero per mancata risposta inviato'],
+    ['richiamo_restituito', 'x', 'Richiamo restituito ai GDO'],
+    ['appuntamento_registrato', '[crm] data della call registrata per il lead 5: 2026-09-24T15:00:00Z', 'Appuntamento registrato per il 24/09 17:00'],
+    ['appuntamento_registrato', null, 'Appuntamento registrato'],
+    ['appuntamento_spostato', '[crm] appuntamento del lead 5 spostato da a a 2026-09-24T15:00:00Z', 'Appuntamento spostato al 24/09 17:00'],
+    ['console_azione', 'x', 'Azione eseguita dalla console'],
+  ];
+  it.each(casi)('%s', (tipo, message, atteso) => {
+    expect(testoEvento(tipo, message)).toBe(atteso);
+  });
+
+  it('un caso per ogni tipo del thread', () => {
+    for (const t of TIPI_EVENTI_THREAD) expect(casi.some(([c]) => c === t), t).toBe(true);
+  });
+
+  it('tipo sconosciuto: frase generica, mai il testo tecnico né vuoto', () => {
+    expect(testoEvento('boh_strano', '[x] technical error snake_case')).toBe('Evento di sistema');
+    expect(testoEvento('', null)).toBe('Evento di sistema');
+  });
 });
 
 it('fondiMessaggi: aggiunge i nuovi, aggiorna per id (stato di consegna), resta in ordine', () => {

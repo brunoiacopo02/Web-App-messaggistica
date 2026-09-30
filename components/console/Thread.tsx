@@ -27,7 +27,7 @@ function RigaSistema({ evento }: { evento: Extract<Voce, { tipo: 'sistema' }>['e
   return (
     <div className={grave ? `sys ${evento.livello}` : 'sys'}>
       {grave ? <TriangleAlert {...p} /> : <History {...p} />}
-      <span>{testoEvento(evento.testo, evento.tipo)}</span>
+      <span>{testoEvento(evento.tipo, evento.testo)}</span>
       <span className="mono">{oraRoma(evento.at)}</span>
     </div>
   );
@@ -124,6 +124,12 @@ export function Thread({ dettaglio, messaggi, now, pausaInCorso, onPausa, onInvi
           inFondo.current = el.scrollHeight - el.scrollTop - el.clientHeight < SOGLIA_FONDO;
         }}
       >
+        {dettaglio.eventiParziali && (
+          <div className="sys" role="status">
+            <History size={16} strokeWidth={1.75} className="ico" aria-hidden="true" />
+            <span>Eventi non caricati: la lettura è lenta. Riapri la chat per riprovare.</span>
+          </div>
+        )}
         {voci.length === 0 && <p className="msgs-vuoto">Nessun messaggio in questa chat.</p>}
         {voci.map((v, i) => {
           if (v.tipo === 'giorno') return <div key={`g${i}`} className="day">{v.etichetta}</div>;

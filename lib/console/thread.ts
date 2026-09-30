@@ -33,6 +33,8 @@ export type DettaglioChat = {
   lead: { id: number | null; nome: string | null; telefono: string | null };
   crm: { status: string | null; conferme_outcome: string | null; sales_outcome: string | null } | null;
   eventi: Evento[];
+  /** `true` se la lettura degli eventi è scaduta o fallita: `eventi` è vuoto ma la chat è completa. */
+  eventiParziali: boolean;
 };
 
 const FUSO = 'Europe/Rome';
@@ -163,10 +165,69 @@ export const TIPI_EVENTI_THREAD = [
   'appuntamento_spostato', 'console_azione',
 ] as const;
 
-/** Il testo di una riga di `event_log` senza il prefisso tecnico `[bot-fissatore] `, `[chat] `, … */
-export function testoEvento(message: string | null, tipo: string): string {
-  const t = (message ?? '').replace(/^\s*\[[^\]]+\]\s*/, '').trim();
-  return t || tipo.replace(/_/g, ' ');
+/**
+ * La frase italiana di una riga di sistema. Il `message` di `event_log` è un testo da log (prefissi
+ * tra parentesi, inglese, id): non si mostra mai grezzo, se ne estrae solo il dato utile.
+ * Tipo sconosciuto: `Evento di sistema`.
+ */
+export function testoEvento(type: string, message: string | null): string {
+  const m = message ?? '';
+  const iso = m.match(/\d{4}-\d{2}-\d{2}T[\d:.]+Z?/g)?.at(-1) ?? null;
+  const quando = dataOraBreve(iso ? (iso.endsWith('Z') ? iso : `${iso}Z`) : null);
+  switch (type) {
+    case 'bot_intake': return 'Lead preso in carico dal bot';
+    case 'lancio_intake': return 'Lead entrato nel lancio';
+    case 'fenice_enroll': return 'Lead arruolato da Mario';
+    case 'bot_outcome_sent': {
+      if (/RICHIAMO interim/i.test(m)) return 'Richiamo provvisorio inviato al CRM';
+      const esito = leggibile(/esito ([A-Z_]+)/.exec(m)?.[1] ?? null);
+      return esito ? `Esito ${esito} inviato al CRM` : 'Esito inviato al CRM';
+    }
+    case 'bot_outcome_locked': return 'Esito intercettato: il lead era già in appuntamento, nota al CRM';
+    case 'bot_outcome_rejected': return "Il CRM ha rifiutato l'esito: chat chiusa in locale";
+    case 'bot_note_sent': return 'Nota inviata al CRM';
+    case 'bot_fermo_stato_crm': {
+      const stato = leggibile(/il CRM dice ([A-Za-z_]+)/.exec(m)?.[1] ?? null);
+      return stato ? `Bot fermo: il CRM dice ${stato}` : 'Bot fermo per lo stato del CRM';
+    }
+    case 'bot_contatto_umano_inviato': return 'Richiesta di contatto umano inviata';
+    case 'bot_appuntamento_rifissato': return 'Appuntamento rifissato dal bot';
+    case 'bot_paused': case 'bot_resumed': {
+      const chi = /\sda (\S+)\s*$/.exec(m)?.[1];
+      const base = type === 'bot_paused' ? 'Bot fermato' : 'Bot riattivato';
+      return chi ? `${base} da ${chi}` : base;
+    }
+    case 'stale_handed_off': return 'Chat passata a persona da oltre 48 ore senza esito: serve chiusura manuale';
+    case 'cancel_requested': return 'Il lead ha chiesto di annullare o spostare: automatismi spenti';
+    case 'inbound_su_altro_numero': return 'Il lead ha risposto a un altro numero: la chat non si sposta';
+    case 'lancio_fase_cambiata': {
+      const fase = leggibile(/fase → (\S+)/.exec(m)?.[1] ?? null);
+      return fase ? `Fase del lancio: ${fase.toLowerCase()}` : 'Fase del lancio aggiornata';
+    }
+    case 'lancio_posto_bloccato': return 'Posto bloccato per il lead';
+    case 'lancio_domanda': {
+      const d = /domanda (\d+)\/(\d+)/.exec(m);
+      return d ? `Risposta a domanda ${d[1]} di ${d[2]}` : 'Risposta a una domanda del lead';
+    }
+    case 'lancio_apertura_inviata': return 'Messaggio di apertura inviato';
+    case 'lancio_silenzio': return 'Il lead non ha risposto';
+    case 'lancio_congedo': return 'Congedo inviato al lead';
+    case 'lancio_ripresa_manuale': return 'Chat ripresa a mano';
+    case 'gdo_video_sent': return 'Video inviato al lead';
+    case 'gdo_video_followup_sent': return 'Sollecito sul video inviato';
+    case 'video_watched': return 'Il lead conferma di aver visto il video';
+    case 'gdo_agenda_sent': return 'Agenda del GDO inviata al lead';
+    case 'gdo_agenda_esito': {
+      const esito = /:\s*([a-z_]+)\s*$/.exec(m)?.[1]?.replace(/_/g, ' ');
+      return esito ? `Esito invio agenda GDO: ${esito}` : 'Esito invio agenda GDO';
+    }
+    case 'recupero_nr_inviato': return 'Recupero per mancata risposta inviato';
+    case 'richiamo_restituito': return 'Richiamo restituito ai GDO';
+    case 'appuntamento_registrato': return quando ? `Appuntamento registrato per il ${quando}` : 'Appuntamento registrato';
+    case 'appuntamento_spostato': return quando ? `Appuntamento spostato al ${quando}` : 'Appuntamento spostato';
+    case 'console_azione': return 'Azione eseguita dalla console';
+    default: return 'Evento di sistema';
+  }
 }
 
 /** Il numero WhatsApp che parla col lead, per le ultime 4 cifre (`0047`, `3199`). */

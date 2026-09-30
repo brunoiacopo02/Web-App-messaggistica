@@ -149,7 +149,7 @@ export function SchedaLead({ dettaglio, now }: SchedaLeadProps) {
             {storico.map((e, i) => (
               <li key={`${e.at}-${i}`}>
                 <span className="mono">{orarioRiga(e.at, now)}</span>
-                <span className="hist-t">{testoEvento(e.testo, e.tipo)}</span>
+                <span className="hist-t">{testoEvento(e.tipo, e.testo)}</span>
               </li>
             ))}
           </ol>

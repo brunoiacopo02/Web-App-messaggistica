@@ -11,6 +11,8 @@ const stato = {
   conv: null as Record<string, unknown> | null,
   crm: null as Record<string, unknown> | null,
   eventi: [] as Record<string, unknown>[],
+  eventiErrore: null as null | 'errore' | 'eccezione',
+  segnali: 0,
   query: [] as { tabella: string; colonne?: string; filtri: Filtro[]; limite?: number; ordine?: [string, unknown] }[],
   conErrori: [] as number[],
 };
@@ -22,6 +24,7 @@ function builder(tabella: string) {
   const risultato = () => {
     if (tabella === 'conversations') return { data: stato.conv, error: null };
     if (tabella === 'crm_lead_status') return { data: stato.crm, error: null };
+    if (stato.eventiErrore === 'errore') return { data: null, error: { message: 'canceling statement due to statement timeout' } };
     return { data: stato.eventi, error: null };
   };
   const b: Record<string, unknown> = {
@@ -31,8 +34,10 @@ function builder(tabella: string) {
     gte: (c: string, v: unknown) => (q.filtri.push(['gte', c, v]), b),
     order: (c: string, o: unknown) => ((q.ordine = [c, o]), b),
     limit: (n: number) => ((q.limite = n), b),
+    abortSignal: (sg: AbortSignal) => ((stato.segnali += sg instanceof AbortSignal ? 1 : 0), b),
     maybeSingle: async () => risultato(),
-    then: (ok: (x: unknown) => unknown) => Promise.resolve(risultato()).then(ok),
+    then: (ok: (x: unknown) => unknown, ko?: (e: unknown) => unknown) =>
+      (tabella === 'event_log' && stato.eventiErrore === 'eccezione' ? Promise.reject(new Error('aborted')) : Promise.resolve(risultato())).then(ok, ko),
   };
   return b;
 }
@@ -62,6 +67,8 @@ beforeEach(() => {
   stato.conv = { ...CONV };
   stato.crm = { lead_id: 'abc-123', status: 'NEW', conferme_outcome: null, sales_outcome: null };
   stato.eventi = [{ created_at: '2026-10-05T19:20:00Z', type: 'bot_paused', message: '[chat] bot fermato', level: 'warn' }];
+  stato.eventiErrore = null;
+  stato.segnali = 0;
   stato.query = [];
   stato.conErrori = [];
 });
@@ -107,7 +114,43 @@ describe('GET /api/console/chat/[id]', () => {
     expect(j.lead).toEqual({ id: 48213, nome: 'Giulia Ferraresi', telefono: '+393334028817' });
     expect(j.crm).toMatchObject({ status: 'NEW' });
     expect(j.eventi).toEqual([{ at: '2026-10-05T19:20:00Z', tipo: 'bot_paused', testo: '[chat] bot fermato', livello: 'warn' }]);
+    expect(j.eventiParziali).toBe(false);
   });
+
+  it('eventi: la lettura ha un tetto di tempo (abortSignal)', async () => {
+    await chiama('42');
+    expect(stato.segnali).toBe(1);
+  });
+
+  it('eventi in errore (es. statement timeout): 200, eventi vuoti e eventiParziali true', async () => {
+    stato.eventiErrore = 'errore';
+    const res = await chiama('42');
+    expect(res.status).toBe(200);
+    const j = await res.json();
+    expect(j.eventi).toEqual([]);
+    expect(j.eventiParziali).toBe(true);
+    expect(j.lead.nome).toBe('Giulia Ferraresi');
+    expect(j.crm).toMatchObject({ status: 'NEW' });
+  });
+
+  it('eventi che lanciano (query abortita): 200 con eventiParziali true', async () => {
+    stato.eventiErrore = 'eccezione';
+    const res = await chiama('42');
+    expect(res.status).toBe(200);
+    const j = await res.json();
+    expect(j.eventi).toEqual([]);
+    expect(j.eventiParziali).toBe(true);
+  });
+
+  it('eventi ordinati dal più vecchio al più recente', async () => {
+    stato.eventi = [
+      { created_at: '2026-10-05T19:30:00Z', type: 'bot_resumed', message: null, level: 'info' },
+      { created_at: '2026-10-05T19:20:00Z', type: 'bot_paused', message: null, level: 'warn' },
+    ];
+    const j = await (await chiama('42')).json();
+    expect(j.eventi.map((e: { at: string }) => e.at)).toEqual(['2026-10-05T19:20:00Z', '2026-10-05T19:30:00Z']);
+  });
+
 
   it('eventi: per conversazione, tipi ristretti, ultimi 30 giorni, max 60, dal più recente', async () => {
     await chiama('42');
