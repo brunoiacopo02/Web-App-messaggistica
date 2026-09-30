@@ -2,7 +2,7 @@ import { Suspense } from 'react';
 import { ListaChat } from '@/components/console/ListaChat';
 import { ChatAperta } from '@/components/console/ChatAperta';
 
-/** Banco di lavoro: lista 360 px | thread | cabina 320 px. Gli avvisi della cabina arrivano nel Task 11. */
+/** Banco di lavoro: lista 360 px | thread | cabina 320 px (avvisi urgenti e scheda lead, in `ChatAperta`). */
 export default function ConsolePage() {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '360px minmax(0,1fr) 320px', height: '100%', minHeight: 0 }}>

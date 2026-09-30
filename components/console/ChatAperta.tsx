@@ -8,6 +8,7 @@ import { Errore, Vuoto } from './ui/Stato';
 import { toast } from './ui/toast';
 import { Thread } from './Thread';
 import { SchedaLead } from './SchedaLead';
+import { Cabina } from './Cabina';
 import { useStatoConsole } from './statoUrl';
 import { rinfrescaConteggi } from './useConteggi';
 import { useOra } from './useOra';
@@ -280,10 +281,8 @@ export function ChatAperta() {
   return (
     <>
       {thread}
-      {/* La cabina: gli avvisi (Task 11) arrivano sopra la scheda. */}
-      <aside className="cabina" aria-label="Cabina">
-        {scheda}
-      </aside>
+      {/* La cabina: gli avvisi urgenti in alto, sotto la scheda del lead. */}
+      <Cabina>{scheda}</Cabina>
     </>
   );
 }
