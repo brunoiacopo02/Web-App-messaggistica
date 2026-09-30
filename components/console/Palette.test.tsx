@@ -99,3 +99,13 @@ it("senza chat aperta il gruppo delle azioni non c'è", async () => {
   expect(screen.queryByText('Azioni sulla chat aperta')).toBeNull();
   expect(screen.queryByText('Metti in pausa Mario…')).toBeNull();
 });
+
+it("nessuna voce promette Ctrl K per l'Assistente: Ctrl+K apre la palette", async () => {
+  const { SISTEMA } = await import('./Nav');
+  expect(SISTEMA.find((s) => s.etichetta === 'Assistente')?.kbd).toBeUndefined();
+  monta();
+  const voce = screen.getByRole('option', { name: /^Assistente/ });
+  expect(voce.querySelector('kbd')).toBeNull();
+  // Le scorciatoie che la palette mostra sono tasti (<kbd>), non testo.
+  expect(screen.getAllByText('Esc').every((e) => e.tagName === 'KBD')).toBe(true);
+});

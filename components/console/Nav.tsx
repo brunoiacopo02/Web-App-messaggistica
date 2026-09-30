@@ -35,10 +35,12 @@ export const GRUPPI: { titolo: string | null; viste: Vista[] }[] = [
   { titolo: 'Mondi', viste: ['fissati_bot', 'mario', 'gdo', 'campagne', 'chiuse'] },
 ];
 
+/** `kbd` solo per una scorciatoia vera, che porta proprio lì: Ctrl+K apre la palette, non
+ *  l'Assistente, e per questo l'Assistente non ne ha. La palette mostra la stessa `kbd`. */
 export const SISTEMA: { etichetta: string; href: string; icona: LucideIcon; kbd?: string }[] = [
   { etichetta: 'Avvisi', href: '/console/avvisi', icona: Bell },
   { etichetta: 'Lancio', href: '/console/lancio', icona: Clapperboard },
-  { etichetta: 'Assistente', href: '/console/assistente', icona: SquareTerminal, kbd: 'Ctrl K' },
+  { etichetta: 'Assistente', href: '/console/assistente', icona: SquareTerminal },
   { etichetta: 'Impostazioni', href: '/console/impostazioni', icona: Settings },
   { etichetta: 'Analisi', href: '/console/analisi', icona: ChartLine },
   { etichetta: 'Simulatore', href: '/console/simulatore', icona: FlaskConical },

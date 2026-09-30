@@ -182,6 +182,7 @@ export function Palette({ aperto, onCambia }: PaletteProps) {
                   <Command.Item key={s.href} value={`pagina ${s.etichetta}`} onSelect={() => vaiPagina(s.href)}>
                     <Icona size={16} strokeWidth={1.75} className="ico" aria-hidden="true" />
                     <span className="pal-t">{s.etichetta}</span>
+                    {s.kbd && <Kbd>{s.kbd}</Kbd>}
                   </Command.Item>
                 );
               })}
