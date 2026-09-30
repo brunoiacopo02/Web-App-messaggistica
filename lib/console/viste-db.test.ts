@@ -121,3 +121,47 @@ describe('paginaChat', () => {
     );
   });
 });
+
+describe('cercaChat', () => {
+  it('q senza lead: [] senza toccare conversations', async () => {
+    const { cercaChat } = await import('./viste-db');
+    const s = fintoSupa({ leads: async () => ({ data: [], error: null }) });
+    const res = await cercaChat(s, 'nessuno', new Date('2026-10-05T19:00:00.000Z'));
+    expect(res).toEqual([]);
+    expect(s.fromCalls).not.toContain('conversations');
+  });
+
+  it('q vuota: [] senza leggere nulla', async () => {
+    const { cercaChat } = await import('./viste-db');
+    const s = fintoSupa({});
+    expect(await cercaChat(s, '   ', new Date('2026-10-05T19:00:00.000Z'))).toEqual([]);
+    expect(s.fromCalls).toEqual([]);
+  });
+
+  it('con lead: al massimo 10 chat, piu recenti prima, filtrate sui lead trovati', async () => {
+    const { cercaChat } = await import('./viste-db');
+    let chiamateConv: Chiamata[] = [];
+    const s = fintoSupa({
+      leads: async () => ({ data: [{ id: 7 }], error: null }),
+      messages: async () => ({ data: [], error: null }),
+      campaigns: async () => ({ data: [], error: null }),
+      conversations: async (calls) => {
+        chiamateConv = calls;
+        return {
+          data: [{
+            id: 3, ai_owner: 'mario', ai_status: 'active', ai_paused_at: null, bot_outcome: null,
+            gdo_agenda_at: null, gdo_video_sent_at: null, campaign_id: null, lancio_slug: null, lancio_fase: null,
+            last_inbound_at: null, unread_count: 0, last_message_at: '2026-10-05T18:00:00.000Z',
+            last_message_preview: 'ciao', lead: { first_name: 'Anna', last_name: 'Bianchi', phone_e164: '+39333' },
+          }],
+          error: null,
+        };
+      },
+    });
+    const res = await cercaChat(s, 'anna', new Date('2026-10-05T19:00:00.000Z'));
+    expect(res.map((r) => r.nome)).toEqual(['Anna Bianchi']);
+    expect(chiamateConv).toContainEqual(['in', ['lead_id', [7]]]);
+    expect(chiamateConv).toContainEqual(['order', ['last_message_at', { ascending: false }]]);
+    expect(chiamateConv).toContainEqual(['limit', [10]]);
+  });
+});

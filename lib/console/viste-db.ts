@@ -191,3 +191,29 @@ export async function paginaChat(
   const prossimo = haProssima && ultima?.last_message_at ? codificaCursore(ultima.last_message_at, ultima.id) : null;
   return { righe, prossimo };
 }
+
+const MAX_RICERCA = 10;
+
+/**
+ * La ricerca dell'Assistente: le chat del perimetro Fenice dei lead che corrispondono a `q`
+ * (nome, cognome o telefono), senza filtro di vista, le 10 piu recenti.
+ */
+export async function cercaChat(s: Supa, q: string, now: Date): Promise<RigaLista[]> {
+  const testo = q.trim();
+  if (testo === '') return [];
+  const leadIds = (await leadIdsPerRicerca(s, testo)).slice(0, MAX_ID_LEAD);
+  if (leadIds.length === 0) return [];
+
+  const [fenice, errori] = await Promise.all([
+    getFeniceCampaignIds(s),
+    // Serve solo al contesto "Invio non riuscito": se la lettura cade, la ricerca resta.
+    idsConErrori(s, now).catch(() => [] as number[]),
+  ]);
+  const { data, error } = await soloMondoFenice(s.from('conversations').select(COLONNE), fenice)
+    .in('lead_id', leadIds)
+    .order('last_message_at', { ascending: false })
+    .limit(MAX_RICERCA);
+  if (error) throw new Error(error.message);
+  const conErrori = new Set(errori);
+  return ((data ?? []) as unknown as RigaConversazione[]).map((r) => mappaRiga(r, { now, conErrori }));
+}
