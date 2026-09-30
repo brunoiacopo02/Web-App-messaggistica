@@ -186,7 +186,7 @@ export function RigaAvviso({ a, onCambio }: RigaAvvisoProps) {
       <div className="al-act">
         <VediChat chat={a.chat} />
         {a.impostazioni && (
-          <Link className="btn ghost" href="/fenice/impostazioni">
+          <Link className="btn ghost" href="/console/impostazioni">
             Apri le impostazioni…
           </Link>
         )}
