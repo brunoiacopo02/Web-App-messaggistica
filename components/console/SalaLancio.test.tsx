@@ -49,7 +49,7 @@ describe('SalaLancio', () => {
     stato.regia = regia({ attivo: false });
     render(<SalaLancio />);
     expect(screen.getByText('Nessun lancio attivo. Si accende da Impostazioni.')).toBeTruthy();
-    expect(screen.queryByText('Fin dove sono arrivati')).toBeNull();
+    expect(screen.queryByText('Dove sono ora')).toBeNull();
   });
 
   it('lancio acceso: numeri, restituiti dalle fasi, fasi linkate alla vista e stato del pulsante', () => {
@@ -57,8 +57,16 @@ describe('SalaLancio', () => {
     stato.avvisi = [avviso('pulsante_spento', 'lancio'), avviso('twilio_63016', 'twilio'), avviso('fenice_ai_error', 'bot')];
     const { container } = render(<SalaLancio />);
     expect(screen.getByText('Restituiti').nextElementSibling?.textContent).toBe('7');
+    // Il cumulativo dice chi ha bloccato il posto; le barre dicono dove sono ora.
+    expect(screen.getByText('Hanno bloccato il posto').nextElementSibling?.textContent).toBe('120');
+    const numeri = screen.getByLabelText('Numeri del lancio');
+    expect(numeri.textContent).not.toContain('Posto bloccato');
+    expect(screen.getByRole('heading', { name: 'Dove sono ora' })).toBeTruthy();
+    expect(screen.queryByText('Fin dove sono arrivati')).toBeNull();
     const fase = [...container.querySelectorAll('a')].find((a) => a.getAttribute('href') === '/console?vista=lancio&fase=posto_bloccato');
     expect(fase?.textContent).toContain('50');
+    // Le barre per fase tengono l'etichetta della fase.
+    expect(fase?.textContent).toContain('Posto bloccato');
     expect(container.querySelectorAll('.sala-fase')).toHaveLength(8);
     expect(screen.getByText('Pulsante del webinar').nextElementSibling?.textContent).toBe('spento');
     expect(container.querySelector('a[href="/console/impostazioni"]')).toBeTruthy();

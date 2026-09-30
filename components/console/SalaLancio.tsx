@@ -37,7 +37,7 @@ function Numeri({ regia }: { regia: Regia }) {
   return (
     <dl className="sala-numeri" aria-label="Numeri del lancio">
       <Numero etichetta="Iscritti" valore={n.iscritti} />
-      <Numero etichetta="Posto bloccato" valore={n.postoBloccato} />
+      <Numero etichetta="Hanno bloccato il posto" valore={n.postoBloccato} />
       <Numero etichetta="Link inviati" valore={n.linkInviati} />
       <Numero etichetta="Consegnati oggi" valore={n.consegnatiOggi} />
       <Numero etichetta="Falliti oggi" valore={n.fallitiOggi} grave={n.fallitiOggi > 0}>
@@ -48,11 +48,11 @@ function Numeri({ regia }: { regia: Regia }) {
   );
 }
 
-/** "Fin dove sono arrivati": una barra per fase, lunga quanto la sua quota degli iscritti. */
+/** "Dove sono ora": una barra per fase (la fase attuale di ogni iscritto), lunga quanto la sua quota degli iscritti. */
 function Fasi({ perFase, iscritti }: { perFase: Regia['perFase']; iscritti: number }) {
   return (
     <section className="sala-sez" aria-labelledby="sala-fasi">
-      <h2 id="sala-fasi">Fin dove sono arrivati</h2>
+      <h2 id="sala-fasi">Dove sono ora</h2>
       <ul className="sala-fasi">
         {LANCIO_FASI.map((f) => {
           const n = perFase[f] ?? 0;

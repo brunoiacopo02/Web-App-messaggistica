@@ -142,7 +142,7 @@ function Numeri({ n, perOra }: { n: Regia['numeri']; perOra: ConsegneOra[] }) {
   return (
     <>
       <Kpi etichetta="Iscritti" valore={n.iscritti} sotto="chat nel lancio" />
-      <Kpi etichetta="Posto bloccato" valore={n.postoBloccato} sotto={`${quota(n.postoBloccato, n.iscritti)} degli iscritti`} />
+      <Kpi etichetta="Hanno bloccato il posto" valore={n.postoBloccato} sotto={`${quota(n.postoBloccato, n.iscritti)} degli iscritti`} />
       <Kpi etichetta="Link inviati" valore={n.linkInviati} sotto={`${quota(n.linkInviati, n.iscritti)} degli iscritti`} />
       <Kpi etichetta="Consegnati oggi" valore={n.consegnatiOggi} sotto={`${quota(n.consegnatiOggi, inviatiOggi)} degli invii`} />
       <Kpi
