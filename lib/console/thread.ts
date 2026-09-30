@@ -165,6 +165,49 @@ export const TIPI_EVENTI_THREAD = [
   'appuntamento_spostato', 'console_azione',
 ] as const;
 
+/** Stati del lead nel CRM (`crm_lead_status.status`) in italiano; fuori mappa, `null`. */
+const STATO_CRM: Record<string, string> = {
+  NEW: 'Nuovo',
+  IN_PROGRESS: 'In lavorazione',
+  APPOINTMENT: 'Appuntamento fissato',
+  CONFIRMED: 'Appuntamento confermato',
+  PRESENTED: 'Presentato alla call',
+  SOLD: 'Venduto',
+  WON: 'Venduto',
+  CLOSED: 'Chiuso',
+  LOST: 'Perso',
+  DISCARDED: 'Scartato',
+  REJECTED: 'Scartato',
+  NOT_IN_TARGET: 'Non in target',
+};
+
+export function statoCrm(codice: string | null): string | null {
+  if (!codice) return null;
+  return STATO_CRM[codice.trim().toUpperCase()] ?? null;
+}
+
+/** Il motivo per cui il bot si ferma, come lo scrive `bot_fermo_stato_crm` (i codici di
+ *  `lib/stop-crm.ts`, e gli stati CRM dei messaggi più vecchi), come coda di "per il CRM …". */
+const MOTIVO_STOP_CRM: Record<string, string> = {
+  GIA_CLIENTE: 'è già cliente',
+  GIA_PRESENTATO: 'si è già presentato alla call',
+  SCARTATO_DA_PERSONA: 'è stato scartato da una persona',
+  ...Object.fromEntries(Object.entries(STATO_CRM).map(([k, v]) => [k, `lo stato è "${v.toLowerCase()}"`])),
+};
+
+/** L'esito dell'invio dell'agenda (`SendAgendaEsito`, o lo stato Twilio da cui nasce). */
+const ESITO_AGENDA: Record<string, string> = {
+  consegnato: 'consegnata al lead',
+  delivered: 'consegnata al lead',
+  read: 'letta dal lead',
+  inviato: 'inviata, consegna non ancora confermata',
+  sent: 'inviata, consegna non ancora confermata',
+  queued: 'in coda di invio',
+  fallito: 'non consegnata',
+  failed: 'non consegnata',
+  undelivered: 'non consegnata',
+};
+
 /**
  * La frase italiana di una riga di sistema. Il `message` di `event_log` è un testo da log (prefissi
  * tra parentesi, inglese, id): non si mostra mai grezzo, se ne estrae solo il dato utile.
@@ -187,8 +230,8 @@ export function testoEvento(type: string, message: string | null): string {
     case 'bot_outcome_rejected': return "Il CRM ha rifiutato l'esito: chat chiusa in locale";
     case 'bot_note_sent': return 'Nota inviata al CRM';
     case 'bot_fermo_stato_crm': {
-      const stato = leggibile(/il CRM dice ([A-Za-z_]+)/.exec(m)?.[1] ?? null);
-      return stato ? `Bot fermo: il CRM dice ${stato}` : 'Bot fermo per lo stato del CRM';
+      const stato = MOTIVO_STOP_CRM[/il CRM dice ([A-Za-z_]+)/.exec(m)?.[1]?.toUpperCase() ?? ''];
+      return stato ? `Bot fermo: per il CRM ${stato}` : 'Bot fermo per lo stato del CRM';
     }
     case 'bot_contatto_umano_inviato': return 'Richiesta di contatto umano inviata';
     case 'bot_appuntamento_rifissato': return 'Appuntamento rifissato dal bot';
@@ -218,8 +261,8 @@ export function testoEvento(type: string, message: string | null): string {
     case 'video_watched': return 'Il lead conferma di aver visto il video';
     case 'gdo_agenda_sent': return 'Agenda del GDO inviata al lead';
     case 'gdo_agenda_esito': {
-      const esito = /:\s*([a-z_]+)\s*$/.exec(m)?.[1]?.replace(/_/g, ' ');
-      return esito ? `Esito invio agenda GDO: ${esito}` : 'Esito invio agenda GDO';
+      const esito = ESITO_AGENDA[/:\s*([A-Za-z_]+)\s*$/.exec(m)?.[1]?.toLowerCase() ?? ''];
+      return esito ? `Agenda del GDO ${esito}` : 'Esito invio agenda GDO';
     }
     case 'recupero_nr_inviato': return 'Recupero per mancata risposta inviato';
     case 'richiamo_restituito': return 'Richiamo restituito ai GDO';

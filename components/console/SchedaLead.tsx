@@ -6,7 +6,7 @@ import { mondoLabel } from '@/lib/chat-perimetro';
 import { isLancioFase } from '@/lib/lancio-fase';
 import { ETICHETTA_FASE } from '@/lib/console/viste';
 import { formattaTelefono, orarioRiga } from '@/lib/console/riga';
-import { dataOraBreve, leggibile, numeroWa, testoEvento, type DettaglioChat } from '@/lib/console/thread';
+import { dataOraBreve, leggibile, numeroWa, statoCrm, testoEvento, type DettaglioChat } from '@/lib/console/thread';
 import { Button } from './ui/Button';
 import { Kbd } from './ui/Kbd';
 import { toast } from './ui/toast';
@@ -99,7 +99,7 @@ export function SchedaLead({ dettaglio, now }: SchedaLeadProps) {
         )}
 
         <dt>Stato CRM</dt>
-        {crm?.status ? <dd>{leggibile(crm.status)}</dd> : <Nessuno testo={conv.crmLeadId ? 'Non sincronizzato' : 'Non nel CRM'} />}
+        {crm?.status ? <dd>{statoCrm(crm.status) ?? leggibile(crm.status)}</dd> : <Nessuno testo={conv.crmLeadId ? 'Non sincronizzato' : 'Non nel CRM'} />}
 
         {crm?.conferme_outcome && (
           <>

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { raggruppa, finestra24h, autoreDi, numeroWa, intercala, leggibile, dataOraBreve, testoEvento, TIPI_EVENTI_THREAD, fondiMessaggi, cursoreDopo, type Gruppo, type Msg } from './thread';
+import { raggruppa, finestra24h, autoreDi, numeroWa, intercala, leggibile, statoCrm, dataOraBreve, testoEvento, TIPI_EVENTI_THREAD, fondiMessaggi, cursoreDopo, type Gruppo, type Msg } from './thread';
 
 const m = (id: number, direction: 'in' | 'out', created_at: string, sender: string | null = null): Msg =>
   ({ id, direction, body: 'x', created_at, is_template: false, twilio_status: 'delivered', twilio_error_code: null, sender });
@@ -82,7 +82,11 @@ describe('testoEvento: frasi italiane per le righe di sistema', () => {
     ['bot_outcome_locked', '[bot-fissatore] esito X intercettato', 'Esito intercettato: il lead era già in appuntamento, nota al CRM'],
     ['bot_outcome_rejected', '[bot-fissatore] CRM ha rifiutato (403)', "Il CRM ha rifiutato l'esito: chat chiusa in locale"],
     ['bot_note_sent', '[gdo] nota inviata al CRM per lead 5', 'Nota inviata al CRM'],
-    ['bot_fermo_stato_crm', '[bot-fissatore] conv 3: il bot non risponde, il CRM dice APPOINTMENT', 'Bot fermo: il CRM dice Appointment'],
+    ['bot_fermo_stato_crm', '[bot-fissatore] conv 3: il bot non risponde, il CRM dice APPOINTMENT', 'Bot fermo: per il CRM lo stato è "appuntamento fissato"'],
+    ['bot_fermo_stato_crm', '[bot-fissatore] conv 3: il bot non risponde, il CRM dice IN_PROGRESS', 'Bot fermo: per il CRM lo stato è "in lavorazione"'],
+    ['bot_fermo_stato_crm', '[sequenza] conv 3: nessun touch, il CRM dice gia_cliente', 'Bot fermo: per il CRM è già cliente'],
+    ['bot_fermo_stato_crm', '[bot-fissatore] conv 3: il bot non risponde, il CRM dice scartato_da_persona', 'Bot fermo: per il CRM è stato scartato da una persona'],
+    ['bot_fermo_stato_crm', '[bot-fissatore] conv 3: il bot non risponde, il CRM dice SOMETHING_ELSE', 'Bot fermo per lo stato del CRM'],
     ['bot_contatto_umano_inviato', null, 'Richiesta di contatto umano inviata'],
     ['bot_appuntamento_rifissato', null, 'Appuntamento rifissato dal bot'],
     ['bot_paused', '[chat] bot fermato sulla conv 3 da a@b.it', 'Bot fermato da a@b.it'],
@@ -102,7 +106,11 @@ describe('testoEvento: frasi italiane per le righe di sistema', () => {
     ['gdo_video_followup_sent', 'x', 'Sollecito sul video inviato'],
     ['video_watched', 'x', 'Il lead conferma di aver visto il video'],
     ['gdo_agenda_sent', 'x', 'Agenda del GDO inviata al lead'],
-    ['gdo_agenda_esito', '[gdo] agenda per il lead 5: inviato', 'Esito invio agenda GDO: inviato'],
+    ['gdo_agenda_esito', '[gdo] agenda per il lead 5: inviato', 'Agenda del GDO inviata, consegna non ancora confermata'],
+    ['gdo_agenda_esito', '[gdo] agenda per il lead 5: consegnato', 'Agenda del GDO consegnata al lead'],
+    ['gdo_agenda_esito', '[gdo] agenda per il lead 5: fallito', 'Agenda del GDO non consegnata'],
+    ['gdo_agenda_esito', '[gdo] agenda per il lead 5: undelivered', 'Agenda del GDO non consegnata'],
+    ['gdo_agenda_esito', '[gdo] agenda per il lead 5: boh_nuovo', 'Esito invio agenda GDO'],
     ['recupero_nr_inviato', 'x', 'Recupero per mancata risposta inviato'],
     ['richiamo_restituito', 'x', 'Richiamo restituito ai GDO'],
     ['appuntamento_registrato', '[crm] data della call registrata per il lead 5: 2026-09-24T15:00:00Z', 'Appuntamento registrato per il 24/09 17:00'],
@@ -140,4 +148,12 @@ it('cursoreDopo: sovrappone gli ultimi messaggi per rileggerne lo stato', () => 
   expect(cursoreDopo(lista)).toBe(10);
   expect(cursoreDopo(lista.slice(0, 5))).toBe(0);
   expect(cursoreDopo([])).toBe(0);
+});
+
+it('statoCrm: gli stati del CRM in italiano, null fuori mappa', () => {
+  expect(statoCrm('NEW')).toBe('Nuovo');
+  expect(statoCrm('IN_PROGRESS')).toBe('In lavorazione');
+  expect(statoCrm('APPOINTMENT')).toBe('Appuntamento fissato');
+  expect(statoCrm('QUALCOSA')).toBeNull();
+  expect(statoCrm(null)).toBeNull();
 });
