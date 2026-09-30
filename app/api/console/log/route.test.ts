@@ -81,6 +81,22 @@ describe('GET /api/console/log', () => {
     expect(seconda.righe[0].message).toBe('e101');
   });
 
+  it('cursore a microsecondi: nessuna riga dello stesso millesimo saltata o ripetuta', async () => {
+    // Come li scrive Postgres: stesso millesimo (.123), microsecondi diversi.
+    const ts = (us: string) => `2026-09-30T10:00:00.${us}+00:00`;
+    stato.cliente = clienteFinto({
+      eventi: [
+        { type: 't', level: 'info', message: 'a', created_at: ts('123456') },
+        { type: 't', level: 'info', message: 'b', created_at: ts('123400') },
+        { type: 't', level: 'info', message: 'c', created_at: ts('122000') },
+      ],
+    });
+    const res = await get(`?prima=${encodeURIComponent(ts('123456'))}`);
+    expect(res.status).toBe(200);
+    const { righe } = (await res.json()) as Risposta;
+    expect(righe.map((r) => r.message)).toEqual(['b', 'c']);
+  });
+
   it('parametri non validi: 400', async () => {
     expect((await get('?livello=grave')).status).toBe(400);
     expect((await get('?conv=abc')).status).toBe(400);

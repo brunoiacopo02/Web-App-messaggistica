@@ -38,6 +38,21 @@ export type FiltriLog = { tipo: string | null; livello: LivelloLog | null; conv:
 
 const TIPO_VALIDO = /^[a-z0-9_.:-]{1,80}$/i;
 
+/** Un timestamp ISO come lo scrive Postgres: fino ai microsecondi, con `Z` o con l'offset. */
+const TIMESTAMP_ISO = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}(:?\d{2})?)?$/;
+
+/**
+ * Il cursore `prima=` così com'è arrivato, solo validato. Non passa da `Date`: `created_at` ha i
+ * microsecondi e `toISOString()` li taglia ai millisecondi, e con `lt` a millisecondi le righe
+ * dello stesso millesimo (ma con microsecondi minori) si salterebbero o si ripeterebbero.
+ * Un `+` dell'offset arrivato non codificato nella query diventa uno spazio: si rimette.
+ */
+export function cursoreLog(grezzo: string): string | null {
+  const s = grezzo.trim().replace(/(:\d{2}(?:\.\d{1,6})?) (\d{2}(?::?\d{2})?)$/, '$1+$2');
+  if (!TIMESTAMP_ISO.test(s) || Number.isNaN(Date.parse(s))) return null;
+  return s;
+}
+
 /** Legge e valida i parametri: `null` se uno è presente ma non valido (la rotta risponde 400). */
 export function leggiFiltriLog(sp: URLSearchParams): FiltriLog | null {
   const pulito = (k: string) => sp.get(k)?.trim() || null;
@@ -49,13 +64,14 @@ export function leggiFiltriLog(sp: URLSearchParams): FiltriLog | null {
   if (tipo !== null && !TIPO_VALIDO.test(tipo)) return null;
   if (livello !== null && !(LIVELLI_LOG as readonly string[]).includes(livello)) return null;
   if (conv !== null && !/^\d{1,12}$/.test(conv)) return null;
-  if (prima !== null && Number.isNaN(Date.parse(prima))) return null;
+  const cursore = prima === null ? null : cursoreLog(prima);
+  if (prima !== null && cursore === null) return null;
 
   return {
     tipo,
     livello: livello as LivelloLog | null,
     conv: conv === null ? null : Number(conv),
-    prima: prima === null ? null : new Date(prima).toISOString(),
+    prima: cursore,
   };
 }
 
