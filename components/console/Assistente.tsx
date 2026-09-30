@@ -267,16 +267,27 @@ export function CorpoAssistente({ onVai, nelPannello = false }: { onVai?: () => 
   const c = useContext(Ctx);
   const campo = useRef<HTMLTextAreaElement>(null);
   const lista = useRef<HTMLDivElement>(null);
+  /** Chi legge è in fondo alla lista: solo allora il turno in corso lo trascina giù. */
+  const inFondo = useRef(true);
   const ultimo = c?.conversazione.messaggi.at(-1);
+  const nTurni = c?.conversazione.messaggi.length ?? 0;
+  const turniVisti = useRef(nTurni);
 
   useEffect(() => {
     campo.current?.focus();
   }, []);
-  // Segue il turno in corso man mano che arrivano letture e risposta.
+  // Segue il turno in corso man mano che arrivano letture e risposta, ma solo se chi legge era già
+  // in fondo: chi è risalito a rileggere un turno vecchio resta lì. Una domanda nuova porta giù.
   useEffect(() => {
     const el = lista.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [ultimo]);
+    if (!el) return;
+    const nuovoTurno = nTurni > turniVisti.current;
+    turniVisti.current = nTurni;
+    if (nuovoTurno || inFondo.current) {
+      el.scrollTop = el.scrollHeight;
+      inFondo.current = true;
+    }
+  }, [ultimo, nTurni]);
 
   if (!c) return null;
   const { conversazione: conv, domanda, setDomanda } = c;
@@ -290,7 +301,14 @@ export function CorpoAssistente({ onVai, nelPannello = false }: { onVai?: () => 
 
   return (
     <div className="as-corpo">
-      <div className="as-turni" ref={lista}>
+      <div
+        className="as-turni"
+        ref={lista}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          inFondo.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+        }}
+      >
         {conv.messaggi.length === 0 ? (
           <Suggerimenti onScegli={manda} />
         ) : (

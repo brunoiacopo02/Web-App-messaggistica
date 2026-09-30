@@ -214,3 +214,40 @@ it('la fonte chat e la bozza tengono la vista in cui si è', async () => {
   expect(link[0]).toBe('/console?vista=lancio&fase=attesa&chat=7');
   expect(screen.getByRole('link', { name: 'Apri la chat 7…' }).getAttribute('href')).toBe('/console?vista=lancio&fase=attesa&chat=7');
 });
+
+it("la risposta in arrivo non trascina giù chi è risalito a rileggere", async () => {
+  let ctrl!: ReadableStreamDefaultController<Uint8Array>;
+  fetchFinto.mockImplementation(async (url: string) => {
+    if (url === '/api/console/assistente') return new Response(new ReadableStream<Uint8Array>({ start(c) { ctrl = c; } }), { status: 200 });
+    return Response.json({});
+  });
+  monta(null);
+  fireEvent.click(screen.getByText('apri'));
+  const campo = (await screen.findByLabelText("Domanda all'Assistente")) as HTMLTextAreaElement;
+  await act(async () => {
+    fireEvent.keyDown(campo, { key: 'Enter' });
+  });
+  await act(async () => {
+    ctrl.enqueue(enc.encode(riga({ tipo: 'testo', testo: 'Primo pezzo.' })));
+  });
+  await screen.findByText('Primo pezzo.');
+  const turni = document.querySelector('.as-turni') as HTMLDivElement;
+  Object.defineProperty(turni, 'scrollHeight', { configurable: true, value: 2000 });
+  Object.defineProperty(turni, 'clientHeight', { configurable: true, value: 400 });
+  turni.scrollTop = 300; // risalito
+  fireEvent.scroll(turni);
+  await act(async () => {
+    ctrl.enqueue(enc.encode(riga({ tipo: 'testo', testo: ' Secondo pezzo.' })));
+  });
+  await screen.findByText('Primo pezzo. Secondo pezzo.');
+  expect(turni.scrollTop).toBe(300);
+
+  // Tornato in fondo, segue di nuovo.
+  turni.scrollTop = 1600;
+  fireEvent.scroll(turni);
+  await act(async () => {
+    ctrl.enqueue(enc.encode(riga({ tipo: 'testo', testo: ' Terzo.' })));
+  });
+  await screen.findByText('Primo pezzo. Secondo pezzo. Terzo.');
+  expect(turni.scrollTop).toBe(2000);
+});
