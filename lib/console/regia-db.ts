@@ -38,9 +38,11 @@ const ZERO: Regia['numeri'] = { iscritti: 0, postoBloccato: 0, linkInviati: 0, c
 export async function leggiRegia(s: Supa, now: Date): Promise<Regia> {
   const foto = await fotografia(s, now);
   const { attivo, eventoAt } = foto.settings;
+  const pulsanteAttivo = foto.settings.pulsanteAttivo === true;
   if (!attivo) {
     return {
       attivo: false,
+      pulsanteAttivo,
       eventoAt,
       stato: { stato: 'nessuno', secondi: 0 },
       scaletta: [],
@@ -60,6 +62,7 @@ export async function leggiRegia(s: Supa, now: Date): Promise<Regia> {
   const perOra = consegnePerOra(oggi);
   return {
     attivo: true,
+    pulsanteAttivo,
     eventoAt,
     stato: statoOnda(now, eventoAt),
     scaletta: scalettaDa(eventoAt),

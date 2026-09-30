@@ -77,6 +77,8 @@ export function consegnePerOra(msg: { created_at: string; twilio_status: string 
 
 export type Regia = {
   attivo: boolean;
+  /** `lancio_pulsante_attivo`: spento, chi preme il pulsante del webinar non entra nel dopo-pitch. */
+  pulsanteAttivo: boolean;
   /** `lancio_evento_at` così com'è nelle impostazioni (null = non impostato). */
   eventoAt: string | null;
   stato: StatoOnda;

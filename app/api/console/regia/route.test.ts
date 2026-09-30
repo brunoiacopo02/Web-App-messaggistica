@@ -9,6 +9,7 @@ const chat = (id: number, fase: string, linkAt: string | null = null) => ({
 const stato = {
   admin: { ok: true, email: 'admin@fenice.com' } as { ok: true; email: string } | { ok: false; risposta: Response },
   attivo: true,
+  pulsante: true,
   eventoAt: '2026-10-05T21:00:00+02:00' as string | null,
   consegneRotte: false,
   fotoLette: 0,
@@ -21,7 +22,7 @@ vi.mock('@/lib/lancio-monitor-db', () => ({
   fotografia: async () => {
     stato.fotoLette++;
     return {
-      settings: { attivo: stato.attivo, eventoAt: stato.eventoAt },
+      settings: { attivo: stato.attivo, pulsanteAttivo: stato.pulsante, eventoAt: stato.eventoAt },
       colonnaInizio: true,
       chats: [chat(1, 'attesa'), chat(2, 'posto_bloccato'), chat(3, 'link_inviato', '2026-10-05T18:55:00Z')],
       eventiContatori: [],
@@ -47,6 +48,7 @@ const { GET } = await import('./route');
 beforeEach(() => {
   stato.admin = { ok: true, email: 'admin@fenice.com' };
   stato.attivo = true;
+  stato.pulsante = true;
   stato.eventoAt = '2026-10-05T21:00:00+02:00';
   stato.consegneRotte = false;
   stato.fotoLette = 0;
@@ -78,6 +80,15 @@ describe('GET /api/console/regia', () => {
     expect(body.scaletta).toEqual([]);
     expect(body.perOra).toHaveLength(24);
     expect(stato.messaggiLetti).toBe(0);
+  });
+
+  it('stato del pulsante del webinar, anche a lancio spento', async () => {
+    stato.attivo = false;
+    stato.pulsante = false;
+    expect((await (await GET()).json()).pulsanteAttivo).toBe(false);
+    stato.attivo = true;
+    stato.pulsante = true;
+    expect((await (await GET()).json()).pulsanteAttivo).toBe(true);
   });
 
   it('lancio acceso: numeri, fasi e consegne di oggi, anche se le consegne per template cadono', async () => {

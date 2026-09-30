@@ -2,7 +2,8 @@
 
 import Link from 'next/link';
 import { useSyncExternalStore, type ReactNode } from 'react';
-import { oraRoma, statoOnda, type ConsegneOra, type Regia, type VoceScaletta } from '@/lib/console/regia';
+import { statoOnda, type ConsegneOra, type Regia, type VoceScaletta } from '@/lib/console/regia';
+import { GraficoOre } from './GraficoOre';
 import { useRegia } from './RegiaProvider';
 import { useOra } from './useOra';
 
@@ -120,48 +121,6 @@ function Scaletta({ eventoAt, scaletta }: { eventoAt: string; scaletta: VoceScal
         );
       })}
       <div className="rd-head" style={{ left: `${testina}%` }} title={`Ora: ${FMT_HM.format(now)}`} />
-    </div>
-  );
-}
-
-// ─────────── consegne ora per ora ───────────
-const ETICHETTE_ASSE = new Set([8, 10, 12, 14, 16, 18, 20]);
-const ALTEZZA = 26;
-const PASSO = 10;
-
-function GraficoOre({ perOra }: { perOra: ConsegneOra[] }) {
-  const ora = oraRoma(useOra());
-  const max = Math.max(1, ...perOra.map((o) => o.inviati));
-  const picco = perOra.reduce((a, o) => (o.inviati > a.inviati ? o : a), perOra[0]);
-  const conFalliti = perOra.filter((o) => o.falliti > 0).map((o) => o.ora);
-  const h = (n: number) => (n / max) * ALTEZZA;
-  const descr = picco && picco.inviati > 0
-    ? `Invii per ora di oggi: picco ${fmt.format(picco.inviati)} alle ${due(picco.ora)}${conFalliti.length ? `, falliti alle ${conFalliti.join(', ')}` : ''}`
-    : 'Nessun invio oggi';
-  return (
-    <div className="tracker">
-      <div className="hd">
-        <span>Consegne ora per ora<span className="hd-x">, oggi</span></span>
-        {conFalliti.length ? <em>falliti alle {conFalliti.slice(-3).join(', ')}</em> : null}
-      </div>
-      <svg className="bars-svg" viewBox={`0 0 ${24 * PASSO} ${ALTEZZA}`} preserveAspectRatio="none" role="img" aria-label={descr}>
-        {perOra.map((o) => {
-          // Una tacca minima anche a zero invii, come nel mockup: l'asse delle ore resta leggibile.
-          const hOk = Math.max(1, h(o.inviati - o.falliti));
-          const hKo = h(o.falliti);
-          const x = o.ora * PASSO + 1;
-          return (
-            <g key={o.ora}>
-              <title>{`${due(o.ora)}:00 · ${fmt.format(o.inviati)} inviati, ${fmt.format(o.consegnati)} consegnati, ${fmt.format(o.falliti)} falliti`}</title>
-              <rect className={o.ora === ora ? 'b now' : 'b'} x={x} width={PASSO - 2} y={ALTEZZA - hOk} height={hOk} />
-              {o.falliti > 0 ? <rect className="ko" x={x} width={PASSO - 2} y={ALTEZZA - hOk - hKo} height={hKo} /> : null}
-            </g>
-          );
-        })}
-      </svg>
-      <div className="axis24" aria-hidden="true">
-        {perOra.map((o) => <span key={o.ora}>{ETICHETTE_ASSE.has(o.ora) ? due(o.ora) : ''}</span>)}
-      </div>
     </div>
   );
 }

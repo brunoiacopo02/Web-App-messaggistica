@@ -121,8 +121,9 @@
 /* grafico SVG a 24 ore (Task 8): stesso aspetto delle barre del mockup */
 [data-console] .bars-svg{display:block;width:100%;height:26px}
 [data-console] .bars-svg .b{fill:var(--bar);transition:fill 120ms ease}
-[data-console] .bars-svg .b.now{fill:var(--bar-hi)}
 [data-console] .bars-svg g:hover .b{fill:var(--bar-hi)}
+/* ora corrente in ember come nel mockup (.bars div.now) */
+[data-console] .bars-svg .b.now,[data-console] .bars-svg g:hover .b.now{fill:var(--ember)}
 [data-console] .bars-svg .ko{fill:var(--red)}
 [data-console] .axis24{display:grid;grid-template-columns:repeat(24,1fr);font-family:var(--m);font-size:11px;line-height:14px;color:var(--fg3);text-align:center;font-variant-numeric:tabular-nums}
 /* dopo la live: luce spenta, niente testina */
@@ -598,3 +599,52 @@
 [data-console] .pal .pl-foot{flex:none}
 [data-console] .regia-min .azioni{margin-left:auto}
 [data-console] .regia-min .cmdbtn{height:28px}
+
+/* ---------- Grafico ore: versione grande e stato vuoto (Task 14) ---------- */
+[data-console] .go-vuoto{display:flex;align-items:center;margin:0;font-size:12px;line-height:16px;color:var(--fg3)}
+[data-console] .tracker.grande{padding:0;gap:8px}
+[data-console] .tracker.grande .go-vuoto{justify-content:center;border:1px solid var(--line2);border-radius:6px}
+[data-console] .go-area{position:relative}
+[data-console] .tracker.grande .go-area{padding-top:24px}
+[data-console] .go-nota{position:absolute;top:0;margin:0;transform:translateX(-50%);font-size:12px;line-height:16px;color:var(--fg2);white-space:nowrap;font-variant-numeric:tabular-nums}
+[data-console] .go-nota.sx{transform:translateX(-12px)}
+[data-console] .go-nota.dx{transform:translateX(calc(-100% + 12px))}
+[data-console] .go-nota b{font-weight:600;color:var(--ember)}
+[data-console] .go-nota .go-ko{color:var(--red)}
+[data-console] .tracker.grande .axis24{font-size:12px;line-height:16px}
+
+/* ---------- Sala del lancio (Task 14) ---------- */
+[data-console] .sala{max-width:1280px;padding:20px 24px 48px}
+[data-console] .sala-msg{margin:24px 0;color:var(--fg3)}
+[data-console] .sala-stato{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px 24px;margin-top:10px;font-size:13px}
+[data-console] .sala-stato dl{display:flex;flex-wrap:wrap;gap:8px 24px;margin:0}
+[data-console] .sala-stato dl div{display:flex;align-items:baseline;gap:6px}
+[data-console] .sala-stato dt{font-size:12px;color:var(--fg3)}
+[data-console] .sala-stato dd{margin:0;font-weight:500}
+[data-console] .sala-stato a{color:var(--fg2);text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px}
+[data-console] .sala-on{color:var(--green)}
+[data-console] .sala-off{color:var(--fg3)}
+[data-console] .sala-numeri{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));margin:16px 0 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+[data-console] .sala-n{padding:12px 16px;border-right:1px solid var(--line2);min-width:0}
+[data-console] .sala-n:first-child{padding-left:0}
+[data-console] .sala-n:last-child{border-right:0}
+[data-console] .sala-n dt{font-size:12px;line-height:16px;color:var(--fg3)}
+[data-console] .sala-n dd{margin:0;font-size:28px;line-height:36px;font-weight:600;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+[data-console] .sala-n .sala-n-s{font-size:12px;line-height:16px;font-weight:400;letter-spacing:0}
+[data-console] .sala-n.bad dd{color:var(--red)}
+[data-console] .sala-n .sala-n-s a{color:var(--red);text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px}
+[data-console] .sala-sez{margin-top:24px;min-width:0}
+[data-console] .sala-sez h2{margin:0 0 8px;font-size:14px;line-height:20px;font-weight:600}
+[data-console] .sala-sez .avv-gh h2{margin:0}
+[data-console] .sala-due{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:0 32px;align-items:start}
+@media (max-width: 1180px){ [data-console] .sala-due{grid-template-columns:minmax(0,1fr)} }
+[data-console] .sala-fasi{list-style:none;margin:0;padding:0}
+[data-console] .sala-fase{display:grid;grid-template-columns:128px minmax(0,1fr) 56px 40px;align-items:center;gap:12px;height:32px;padding:0 8px;margin:0 -8px;border-radius:6px;color:var(--fg);text-decoration:none;transition:background-color 120ms ease}
+[data-console] .sala-fase:hover{background:var(--s2)}
+[data-console] .sala-fase:focus-visible{outline:2px solid var(--ice);outline-offset:-2px}
+[data-console] .sala-fase-nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+[data-console] .sala-fase-t{height:8px;background:var(--line2);border-radius:2px;overflow:hidden}
+[data-console] .sala-fase-t i{display:block;height:100%;background:var(--bar);border-radius:2px}
+[data-console] .sala-fase:hover .sala-fase-t i{background:var(--bar-hi)}
+[data-console] .sala-fase-n{text-align:right;font-family:var(--m);font-size:13px;font-variant-numeric:tabular-nums}
+[data-console] .sala-fase-q{text-align:right;font-size:12px;color:var(--fg3);font-variant-numeric:tabular-nums}
