@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Pencil, Plus, TriangleAlert, X } from 'lucide-react';
 import { Button } from '../ui/Button';
@@ -46,6 +46,15 @@ const CAMPI_LEAD: Array<{ value: string; label: string }> = [
   { value: 'phone', label: 'Telefono' },
 ];
 
+/** Il "Sì" della conferma compare dove un attimo prima c'era "Crea…"/"Salva…": resta
+ *  disabilitato per questo tempo, così il secondo clic di un doppio clic non lo preme. */
+export const ATTESA_CONFERMA_MS = 400;
+
+/** Il database può avere `template_variables` a null: dentro la console è sempre una lista. */
+function normalizza(c: Campagna): Campagna {
+  return { ...c, template_variables: c.template_variables ?? [] };
+}
+
 const ICONA = { size: 16, strokeWidth: 1.75, className: 'ico', 'aria-hidden': true } as const;
 
 /** Lo stesso corpo del drawer vecchio, campo per campo. */
@@ -53,7 +62,7 @@ function corpo(c: Campagna) {
   return {
     name: c.name, ac_list_match: c.ac_list_match,
     twilio_template_sid: c.twilio_template_sid,
-    template_variables: c.template_variables, active: c.active,
+    template_variables: c.template_variables ?? [], active: c.active,
   };
 }
 
@@ -82,8 +91,8 @@ function differenze(prima: Campagna, dopo: Campagna): Array<{ campo: string; pri
   for (const k of ['name', 'ac_list_match', 'twilio_template_sid'] as const) {
     if (prima[k] !== dopo[k]) out.push({ campo: CAMPO[k], prima: prima[k] || '(vuoto)', dopo: dopo[k] || '(vuoto)' });
   }
-  const vp = variabiliLeggibili(prima.template_variables);
-  const vd = variabiliLeggibili(dopo.template_variables);
+  const vp = variabiliLeggibili(prima.template_variables ?? []);
+  const vd = variabiliLeggibili(dopo.template_variables ?? []);
   if (vp !== vd) out.push({ campo: CAMPO.template_variables, prima: vp, dopo: vd });
   if (prima.active !== dopo.active) out.push({ campo: 'Stato', prima: prima.active ? 'Accesa' : 'Spenta', dopo: dopo.active ? 'Accesa' : 'Spenta' });
   return out;
@@ -91,6 +100,8 @@ function differenze(prima: Campagna, dopo: Campagna): Array<{ campo: string; pri
 
 export function Campagne({ campagne }: { campagne: Campagna[] }) {
   const [aperta, setAperta] = useState<Campagna | null>(null);
+  /** Una scrittura in corso: il pannello non si chiude finché non torna. */
+  const [occupato, setOccupato] = useState(false);
 
   return (
     <div className="avv cmp-pag">
@@ -128,7 +139,7 @@ export function Campagne({ campagne }: { campagne: Campagna[] }) {
                   <td className="r num">{c.template_variables?.length ?? 0}</td>
                   <td>{c.active ? <Tag tono="ok">Attiva</Tag> : <Tag tono="neutro">Disattivata</Tag>}</td>
                   <td className="cmp-x">
-                    <button type="button" className="iconbtn" aria-label={`Modifica ${c.name}…`} onClick={() => setAperta(c)}>
+                    <button type="button" className="iconbtn" aria-label={`Modifica ${c.name}…`} onClick={() => setAperta(normalizza(c))}>
                       <Pencil size={16} strokeWidth={1.75} aria-hidden="true" />
                     </button>
                   </td>
@@ -142,23 +153,40 @@ export function Campagne({ campagne }: { campagne: Campagna[] }) {
       <Sheet
         aperto={aperta !== null}
         onCambia={(v) => { if (!v) setAperta(null); }}
+        bloccato={occupato}
         titolo={aperta?.id ? 'Modifica campagna' : 'Nuova campagna'}
       >
-        {aperta && <Modulo key={aperta.id ?? 'nuova'} iniziale={aperta} onFatto={() => setAperta(null)} />}
+        {aperta && (
+          <Modulo
+            key={aperta.id ?? 'nuova'}
+            iniziale={aperta}
+            onOccupato={setOccupato}
+            onFatto={() => { setOccupato(false); setAperta(null); }}
+          />
+        )}
       </Sheet>
     </div>
   );
 }
 
-function Modulo({ iniziale, onFatto }: { iniziale: Campagna; onFatto: () => void }) {
+function Modulo({ iniziale, onFatto, onOccupato }: { iniziale: Campagna; onFatto: () => void; onOccupato: (v: boolean) => void }) {
   const router = useRouter();
   const [c, setC] = useState<Campagna>(iniziale);
   const [fase, setFase] = useState<'modulo' | 'conferma'>('modulo');
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusyStato] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  /** Una sola scrittura alla volta, anche se due clic arrivano prima del re-render. */
+  const inVolo = useRef(false);
   const nuova = !c.id;
 
+  function setBusy(v: boolean) {
+    inVolo.current = v;
+    setBusyStato(v);
+    onOccupato(v);
+  }
+
   async function save() {
+    if (inVolo.current) return;
     setBusy(true); setErr(null);
     const url = c.id ? `/api/campaigns/${c.id}` : '/api/campaigns';
     let res: Response;
@@ -216,7 +244,7 @@ function Modulo({ iniziale, onFatto }: { iniziale: Campagna; onFatto: () => void
           </p>
         )}
         <div className="imp-conf-act">
-          <Button variante="primario" caricamento={busy} onClick={() => void save()}>{verbo}</Button>
+          <SiRitardato caricamento={busy} onClick={() => void save()}>{verbo}</SiRitardato>
           <Button variante="fantasma" disabled={busy} onClick={() => setFase('modulo')}>Torna al modulo</Button>
         </div>
       </div>
@@ -278,6 +306,20 @@ function Modulo({ iniziale, onFatto }: { iniziale: Campagna; onFatto: () => void
         <Button type="submit" variante="primario">{nuova ? 'Crea…' : 'Salva…'}</Button>
       </div>
     </form>
+  );
+}
+
+/** Il "Sì" della conferma: nasce disabilitato e si abilita dopo `ATTESA_CONFERMA_MS`. */
+function SiRitardato({ caricamento, onClick, children }: { caricamento: boolean; onClick: () => void; children: string }) {
+  const [pronto, setPronto] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setPronto(true), ATTESA_CONFERMA_MS);
+    return () => clearTimeout(t);
+  }, []);
+  return (
+    <Button variante="primario" caricamento={caricamento} disabled={!pronto} onClick={onClick}>
+      {children}
+    </Button>
   );
 }
 
