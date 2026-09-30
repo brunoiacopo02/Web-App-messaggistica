@@ -371,6 +371,23 @@ describe('interruttore', () => {
       payload: { key: 'fenice_ai_autoreply', old: true, new: false, who: 'admin@fenice.com' },
     });
   });
+  it('fenice_ai_autoreply non salvato (la rilettura dà il valore di prima): esito ko e riga di scrittura fallita', async () => {
+    const c = clienteFinto({ settings: { fenice_ai_autoreply: true }, upsertPerso: true });
+    const a = await anteprima('interruttore', { chiave: 'fenice_ai_autoreply', valore: false }, ctxCon(c));
+    const e = await esegui(a.token, ctxCon(c));
+    expect(e).toMatchObject({ ok: false, fatti: 0, falliti: 1, messaggio: 'Auto-risposta di Mario NON salvata: è rimasta accesa' });
+    expect(soloTipo(c.scritture, 'console_autoreply_cambiata')).toHaveLength(0);
+    expect(soloTipo(c.scritture, 'console_autoreply_scrittura_fallita')[0].riga).toMatchObject({
+      level: 'error',
+      payload: { key: 'fenice_ai_autoreply', value: false, letto: true, who: 'admin@fenice.com' },
+    });
+  });
+  it('fenice_ai_autoreply da spento ad acceso non salvato: "è rimasta spenta"', async () => {
+    const c = clienteFinto({ settings: { fenice_ai_autoreply: false }, upsertPerso: true });
+    const a = await anteprima('interruttore', { chiave: 'fenice_ai_autoreply', valore: true }, ctxCon(c));
+    const e = await esegui(a.token, ctxCon(c));
+    expect(e).toMatchObject({ ok: false, messaggio: 'Auto-risposta di Mario NON salvata: è rimasta spenta' });
+  });
 });
 
 describe('pausa e ripresa di Mario', () => {

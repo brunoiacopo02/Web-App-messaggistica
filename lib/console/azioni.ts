@@ -455,6 +455,20 @@ async function eseguiAzione(c: Carico, ctx: Contesto, timeout: () => number): Pr
       if (chiave === 'fenice_ai_autoreply') {
         const prima = await getAutoReply(ctx.s);
         await setAutoReply(ctx.s, valore);
+        // setAutoReply non riporta errori: si rilegge, e un valore diverso è una scrittura persa.
+        const letto = await getAutoReply(ctx.s);
+        if (letto !== valore) {
+          await scriviAudit(ctx.s, {
+            type: 'console_autoreply_scrittura_fallita',
+            payload: { key: chiave, value: valore, letto, who: ctx.email },
+            message: `[console] ${chiave} NON salvata: chiesto ${valore}, riletto ${letto} (${ctx.email})`,
+            level: 'error',
+          }, dettagli);
+          return {
+            ok: false, fatti: 0, falliti: 1, dettagli,
+            messaggio: `Auto-risposta di Mario NON salvata: è rimasta ${letto ? 'accesa' : 'spenta'}`,
+          };
+        }
         await scriviAudit(ctx.s, {
           type: 'console_autoreply_cambiata',
           payload: { key: chiave, old: prima, new: valore, who: ctx.email },

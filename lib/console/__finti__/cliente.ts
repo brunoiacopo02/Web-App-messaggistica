@@ -13,6 +13,8 @@ export function clienteFinto(dati: {
   erroreUpdate?: string;
   /** Un messaggio d'errore per gli insert da far fallire, `null` per lasciarli passare. */
   falliscoInsert?: (riga: Riga) => string | null;
+  /** L'upsert su app_settings risponde senza errore ma non cambia niente (scrittura persa). */
+  upsertPerso?: boolean;
 } = {}) {
   const eventi: Riga[] = (dati.eventi ?? []).map((r, i) => ({ id: i + 1, ...r }));
   let prossimo = eventi.length + 1;
@@ -69,7 +71,7 @@ export function clienteFinto(dati: {
       },
       upsert: async (riga: Riga) => {
         scritture.push({ tabella, op: 'upsert', riga, filtri: filtriEq });
-        if (dati.settings) dati.settings[String(riga.key)] = riga.value;
+        if (dati.settings && !dati.upsertPerso) dati.settings[String(riga.key)] = riga.value;
         return { error: null };
       },
       update: (riga: Riga) => { update = riga; return b; },
