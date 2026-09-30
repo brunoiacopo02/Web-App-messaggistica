@@ -127,7 +127,9 @@ export function FlussoAzione({ rif, onEseguita }: FlussoAzioneProps) {
         });
         return;
       }
+      // 400: la rotta ha scartato la richiesta prima di qualunque effetto.
       const testo = messaggioRifiuto(j, r.status)
+        || (r.status === 400 ? 'Niente è partito: rifai la prova.' : '')
         || `L'esecuzione non è riuscita${j.dettaglio ? `: ${j.dettaglio}` : ` (HTTP ${r.status})`}. Guarda il registro azioni prima di rifare la prova.`;
       setStato({ fase: 'errore', messaggio: testo });
     } catch {

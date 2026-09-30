@@ -210,3 +210,30 @@ it('con conteggio 0 la conferma non si può premere', async () => {
   await provaAVuoto();
   expect((screen.getByRole('button', { name: /Conferma: Rinvia 0/ }) as HTMLButtonElement).disabled).toBe(true);
 });
+
+it('esecuzione rifiutata con 400 (richiesta non valida): niente è partito, rifai la prova', async () => {
+  fetchFinto({
+    '/api/console/azioni/anteprima': () => risposta(anteprima(38)),
+    '/api/console/azioni/esegui': () => risposta({ errore: 'token_mancante' }, 400),
+  });
+  render(<FlussoAzione rif={rif} />);
+  await provaAVuoto();
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: /Conferma: Rinvia 38/ }));
+  });
+  expect(screen.getByText('Niente è partito: rifai la prova.')).toBeTruthy();
+  expect(screen.queryByText(/Guarda il registro/)).toBeNull();
+});
+
+it('esecuzione con 500: resta il rimando al registro azioni', async () => {
+  fetchFinto({
+    '/api/console/azioni/anteprima': () => risposta(anteprima(38)),
+    '/api/console/azioni/esegui': () => risposta({ errore: 'interno' }, 500),
+  });
+  render(<FlussoAzione rif={rif} />);
+  await provaAVuoto();
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: /Conferma: Rinvia 38/ }));
+  });
+  expect(screen.getByText(/Guarda il registro azioni/)).toBeTruthy();
+});
