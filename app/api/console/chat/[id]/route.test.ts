@@ -51,7 +51,7 @@ vi.mock('@/lib/chat-perimetro', async (orig) => ({
 }));
 
 const { GET } = await import('./route');
-const chiama = (id: string) => GET(new NextRequest(`http://x/api/console/chat/${id}`), { params: Promise.resolve({ id }) });
+const chiama = (id: string, qs = '') => GET(new NextRequest(`http://x/api/console/chat/${id}${qs}`), { params: Promise.resolve({ id }) });
 
 const CONV = {
   id: 42, ai_owner: 'mario', ai_status: 'active', ai_paused_at: null, bot_outcome: null, bot_scheduled_at: null,
@@ -152,16 +152,33 @@ describe('GET /api/console/chat/[id]', () => {
   });
 
 
-  it('eventi: per conversazione, tipi ristretti, ultimi 30 giorni, max 60, dal più recente', async () => {
+  it('eventi: per conversazione, tipi ristretti, ultimi 7 giorni, max 60, dal più recente', async () => {
     await chiama('42');
     const ev = stato.query.find((q) => q.tabella === 'event_log')!;
     expect(ev.filtri).toContainEqual(['eq', 'payload->>conversationId', '42']);
     expect(ev.filtri.some(([op, c]) => op === 'in' && c === 'type')).toBe(true);
     const da = ev.filtri.find(([op]) => op === 'gte')![2] as string;
-    expect(Date.now() - Date.parse(da)).toBeGreaterThan(29 * 864e5);
-    expect(Date.now() - Date.parse(da)).toBeLessThan(31 * 864e5);
+    expect(Date.now() - Date.parse(da)).toBeGreaterThan(6.9 * 864e5);
+    expect(Date.now() - Date.parse(da)).toBeLessThan(7.1 * 864e5);
     expect(ev.limite).toBe(60);
     expect(ev.ordine).toEqual(['created_at', { ascending: false }]);
+  });
+
+  it('?eventi=0: non legge event_log, eventi vuoti, eventiSaltati true e non parziali', async () => {
+    const res = await chiama('42', '?eventi=0');
+    expect(res.status).toBe(200);
+    const j = await res.json();
+    expect(stato.query.some((q) => q.tabella === 'event_log')).toBe(false);
+    expect(j.eventi).toEqual([]);
+    expect(j.eventiParziali).toBe(false);
+    expect(j.eventiSaltati).toBe(true);
+    expect(j.lead.nome).toBe('Giulia Ferraresi');
+  });
+
+  it('senza ?eventi=0 legge event_log e eventiSaltati è false', async () => {
+    const j = await (await chiama('42', '?eventi=1')).json();
+    expect(stato.query.some((q) => q.tabella === 'event_log')).toBe(true);
+    expect(j.eventiSaltati).toBe(false);
   });
 
   it("chat con l'ultimo invio fallito: contesto in tono errore, come nella lista", async () => {

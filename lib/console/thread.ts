@@ -35,6 +35,8 @@ export type DettaglioChat = {
   eventi: Evento[];
   /** `true` se la lettura degli eventi è scaduta o fallita: `eventi` è vuoto ma la chat è completa. */
   eventiParziali: boolean;
+  /** `true` se la richiesta aveva `?eventi=0` (polling): `eventi` è vuoto per scelta, non per assenza. */
+  eventiSaltati?: boolean;
 };
 
 const FUSO = 'Europe/Rome';
@@ -301,6 +303,13 @@ export function fondiMessaggi(vecchi: readonly Msg[], nuovi: readonly Msg[]): Ms
   const perId = new Map(vecchi.map((m) => [m.id, m]));
   for (const m of nuovi) perId.set(m.id, m);
   return [...perId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id);
+}
+
+/** Fonde un dettaglio riletto con quello in pagina: se la rilettura ha saltato gli eventi
+ *  (`eventiSaltati`), tiene gli eventi e lo stato "parziali" già caricati; il resto è il nuovo. */
+export function fondiDettaglio(prima: DettaglioChat | null, nuovo: DettaglioChat): DettaglioChat {
+  if (!nuovo.eventiSaltati || !prima) return nuovo;
+  return { ...nuovo, eventi: prima.eventi, eventiParziali: prima.eventiParziali };
 }
 
 /** Quanti degli ultimi messaggi il polling rilegge comunque, per vederne cambiare lo stato di

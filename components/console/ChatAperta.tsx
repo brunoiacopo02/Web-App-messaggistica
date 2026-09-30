@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { convDaSegnareLetta } from '@/lib/segna-letta';
-import { cursoreDopo, fondiMessaggi, type DettaglioChat, type Msg } from '@/lib/console/thread';
+import { cursoreDopo, fondiDettaglio, fondiMessaggi, type DettaglioChat, type Msg } from '@/lib/console/thread';
 import { SkeletonRighe, useCaricamentoVisibile } from './ui/Skeleton';
 import { Errore, Vuoto } from './ui/Stato';
 import { toast } from './ui/toast';
@@ -17,8 +17,8 @@ import { CHAT_CAMBIATA } from './ComposerBridge';
 
 /** Messaggi della chat aperta: polling a 5 s (brief). */
 const OGNI_MESSAGGI = 5_000;
-/** Dettaglio (stato, scheda, eventi): la lettura di event_log costa ~0,5 s, quindi 30 s, più una
- *  rilettura subito quando arriva un messaggio del lead (serve a segnare letta la chat). */
+/** Dettaglio (stato, scheda): ogni 30 s SENZA eventi (`?eventi=0`, la lettura di event_log è la parte
+ *  cara). Gli eventi si rileggono all'apertura, dopo `CHAT_CAMBIATA`, dopo la pausa e al nuovo inbound. */
 const OGNI_DETTAGLIO = 30_000;
 
 type TipoErrore = 'rete' | 'non_trovata';
@@ -36,7 +36,8 @@ async function leggiJson<T>(url: string, segnale?: AbortSignal): Promise<T> {
   return (await r.json()) as T;
 }
 
-const leggiDettaglio = (id: number, s?: AbortSignal) => leggiJson<DettaglioChat>(`/api/console/chat/${id}`, s);
+const leggiDettaglio = (id: number, conEventi: boolean, s?: AbortSignal) =>
+  leggiJson<DettaglioChat>(`/api/console/chat/${id}${conEventi ? '' : '?eventi=0'}`, s);
 /** Gli ultimi 500 (`dopo` assente) o solo quelli con id > `dopo`, sempre crescenti. */
 const leggiMessaggi = (id: number, dopo: number | null, s?: AbortSignal) =>
   leggiJson<{ messaggi: Msg[] }>(`/api/console/chat/${id}/messaggi${dopo != null ? `?dopo=${dopo}` : ''}`, s).then(
@@ -83,7 +84,7 @@ export function ChatAperta() {
     const ac = new AbortController();
     const sm = ++seqMessaggi.current;
     const sd = ++seqDettaglio.current;
-    Promise.all([leggiDettaglio(chat, ac.signal), leggiMessaggi(chat, null, ac.signal)]).then(
+    Promise.all([leggiDettaglio(chat, true, ac.signal), leggiMessaggi(chat, null, ac.signal)]).then(
       ([dettaglio, messaggi]) => {
         if (sm !== seqMessaggi.current || sd !== seqDettaglio.current) return;
         setDati({ id: chat, dettaglio, messaggi, errore: null });
@@ -114,12 +115,13 @@ export function ChatAperta() {
     );
   }, []);
 
-  const rileggiDettaglio = useCallback(async (id: number) => {
+  /** `conEventi = false` è il polling: gli eventi già in pagina restano (`fondiDettaglio`). */
+  const rileggiDettaglio = useCallback(async (id: number, conEventi = true) => {
     const n = ++seqDettaglio.current;
     try {
-      const dettaglio = await leggiDettaglio(id);
+      const dettaglio = await leggiDettaglio(id, conEventi);
       if (n !== seqDettaglio.current) return;
-      setDati((d) => (d && d.id === id && !d.errore ? { ...d, dettaglio } : d));
+      setDati((d) => (d && d.id === id && !d.errore ? { ...d, dettaglio: fondiDettaglio(d.dettaglio, dettaglio) } : d));
     } catch {
       // Un giro fallito non svuota la scheda: ci riprova il prossimo.
     }
@@ -155,7 +157,7 @@ export function ChatAperta() {
       void rileggiMessaggi(chat);
       segnaLetta(chat);
     }, OGNI_MESSAGGI);
-    const d = setInterval(() => visibile() && void rileggiDettaglio(chat), OGNI_DETTAGLIO);
+    const d = setInterval(() => visibile() && void rileggiDettaglio(chat, false), OGNI_DETTAGLIO);
     return () => {
       clearInterval(m);
       clearInterval(d);
@@ -217,7 +219,7 @@ export function ChatAperta() {
         });
         if (r.status === 409) {
           toast.errore('Mario è ancora attivo su questa chat: mettilo in pausa prima di scrivere.');
-          void rileggiDettaglio(chat);
+          void rileggiDettaglio(chat, false);
           return false;
         }
         if (!r.ok) {

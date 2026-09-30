@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { raggruppa, finestra24h, autoreDi, numeroWa, intercala, leggibile, statoCrm, dataOraBreve, testoEvento, TIPI_EVENTI_THREAD, fondiMessaggi, cursoreDopo, type Gruppo, type Msg } from './thread';
+import { raggruppa, finestra24h, autoreDi, numeroWa, intercala, leggibile, statoCrm, dataOraBreve, testoEvento, TIPI_EVENTI_THREAD, fondiMessaggi, cursoreDopo, fondiDettaglio, type DettaglioChat, type Gruppo, type Msg } from './thread';
 
 const m = (id: number, direction: 'in' | 'out', created_at: string, sender: string | null = null): Msg =>
   ({ id, direction, body: 'x', created_at, is_template: false, twilio_status: 'delivered', twilio_error_code: null, sender });
@@ -156,4 +156,38 @@ it('statoCrm: gli stati del CRM in italiano, null fuori mappa', () => {
   expect(statoCrm('APPOINTMENT')).toBe('Appuntamento fissato');
   expect(statoCrm('QUALCOSA')).toBeNull();
   expect(statoCrm(null)).toBeNull();
+});
+
+describe('fondiDettaglio', () => {
+  const base = {
+    conv: { id: 42, unreadCount: 0 },
+    lead: { id: 1, nome: 'Giulia', telefono: null },
+    crm: null,
+  } as unknown as Omit<DettaglioChat, 'eventi' | 'eventiParziali'>;
+  const ev = { at: '2026-10-05T19:20:00Z', tipo: 'bot_paused', testo: '', livello: 'warn' };
+
+  it('polling con eventi saltati: tiene gli eventi già caricati e aggiorna il resto', () => {
+    const prima: DettaglioChat = { ...base, eventi: [ev], eventiParziali: false };
+    const nuovo: DettaglioChat = { ...base, conv: { ...base.conv, unreadCount: 3 }, eventi: [], eventiParziali: false, eventiSaltati: true };
+    const d = fondiDettaglio(prima, nuovo);
+    expect(d.eventi).toEqual([ev]);
+    expect(d.conv.unreadCount).toBe(3);
+  });
+
+  it('eventi saltati tengono anche lo stato "parziali" della lettura precedente', () => {
+    const prima: DettaglioChat = { ...base, eventi: [], eventiParziali: true };
+    const d = fondiDettaglio(prima, { ...base, eventi: [], eventiParziali: false, eventiSaltati: true });
+    expect(d.eventiParziali).toBe(true);
+  });
+
+  it('lettura completa: gli eventi nuovi sostituiscono i vecchi', () => {
+    const prima: DettaglioChat = { ...base, eventi: [ev], eventiParziali: false };
+    const d = fondiDettaglio(prima, { ...base, eventi: [], eventiParziali: false, eventiSaltati: false });
+    expect(d.eventi).toEqual([]);
+  });
+
+  it('senza dettaglio precedente usa il nuovo così com\'è', () => {
+    const nuovo: DettaglioChat = { ...base, eventi: [], eventiParziali: false, eventiSaltati: true };
+    expect(fondiDettaglio(null, nuovo)).toBe(nuovo);
+  });
 });

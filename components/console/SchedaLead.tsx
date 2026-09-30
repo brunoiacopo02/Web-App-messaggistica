@@ -141,7 +141,7 @@ export function SchedaLead({ dettaglio, now }: SchedaLeadProps) {
       <div className="hist">
         <h3>Storico</h3>
         {eventi.length === 0 ? (
-          <p className="hist-vuoto">Nessun evento negli ultimi 30 giorni.</p>
+          <p className="hist-vuoto">Nessun evento negli ultimi 7 giorni.</p>
         ) : (
           <ol>
             {storico.map((e, i) => (

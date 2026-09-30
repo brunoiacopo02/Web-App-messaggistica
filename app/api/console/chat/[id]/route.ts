@@ -9,7 +9,8 @@ import { idsConErrori } from '@/lib/console/viste-db';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const TRENTA_GIORNI = 30 * 24 * 3600_000;
+/** Finestra degli eventi nel thread: una settimana basta a leggere la storia recente e pesa meno su event_log. */
+const SETTE_GIORNI = 7 * 24 * 3600_000;
 const MAX_EVENTI = 60;
 /** Tetto di tempo per gli eventi: in produzione la query è stata vista a 8,5 s. Oltre, la chat si apre senza. */
 const TETTO_EVENTI_MS = 3000;
@@ -24,7 +25,7 @@ async function leggiEventi(s: ReturnType<typeof getSupabaseAdmin>, convId: numbe
       .select('created_at, type, message, level')
       .in('type', [...TIPI_EVENTI_THREAD])
       .eq('payload->>conversationId', String(convId))
-      .gte('created_at', new Date(now.getTime() - TRENTA_GIORNI).toISOString())
+      .gte('created_at', new Date(now.getTime() - SETTE_GIORNI).toISOString())
       .order('created_at', { ascending: false })
       .limit(MAX_EVENTI)
       .abortSignal(AbortSignal.timeout(TETTO_EVENTI_MS));
@@ -48,8 +49,9 @@ type RigaConv = {
   lead: { id: number; first_name: string | null; last_name: string | null; phone_e164: string | null } | null;
 };
 
-/** Dettaglio di una chat per la console: la conversazione, il lead, lo stato CRM e gli eventi. */
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+/** Dettaglio di una chat per la console: la conversazione, il lead, lo stato CRM e gli eventi.
+ *  Con `?eventi=0` salta event_log (`eventiSaltati: true`): è il polling periodico, che tiene gli eventi già in pagina. */
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const admin = await richiediAdmin();
   if (!admin.ok) return admin.risposta;
 
@@ -66,11 +68,12 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   if (!c) return NextResponse.json({ error: 'chat_non_trovata' }, { status: 404 });
 
   const now = new Date();
+  const saltaEventi = req.nextUrl.searchParams.get('eventi') === '0';
   const [crm, eventi, errori] = await Promise.all([
     c.crm_lead_id
       ? s.from('crm_lead_status').select('status, conferme_outcome, sales_outcome').eq('lead_id', c.crm_lead_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
-    leggiEventi(s, convId, now),
+    saltaEventi ? Promise.resolve([] as RigaEvento[]) : leggiEventi(s, convId, now),
     // Stessa fonte della lista (cache 15 s): una chat con l'ultimo invio fallito mostra il tono errore.
     idsConErrori(s, now).catch(() => [] as number[]),
   ]);
@@ -105,5 +108,6 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
       .map((e) => ({ at: e.created_at, tipo: e.type, testo: e.message ?? '', livello: e.level }))
       .reverse(),
     eventiParziali: eventi === null,
+    eventiSaltati: saltaEventi,
   });
 }
