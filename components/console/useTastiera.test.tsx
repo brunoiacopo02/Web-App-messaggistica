@@ -106,3 +106,30 @@ it('Ctrl+K dentro il composer (textarea) resta al campo: niente palette, niente 
   expect(g.onPalette).not.toHaveBeenCalled();
   expect(e.defaultPrevented).toBe(false);
 });
+
+it('con palette, pannello o dialog aperti j/k/Invio/Esc/]// non toccano la lista dietro', () => {
+  const g = { ...gestori(), onCerca: vi.fn() };
+  renderHook(() => useTastiera(g));
+  const dialog = document.createElement('div');
+  dialog.setAttribute('role', 'dialog');
+  dialog.setAttribute('data-state', 'open');
+  const bottone = document.createElement('button');
+  dialog.appendChild(bottone);
+  document.body.appendChild(dialog);
+
+  for (const k of ['j', 'k', 'ArrowDown', 'Escape', ']', '/']) {
+    const e = premi(k, {}, bottone);
+    expect(e.defaultPrevented).toBe(false);
+  }
+  premi('j');
+  expect(g.onGiu).not.toHaveBeenCalled();
+  expect(g.onSu).not.toHaveBeenCalled();
+  expect(g.onEsc).not.toHaveBeenCalled();
+  expect(g.onScheda).not.toHaveBeenCalled();
+  expect(g.onCerca).not.toHaveBeenCalled();
+
+  // Chiuso l'overlay, la lista torna a rispondere.
+  dialog.setAttribute('data-state', 'closed');
+  premi('j');
+  expect(g.onGiu).toHaveBeenCalledTimes(1);
+});

@@ -32,8 +32,18 @@ function staScrivendo(t: EventTarget | null): boolean {
   return !!ce && ce.getAttribute('contenteditable') !== 'false';
 }
 
+/** Palette, pannello dell'Assistente, sheet, dialog e menu aperti (Radix mette `data-state="open"`
+ *  sul contenuto): finché uno è sopra, la lista dietro non si muove e Esc resta a lui. */
+const OVERLAY_APERTO =
+  '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"], [role="menu"][data-state="open"], [aria-modal="true"]';
+
+function overlayAperto(): boolean {
+  return document.querySelector(OVERLAY_APERTO) !== null;
+}
+
 /** Scorciatoie della console: j/k o frecce per scorrere, Enter apre, Escape chiude, `]` scheda
- *  lead, `/` ricerca, Ctrl/Cmd+K palette. Mentre si scrive in un campo tutto tace; Invio su un link
+ *  lead, `/` ricerca, Ctrl/Cmd+K palette. Mentre si scrive in un campo tutto tace, e con palette,
+ *  pannello o dialog aperti tace tutto tranne Ctrl+K; Invio su un link
  *  o un bottone resta al browser. Il default si blocca solo se il gestore ha fatto qualcosa (un
  *  gestore che torna `false` lascia passare il tasto). Un solo listener su `document`; i gestori si
  *  leggono da un ref, così cambiarli non lo riaggancia. */
@@ -55,6 +65,8 @@ export function useTastiera(gestori: GestoriTastiera) {
         return;
       }
       if (mod || e.altKey) return;
+      // Con un overlay aperto j/k/Invio/Esc/]/ sono suoi (o del browser), non della lista dietro.
+      if (overlayAperto()) return;
 
       const azione: Record<string, Gestore | undefined> = {
         j: g.onGiu, ArrowDown: g.onGiu,
