@@ -73,7 +73,7 @@ export const TIPI_SISTEMA: Record<string, TipoSistema> = {
     area: 'gdo', gravita: 'critico',
     titolo: 'Agenda del GDO non partita',
     significato: "Il lead ha un appuntamento con il GDO, ma il messaggio con l'agenda non è stato inviato.",
-    cosaFare: 'Usa "Recupera le agende" o scrivi tu al lead con giorno e ora dell\'appuntamento.',
+    cosaFare: "Apri le chat elencate e scrivi tu al lead con giorno e ora dell'appuntamento.",
   },
   gdo_followup_error: {
     area: 'gdo', gravita: 'attenzione',
@@ -92,8 +92,10 @@ export const CRON_SISTEMA: { cron: IdCron; tipoEvento: string; periodoMin: numbe
 const ORDINE: Record<Gravita, number> = { critico: 0, attenzione: 1, info: 2 };
 const MAX_CHAT_AZIONI = 20;
 
-export function firmaAvviso(a: Pick<Avviso, 'id' | 'conteggio' | 'ultimoAt'>): string {
-  return `${a.id}:${a.conteggio}:${a.ultimoAt}`;
+// Niente conteggio: e' calcolato su una finestra mobile di 24 ore e scende da solo,
+// e riaprirebbe avvisi risolti senza eventi nuovi. Cambia solo se arriva un evento nuovo.
+export function firmaAvviso(a: Pick<Avviso, 'id' | 'ultimoAt'>): string {
+  return `${a.id}:${a.ultimoAt}`;
 }
 
 export function areaDi(a: Avviso): AreaAvviso {
@@ -149,7 +151,15 @@ export function avvisiSistema(
   const out: AvvisoConsole[] = [];
   for (const [tipo, evs] of gruppi) {
     const d = TIPI_SISTEMA[tipo];
-    const chat = [...new Set(evs.map(convIdDi).filter((n): n is number => n !== null))].sort((x, y) => x - y);
+    // Chat distinte, dalla piu' recente: i tagli a 50 e a 20 tengono le ultime.
+    const ultimaPerChat = new Map<number, number>();
+    for (const e of evs) {
+      const c = convIdDi(e);
+      if (c === null) continue;
+      const t = Date.parse(e.created_at);
+      if (!ultimaPerChat.has(c) || t > ultimaPerChat.get(c)!) ultimaPerChat.set(c, t);
+    }
+    const chat = [...ultimaPerChat.entries()].sort((x, y) => y[1] - x[1] || y[0] - x[0]).map(([c]) => c);
     let primoAt: string | null = null;
     let ultimoAt: string | null = null;
     for (const e of evs) {
