@@ -57,7 +57,9 @@ it('cron null = fermo, chiave assente = nessun avviso', () => {
   expect(avvisiSistema([], { 'bot-followups': null }, now).map((x) => x.id)).toEqual(['cron_bot-followups']);
   expect(avvisiSistema([], {}, now)).toEqual([]);
 });
-it('run_fermo_inizio non ha azioni', () => {
+it('run_fermo_inizio: rilancia lancio-inizio', () => {
   const base = { gravita: 'critico' as const, titolo: '', significato: '', cosaFare: '', conteggio: 1, chat: [], ultimoAt: null };
-  expect(azioniPer({ ...base, id: 'run_fermo_inizio' })).toEqual([]);
+  expect(azioniPer({ ...base, id: 'run_fermo_inizio' })).toEqual([
+    { azione: 'rilancia_cron', params: { cron: 'lancio-inizio' }, etichetta: 'Rilancia ora' },
+  ]);
 });

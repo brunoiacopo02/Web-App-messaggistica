@@ -2,6 +2,7 @@
 export const ID_CRON = [
   'lancio-aperture',
   'lancio-zoom',
+  'lancio-inizio',
   'lancio-followup',
   'lancio-restituzioni',
   'riapri-mute',

@@ -25,3 +25,21 @@ it("/console/avvisi#id: quando la lista arriva scorre all'avviso una volta sola"
   rerender({ pronto: true });
   expect(scorri).toHaveBeenCalledTimes(1);
 });
+
+it('Azioni manuali: la select dei cron mostra lancio-inizio', async () => {
+  vi.resetModules();
+  vi.doMock('./useAvvisi', () => ({
+    useAvvisi: () => ({ dati: [], errore: null, rileggi: () => {} }),
+    useRegistro: () => ({ dati: [], errore: null, rileggi: () => {} }),
+  }));
+  const { render, screen } = await import('@testing-library/react');
+  const { Avvisi } = await import('./Avvisi');
+  render(
+    <div data-console>
+      <Avvisi />
+    </div>,
+  );
+  const opzioni = screen.getAllByRole('option').map((o) => (o as HTMLOptionElement).value);
+  expect(opzioni).toContain('lancio-inizio');
+  vi.doUnmock('./useAvvisi');
+});

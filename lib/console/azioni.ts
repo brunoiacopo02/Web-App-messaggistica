@@ -78,6 +78,7 @@ export const PARAMS: Record<IdAzione, z.ZodType> = {
 export const DESCRIZIONE_CRON: Record<IdCron, string> = {
   'lancio-aperture': 'Manda il benvenuto del lancio ai lead in attesa. Scrive ai lead.',
   'lancio-zoom': 'Manda il link dello Zoom della live ai lead del lancio. Scrive ai lead.',
+  'lancio-inizio': 'Manda «la live sta iniziando» con il link Zoom a chi ha scritto dopo il benvenuto. Fuori dalla finestra 20:30-21:30 del giorno della live non manda niente. Scrive ai lead.',
   'lancio-followup': 'Manda i solleciti del lancio a chi non ha ancora risposto. Scrive ai lead.',
   'lancio-restituzioni': 'Restituisce al CRM i lead del lancio rimasti fermi e manda il congedo. Scrive ai lead e al CRM.',
   'riapri-mute': "Rimanda l'apertura ai lead a cui il primo messaggio non è mai partito. Scrive ai lead.",
@@ -91,6 +92,7 @@ export const DESCRIZIONE_CRON: Record<IdCron, string> = {
 const EVENTO_GIRO: Record<IdCron, string> = {
   'lancio-aperture': 'lancio_aperture_run',
   'lancio-zoom': 'lancio_zoom_run',
+  'lancio-inizio': 'lancio_inizio_run',
   'lancio-followup': 'lancio_followup_run',
   'lancio-restituzioni': 'lancio_restituzioni_run',
   'riapri-mute': 'riapri_mute',

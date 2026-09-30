@@ -271,6 +271,21 @@ describe('rilancia_cron', () => {
     const a = await anteprima('rilancia_cron', { cron: 'adotta-mai-risposti' }, ctxCon(clienteFinto(), f));
     expect(a.righe[0]).toBe('Questo giro ne manda al massimo 25 su 4.');
   });
+  it('lancio-inizio: niente prova a vuoto, avvertenza, ultimo giro lancio_inizio_run; esegue in GET', async () => {
+    const f = (async (u: string, init: RequestInit) => {
+      chiamate.push({ url: u, init });
+      return new Response(JSON.stringify({ ok: true, skipped: 'fuori_finestra', finestraChiusa: false, rimanenti: null }));
+    }) as unknown as typeof fetch;
+    const c = clienteFinto({ eventi: [{ type: 'lancio_inizio_run', created_at: '2026-10-05T18:30:00Z', message: '[lancio] inizio live: fuori dalla finestra, nessun invio' }] });
+    const a = await anteprima('rilancia_cron', { cron: 'lancio-inizio' }, ctxCon(c, f));
+    expect(chiamate).toHaveLength(0);
+    expect(a.descrizione).toBe('Manda «la live sta iniziando» con il link Zoom a chi ha scritto dopo il benvenuto. Fuori dalla finestra 20:30-21:30 del giorno della live non manda niente. Scrive ai lead.');
+    expect(a.avvertenza).toBe('Questo giro non ha una prova a vuoto: parte davvero.');
+    expect(a.righe.join(' ')).toContain('fuori dalla finestra');
+    await esegui(a.token, ctxCon(c, f));
+    expect(chiamate[0].url).toBe('https://bot.example/api/cron/lancio-inizio');
+    expect(chiamate[0].init.method).toBe('GET');
+  });
   it('un timeout dice che il giro puo\' essere ancora in corso', async () => {
     const f = (async () => { throw Object.assign(new Error('aborted'), { name: 'AbortError' }); }) as unknown as typeof fetch;
     const c = clienteFinto();

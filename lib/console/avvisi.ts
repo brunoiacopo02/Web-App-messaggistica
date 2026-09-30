@@ -106,7 +106,7 @@ export function areaDi(a: Avviso): AreaAvviso {
 }
 
 function rilancia(cron: string): AzioneRef[] {
-  // `lancio-inizio` non e' tra i cron rilanciabili: niente bottone invece di un bottone che fallisce.
+  // Un cron fuori da ID_CRON non e' rilanciabile: niente bottone invece di un bottone che fallisce.
   if (!(ID_CRON as readonly string[]).includes(cron)) return [];
   return [{ azione: 'rilancia_cron', params: { cron }, etichetta: 'Rilancia ora' }];
 }

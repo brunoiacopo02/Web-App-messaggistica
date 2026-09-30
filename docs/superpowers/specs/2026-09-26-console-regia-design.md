@@ -164,7 +164,7 @@ consegne ora per ora (SVG proprio, falliti in rosso). Dati da `fotografia()`/`co
   2. `recupera_agende_consegnate` → `/api/cron/arretrati` `cosa:'agenda-delivery'`.
   3. `rinvia_esito` (una conversazione) → `sendOutcome()` come `/api/cron/resend-outcome`, con l'esito già registrato
      sulla conversazione; anteprima = payload che partirebbe.
-  4. `rilancia_cron` (`lancio-aperture|lancio-zoom|lancio-followup|lancio-restituzioni|riapri-mute|adotta-mai-risposti|bot-followups|crm-lead-status`) → chiamata server-side alla rotta con `CRON_SECRET`. Anteprima = cosa fa + esito dell'ultimo giro (questi cron non hanno una prova a vuoto: lo si dice).
+  4. `rilancia_cron` (`lancio-aperture|lancio-zoom|lancio-inizio|lancio-followup|lancio-restituzioni|riapri-mute|adotta-mai-risposti|bot-followups|crm-lead-status`) → chiamata server-side alla rotta con `CRON_SECRET`. Anteprima = cosa fa + esito dell'ultimo giro (questi cron non hanno una prova a vuoto: lo si dice).
   5. `interruttore` (`lancio_attivo`, `lancio_pulsante_attivo`, `fenice_ai_autoreply`) → stessa scrittura e audit di
      `/api/fenice/lancio-settings`.
   6. `pausa_mario` / `riprendi_mario` su una chat → stessa logica di `/api/chat/pause`.
