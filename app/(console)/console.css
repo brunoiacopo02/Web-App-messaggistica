@@ -700,7 +700,8 @@
 [data-console] .log-liv{display:flex;gap:4px;margin-left:8px}
 [data-console] .log-tbl .log-x{width:36px;padding:0 0 0 4px}
 [data-console] .log-tbl .log-tipo{color:var(--fg2)}
-[data-console] .log-tbl .log-msg{max-width:520px;overflow:hidden;text-overflow:ellipsis}
+/* max-width:0 + width:100%: il messaggio prende lo spazio che resta e si chiude con l'ellissi, così la colonna Chat resta a vista anche a 1280 */
+[data-console] .log-tbl .log-msg{max-width:0;width:100%;overflow:hidden;text-overflow:ellipsis}
 [data-console] .log-tbl td a{color:var(--fg2);text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px}
 [data-console] .log-tbl tr.log-aperta td{border-bottom-color:transparent;background:var(--s2)}
 [data-console] .log-tbl tr.log-det td{height:auto;padding:4px 10px 12px;white-space:normal;background:var(--s2)}
