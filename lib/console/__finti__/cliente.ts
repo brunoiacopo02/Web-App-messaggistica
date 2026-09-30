@@ -50,6 +50,8 @@ export function clienteFinto(dati: {
       select: () => b,
       eq: (k: string, v: unknown) => { filtriEq[k] = v; filtri.push((r) => String(val(r, k)) === String(v)); return b; },
       gte: (k: string, v: unknown) => { filtri.push((r) => String(val(r, k)) >= String(v)); return b; },
+      lt: (k: string, v: unknown) => { filtri.push((r) => String(val(r, k)) < String(v)); return b; },
+      abortSignal: () => b,
       in: (k: string, vs: unknown[]) => { filtri.push((r) => vs.map(String).includes(String(val(r, k)))); return b; },
       order: (col: string, o?: { ascending?: boolean }) => { ordine = { col, asc: o?.ascending !== false }; return b; },
       limit: (n: number) => { limite = n; return b; },
