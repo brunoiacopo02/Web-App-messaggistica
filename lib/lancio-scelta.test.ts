@@ -130,7 +130,7 @@ describe('testi', () => {
   });
   it('slot di notte: mattina elencata, pomeriggio a fascia', () => {
     const s = testoSlots(oreProponibili(SLOTS, NOTTE, EVENTO), GIORNI, 'notte');
-    expect(s).toBe('Per la call ho libero domattina alle 9, alle 11 o alle 14, oppure domani pomeriggio dalle 15 alle 20: che ora preferisci?');
+    expect(s).toBe('Per la videocall ho libero domattina alle 9, alle 11 o alle 14, oppure domani pomeriggio dalle 15 alle 20: che ora preferisci?');
   });
   it('mattina piena: si propone il pomeriggio e il 7 solo per chi puo solo la mattina', () => {
     const s = testoSlots(oreProponibili({ ...SLOTS, mattina: [], mattinaEsaurita: true }, NOTTE, EVENTO), GIORNI, 'notte');
@@ -150,7 +150,7 @@ describe('testi', () => {
   it('alle 20:40 del 5 i giorni hanno il nome del 5, e la mattina non si propone', () => {
     const ora = t('2026-10-05T20:40:00+02:00');
     const s = testoSlots(oreProponibili(SLOTS, ora, EVENTO), GIORNI, modoEtichette(ora, EVENTO), modoPostPitch(ora, EVENTO) === 'notte');
-    expect(s).toBe('Per la call ho domani pomeriggio dalle 15 alle 20: che ora preferisci? Se puoi solo la mattina, ho mercoledì 7 ottobre dalle 9 alle 14.');
+    expect(s).toBe('Per la videocall ho domani pomeriggio dalle 15 alle 20: che ora preferisci? Se puoi solo la mattina, ho mercoledì 7 ottobre dalle 9 alle 14.');
     expect(s).not.toContain('oggi');
   });
   // Alle 02:00 del 6 le due decisioni divergono: la mattina si propone ancora (siamo
@@ -160,7 +160,7 @@ describe('testi', () => {
     const ora = t('2026-10-06T02:00:00+02:00');
     const ore = oreProponibili(SLOTS, ora, EVENTO);
     const s = testoSlots(ore, GIORNI, modoEtichette(ora, EVENTO), modoPostPitch(ora, EVENTO) === 'notte');
-    expect(s).toBe('Per la call ho libero stamattina alle 9, alle 11 o alle 14, oppure oggi pomeriggio dalle 15 alle 20: che ora preferisci?');
+    expect(s).toBe('Per la videocall ho libero stamattina alle 9, alle 11 o alle 14, oppure oggi pomeriggio dalle 15 alle 20: che ora preferisci?');
     expect(s).not.toContain('domattina');
     // E il modello le vede come ore da proporre, senza il "solo se la chiede il lead".
     const b = bloccoSlotPerPrompt(ore, GIORNI, modoEtichette(ora, EVENTO), true);
@@ -181,7 +181,7 @@ describe('testi', () => {
   // chi risponde al pulsante alle 20:40 e' fuori dalla notte di `modoPostPitch`).
   it('etichette e proposta della mattina sono due parametri distinti', () => {
     const ore = oreProponibili(SLOTS, NOTTE, EVENTO);
-    expect(testoSlots(ore, GIORNI, 'notte', false)).toBe('Per la call ho domani pomeriggio dalle 15 alle 20: che ora preferisci? Se puoi solo la mattina, ho mercoledì 7 ottobre dalle 9 alle 14.');
+    expect(testoSlots(ore, GIORNI, 'notte', false)).toBe('Per la videocall ho domani pomeriggio dalle 15 alle 20: che ora preferisci? Se puoi solo la mattina, ho mercoledì 7 ottobre dalle 9 alle 14.');
     expect(testoSlots(ore, GIORNI, 'giorno', true)).toContain('stamattina alle 9, alle 11 o alle 14');
   });
   // Il 7 il 6 non esiste piu': le sue ore sono tutte passate e non si nomina.
@@ -191,7 +191,7 @@ describe('testi', () => {
     expect(ore.mattina).toEqual([]);
     expect(ore.pomeriggio).toEqual([]);
     const s = testoSlots(ore, GIORNI, modoEtichette(ora, EVENTO));
-    expect(s).toBe('Per la call ho stamattina dalle 11 alle 14: che ora preferisci?');
+    expect(s).toBe('Per la videocall ho stamattina dalle 11 alle 14: che ora preferisci?');
     expect(s).not.toMatch(/domani|ieri|non ho piu/);
     const b = bloccoSlotPerPrompt(ore, GIORNI, modoEtichette(ora, EVENTO));
     expect(b).toContain('2026-10-07T11:00:00+02:00 → mercoledì 7 ottobre alle 11:00 (stamattina)');
@@ -207,9 +207,9 @@ describe('testi', () => {
   });
   it('conferme fisse', () => {
     expect(testoConfermaChiamata('Luca')).toBe('Perfetto, ti chiama Luca tra pochissimo.');
-    expect(testoConfermaPrenotazione('mattina', '2026-10-06T09:00:00+02:00', 'Luca')).toBe('Perfetto, ci sentiamo martedì 6 ottobre alle 9:00: ti chiama Luca. Tieni il telefono a portata di mano.');
-    expect(testoConfermaPrenotazione('pomeriggio', '2026-10-06T17:00:00+02:00')).toBe('Perfetto, ci sentiamo martedì 6 ottobre alle 17:00: ti chiama un nostro consulente. Tieni il telefono a portata di mano.');
-    expect(testoOraEsaurita(9, oreProponibili(SLOTS, NOTTE, EVENTO), GIORNI, 'notte')).toMatch(/^Le 9 si sono appena riempite\. Per la call ho libero/);
+    expect(testoConfermaPrenotazione('mattina', '2026-10-06T09:00:00+02:00', 'Luca')).toBe('Perfetto, ci vediamo in videocall martedì 6 ottobre alle 9:00 con Luca: il link per collegarti ti arriva per email.');
+    expect(testoConfermaPrenotazione('pomeriggio', '2026-10-06T17:00:00+02:00')).toBe('Perfetto, ci vediamo in videocall martedì 6 ottobre alle 17:00 con un nostro consulente: prima ti contattiamo per confermarla e mandarti il link.');
+    expect(testoOraEsaurita(9, oreProponibili(SLOTS, NOTTE, EVENTO), GIORNI, 'notte')).toMatch(/^Le 9 si sono appena riempite\. Per la videocall ho libero/);
   });
 });
 
@@ -259,5 +259,18 @@ describe('dopoLaNotteDelLancio (PO 25/09)', () => {
   it('senza evento o con un evento illeggibile non scatta mai', () => {
     expect(scelta.dopoLaNotteDelLancio(new Date('2026-10-06T10:00:00+02:00'), null)).toBe(false);
     expect(scelta.dopoLaNotteDelLancio(new Date('2026-10-06T10:00:00+02:00'), 'boh')).toBe(false);
+  });
+});
+
+describe('dallaLiveDelLancio (PO 30/09): il pulsante si accende da solo alla live', () => {
+  const EVENTO = '2026-10-05T21:00:00+02:00';
+  it('falso prima delle 21:00 del 5, vero dalle 21:00 in poi', () => {
+    expect(scelta.dallaLiveDelLancio(new Date('2026-10-05T20:59:59+02:00'), EVENTO)).toBe(false);
+    expect(scelta.dallaLiveDelLancio(new Date('2026-10-05T21:00:00+02:00'), EVENTO)).toBe(true);
+    expect(scelta.dallaLiveDelLancio(new Date('2026-10-05T22:30:00+02:00'), EVENTO)).toBe(true);
+  });
+  it('senza evento o con un evento illeggibile non scatta mai', () => {
+    expect(scelta.dallaLiveDelLancio(new Date('2026-10-05T22:00:00+02:00'), null)).toBe(false);
+    expect(scelta.dallaLiveDelLancio(new Date('2026-10-05T22:00:00+02:00'), 'boh')).toBe(false);
   });
 });

@@ -616,12 +616,14 @@ export function calcolaAvvisi(i: InputAvvisi): Avviso[] {
   }
 
   // ── pulsante e post-pitch ──
-  if (evento && now >= eventoMs + 10 * MINUTO && now < eventoMs + 6 * ORA && !i.settings.pulsanteAttivo) {
+  // Dal 30/09 il pulsante si accende da solo all'ora della live (`dallaLiveDelLancio`): questo
+  // allarme scatta solo se manca l'ora dell'evento, cioe' se l'accensione automatica non puo' avvenire.
+  if (!evento && !i.settings.pulsanteAttivo && i.settings.attivo) {
     out.push({
       id: 'pulsante_spento', gravita: 'critico', conteggio: 1, chat: [], ultimoAt: null, impostazioni: true,
       titolo: 'Il pulsante del webinar è ancora spento',
-      significato: 'Sono passate le 21:10 e `lancio_pulsante_attivo` è falso: chi preme il pulsante durante la live viene trattato come un messaggio qualunque, senza pitch né scelta.',
-      cosaFare: 'Accendere il pulsante da Impostazioni.',
+      significato: 'Manca l’ora dell’evento (`lancio_evento_at`), quindi il pulsante non si accende da solo all’inizio della live: chi lo preme viene trattato come un messaggio qualunque, senza pitch né scelta.',
+      cosaFare: 'Impostare l’ora dell’evento, oppure accendere il pulsante da Impostazioni.',
     });
   }
   const orfani = recenti((t) => t === 'lancio_pulsante', 24 * ORA).filter((e) => e.payload?.orfano === true);

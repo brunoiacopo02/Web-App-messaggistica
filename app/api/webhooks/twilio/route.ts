@@ -17,7 +17,7 @@ import {
   LANCIO_SLUG, pulsanteRiportaInPostPitch, pulsanteRiapreChat, pulsanteScriveFase, serveNotaRestituzione,
   linkSviluppatoreEntraNelLancio, pulsantePassaAMario, conMarioDopoNotte, haCongedo,
 } from '@/lib/lancio-fase';
-import { dopoLaNotteDelLancio } from '@/lib/lancio-scelta';
+import { dallaLiveDelLancio, dopoLaNotteDelLancio } from '@/lib/lancio-scelta';
 import { adessoLancio } from '@/lib/lancio-orologio';
 import type { Json } from '@/lib/supabase/types';
 import { impostaFaseLancio, marcaNotaRestituzione } from '@/lib/lancio-db';
@@ -266,7 +266,9 @@ export async function POST(req: NextRequest) {
       // il link "professione dello Sviluppatore AI", che un interruttore non ce l'ha. Senza
       // `lancio_evento_at` non scatta mai (resta il comportamento di prima).
       const pulsanteDopoNotte = markerPulsante && dopoLaNotteDelLancio(adessoLancio(), settingsPulsante?.eventoAt);
-      const pulsanteVale = pulsanteAttivo || pulsanteDopoNotte;
+      // Dall'ora della live il pulsante vale da solo, senza interruttore (PO 30/09).
+      const pulsanteDallaLive = markerPulsante && dallaLiveDelLancio(adessoLancio(), settingsPulsante?.eventoAt);
+      const pulsanteVale = pulsanteAttivo || pulsanteDallaLive || pulsanteDopoNotte;
       const lancioPulsante = markerPulsante && pulsanteVale;
       if (conv && markerPulsante) {
         // Il gate dell'adozione, valutato qui perche' e' la seconda delle due sole
