@@ -45,10 +45,19 @@ const VIEWPORTS = [
 
 const TEMI = ['dark', 'light'] as const;
 
-const ROTTE_DEFAULT = [
-  '/console?vista=non_lette',
-  '/console?vista=lancio',
-  '/console?vista=serve_te',
+/** Le 9 viste della lista (lib/console/viste.ts): ognuna si fotografa con la sua prima chat aperta. */
+const VISTE = ['serve_te', 'non_lette', 'errori', 'lancio', 'fissati_bot', 'mario', 'gdo', 'campagne', 'chiuse'] as const;
+
+/** Le pagine della console (Serenamente è esclusa: sospesa). */
+const PAGINE = [
+  '/console/avvisi',
+  '/console/lancio',
+  '/console/assistente',
+  '/console/impostazioni',
+  '/console/analisi',
+  '/console/simulatore',
+  '/console/campagne',
+  '/console/log',
 ];
 
 interface Credenziali {
@@ -105,8 +114,8 @@ async function loggato(page: Page, credenziali: Credenziali): Promise<void> {
   }
 }
 
-async function primoChatId(page: Page): Promise<number | null> {
-  await page.goto(`${BASE_URL}/console?vista=non_lette`, { waitUntil: 'networkidle' });
+async function primoChatId(page: Page, vista: string): Promise<number | null> {
+  await page.goto(`${BASE_URL}/console?vista=${vista}`, { waitUntil: 'networkidle' });
   await page.waitForTimeout(1500);
   const id = await page.evaluate(() => {
     const el = document.querySelector('[data-chat-id]');
@@ -191,15 +200,19 @@ async function main(): Promise<void> {
     const loginState = path.join(SCREENS_DIR, '.storage-state.json');
     await loginContext.storageState({ path: loginState });
 
-    const rotte = argRotte.length > 0 ? argRotte : [...ROTTE_DEFAULT];
+    const rotte = [...argRotte];
 
     if (argRotte.length === 0) {
-      const chatId = await primoChatId(loginPage);
-      if (chatId != null) {
-        rotte.push(`/console?vista=non_lette&chat=${chatId}`);
-      } else {
-        console.log('[avviso] nessuna chat trovata in "non_lette": salto la rotta con chat aperta');
+      for (const vista of VISTE) {
+        const chatId = await primoChatId(loginPage, vista);
+        if (chatId != null) {
+          rotte.push(`/console?vista=${vista}&chat=${chatId}`);
+        } else {
+          console.log(`[avviso] nessuna chat in "${vista}": la fotografo vuota`);
+          rotte.push(`/console?vista=${vista}`);
+        }
       }
+      rotte.push(...PAGINE);
     }
     await loginContext.close();
 
