@@ -153,6 +153,9 @@
 [data-console] .nv>span:nth-child(2){min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 [data-console] .nv .c.urg{color:var(--red-ink);background:var(--red-strong);padding:0 6px;border-radius:9px;line-height:18px;font-weight:600}
 [data-console] .nv.live .ico{color:var(--ember)}
+/* Esci e Interfaccia vecchia: in fondo alle voci; il bottone ha l'aspetto di un link della nav. */
+[data-console] .nav-fondo{margin-top:auto;padding-top:8px}
+[data-console] button.nv{width:100%;background:none;border:0;font:inherit;text-align:left}
 [data-console] .grp{font-size:12px;line-height:16px;color:var(--fg3);padding:8px 8px 4px}
 [data-console] .phases{padding:0 0 4px 26px;display:flex;flex-direction:column}
 [data-console] .ph{display:grid;grid-template-columns:1fr 24px 36px;align-items:center;gap:6px;white-space:nowrap;height:20px;font-size:12px;color:var(--fg3);padding-right:8px;border-radius:4px;cursor:pointer}

@@ -5,9 +5,10 @@ import { usePathname } from 'next/navigation';
 import { Fragment, type MouseEvent } from 'react';
 import {
   Archive, Bell, Bot, CalendarCheck, ChartLine, Clapperboard, FlaskConical, Headset, Inbox,
-  Megaphone, RadioTower, ScrollText, Send, Settings, SquareTerminal, TriangleAlert, UserRound,
+  LayoutDashboard, LogOut, Megaphone, RadioTower, ScrollText, Send, Settings, SquareTerminal, TriangleAlert, UserRound,
   type LucideIcon,
 } from 'lucide-react';
+import { signOutAction } from '@/app/(auth)/login/actions';
 import { ETICHETTA_FASE, VISTA_META, type Vista } from '@/lib/console/viste';
 import type { LancioFase } from '@/lib/lancio-fase';
 import { Kbd } from './ui/Kbd';
@@ -141,6 +142,22 @@ export function Nav() {
             </Link>
           );
         })}
+      </div>
+
+      {/* In fondo: l'uscita e la strada per le pagine di prima, che restano tutte com'erano. */}
+      <div className="nav-grp nav-fondo">
+        <Link href="/dashboard" className="nv">
+          <LayoutDashboard size={16} strokeWidth={1.75} className="ico" aria-hidden="true" />
+          <span>Interfaccia vecchia</span>
+          <span />
+        </Link>
+        <form action={signOutAction}>
+          <button type="submit" className="nv">
+            <LogOut size={16} strokeWidth={1.75} className="ico" aria-hidden="true" />
+            <span>Esci</span>
+            <span />
+          </button>
+        </form>
       </div>
     </>
   );
