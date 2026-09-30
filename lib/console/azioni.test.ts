@@ -350,6 +350,24 @@ describe('rinvia_esito', () => {
   });
 });
 
+describe('rinvia_esito: perimetro', () => {
+  const conv = { bot_outcome: null, bot_scheduled_at: '2026-10-02T15:00:00+02:00', ai_status: 'booked', crm_lead_id: 'L9' };
+  it('anteprima fuori perimetro: rifiuta senza scrivere', async () => {
+    perimetro.dentro = false;
+    const c = clienteFinto({ conv });
+    await expect(anteprima('rinvia_esito', { conversationId: 55 }, ctxCon(c))).rejects.toThrow('chat_fuori_perimetro');
+    expect(c.scritture).toHaveLength(0);
+  });
+  it('esecuzione: se la chat esce dal perimetro dopo l\'anteprima, niente parte verso il CRM', async () => {
+    const c = clienteFinto({ conv });
+    const a = await anteprima('rinvia_esito', { conversationId: 55 }, ctxCon(c));
+    perimetro.dentro = false;
+    await expect(esegui(a.token, ctxCon(c))).rejects.toThrow('chat_fuori_perimetro');
+    expect(sendOutcome).not.toHaveBeenCalled();
+    expect(soloTipo(c.scritture, 'admin_resend_outcome')).toHaveLength(0);
+  });
+});
+
 describe('interruttore', () => {
   it('lancio_attivo: prima → dopo, stessa riga lancio_setting_cambiata del pannello', async () => {
     const c = clienteFinto({ settings: { lancio_attivo: false } });

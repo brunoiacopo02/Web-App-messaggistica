@@ -338,6 +338,7 @@ async function calcolaAnteprima(azione: IdAzione, p: Record<string, unknown>, ct
     }
     case 'rinvia_esito': {
       const id = p.conversationId as number;
+      await richiediPerimetro(ctx.s, id);
       const c = await leggiConversazione(ctx.s, id);
       const e = c ? esitoDa(c) : null;
       if (!c || !e) {
@@ -425,6 +426,7 @@ async function eseguiAzione(c: Carico, ctx: Contesto, timeout: () => number): Pr
     }
     case 'rinvia_esito': {
       const id = p.conversationId as number;
+      await richiediPerimetro(ctx.s, id);
       const conv = await leggiConversazione(ctx.s, id);
       const e = conv ? esitoDa(conv) : null;
       if (!e) throw new ErroreAzione('nessun_esito');
