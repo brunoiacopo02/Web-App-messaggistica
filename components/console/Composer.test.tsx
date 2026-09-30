@@ -2,6 +2,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { Composer } from './Composer';
+import { ComposerBridgeProvider, useComposerBridge, type ComposerAperto } from './ComposerBridge';
 
 afterEach(() => {
   document.body.innerHTML = '';
@@ -48,4 +49,42 @@ it('se l\'invio fallisce il testo resta nel campo', async () => {
     fireEvent.keyDown(campo, { key: 'Enter', ctrlKey: true });
   });
   expect(campo.value).toBe('da rimandare');
+});
+
+function Sonda({ onComposer }: { onComposer: (c: ComposerAperto | null) => void }) {
+  onComposer(useComposerBridge());
+  return null;
+}
+
+it('ComposerBridge: impostaBozza riempie il campo della chat aperta e non invia', () => {
+  const onInvia = vi.fn(async () => true);
+  let visto: ComposerAperto | null = null;
+  render(
+    <ComposerBridgeProvider>
+      <Composer conversationId={42} inPausa lastInboundAt="2026-10-05T19:14:00Z" now={now} pausaInCorso={false} onPausa={() => {}} onInvia={onInvia} />
+      <Sonda onComposer={(c) => (visto = c)} />
+    </ComposerBridgeProvider>,
+  );
+  expect(visto).toMatchObject({ conversationId: 42, inPausa: true });
+  act(() => visto!.impostaBozza('Ciao Giulia, ti richiamo alle 18'));
+  const campo = screen.getByLabelText('Messaggio al lead') as HTMLTextAreaElement;
+  expect(campo.value).toBe('Ciao Giulia, ti richiamo alle 18');
+  expect(onInvia).not.toHaveBeenCalled();
+});
+
+it('ComposerBridge: smontato il composer, nessuna chat aperta', () => {
+  let visto: ComposerAperto | null = null;
+  const { rerender } = render(
+    <ComposerBridgeProvider>
+      <Composer conversationId={42} inPausa={false} lastInboundAt={null} now={now} pausaInCorso={false} onPausa={() => {}} onInvia={async () => true} />
+      <Sonda onComposer={(c) => (visto = c)} />
+    </ComposerBridgeProvider>,
+  );
+  expect(visto).toMatchObject({ conversationId: 42, inPausa: false });
+  rerender(
+    <ComposerBridgeProvider>
+      <Sonda onComposer={(c) => (visto = c)} />
+    </ComposerBridgeProvider>,
+  );
+  expect(visto).toBeNull();
 });

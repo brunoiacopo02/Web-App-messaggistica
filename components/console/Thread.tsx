@@ -152,6 +152,7 @@ export function Thread({ dettaglio, messaggi, now, pausaInCorso, onPausa, onInvi
 
       <Composer
         key={conv.id}
+        conversationId={conv.id}
         inPausa={inPausa}
         lastInboundAt={conv.lastInboundAt}
         now={now}

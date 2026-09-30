@@ -10,8 +10,8 @@ import { FlussoAzione } from './FlussoAzione';
 import { Button } from './ui/Button';
 import { Dialog } from './ui/Dialog';
 import { Sheet } from './ui/Sheet';
-import { Tooltip } from './ui/Tooltip';
 import { toast } from './ui/toast';
+import { useApriAssistente } from './Assistente';
 
 /** Parola, classe e icona di ogni gravità: lo stato non passa mai dal solo colore. */
 export const GRAVITA: Record<Gravita, { parola: string; classe: string; icona: LucideIcon }> = {
@@ -145,6 +145,7 @@ interface RigaAvvisoProps {
 /** Un avviso nella pagina Avvisi: gravità, testo, occorrenze, chat coinvolte e azioni con prova. */
 export function RigaAvviso({ a, onCambio }: RigaAvvisoProps) {
   const [tutte, setTutte] = useState(false);
+  const { apri } = useApriAssistente();
   const g = GRAVITA[a.gravita];
   const Icona = g.icona;
   const azioni = tutte ? a.azioni : a.azioni.slice(0, AZIONI_VISIBILI);
@@ -189,15 +190,14 @@ export function RigaAvviso({ a, onCambio }: RigaAvvisoProps) {
             Apri le impostazioni…
           </Link>
         )}
-        {/* Ruling 2: il pannello dell'Assistente arriva col Task 13, che cablerà la domanda sull'avviso. */}
-        <Tooltip contenuto="Arriva con l'Assistente">
-          <div className="inline-trigger" tabIndex={0}>
-            <Button variante="fantasma" disabled aria-label={`Chiedi all'Assistente dell'avviso: ${a.titolo}`}>
-              <SquareTerminal size={16} strokeWidth={1.75} className="ico" aria-hidden="true" />
-              Chiedi all&apos;Assistente…
-            </Button>
-          </div>
-        </Tooltip>
+        <Button
+          variante="fantasma"
+          onClick={() => apri(`Cosa c'è dietro l'avviso "${a.titolo}" (id ${a.id})? Da cosa parto?`)}
+          aria-label={`Chiedi all'Assistente dell'avviso: ${a.titolo}`}
+        >
+          <SquareTerminal size={16} strokeWidth={1.75} className="ico" aria-hidden="true" />
+          Chiedi all&apos;Assistente…
+        </Button>
         <SegnaRisolto a={a} onRisolto={onCambio} />
       </div>
     </article>

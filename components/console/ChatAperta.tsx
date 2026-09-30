@@ -13,6 +13,7 @@ import { useStatoConsole } from './statoUrl';
 import { rinfrescaConteggi } from './useConteggi';
 import { useOra } from './useOra';
 import { useTastiera } from './useTastiera';
+import { CHAT_CAMBIATA } from './ComposerBridge';
 
 /** Messaggi della chat aperta: polling a 5 s (brief). */
 const OGNI_MESSAGGI = 5_000;
@@ -160,6 +161,14 @@ export function ChatAperta() {
       clearInterval(d);
     };
   }, [chat, rileggiMessaggi, rileggiDettaglio, segnaLetta]);
+
+  // Un'azione eseguita dalla palette o dall'Assistente: stato di Mario riletto subito.
+  useEffect(() => {
+    if (chat == null) return;
+    const rileggi = () => void rileggiDettaglio(chat);
+    window.addEventListener(CHAT_CAMBIATA, rileggi);
+    return () => window.removeEventListener(CHAT_CAMBIATA, rileggi);
+  }, [chat, rileggiDettaglio]);
 
   // Subito all'apertura e a ogni nuovo conteggio di non letti.
   const nonLetti = attuali?.dettaglio?.conv.unreadCount ?? 0;

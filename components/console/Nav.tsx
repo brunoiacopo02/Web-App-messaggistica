@@ -15,7 +15,7 @@ import { useConteggi } from './useConteggi';
 import { useStatoConsole } from './statoUrl';
 import { useRegia } from './RegiaProvider';
 
-const ICONA_VISTA: Record<Vista, LucideIcon> = {
+export const ICONA_VISTA: Record<Vista, LucideIcon> = {
   serve_te: UserRound,
   non_lette: Inbox,
   errori: TriangleAlert,
@@ -28,13 +28,13 @@ const ICONA_VISTA: Record<Vista, LucideIcon> = {
 };
 
 /** Il primo gruppo non ha titolo, come nel mockup: sono le viste di ogni giorno, in cima. */
-const GRUPPI: { titolo: string | null; viste: Vista[] }[] = [
+export const GRUPPI: { titolo: string | null; viste: Vista[] }[] = [
   { titolo: null, viste: ['serve_te', 'non_lette', 'errori'] },
   { titolo: 'Lancio 5/10', viste: ['lancio'] },
   { titolo: 'Mondi', viste: ['fissati_bot', 'mario', 'gdo', 'campagne', 'chiuse'] },
 ];
 
-const SISTEMA: { etichetta: string; href: string; icona: LucideIcon; kbd?: string }[] = [
+export const SISTEMA: { etichetta: string; href: string; icona: LucideIcon; kbd?: string }[] = [
   { etichetta: 'Avvisi', href: '/console/avvisi', icona: Bell },
   { etichetta: 'Lancio', href: '/console/lancio', icona: Clapperboard },
   { etichetta: 'Assistente', href: '/console/assistente', icona: SquareTerminal, kbd: 'Ctrl K' },

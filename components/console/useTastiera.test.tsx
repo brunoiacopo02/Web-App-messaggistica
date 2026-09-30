@@ -95,3 +95,14 @@ it('un gestore che torna false lascia il tasto al browser', () => {
   expect(onEsc).toHaveBeenCalledTimes(1);
   expect(e.defaultPrevented).toBe(false);
 });
+
+it('Ctrl+K dentro il composer (textarea) resta al campo: niente palette, niente preventDefault', () => {
+  const g = gestori();
+  renderHook(() => useTastiera(g));
+  const area = document.createElement('textarea');
+  document.body.appendChild(area);
+  area.focus();
+  const e = premi('k', { ctrlKey: true }, area);
+  expect(g.onPalette).not.toHaveBeenCalled();
+  expect(e.defaultPrevented).toBe(false);
+});

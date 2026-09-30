@@ -4,8 +4,11 @@ import { useRef, useState } from 'react';
 import { Bot, Clock, Pause, Send, UserRound } from 'lucide-react';
 import { finestra24h } from '@/lib/console/thread';
 import { Button } from './ui/Button';
+import { useRegistraComposer } from './ComposerBridge';
 
 interface ComposerProps {
+  /** La chat del composer: con lui l'Assistente può mettere una bozza nel campo (ComposerBridge). */
+  conversationId?: number;
   inPausa: boolean;
   lastInboundAt: string | null;
   now: Date;
@@ -27,9 +30,15 @@ function Finestra({ lastInboundAt, now }: { lastInboundAt: string | null; now: D
 
 /** Si scrive solo a Mario in pausa: la rotta di invio risponde 409 `bot_attivo` altrimenti, e
  *  due voci sulla stessa chat confonderebbero il lead e il modello. */
-export function Composer({ inPausa, lastInboundAt, now, pausaInCorso, onPausa, onInvia }: ComposerProps) {
+export function Composer({ conversationId, inPausa, lastInboundAt, now, pausaInCorso, onPausa, onInvia }: ComposerProps) {
   const [testo, setTesto] = useState('');
   const [invio, setInvio] = useState(false);
+  const campo = useRef<HTMLTextAreaElement>(null);
+  // Una bozza dell'Assistente riempie il campo e basta: l'invio resta un gesto dell'admin.
+  useRegistraComposer(conversationId, inPausa, (bozza) => {
+    setTesto(bozza.slice(0, 4096));
+    campo.current?.focus();
+  });
   // Guardia sincrona: due Ctrl+Invio nello stesso giro di eventi vedono ancora `invio` a false.
   const inCorso = useRef(false);
   const aperta = finestra24h(lastInboundAt, now).aperta;
@@ -81,6 +90,7 @@ export function Composer({ inPausa, lastInboundAt, now, pausaInCorso, onPausa, o
       </div>
       <div className="cmp">
         <textarea
+          ref={campo}
           value={testo}
           disabled={!aperta}
           maxLength={4096}

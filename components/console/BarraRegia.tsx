@@ -199,31 +199,32 @@ function Numeri({ n, perOra }: { n: Regia['numeri']; perOra: ConsegneOra[] }) {
 // ─────────── barra ───────────
 const STATO_CSS: Record<Regia['stato']['stato'], string> = { prima: 'pre', in_onda: 'live', dopo: 'post', nessuno: 'post' };
 
-function RigaMinima({ children }: { children: ReactNode }) {
+function RigaMinima({ children, azioni }: { children: ReactNode; azioni?: ReactNode }) {
   return (
     <section className="regia-min" aria-label="Regia del lancio">
       <div className="brand"><Marchio /><b>Fenice</b><span>Mario</span></div>
       <div className="msg">{children}</div>
+      {azioni && <div className="azioni">{azioni}</div>}
     </section>
   );
 }
 
 /** Barra di regia (mockup righe 404-482): luce di onda, scaletta, numeri del lancio e consegne
  *  ora per ora. A lancio spento o senza data dell'evento si riduce a una riga da 36 px.
- *  `azioni` occupa la colonna destra della prima riga (lì andrà il bottone della palette). */
+ *  `azioni` occupa la colonna destra della prima riga: il bottone della palette. */
 export function BarraRegia({ azioni }: { azioni?: ReactNode }) {
   const { regia, errore } = useRegia();
 
   if (!regia) {
     return (
-      <RigaMinima>
+      <RigaMinima azioni={azioni}>
         {errore ? 'Regia non raggiungibile: riprovo da sola fra 30 secondi.' : <span aria-busy="true">Carico la regia…</span>}
       </RigaMinima>
     );
   }
   if (!regia.attivo || !regia.eventoAt || regia.stato.stato === 'nessuno') {
     return (
-      <RigaMinima>
+      <RigaMinima azioni={azioni}>
         {regia.attivo ? 'Lancio acceso ma senza data dell\'evento' : 'Nessun lancio in corso'}
         {' · '}
         <Link href="/console/impostazioni">Impostazioni…</Link>

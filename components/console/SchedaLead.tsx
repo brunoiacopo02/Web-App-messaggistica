@@ -9,8 +9,8 @@ import { formattaTelefono, orarioRiga } from '@/lib/console/riga';
 import { dataOraBreve, leggibile, numeroWa, testoEvento, type DettaglioChat } from '@/lib/console/thread';
 import { Button } from './ui/Button';
 import { Kbd } from './ui/Kbd';
-import { Tooltip } from './ui/Tooltip';
 import { toast } from './ui/toast';
+import { useApriAssistente } from './Assistente';
 
 const CRM_URL = 'https://crm-sales-fenice.vercel.app/?lead=';
 const STORICO_BREVE = 8;
@@ -31,6 +31,7 @@ interface SchedaLeadProps {
 export function SchedaLead({ dettaglio, now }: SchedaLeadProps) {
   const { conv, lead, crm, eventi } = dettaglio;
   const [tutti, setTutti] = useState(false);
+  const { apri } = useApriAssistente();
 
   const wa = numeroWa(conv.waNumber);
   const esito = leggibile(conv.botOutcome);
@@ -128,16 +129,13 @@ export function SchedaLead({ dettaglio, now }: SchedaLeadProps) {
             Apri nel CRM
           </a>
         )}
-        {/* Ruling 2: il pannello dell'Assistente arriva col Task 13, che cablerà la domanda
-            "Com'è andata la chat di <nome>?". Il wrapper tiene vivo il tooltip sul bottone disabilitato. */}
-        <Tooltip contenuto="Arriva con l'Assistente">
-          <div className="inline-trigger" tabIndex={0}>
-            <Button disabled aria-label={`Chiedi all'Assistente com'è andata la chat di ${lead.nome ?? 'questo lead'}`}>
-              <SquareTerminal size={16} strokeWidth={1.75} className="ico" aria-hidden="true" />
-              Chiedi all&apos;Assistente…
-            </Button>
-          </div>
-        </Tooltip>
+        <Button
+          onClick={() => apri(`Com'è andata la chat ${conv.id}${lead.nome ? ` di ${lead.nome}` : ''}? Cosa serve adesso?`)}
+          aria-label={`Chiedi all'Assistente com'è andata la chat di ${lead.nome ?? 'questo lead'}`}
+        >
+          <SquareTerminal size={16} strokeWidth={1.75} className="ico" aria-hidden="true" />
+          Chiedi all&apos;Assistente…
+        </Button>
       </div>
 
       <div className="hist">
