@@ -118,6 +118,55 @@ export async function marcaCongedo(
 }
 
 /**
+ * Il marcatore durevole della registrazione promessa su `conversations.lancio_info`
+ * (`registrazione_promessa_at`): si scrive quando la frase della promessa e' PARTITA.
+ * Lo legge il turno, perche' la frase esca una volta sola, e il cron del follow-up, che
+ * dopo la live manda davvero la registrazione a queste chat: senza marcatore la promessa
+ * resterebbe una frase e basta.
+ *
+ * Stessa disciplina di `marcaCongedo`: `lancio_info` porta anche le chiavi di B4 e il
+ * congedo, quindi si rilegge prima di scrivere e su una lettura fallita non si scrive
+ * niente. Non lancia: la frase e' gia' uscita e il turno non deve morire qui.
+ */
+export async function marcaRegistrazionePromessa(
+  supabase: Supa,
+  conversationId: number,
+  quandoIso: string = new Date().toISOString(),
+): Promise<void> {
+  const { data, error: erroreLettura } = await supabase
+    .from('conversations')
+    .select('lancio_info')
+    .eq('id', conversationId)
+    .maybeSingle();
+  if (erroreLettura) {
+    await supabase.from('event_log').insert({
+      type: 'lancio_registrazione_non_marcata',
+      payload: { conversationId, errore: erroreLettura.message, fase: 'lettura' } as never,
+      message: `[lancio] conv ${conversationId}: lancio_info non letto, marcatore della registrazione NON scritto — ${erroreLettura.message}`,
+      level: 'warn',
+    });
+    return;
+  }
+  const attuale = (data as { lancio_info?: Json | null } | null)?.lancio_info;
+  const base =
+    attuale && typeof attuale === 'object' && !Array.isArray(attuale)
+      ? (attuale as Record<string, unknown>)
+      : {};
+  const { error } = await supabase
+    .from('conversations')
+    .update({ lancio_info: { ...base, registrazione_promessa_at: quandoIso } as Json })
+    .eq('id', conversationId);
+  if (error) {
+    await supabase.from('event_log').insert({
+      type: 'lancio_registrazione_non_marcata',
+      payload: { conversationId, errore: error.message, fase: 'scrittura' } as never,
+      message: `[lancio] conv ${conversationId}: marcatore della registrazione NON scritto — ${error.message}`,
+      level: 'warn',
+    });
+  }
+}
+
+/**
  * Il marcatore durevole dell'ultima nota mandata al CRM per un lead gia' restituito al
  * pool (ruling C8): e' quello che tiene la finestra di un'ora di `serveNotaRestituzione`.
  *

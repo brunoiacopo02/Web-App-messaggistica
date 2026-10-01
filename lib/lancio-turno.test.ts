@@ -17,7 +17,7 @@ import { sendOutcome } from './bot-outcome';
 import { turnoAssistenza } from './lancio-assistenza';
 import { turnoPostPitch, turnoDopoScelta } from './lancio-post-pitch';
 import { getLancioSettings } from './lancio-settings';
-import { TESTO_POSTO_BLOCCATO, TESTO_CONGEDO, TESTO_CHIUSURA_DOMANDE, TESTO_NIENTE_PASSAGGIO, MAX_SCAMBI_DOMANDE } from './lancio-fase';
+import { TESTO_POSTO_BLOCCATO, TESTO_CONGEDO, TESTO_CHIUSURA_DOMANDE, TESTO_NIENTE_PASSAGGIO, MAX_SCAMBI_DOMANDE, TESTO_REGISTRAZIONE_PROMESSA } from './lancio-fase';
 
 type Row = { direction: string; body: string | null; template_sid: string | null };
 const WELCOME: Row = { direction: 'out', body: "Ciao Anna, sono l'assistente virtuale...", template_sid: 'HX_W' };
@@ -540,5 +540,67 @@ describe('followup_inviato — il lead ha risposto al follow-up: la chat passa a
     expect(turnoPostPitch).not.toHaveBeenCalled();
     // Nessuna traccia fenice_ai_reply qui: la scrive il giro di Mario che segue.
     expect(calls.events.map((e) => e.type)).not.toContain('fenice_ai_reply');
+  });
+});
+
+describe('eseguiTurnoLancio — chi non può esserci: la registrazione (PO 01/10/2026)', () => {
+  const MSG = 'Purtroppo lunedì non riesco.';
+
+  it('manda la frase fissa, scrive il marcatore, niente esito al CRM, fase invariata, modello non chiamato', async () => {
+    const { supabase, calls } = makeSupabase(null, { risposte: [] });
+    const stato = await eseguiTurnoLancio(supabase, base({ rows: [WELCOME, inb(MSG)], inboundBody: MSG }));
+    expect(stato).toBe('active');
+    expect(genera).not.toHaveBeenCalled();
+    expect(sendFreeText).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe(TESTO_REGISTRAZIONE_PROMESSA);
+    expect(calls.convUpdates.find((u) => u.lancio_info)?.lancio_info).toMatchObject({
+      risposte: [], registrazione_promessa_at: expect.any(String),
+    });
+    expect(calls.convUpdates.some((u) => 'lancio_fase' in u)).toBe(false);
+    expect(sendOutcome).not.toHaveBeenCalled();
+    expect(calls.events.some((e) => e.type === 'lancio_registrazione_promessa')).toBe(true);
+    expect(calls.events.some((e) => e.type === 'lancio_congedo')).toBe(false);
+    expect(calls.events.find((e) => e.type === 'fenice_ai_reply').payload).toMatchObject({ azione: 'registrazione' });
+  });
+
+  it('in posto_bloccato: stessa promessa, la fase resta posto_bloccato', async () => {
+    const { supabase, calls } = makeSupabase();
+    const stato = await eseguiTurnoLancio(supabase, base({
+      fase: 'posto_bloccato', rows: [WELCOME, inb('si'), outLibero(TESTO_POSTO_BLOCCATO), inb('ci sarà la registrazione?')], inboundBody: 'ci sarà la registrazione?',
+    }));
+    expect(stato).toBe('active');
+    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe(TESTO_REGISTRAZIONE_PROMESSA);
+    expect(calls.convUpdates.some((u) => 'lancio_fase' in u)).toBe(false);
+  });
+
+  it('il modello col tag REGISTRAZIONE su un messaggio che le regex non vedono: stessa azione', async () => {
+    genera.mockResolvedValueOnce({ classe: 'registrazione', passToHuman: false, visibleReply: 'Capisco.' });
+    const { supabase, calls } = makeSupabase();
+    const msg = 'il 5 sono a Milano per un matrimonio, si può avere dopo?';
+    await eseguiTurnoLancio(supabase, base({ rows: [WELCOME, inb(msg)], inboundBody: msg }));
+    expect(genera).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe(TESTO_REGISTRAZIONE_PROMESSA);
+    expect(calls.events.some((e) => e.type === 'lancio_registrazione_promessa')).toBe(true);
+    expect(sendOutcome).not.toHaveBeenCalled();
+  });
+
+  it('già promessa: la frase non riparte, risponde il modello (che lo sa dal prompt)', async () => {
+    genera.mockResolvedValueOnce({ classe: 'domanda', passToHuman: false, visibleReply: 'Sì, te la mandiamo qui dopo la live.' });
+    const { supabase, calls } = makeSupabase(null, { registrazione_promessa_at: '2026-10-01T10:00:00.000Z' });
+    const rows = [WELCOME, inb(MSG), outLibero(TESTO_REGISTRAZIONE_PROMESSA), inb('quindi la registrazione arriva qui?')];
+    await eseguiTurnoLancio(supabase, base({ rows, inboundBody: 'quindi la registrazione arriva qui?', lancioInfo: { registrazione_promessa_at: '2026-10-01T10:00:00.000Z' } as any }));
+    expect(genera).toHaveBeenCalledTimes(1);
+    expect(genera.mock.calls[0][1]).toMatchObject({ registrazionePromessa: true });
+    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe('Sì, te la mandiamo qui dopo la live.');
+    expect(calls.events.some((e) => e.type === 'lancio_registrazione_promessa')).toBe(false);
+    expect(calls.convUpdates.some((u) => u.lancio_info)).toBe(false);
+  });
+
+  it('chi chiede di cancellare l iscrizione perché non può esserci resta un congedo', async () => {
+    const { supabase } = makeSupabase();
+    const msg = 'Ciao e grazie, ma ti chiedo di cancellare la mia iscrizione in quanto non potrò partecipare. Grazie';
+    const stato = await eseguiTurnoLancio(supabase, base({ rows: [WELCOME, inb(msg)], inboundBody: msg }));
+    expect(stato).toBe('closed');
+    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe(TESTO_CONGEDO);
   });
 });

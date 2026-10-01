@@ -6,7 +6,8 @@ import {
   inboundDelLotto, ultimoTestoDelLotto, haCongedo, pulsanteRiportaInPostPitch, pulsanteScriveFase,
   pulsanteRiapreChat, serveNotaRestituzione, NOTA_RESTITUZIONE_OGNI_MS, lancioRestituito,
   tagliaRigheDalLancio, lancioRipartePerRiarruolamento, LANCIO_FASE_RIPARTE_AL_RIARRUOLAMENTO,
-  linkSviluppatoreEntraNelLancio,
+  linkSviluppatoreEntraNelLancio, registrazionePromessa,
+  TESTO_REGISTRAZIONE_PROMESSA, TESTO_REGISTRAZIONE_PROMESSA_STASERA,
 } from './lancio-fase';
 
 describe('costanti della spec §3.2 / §5.2', () => {
@@ -88,6 +89,37 @@ describe('decideLancioTurno — fase posto_bloccato', () => {
   });
   it('un no dopo il posto bloccato è comunque un congedo', () => {
     expect(decideLancioTurno({ ...base, classe: 'no' }).kind).toBe('congedo');
+  });
+});
+
+describe('decideLancioTurno — chi non può esserci: la registrazione (PO 01/10/2026)', () => {
+  it('la prima volta → la frase fissa della promessa, mai un congedo', () => {
+    expect(decideLancioTurno({ fase: 'attesa', classe: 'registrazione', scambiDomande: 0 }))
+      .toEqual({ kind: 'registrazione', testo: TESTO_REGISTRAZIONE_PROMESSA });
+    expect(TESTO_REGISTRAZIONE_PROMESSA).toBe('Nessun problema: dopo la live ti mandiamo qui la registrazione, così la guardi quando vuoi.');
+  });
+  it('vale anche in posto_bloccato', () => {
+    expect(decideLancioTurno({ fase: 'posto_bloccato', classe: 'registrazione', scambiDomande: 0 }).kind).toBe('registrazione');
+  });
+  it('già promessa → è una domanda: risponde il modello, col solito tetto', () => {
+    expect(decideLancioTurno({ fase: 'attesa', classe: 'registrazione', scambiDomande: 0, registrazionePromessa: true }))
+      .toEqual({ kind: 'domanda', chiudi: false });
+    expect(decideLancioTurno({ fase: 'attesa', classe: 'registrazione', scambiDomande: MAX_SCAMBI_DOMANDE, registrazionePromessa: true }))
+      .toEqual({ kind: 'silenzio', motivo: 'domande_esaurite' });
+  });
+  it('fuori da attesa/posto_bloccato resta silenzio: in assistenza decide il suo turno', () => {
+    expect(decideLancioTurno({ fase: 'link_inviato', classe: 'registrazione', scambiDomande: 0 }).kind).toBe('silenzio');
+  });
+  it('le frasi della promessa non contano come scambi di domande', () => {
+    const out = (body: string) => ({ direction: 'out', body, template_sid: null });
+    expect(contaScambiDomande([out(TESTO_REGISTRAZIONE_PROMESSA), out(TESTO_REGISTRAZIONE_PROMESSA_STASERA)])).toBe(0);
+  });
+  it('registrazionePromessa legge il marcatore di lancio_info', () => {
+    expect(registrazionePromessa({ registrazione_promessa_at: '2026-10-01T10:00:00.000Z' })).toBe(true);
+    expect(registrazionePromessa({ congedo_at: 'x' })).toBe(false);
+    expect(registrazionePromessa({ registrazione_promessa_at: '' })).toBe(false);
+    expect(registrazionePromessa(null)).toBe(false);
+    expect(registrazionePromessa([])).toBe(false);
   });
 });
 

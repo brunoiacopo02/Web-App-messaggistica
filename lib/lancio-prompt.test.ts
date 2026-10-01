@@ -55,9 +55,18 @@ describe('buildLancioSystem — fase attesa', () => {
     expect(altra).toContain('giovedì 12 novembre alle 20:30');
     expect(altra).not.toContain('5 ottobre');
   });
-  it('non promette registrazioni né replay', () => {
-    expect(s).toMatch(/non prometti NESSUNA registrazione né replay/);
-    expect(s).toMatch(/in diretta/i);
+  it('chi non può esserci o chiede la registrazione → [LANCIO:REGISTRAZIONE], mai un congedo (PO 01/10/2026)', () => {
+    expect(s).not.toMatch(/non prometti NESSUNA registrazione/);
+    expect(s).toMatch(/Se non può esserci quella sera[^\n]*usa \[LANCIO:REGISTRAZIONE\]/);
+    expect(s).toMatch(/dopo la live gli mandiamo qui la registrazione: non è un no/);
+    expect(s).toMatch(/- \[LANCIO:REGISTRAZIONE\] se non può esserci/);
+    expect(s).toMatch(/Quando usi \[LANCIO:SI\], \[LANCIO:NO\] o \[LANCIO:REGISTRAZIONE\] il testo che scrivi viene sostituito/);
+  });
+  it('la promessa già fatta: il modello lo sa e la conferma, senza ripetere il tag', () => {
+    expect(s).not.toMatch(/Gli abbiamo già detto/);
+    const promessa = buildLancioSystem({ ...base, registrazionePromessa: true });
+    expect(promessa).toMatch(/Gli abbiamo già detto che dopo la live gli mandiamo qui la registrazione: se ne parla, confermalo\./);
+    expect(promessa).toMatch(/\[LANCIO:DOMANDA\]\.\n- Fenice/); // nessuna riga vuota in mezzo all'elenco
   });
   it('dà del tu, risponde in italiano, niente markdown, tetto di parole', () => {
     expect(s).toMatch(/Dai sempre del tu e rispondi sempre in italiano/);
@@ -116,6 +125,14 @@ describe('buildLancioSystem — fase link_inviato (assistenza al collegamento)',
     for (const t of ['[LANCIO:DOMANDA]', '[LANCIO:NO]']) expect(s).toContain(t);
     for (const t of ['[LANCIO:SI]', '[LANCIO:CHIAMA_ORA]', '[LANCIO:PRENOTA', '[PASSAGGIO_UMANO]']) expect(s).not.toContain(t);
     expect(s).toMatch(/Non passi MAI la chat a una persona/);
+  });
+  it('chi non può esserci stasera o chiede la registrazione → [LANCIO:REGISTRAZIONE] (PO 01/10/2026)', () => {
+    expect(s).not.toMatch(/non prometti NESSUNA registrazione/);
+    expect(s).toMatch(/Se non può esserci stasera[^\n]*usa \[LANCIO:REGISTRAZIONE\]/);
+    expect(s).toMatch(/- \[LANCIO:REGISTRAZIONE\] se non può esserci stasera/);
+    expect(s).not.toMatch(/Gli abbiamo già detto/);
+    const promessa = buildLancioSystem({ ...base, fase: 'link_inviato', registrazionePromessa: true });
+    expect(promessa).toMatch(/Gli abbiamo già detto che gli mandiamo qui la registrazione: se ne parla, confermalo\./);
   });
   it('se le tre mosse non bastano non si arrende e non rimanda a domani (PO 25/09/2026)', () => {
     expect(s).toMatch(/NON ti arrendi: lo aiuti tu finché entra/);

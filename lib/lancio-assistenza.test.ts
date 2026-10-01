@@ -7,13 +7,14 @@ vi.mock('./bot-outcome', () => ({ sendOutcome: vi.fn(async () => ({ sent: true }
 vi.mock('./lancio-db', () => ({
   impostaFaseLancio: vi.fn(async () => undefined),
   marcaCongedo: vi.fn(async () => undefined),
+  marcaRegistrazionePromessa: vi.fn(async () => undefined),
 }));
 
 import { turnoAssistenza, TESTO_ASSISTENZA_SENZA_PASSAGGIO } from './lancio-assistenza';
 import { sendFreeText } from './twilio';
 import { sendOutcome } from './bot-outcome';
-import { impostaFaseLancio, marcaCongedo } from './lancio-db';
-import { TESTO_CONGEDO } from './lancio-fase';
+import { impostaFaseLancio, marcaCongedo, marcaRegistrazionePromessa } from './lancio-db';
+import { TESTO_CONGEDO, TESTO_REGISTRAZIONE_PROMESSA_STASERA } from './lancio-fase';
 import type { LancioSettings } from './lancio-settings';
 
 type Row = { direction: string; body: string | null; template_sid: string | null; created_at?: string | null };
@@ -291,5 +292,45 @@ describe('turnoAssistenza — dopo mezzanotte', () => {
     const { supabase } = makeSupabase();
     await turnoAssistenza(supabase, base(), { settings: { ...SETTINGS, eventoAt: 'quando capita' }, now: NOTTE5 });
     expect(sendFreeText).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('turnoAssistenza — non può esserci stasera: la registrazione (PO 01/10/2026)', () => {
+  const MSG = 'stasera non ce la faccio, ci sarà la registrazione?';
+
+  it('tag REGISTRAZIONE → frase fissa per domani, marcatore, evento; mai congedo né esito', async () => {
+    genera.mockResolvedValueOnce({ classe: 'registrazione', passToHuman: false, visibleReply: 'Capisco.', lancioTag: null });
+    const { supabase, calls } = makeSupabase();
+    const stato = await turnoAssistenza(supabase, base({ rows: [LINK, inb(MSG)], inboundBody: MSG }), { settings: SETTINGS, now: NOTTE5 });
+    expect(stato).toBe('active');
+    expect(sendFreeText).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe(TESTO_REGISTRAZIONE_PROMESSA_STASERA);
+    expect(TESTO_REGISTRAZIONE_PROMESSA_STASERA).toBe('Nessun problema: domani ti mandiamo qui la registrazione, così la guardi quando vuoi.');
+    expect(marcaRegistrazionePromessa).toHaveBeenCalledWith(supabase, 42);
+    expect(tipiEventi(calls)).toContain('lancio_registrazione_promessa');
+    expect(calls.events.find((e) => e.type === 'fenice_ai_reply').payload).toMatchObject({ azione: 'registrazione' });
+    expect(marcaCongedo).not.toHaveBeenCalled();
+    expect(sendOutcome).not.toHaveBeenCalled();
+    expect(impostaFaseLancio).not.toHaveBeenCalled();
+    expect(genera.mock.calls[0][1]).toMatchObject({ registrazionePromessa: false });
+  });
+
+  it('già promessa: niente seconda frase fissa, esce la risposta del modello', async () => {
+    genera.mockResolvedValueOnce({ classe: 'registrazione', passToHuman: false, visibleReply: 'Sì, domani te la mandiamo qui.', lancioTag: null });
+    const { supabase } = makeSupabase();
+    await turnoAssistenza(supabase, base({
+      rows: [LINK, inb(MSG)], inboundBody: MSG, lancioInfo: { registrazione_promessa_at: '2026-10-05T21:40:00.000Z' },
+    }), { settings: SETTINGS, now: NOTTE5 });
+    expect(genera.mock.calls[0][1]).toMatchObject({ registrazionePromessa: true });
+    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe('Sì, domani te la mandiamo qui.');
+    expect(marcaRegistrazionePromessa).not.toHaveBeenCalled();
+  });
+
+  it('"non riesco a collegarmi" stasera non passa da una regex: senza tag è assistenza', async () => {
+    genera.mockResolvedValueOnce({ classe: 'domanda', passToHuman: false, visibleReply: 'Riclicca il link qui in chat.', lancioTag: null });
+    const { supabase } = makeSupabase();
+    await turnoAssistenza(supabase, base({ rows: [LINK, inb('non riesco a collegarmi')], inboundBody: 'non riesco a collegarmi' }), { settings: SETTINGS, now: NOTTE5 });
+    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe('Riclicca il link qui in chat.');
+    expect(marcaRegistrazionePromessa).not.toHaveBeenCalled();
   });
 });

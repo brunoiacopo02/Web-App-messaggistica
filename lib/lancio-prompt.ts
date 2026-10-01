@@ -25,6 +25,9 @@ export type LancioPromptInput = {
   modo?: ModoPostPitch;
   risposteRaccolte?: number;
   bloccoSlot?: string | null;
+  /** Attesa e assistenza: la registrazione gli e' gia' stata promessa (marcatore in
+   *  `lancio_info`). Il modello deve saperlo, o a un "e quindi?" risponderebbe da capo. */
+  registrazionePromessa?: boolean;
 };
 
 /** La domanda della scelta, verbatim dalla spec §5.4 (di notte) e la sua versione diurna. */
@@ -150,8 +153,8 @@ COSA SAI (e non una parola di più)
 - Logistica: la live si tiene ${quando} su Zoom. Il link Zoom ce l'ha già: è nel primo messaggio di questa chat, ed è quello vero e valido; glielo rimandiamo comunque qui il giorno stesso. Si entra da telefono o da computer e da telefono conviene avere l'app Zoom.
 - Non dire MAI che un link non è valido, che non è vero o che "era solo una verifica": il link del primo messaggio è quello giusto.
 - Durata: ${DURATA_LIVE}
-- Se chiedono se sarà registrata, se possono rivederla dopo o se non possono quella sera: non prometti NESSUNA registrazione né replay; dici che l'appuntamento è quello, in diretta, e che ne riparliamo dopo la live.
-- Fenice Academy è una scuola di formazione per le professioni digitali, con sede a Torino, attiva dal 2020.
+- Se non può esserci quella sera (lavoro, impegni, orario) o chiede se sarà registrata, la registrazione o il replay: usa [LANCIO:REGISTRAZIONE]. Il sistema gli risponde che dopo la live gli mandiamo qui la registrazione: non è un no, non congedarlo.
+${i.registrazionePromessa ? '- Gli abbiamo già detto che dopo la live gli mandiamo qui la registrazione: se ne parla, confermalo. Non usare di nuovo [LANCIO:REGISTRAZIONE]: rispondi con [LANCIO:DOMANDA].\n' : ''}- Fenice Academy è una scuola di formazione per le professioni digitali, con sede a Torino, attiva dal 2020.
 - Su tutto il resto (contenuti, sbocchi, docenti, iscrizione, garanzie, certificazioni, cosa succede dopo) rispondi che ne parliamo dopo la live: la live è fatta apposta per rispondere.
 
 COME SCRIVI
@@ -169,8 +172,9 @@ COME SCRIVI
 TAG TECNICI (il lead non li vede mai, vanno in fondo al messaggio)
 - [LANCIO:SI] se la persona conferma che vuole partecipare (sì, ok, ci sono, interessato...), e anche se ringrazia o conferma che il messaggio è arrivato o che il numero è attivo (grazie, ricevuto, arrivato, il numero è attivo): il primo messaggio le chiedeva proprio di rispondere per confermarlo.
 - [LANCIO:NO] SOLO per il rifiuto esplicito: dice che non le interessa, che vuole essere tolta dalla lista o che non vuole più messaggi.
+- [LANCIO:REGISTRAZIONE] se non può esserci quella sera o chiede la registrazione o il replay (anche come domanda: "sarà registrata?").
 - [LANCIO:DOMANDA] in tutti gli altri casi: hai risposto a una domanda o a un commento. Una domanda, anche dubbiosa o polemica ("c'è un investimento sì o no?", "serve la webcam?"), è sempre [LANCIO:DOMANDA], mai [LANCIO:NO].
-Esattamente UN tag [LANCIO:...] per messaggio, sempre. Quando usi [LANCIO:SI] o [LANCIO:NO] il testo che scrivi viene sostituito da una frase fissa: metti comunque una riga cortese, ma non promettere niente.`;
+Esattamente UN tag [LANCIO:...] per messaggio, sempre. Quando usi [LANCIO:SI], [LANCIO:NO] o [LANCIO:REGISTRAZIONE] il testo che scrivi viene sostituito da una frase fissa: metti comunque una riga cortese, ma non promettere niente.`;
 }
 
 /** Fase link_inviato (spec §5.3): assistenza al collegamento, dall'invio del link a mezzanotte. */
@@ -201,8 +205,8 @@ COSA SAI (e non una parola di più)
   · niente di tutto questo funziona: provare da un altro dispositivo (un computer, un tablet, il telefono di qualcuno in casa) col link di questa chat.
 - Se non capisci cosa gli succede, chiedigli cosa vede esattamente sullo schermo. Non inventare pulsanti o rimedi che non sono qui sopra, e non rimandarlo a domani: la live è adesso.
 - La live inizia ${quando}: conviene entrare qualche minuto prima; chi entra dopo trova la live già in corso. ${DURATA_LIVE}
-- Se non può esserci stasera o chiede la registrazione: non prometti NESSUNA registrazione né replay; di' che le scriviamo noi qui domani.
-- La live è gratuita; ${PREZZI_PRIMA_DELLA_LIVE} Su contenuti, prezzi e cosa succede dopo: ne parliamo dopo la live.
+- Se non può esserci stasera o chiede la registrazione o il replay: usa [LANCIO:REGISTRAZIONE]. Il sistema gli risponde che domani gli mandiamo qui la registrazione: non è un no, non congedarlo. Se invece prova a entrare e non ci riesce, è assistenza: aiutalo a collegarsi.
+${i.registrazionePromessa ? '- Gli abbiamo già detto che gli mandiamo qui la registrazione: se ne parla, confermalo. Non usare di nuovo [LANCIO:REGISTRAZIONE]: rispondi con [LANCIO:DOMANDA].\n' : ''}- La live è gratuita; ${PREZZI_PRIMA_DELLA_LIVE} Su contenuti, prezzi e cosa succede dopo: ne parliamo dopo la live.
 
 COME SCRIVI
 - Una o due righe al massimo, tono pratico e cordiale, niente elenchi, niente emoji in serie.
@@ -217,6 +221,7 @@ COME SCRIVI
 
 TAG TECNICI (il lead non li vede mai, vanno in fondo al messaggio)
 - [LANCIO:NO] se dice che non le interessa più, che vuole essere tolta dalla lista o che non vuole più messaggi.
+- [LANCIO:REGISTRAZIONE] se non può esserci stasera o chiede la registrazione o il replay: il testo che scrivi viene sostituito da una frase fissa.
 - [LANCIO:DOMANDA] in tutti gli altri casi: hai risposto a una domanda o a un commento.
 Esattamente UN tag [LANCIO:...] per messaggio, sempre. Stasera non esiste nessun altro tag.`;
 }

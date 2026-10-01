@@ -4,7 +4,8 @@ import { sanitizeOutbound } from './outbound-sanitize';
 /**
  * Classificazione deterministica del messaggio del lead nella fase di attesa (spec §5.2):
  * le regex decidono i casi netti, il modello (con i tag) decide il resto. L'ordine
- * conta: il rifiuto esplicito vince su tutto, poi una domanda vince sul "no" generico
+ * conta: il rifiuto esplicito vince su tutto, poi chi non puo' esserci quella sera (o chiede
+ * la registrazione), poi una domanda vince sul "no" generico
  * ("c'è un investimento iniziale sì o no" chiede una cosa, non congeda), poi il no; e
  * un punto di domanda vince sempre su un sì.
  */
@@ -27,12 +28,17 @@ const NO_SECCO = /^(no|nope|nah|no grazie|no grazie!?)$/;
 const NO_ESPLICITO = new RegExp(
   '\\b(' +
     [
-      'non (mi|ci) interessa', 'non sono interessat[oa]',
+      // "piu": "Ciao, non sono più interessata" restava incerto e andava al modello.
+      'non (mi|ci) interessa', 'non sono (piu )?interessat[oa]',
       'togli(mi|etemi|temi)', 'cancell(ami|atemi)', 'rimuov(imi|etemi)', 'elimin(ami|atemi)',
       'non (mi )?scriv(ere|ete|etemi|ermi)( piu)?', 'non voglio piu ricevere',
       'lasciat?e?mi (in pace|stare)', 'lasciami (in pace|stare)', 'numero sbagliato', 'sbagliato numero',
       // `\w*`: col `\b` finale un "disiscriv" nudo non prendeva mai "disiscrivimi"
       'disiscriv\\w*', 'annulla(re|te)? (l )?iscrizione',
+      // "ti chiedo di cancellare la mia iscrizione in quanto non potrò partecipare": chi
+      // chiede di cancellarsi esce, anche se il motivo e' l'orario (vince sulla
+      // registrazione). L'apostrofo resta nel testo normalizzato: "l'iscrizione".
+      "(annull|cancell)(a|are|ate) (l'|l |la )?(mia )?iscrizione",
     ].join('|') +
     ')\\b',
 );
@@ -59,6 +65,43 @@ const NO_FRASI = new RegExp(
  */
 const BASTA_INTERO =
   /^(ok |ora |adesso |dai |e )?basta( cosi| messaggi| con (i|questi) messaggi| scriver(mi|e)| mandarmi messaggi)?( grazie| per favore)?$/;
+/**
+ * Non puo' esserci quella sera, o chiede la registrazione (decisione PO 01/10/2026): non
+ * e' un congedo, gli si promette la registrazione. Viene DOPO il rifiuto esplicito ("non
+ * mi interessa più, annullate l'iscrizione" resta un no) e PRIMA della domanda: "Sarà
+ * disponibile registrazione?" chiede proprio questo, non una cosa generica. Solo i casi
+ * netti, presi dai messaggi veri della lista d'attesa: il resto lo decide il modello col
+ * tag [LANCIO:REGISTRAZIONE].
+ *
+ * Vale per il turno dell'attesa (B1). In assistenza (la sera, col link in mano) "non
+ * riesco a collegarmi" e' un problema tecnico: li' questa regex non si applica e decide
+ * il modello.
+ */
+const REGISTRAZIONE = new RegExp(
+  [
+    // "registrazione", ma non quella del sito: "ho fatto la registrazione", "la mia registrazione".
+    '(?<!(fatto|completato|confermato|finito|terminato) (la )?)(?<!mia )\\bregistrazion[ei]\\b',
+    // "si potrà vedere anche registrato?", e non "mi sono registrata" (= iscritta).
+    '\\b(vedere|vederl[ao]|guardare|guardarl[ao]|rivedere|rivederl[ao]|disponibile|sara|verra|viene) (anche )?registrat[ao]\\b',
+    '\\breplay\\b', '\\bdifferita\\b', '\\brivederl[ao]\\b',
+    "\\brivedere (la |il |l')?(live|webinar|diretta|evento|video)\\b",
+    // non posso / non riesco / non potrò esserci, partecipare, collegarmi, seguirla, venire...
+    '\\bnon (ci )?(posso|potro|riesco|riusciro|ce la faccio|ce la faro) (a )?(esserci|essere presente|partecipar(e|ci|vi)|collegarmi|connettermi|seguir(e|la|lo)|venire|presenziare)\\b',
+    '\\bnon (ci )?(posso|potro) essere\\b', '\\bnon ci saro\\b',
+    // il giorno o l'ora, poi il no: "Purtroppo lunedì non riesco.", "è alle 21, non posso".
+    "\\b(lunedi|il 5|5 ottobre|quella sera|quel giorno|quell'ora|alle 21|alle nove) (purtroppo )?non (posso|riesco|potro|riusciro|ci sono|ci saro)\\b",
+    // e al contrario: "non posso alle 21", "non riesco lunedì".
+    "\\bnon (posso|riesco|potro|riusciro|ci sono|ci saro) (lunedi|il 5|alle 21|quella sera|quel giorno|a quell'ora)\\b",
+    // "non posso, mi dispiace" in chiusura del messaggio: a una lista d'attesa e' l'orario.
+    '\\bnon (posso|riesco)( purtroppo)?( mi (di)?spiace)?$',
+    // impegni: "ho già un altro impegno", "sono impegnata"; mai "non ho altri impegni".
+    '(?<!non )\\bho (gia )?(un |degli |altri )?(altr[oi] )?impegn[oi]\\b', '\\b(sono|saro) (gia )?impegnat[oa]\\b',
+    // lavoro e turni: "il 5 sono fuori per lavoro", "sarò in turno", "lavorerò".
+    '\\b(saro|sono) (fuori|al lavoro|a lavoro|in turno|di turno|in viaggio)\\b', '\\blavorero\\b',
+    "\\blavoro (quella sera|lunedi|il 5|alle 21|di sera|a quell'ora)\\b", '\\b(ho|avro) (il )?turno\\b',
+  ].join('|'),
+);
+
 /** "sì o no" chiude la frase con un "no" che non è un rifiuto: è una domanda che pretende
  *  una risposta secca ("c'è un investimento iniziale sì o no"). */
 const SI_O_NO = /\bsi o no\b/;
@@ -138,6 +181,9 @@ export function classificaLancio(body: string | null | undefined): ClasseLancio 
   if (!t) return 'incerto';
 
   if (NO_ESPLICITO.test(t) || BASTA_INTERO.test(t)) return 'no';
+  // Dopo il rifiuto esplicito e prima della domanda: chi non c'e' quella sera non si
+  // congeda, e "ci sarà una registrazione?" e' proprio questa richiesta.
+  if (REGISTRAZIONE.test(t)) return 'registrazione';
   // Una domanda vince sul "no" che non è un rifiuto esplicito: "investimento iniziale sì
   // o no" finisce con "no" ma chiede una cosa, e trattarlo da congedo perdeva il lead.
   if (t.includes('?') || SI_O_NO.test(t)) return 'domanda';
@@ -174,13 +220,13 @@ export function classificaLancio(body: string | null | undefined): ClasseLancio 
 }
 
 export type LancioReplyParsed = {
-  classe: 'si' | 'no' | 'domanda';
+  classe: 'si' | 'no' | 'domanda' | 'registrazione';
   passToHuman: boolean;
   visibleReply: string;
 };
 
-const LANCIO_TAG_RE = /\[LANCIO:(SI|DOMANDA|NO)\]/i;
-const LANCIO_TAG_ALL_RE = /\[LANCIO:(SI|DOMANDA|NO)\]/gi;
+const LANCIO_TAG_RE = /\[LANCIO:(SI|DOMANDA|NO|REGISTRAZIONE)\]/i;
+const LANCIO_TAG_ALL_RE = /\[LANCIO:(SI|DOMANDA|NO|REGISTRAZIONE)\]/gi;
 /** Qualsiasi altro tag tecnico fra parentesi quadre (anche uno di Mario uscito per
  *  sbaglio, es. `[ESITO:SCARTO|x]`: i due punti fanno parte del nome). */
 const ALTRI_TAG_RE = /\[[A-Z_:]+(?:\|[^\]]*)?\]/gi;
@@ -194,7 +240,8 @@ const PASSAGGIO_UMANO_RE_G = /\[PASSAGGIO_UMANO\]/gi;
 export function parseLancioReply(raw: string): LancioReplyParsed {
   const m = raw.match(LANCIO_TAG_RE);
   const kind = m ? m[1].toUpperCase() : 'DOMANDA';
-  const classe: LancioReplyParsed['classe'] = kind === 'SI' ? 'si' : kind === 'NO' ? 'no' : 'domanda';
+  const classe: LancioReplyParsed['classe'] =
+    kind === 'SI' ? 'si' : kind === 'NO' ? 'no' : kind === 'REGISTRAZIONE' ? 'registrazione' : 'domanda';
   const passToHuman = PASSAGGIO_UMANO_RE.test(raw);
   const visibleReply = sanitizeOutbound(
     raw

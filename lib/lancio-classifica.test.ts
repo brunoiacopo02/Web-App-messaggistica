@@ -183,3 +183,43 @@ describe('congedoEsplicito — solo le frasi di rifiuto, mai il "no" secco', () 
     expect(congedoEsplicito('👍')).toBe(false);
   });
 });
+
+describe('classificaLancio — chi non può esserci o chiede la registrazione (PO 01/10/2026)', () => {
+  // I messaggi veri della lista d'attesa: fino al 01/10 finivano in un congedo o in un
+  // "l'appuntamento è quello, in diretta". Ora gli si promette la registrazione.
+  it.each([
+    'Ciao! Sarà disponibile registrazione? Ho realizzato che ho un impegno lunedì 5, nel caso disdico e libero il mio posto',
+    'Il mio numero è attivo ma so già per certo che il 5 non potrò partecipare',
+    'Purtroppo lunedì non riesco.',
+    'Caspita non avevo visto che é alle 21, non posso mi dispiace',
+    'Salve,si potrà vedere anche registrato?',
+    "Ciao grazie! Ci sarà anche una registrazione? Perchè mi sono resa conto che a quell'ora non riuscirò a seguire, grazie",
+    'Purtroppo ho guardato gli orari e lavorerò mi dpiace',
+    'Ciao mi sono appena resa conto che il 5 sono fuori per lavoro quindi non posso esserci',
+    'Buongiorno, vi ringrazio molto! Al momento dell iscrizione non era indicato il giorno del Webinar. lunedì 5 ottobre ho già un altro impegno e non riesco a collegarmi per l’orario indicato',
+    'ci sarà il replay?', 'non posso alle 21', 'sarò al lavoro quella sera', 'ho già un impegno',
+  ])('"%s" → registrazione', (b) => expect(classificaLancio(b)).toBe('registrazione'));
+
+  // Il rifiuto esplicito vince sempre, anche quando il motivo è l'orario.
+  it.each([
+    'Ciao, non sono più interessata',
+    'Ciao e grazie, ma ti chiedo di cancellare la mia iscrizione in quanto non potrò partecipare. Grazie',
+    'Mi spiace ha sbagliato numero',
+    "non mi interessa più, annullate l'iscrizione",
+  ])('"%s" → no', (b) => expect(classificaLancio(b)).toBe('no'));
+
+  // "registrata" e "registrazione" che vogliono dire "iscritta": non è una richiesta di replay.
+  it.each([
+    'mi sono registrata ieri', 'ho fatto la registrazione ma non trovo il link', 'non ho altri impegni, ci sono',
+  ])('"%s" → mai registrazione', (b) => expect(classificaLancio(b)).not.toBe('registrazione'));
+});
+
+describe('parseLancioReply — [LANCIO:REGISTRAZIONE]', () => {
+  it('→ classe registrazione, tag tolto dal testo', () => {
+    const r = parseLancioReply('Capisco, nessun problema. [LANCIO:REGISTRAZIONE]');
+    expect(r).toEqual({ classe: 'registrazione', passToHuman: false, visibleReply: 'Capisco, nessun problema.' });
+  });
+  it('minuscolo: riconosciuto lo stesso', () => {
+    expect(parseLancioReply('ok [lancio:registrazione]').classe).toBe('registrazione');
+  });
+});

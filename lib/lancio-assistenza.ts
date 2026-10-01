@@ -3,7 +3,11 @@ import type { LancioSettings } from './lancio-settings';
 import type { TurnoLancioInput } from './lancio-turno';
 import { generateLancioReply } from './lancio-reply';
 import { congedoEsplicito } from './lancio-classifica';
-import { congedoGiaInviato, inboundDelLotto, paroleDelCongedo, ultimoTestoDelLotto } from './lancio-fase';
+import {
+  congedoGiaInviato, inboundDelLotto, paroleDelCongedo, registrazionePromessa,
+  TESTO_REGISTRAZIONE_PROMESSA_STASERA, ultimoTestoDelLotto,
+} from './lancio-fase';
+import { marcaRegistrazionePromessa } from './lancio-db';
 import { puoRispondere } from './lancio-scelta';
 import { zoomMeetingId } from './lancio-zoom-blast';
 import {
@@ -75,6 +79,7 @@ export async function turnoAssistenza(
   }
 
   const zoomLink = ctx.settings.zoomLink;
+  const giaPromessa = registrazionePromessa(i.lancioInfo);
   const r = await genera(historyDi(i.rows), {
     fase: 'link_inviato',
     nome: i.nome,
@@ -84,6 +89,7 @@ export async function turnoAssistenza(
     // L'ID riunione si legge dal link, non si inventa: senza link nelle impostazioni il
     // prompt lo sa e dice al lead di usare quello che ha ricevuto.
     meetingId: zoomLink ? zoomMeetingId(zoomLink) : null,
+    registrazionePromessa: giaPromessa,
   });
 
   if (r.passToHuman) {
@@ -93,6 +99,21 @@ export async function turnoAssistenza(
   // Il no che le regex non hanno visto: il modello lo dice con la classe o col tag.
   if (r.classe === 'no' || r.lancioTag?.tag === 'NO') {
     return congedoLancio(supabase, c, testoLead, NOTA_CONGEDO);
+  }
+
+  // Non puo' esserci stasera o chiede la registrazione (PO 01/10/2026): mai un congedo,
+  // gli si promette la registrazione per domani. Prima il prompt diceva "non prometti
+  // nessuna registrazione, di' che le scriviamo noi domani": una promessa vaga che non
+  // manteneva nessuno. Qui la decide il modello col tag e non una regex: la sera della
+  // live "non riesco a collegarmi" e' quasi sempre un problema tecnico, non un no.
+  // Se l'ha gia' avuta, la frase fissa non riparte: vale la risposta del modello.
+  if (r.classe === 'registrazione' && !giaPromessa) {
+    await inviaBollaLancio(supabase, c, TESTO_REGISTRAZIONE_PROMESSA_STASERA);
+    await marcaRegistrazionePromessa(supabase, c.conversationId);
+    await eventoLancio(supabase, c, 'lancio_registrazione_promessa', { testo: testoLead.slice(0, 300) },
+      `[lancio] conv ${c.conversationId}: non puo' esserci stasera, promessa la registrazione`);
+    await tracciaTurnoLancio(supabase, c, 'registrazione');
+    return 'active';
   }
 
   const testo = r.passToHuman ? TESTO_ASSISTENZA_SENZA_PASSAGGIO : r.visibleReply.trim();

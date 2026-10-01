@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { impostaFaseLancio, marcaCongedo, marcaNotaRestituzione, contaBenvenutiUltimaOra, leggiIngressiLancioAt } from './lancio-db';
+import { impostaFaseLancio, marcaCongedo, marcaNotaRestituzione, marcaRegistrazionePromessa, contaBenvenutiUltimaOra, leggiIngressiLancioAt } from './lancio-db';
 
 /**
  * Finto Supabase: registra gli update su `conversations`, gli insert su `event_log` e la
@@ -159,6 +159,30 @@ describe('marcaCongedo', () => {
     const { supabase, calls } = makeSupabase({ erroreScrittura: { message: 'update ko' } });
     await expect(marcaCongedo(supabase, 42)).resolves.toBeUndefined();
     expect(eventiDiTipo(calls, 'lancio_congedo_non_marcato')[0].payload).toMatchObject({ fase: 'scrittura' });
+  });
+});
+
+describe('marcaRegistrazionePromessa', () => {
+  it('merge sulle chiavi gia presenti: il marcatore si aggiunge, non sostituisce', async () => {
+    const { supabase, calls } = makeSupabase({ lancioInfo: { risposte: ['studio'] } });
+    await marcaRegistrazionePromessa(supabase, 42, '2026-10-01T10:00:00.000Z');
+    expect(calls.updates[0].lancio_info).toEqual({ risposte: ['studio'], registrazione_promessa_at: '2026-10-01T10:00:00.000Z' });
+  });
+
+  it('lettura fallita: non scrive NIENTE e lascia la traccia warn', async () => {
+    const { supabase, calls } = makeSupabase({ lancioInfo: { congedo_at: 'x' }, erroreLettura: { message: 'connessione persa' } });
+    await marcaRegistrazionePromessa(supabase, 42);
+    expect(calls.updates).toHaveLength(0);
+    const traccia = eventiDiTipo(calls, 'lancio_registrazione_non_marcata');
+    expect(traccia).toHaveLength(1);
+    expect(traccia[0]).toMatchObject({ level: 'warn' });
+    expect(traccia[0].payload).toMatchObject({ conversationId: 42, fase: 'lettura' });
+  });
+
+  it('scrittura fallita: traccia distinta, e non lancia', async () => {
+    const { supabase, calls } = makeSupabase({ erroreScrittura: { message: 'update ko' } });
+    await expect(marcaRegistrazionePromessa(supabase, 42)).resolves.toBeUndefined();
+    expect(eventiDiTipo(calls, 'lancio_registrazione_non_marcata')[0].payload).toMatchObject({ fase: 'scrittura' });
   });
 });
 

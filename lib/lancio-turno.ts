@@ -8,10 +8,10 @@ import { classificaLancio, type LancioReplyParsed } from './lancio-classifica';
 import {
   congedoGiaInviato, contaScambiDomande, decideLancioTurno, faseGestitaB1, inboundDelLotto,
   MAX_SCAMBI_DOMANDE, paroleDelCongedo, tagliaRigheDalLancio, TESTO_CHIUSURA_DOMANDE, TESTO_CONGEDO,
-  TESTO_NIENTE_PASSAGGIO, ultimoTestoDelLotto,
+  TESTO_NIENTE_PASSAGGIO, ultimoTestoDelLotto, registrazionePromessa,
   type ClasseLancio, type LancioAzione, type RigaLancio,
 } from './lancio-fase';
-import { impostaFaseLancio, leggiIngressoLancioAt, marcaCongedo } from './lancio-db';
+import { impostaFaseLancio, leggiIngressoLancioAt, marcaCongedo, marcaRegistrazionePromessa } from './lancio-db';
 import { turnoAssistenza } from './lancio-assistenza';
 import { turnoPostPitch, turnoDopoScelta } from './lancio-post-pitch';
 import { adessoLancio } from './lancio-orologio';
@@ -127,6 +127,9 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
 
   let classe: ClasseLancio = classificaLancio(testoLead);
   let modello: LancioReplyParsed | null = null;
+  // La registrazione gia' promessa (marcatore durevole): la frase fissa non riparte, e
+  // quello che scrive dopo lo legge il modello, che lo sa dal prompt.
+  const giaPromessa = registrazionePromessa(i.lancioInfo);
   // Il modello si interpella solo se puo' ancora rispondere: nelle fasi di B4/B5 il
   // turno e' silenzio comunque, oltre il fusibile degli scambi si tace, e su un inbound senza
   // testo (una foto, un audio) non c'e' niente da leggere. Chiedere una risposta per poi
@@ -135,14 +138,18 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
   const serveModello =
     faseGestita && !daRitentare && !inboundFuoriLancio
     && testoLead !== '' && scambi < MAX_SCAMBI_DOMANDE
-    && (classe === 'incerto' || classe === 'domanda');
+    && (classe === 'incerto' || classe === 'domanda' || (classe === 'registrazione' && giaPromessa));
   if (serveModello) {
     const settings = i.settings ?? (await getLancioSettings(supabase));
     // Tutta la storia del lancio, lotto compreso: il modello legge anche i messaggi del
     // lead che vengono prima di quello su cui abbiamo classificato.
     const history: MarioTurn[] = righe.map((m) => ({ role: m.direction === 'in' ? 'user' : 'assistant', content: m.body ?? '' }));
-    modello = await genera(history, { fase: i.fase, nome: i.nome, eventoAt: settings.eventoAt });
+    modello = await genera(history, { fase: i.fase, nome: i.nome, eventoAt: settings.eventoAt, registrazionePromessa: giaPromessa });
     if (classe === 'incerto') classe = modello.classe;
+    // Le regex vedono i casi netti; "il 5 sono a Milano, si può avere dopo?" lo vede il
+    // modello col tag [LANCIO:REGISTRAZIONE], anche su un messaggio che per le regex era
+    // una domanda: e' la stessa promessa.
+    else if (classe === 'domanda' && modello.classe === 'registrazione') classe = 'registrazione';
     // Il lancio non passa MAI la chat a una persona (PO 25/09/2026): il tag si ignora e
     // la riga del modello, che prometterebbe un contatto, cede il posto a quella fissa.
     if (modello.passToHuman) {
@@ -160,7 +167,7 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
     ? { kind: 'congedo', testo: TESTO_CONGEDO }
     : inboundFuoriLancio
       ? { kind: 'silenzio', motivo: 'inbound_fuori_lancio' }
-      : decideLancioTurno({ fase: i.fase, classe, scambiDomande: scambi });
+      : decideLancioTurno({ fase: i.fase, classe, scambiDomande: scambi, registrazionePromessa: giaPromessa });
 
   const invia = async (body: string): Promise<void> => {
     const sent = await sendFreeText({ to: i.phone, body, from: i.from });
@@ -228,6 +235,16 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
       await evento('lancio_congedo', { finalStatus, ritentato: daRitentare, accettato, motivo },
         `[lancio] conv ${i.conversationId}: non interessato, congedato${accettato ? '' : ' (esito al CRM da ritentare)'}`,
         accettato ? 'info' : 'warn');
+      break;
+    }
+    case 'registrazione': {
+      // Niente esito al CRM e nessun cambio di fase: resta iscritto, gli arrivera' il link
+      // come a tutti, e dopo la live la registrazione (la manda il cron del follow-up, che
+      // legge il marcatore). Il marcatore si scrive sull'invio, come quello del congedo.
+      await invia(azione.testo);
+      await marcaRegistrazionePromessa(supabase, i.conversationId);
+      await evento('lancio_registrazione_promessa', { testo: testoLead.slice(0, 300) },
+        `[lancio] conv ${i.conversationId}: non puo' esserci, promessa la registrazione`);
       break;
     }
     case 'domanda': {

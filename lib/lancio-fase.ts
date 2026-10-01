@@ -309,6 +309,23 @@ export const TESTO_NIENTE_PASSAGGIO =
   'Prima della live non posso metterti in contatto con nessuno: ne parliamo dopo la live, e alla fine potrai parlare con un nostro consulente.';
 
 /**
+ * Chi non puo' esserci la sera della live, o chiede la registrazione, non si congeda
+ * (decisione del PO, 01/10/2026). Fino a qui "lunedi' non riesco" o "sara' disponibile la
+ * registrazione?" finivano in un congedo o in un "l'appuntamento e' quello, in diretta":
+ * persone che la live la volevano vedere, perse per un orario. La registrazione gliela
+ * mandiamo davvero: la manda il cron del follow-up, leggendo il marcatore
+ * `lancio_info.registrazione_promessa_at` (vedi `marcaRegistrazionePromessa`).
+ */
+export const TESTO_REGISTRAZIONE_PROMESSA =
+  'Nessun problema: dopo la live ti mandiamo qui la registrazione, così la guardi quando vuoi.';
+/** La stessa promessa la sera della live (fase `link_inviato`): la live e' gia' adesso,
+ *  quindi "domani" e non "dopo la live". */
+export const TESTO_REGISTRAZIONE_PROMESSA_STASERA =
+  'Nessun problema: domani ti mandiamo qui la registrazione, così la guardi quando vuoi.';
+/** La chiave del marcatore su `conversations.lancio_info` (stringa ISO). */
+export const CHIAVE_REGISTRAZIONE_PROMESSA = 'registrazione_promessa_at';
+
+/**
  * Quante risposte a domande prima che il bot chiuda e taccia fino al link.
  *
  * Era 3 (spec §5.2). Il 29/09/2026 il PO: "non deve fissare l'app ma può tranquillamente
@@ -318,7 +335,8 @@ export const TESTO_NIENTE_PASSAGGIO =
  */
 export const MAX_SCAMBI_DOMANDE = 30;
 
-export type ClasseLancio = 'si' | 'no' | 'domanda' | 'incerto';
+/** `registrazione`: non puo' esserci quella sera, o chiede la registrazione/il replay. */
+export type ClasseLancio = 'si' | 'no' | 'domanda' | 'registrazione' | 'incerto';
 
 /** Una riga `messages` come la leggono i moduli del lancio. */
 export type RigaLancio = {
@@ -331,6 +349,7 @@ export type RigaLancio = {
 export type LancioAzione =
   | { kind: 'posto_bloccato'; testo: string }
   | { kind: 'congedo'; testo: string }
+  | { kind: 'registrazione'; testo: string }
   | { kind: 'domanda'; chiudi: boolean }
   | { kind: 'silenzio'; motivo: 'gia_bloccato' | 'domande_esaurite' | 'fase_non_gestita' | 'classe_incerta' | 'inbound_fuori_lancio' };
 
@@ -343,22 +362,33 @@ export function decideLancioTurno(i: {
   fase: string | null;
   classe: ClasseLancio;
   scambiDomande: number;
+  /** La registrazione gli e' gia' stata promessa (`registrazionePromessa(lancio_info)`). */
+  registrazionePromessa?: boolean;
 }): LancioAzione {
   if (!faseGestitaB1(i.fase)) return { kind: 'silenzio', motivo: 'fase_non_gestita' };
-  if (i.classe === 'no') return { kind: 'congedo', testo: TESTO_CONGEDO };
-  if (i.classe === 'si') {
+  // La promessa si fa una volta sola, e non cambia la fase: chi ha bloccato il posto
+  // resta in posto_bloccato (gli arriva comunque il link), chi era in attesa resta li'.
+  // Se l'ha gia' avuta, quello che scrive dopo ("ok grazie, ma a che ora finisce?") e'
+  // una conversazione: risponde il modello, che sa della promessa dal prompt.
+  const classe: ClasseLancio = i.classe === 'registrazione' && i.registrazionePromessa ? 'domanda' : i.classe;
+  if (classe === 'registrazione') return { kind: 'registrazione', testo: TESTO_REGISTRAZIONE_PROMESSA };
+  if (classe === 'no') return { kind: 'congedo', testo: TESTO_CONGEDO };
+  if (classe === 'si') {
     return i.fase === 'posto_bloccato'
       ? { kind: 'silenzio', motivo: 'gia_bloccato' }
       : { kind: 'posto_bloccato', testo: TESTO_POSTO_BLOCCATO };
   }
-  if (i.classe === 'domanda') {
+  if (classe === 'domanda') {
     if (i.scambiDomande >= MAX_SCAMBI_DOMANDE) return { kind: 'silenzio', motivo: 'domande_esaurite' };
     return { kind: 'domanda', chiudi: i.scambiDomande === MAX_SCAMBI_DOMANDE - 1 };
   }
   return { kind: 'silenzio', motivo: 'classe_incerta' };
 }
 
-const TESTI_FISSI = new Set([TESTO_POSTO_BLOCCATO, TESTO_CONGEDO, TESTO_PASSAGGIO_UMANO]);
+const TESTI_FISSI = new Set([
+  TESTO_POSTO_BLOCCATO, TESTO_CONGEDO, TESTO_PASSAGGIO_UMANO,
+  TESTO_REGISTRAZIONE_PROMESSA, TESTO_REGISTRAZIONE_PROMESSA_STASERA,
+]);
 
 /**
  * Le risposte a domande già uscite: gli outbound liberi (senza template) che non sono
@@ -423,6 +453,17 @@ export function ultimoTestoDelLotto(lotto: RigaLancio[]): string {
 export function haCongedo(lancioInfo: unknown): boolean {
   if (!lancioInfo || typeof lancioInfo !== 'object' || Array.isArray(lancioInfo)) return false;
   const v = (lancioInfo as Record<string, unknown>).congedo_at;
+  return typeof v === 'string' && v.trim() !== '';
+}
+
+/**
+ * La registrazione gli e' gia' stata promessa, letto dal marcatore durevole
+ * `lancio_info.registrazione_promessa_at`. Serve al turno (la frase fissa esce una volta
+ * sola) e al cron del follow-up, che dopo la live manda la registrazione a queste chat.
+ */
+export function registrazionePromessa(lancioInfo: unknown): boolean {
+  if (!lancioInfo || typeof lancioInfo !== 'object' || Array.isArray(lancioInfo)) return false;
+  const v = (lancioInfo as Record<string, unknown>)[CHIAVE_REGISTRAZIONE_PROMESSA];
   return typeof v === 'string' && v.trim() !== '';
 }
 
