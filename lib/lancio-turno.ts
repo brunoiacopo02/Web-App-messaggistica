@@ -38,7 +38,16 @@ export type TurnoLancioInput = {
   lancioInfo?: LancioInfo | null;
   /** L'orologio del turno (B4): di default `adessoLancio()`. Iniettabile nei test. */
   now?: Date;
+  /**
+   * La chat e' anche un lead GDO (Task 5): le due colonne lette dal claim del drain.
+   * Se una delle due e' valorizzata, i messaggi sulla call col consulente non sono del
+   * lancio e il turno li passa al postino (`handed_to_postino`).
+   */
+  contestoGdo?: { gdoAgendaAt: string | null; gdoAppuntamentoAt: string | null } | null;
 };
+
+/** Esito del turno. `handed_to_mario` e `handed_to_postino` NON sono stati di ai_status. */
+export type EsitoTurnoLancio = 'active' | 'closed' | 'handed_off' | 'handed_to_mario' | 'handed_to_postino';
 
 /**
  * Un turno della chat del lancio. Chiamato dal drain al posto di Mario quando
@@ -53,7 +62,7 @@ export type TurnoLancioInput = {
  * `fenice_ai_reply` — anche nel silenzio — perche' il re-drive di bot-followups non
  * rimetta in coda lo stesso inbound ogni ora.
  */
-export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Promise<'active' | 'closed' | 'handed_off' | 'handed_to_mario'> {
+export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Promise<EsitoTurnoLancio> {
   const genera = i.genera ?? generateLancioReply;
 
   // Ha risposto al follow-up del giorno dopo (spec §5.5): da qui la chat e' di Mario
@@ -132,6 +141,9 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
   // La registrazione gia' promessa (marcatore durevole): la frase fissa non riparte, e
   // quello che scrive dopo lo legge il modello, che lo sa dal prompt.
   const giaPromessa = registrazionePromessa(i.lancioInfo);
+  // Lead anche di un GDO (Task 5, conv 9676): il prompt lo sa e puo' rispondere
+  // [LANCIO:ALTRO] sui messaggi che riguardano la call. Senza, il tag non esiste.
+  const contestoGdo = !!(i.contestoGdo?.gdoAgendaAt || i.contestoGdo?.gdoAppuntamentoAt);
   // Il modello si interpella solo se puo' ancora rispondere: nelle fasi di B4/B5 il
   // turno e' silenzio comunque, oltre il fusibile degli scambi si tace, e su un inbound senza
   // testo (una foto, un audio) non c'e' niente da leggere. Chiedere una risposta per poi
@@ -146,8 +158,15 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
     // Tutta la storia del lancio, lotto compreso: il modello legge anche i messaggi del
     // lead che vengono prima di quello su cui abbiamo classificato.
     const history: MarioTurn[] = righe.map((m) => ({ role: m.direction === 'in' ? 'user' : 'assistant', content: m.body ?? '' }));
-    modello = await genera(history, { fase: i.fase, nome: i.nome, eventoAt: settings.eventoAt, registrazionePromessa: giaPromessa });
-    if (classe === 'incerto') classe = modello.classe;
+    modello = await genera(history, {
+      fase: i.fase, nome: i.nome, eventoAt: settings.eventoAt, registrazionePromessa: giaPromessa,
+      ...(contestoGdo ? { contestoGdo: true } : {}),
+    });
+    // [LANCIO:ALTRO] vale solo dove il prompt lo prevede: "non dovevamo sentirci alle
+    // 12?" e' una domanda per le regex, ma e' del postino. Fuori dal contesto GDO il tag
+    // non dovrebbe uscire; se esce, e' una risposta normale.
+    if (modello.classe === 'altro') classe = contestoGdo ? 'altro' : classe === 'incerto' ? 'domanda' : classe;
+    else if (classe === 'incerto') classe = modello.classe;
     // Le regex vedono i casi netti; "il 5 sono a Milano, si può avere dopo?" lo vede il
     // modello col tag [LANCIO:REGISTRAZIONE], anche su un messaggio che per le regex era
     // una domanda: e' la stessa promessa.
@@ -170,6 +189,20 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
     : inboundFuoriLancio
       ? { kind: 'silenzio', motivo: 'inbound_fuori_lancio' }
       : decideLancioTurno({ fase: i.fase, classe, scambiDomande: scambi, registrazionePromessa: giaPromessa });
+
+  // Il messaggio e' per il postino GDO (Task 5): il lancio non risponde, non tocca la
+  // fase e non scrive la traccia `fenice_ai_reply` — a questo inbound risponde Mario
+  // (ramo postino) fra un istante NELLO STESSO drain, e la traccia la scrive lui. Il
+  // messaggio dopo torna al lancio.
+  if (azione.kind === 'al_postino') {
+    await supabase.from('event_log').insert({
+      type: 'lancio_messaggio_al_postino',
+      payload: { conversationId: i.conversationId, crmLeadId: i.crmLeadId, fase: i.fase, testo: testoLead.slice(0, 300) } as never,
+      message: `[lancio] conv ${i.conversationId}: il messaggio riguarda la call col consulente, passa al postino`,
+      level: 'info',
+    });
+    return 'handed_to_postino';
+  }
 
   const invia = async (body: string): Promise<void> => {
     const sent = await sendFreeText({ to: i.phone, body, from: i.from });

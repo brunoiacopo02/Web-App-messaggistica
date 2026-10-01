@@ -285,13 +285,14 @@ export function congedoDaRevocare(body: string | null | undefined): boolean {
 }
 
 export type LancioReplyParsed = {
-  classe: 'si' | 'no' | 'domanda' | 'registrazione';
+  /** `altro`: il messaggio riguarda la call col GDO, non la live (tag [LANCIO:ALTRO], Task 5). */
+  classe: 'si' | 'no' | 'domanda' | 'registrazione' | 'altro';
   passToHuman: boolean;
   visibleReply: string;
 };
 
-const LANCIO_TAG_RE = /\[LANCIO:(SI|DOMANDA|NO|REGISTRAZIONE)\]/i;
-const LANCIO_TAG_ALL_RE = /\[LANCIO:(SI|DOMANDA|NO|REGISTRAZIONE)\]/gi;
+const LANCIO_TAG_RE = /\[LANCIO:(SI|DOMANDA|NO|REGISTRAZIONE|ALTRO)\]/i;
+const LANCIO_TAG_ALL_RE = /\[LANCIO:(SI|DOMANDA|NO|REGISTRAZIONE|ALTRO)\]/gi;
 /** Qualsiasi altro tag tecnico fra parentesi quadre (anche uno di Mario uscito per
  *  sbaglio, es. `[ESITO:SCARTO|x]`: i due punti fanno parte del nome). */
 const ALTRI_TAG_RE = /\[[A-Z_:]+(?:\|[^\]]*)?\]/gi;
@@ -306,7 +307,11 @@ export function parseLancioReply(raw: string): LancioReplyParsed {
   const m = raw.match(LANCIO_TAG_RE);
   const kind = m ? m[1].toUpperCase() : 'DOMANDA';
   const classe: LancioReplyParsed['classe'] =
-    kind === 'SI' ? 'si' : kind === 'NO' ? 'no' : kind === 'REGISTRAZIONE' ? 'registrazione' : 'domanda';
+    kind === 'SI' ? 'si'
+      : kind === 'NO' ? 'no'
+        : kind === 'REGISTRAZIONE' ? 'registrazione'
+          : kind === 'ALTRO' ? 'altro'
+            : 'domanda';
   const passToHuman = PASSAGGIO_UMANO_RE.test(raw);
   const visibleReply = sanitizeOutbound(
     raw

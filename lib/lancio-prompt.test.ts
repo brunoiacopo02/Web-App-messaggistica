@@ -230,3 +230,25 @@ describe('buildLancioSystem — fase post_pitch (riscaldamento e scelta)', () =>
     expect(buildLancioSystem(base)).not.toContain('tre mosse');
   });
 });
+
+// Task 5 (piano 2026-10-01), conv 9676: la chat del lancio e' anche un lead GDO.
+describe('buildLancioSystem — attesa con contesto GDO', () => {
+  it('con contesto GDO: il blocco della call e il tag [LANCIO:ALTRO]', () => {
+    for (const fase of ['attesa', 'posto_bloccato']) {
+      const s = buildLancioSystem({ ...base, fase, contestoGdo: true });
+      expect(s).toMatch(/QUESTA PERSONA HA ANCHE UNA CALL CON NOI/);
+      expect(s).toMatch(/un orario, una telefonata attesa o ricevuta, un video o un altro corso/);
+      expect(s).toContain('[LANCIO:ALTRO]');
+    }
+  });
+  it('senza contesto GDO il prompt e identico a prima: il tag non compare nemmeno', () => {
+    const senza = buildLancioSystem(base);
+    expect(buildLancioSystem({ ...base, contestoGdo: false })).toBe(senza);
+    expect(senza).not.toContain('[LANCIO:ALTRO]');
+    expect(senza).not.toMatch(/HA ANCHE UNA CALL/);
+    expect(senza).toMatch(/È un \[LANCIO:DOMANDA\]\.\n\nTAG TECNICI/);
+  });
+  it('le altre fasi non lo ricevono', () => {
+    expect(buildLancioSystem({ ...base, fase: 'link_inviato', contestoGdo: true })).not.toContain('[LANCIO:ALTRO]');
+  });
+});

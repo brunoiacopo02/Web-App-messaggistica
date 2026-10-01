@@ -335,8 +335,12 @@ export const CHIAVE_REGISTRAZIONE_PROMESSA = 'registrazione_promessa_at';
  */
 export const MAX_SCAMBI_DOMANDE = 30;
 
-/** `registrazione`: non puo' esserci quella sera, o chiede la registrazione/il replay. */
-export type ClasseLancio = 'si' | 'no' | 'domanda' | 'registrazione' | 'incerto';
+/**
+ * `registrazione`: non puo' esserci quella sera, o chiede la registrazione/il replay.
+ * `altro`: il messaggio riguarda la call col GDO/Conferme e non la live (Task 5, solo dal
+ * tag del modello e solo su una chat che e' anche un lead GDO).
+ */
+export type ClasseLancio = 'si' | 'no' | 'domanda' | 'registrazione' | 'altro' | 'incerto';
 
 /** Una riga `messages` come la leggono i moduli del lancio. */
 export type RigaLancio = {
@@ -351,6 +355,8 @@ export type LancioAzione =
   | { kind: 'congedo'; testo: string }
   | { kind: 'registrazione'; testo: string }
   | { kind: 'domanda'; chiudi: boolean }
+  /** Il messaggio e' per il postino GDO (Task 5): il lancio tace e passa la mano a Mario. */
+  | { kind: 'al_postino' }
   | { kind: 'silenzio'; motivo: 'gia_bloccato' | 'domande_esaurite' | 'fase_non_gestita' | 'classe_incerta' | 'inbound_fuori_lancio' };
 
 /**
@@ -372,6 +378,7 @@ export function decideLancioTurno(i: {
   // una conversazione: risponde il modello, che sa della promessa dal prompt.
   const classe: ClasseLancio = i.classe === 'registrazione' && i.registrazionePromessa ? 'domanda' : i.classe;
   if (classe === 'registrazione') return { kind: 'registrazione', testo: TESTO_REGISTRAZIONE_PROMESSA };
+  if (classe === 'altro') return { kind: 'al_postino' };
   if (classe === 'no') return { kind: 'congedo', testo: TESTO_CONGEDO };
   if (classe === 'si') {
     return i.fase === 'posto_bloccato'

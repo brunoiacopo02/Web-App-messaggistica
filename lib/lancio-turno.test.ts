@@ -622,3 +622,57 @@ describe('eseguiTurnoLancio — chi non può esserci: la registrazione (PO 01/10
     expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe(TESTO_CONGEDO);
   });
 });
+
+// Task 5 (piano 2026-10-01), conv 9676: chat del lancio in posto_bloccato che e' anche il
+// lead di un GDO. "Buongiorno, non dovevamo sentirci alle 12?" riguarda la call: il turno
+// del lancio non risponde e passa la mano al postino.
+describe('eseguiTurnoLancio — messaggio per il postino GDO', () => {
+  const DOMANDA_CALL = 'Buongiorno, non dovevamo sentirci alle 12?';
+  const conGdo = { gdoAgendaAt: '2026-10-01T08:00:00Z', gdoAppuntamentoAt: null };
+
+  it('contesto GDO + [LANCIO:ALTRO]: handed_to_postino, nessuna bolla, fase invariata, niente fenice_ai_reply', async () => {
+    genera.mockResolvedValueOnce({ classe: 'altro', passToHuman: false, visibleReply: '', lancioTag: null });
+    const { supabase, calls } = makeSupabase();
+    const esito = await eseguiTurnoLancio(supabase, base({
+      fase: 'posto_bloccato', rows: [WELCOME, inb('si'), outLibero(TESTO_POSTO_BLOCCATO), inb(DOMANDA_CALL)],
+      inboundBody: DOMANDA_CALL, contestoGdo: conGdo,
+    }));
+    expect(esito).toBe('handed_to_postino');
+    expect(genera.mock.calls[0][1]).toMatchObject({ contestoGdo: true });
+    expect(sendFreeText).not.toHaveBeenCalled();
+    expect(calls.messages).toHaveLength(0);
+    expect(calls.convUpdates.some((u) => 'lancio_fase' in u)).toBe(false);
+    expect(calls.events.some((e) => e.type === 'fenice_ai_reply')).toBe(false);
+    expect(calls.events.find((e) => e.type === 'lancio_messaggio_al_postino')?.payload).toMatchObject({ testo: DOMANDA_CALL });
+    expect(sendOutcome).not.toHaveBeenCalled();
+  });
+
+  it('vale anche col solo appuntamento GDO', async () => {
+    genera.mockResolvedValueOnce({ classe: 'altro', passToHuman: false, visibleReply: '', lancioTag: null });
+    const { supabase } = makeSupabase();
+    const esito = await eseguiTurnoLancio(supabase, base({
+      rows: [WELCOME, inb(DOMANDA_CALL)], inboundBody: DOMANDA_CALL,
+      contestoGdo: { gdoAgendaAt: null, gdoAppuntamentoAt: '2026-10-01T10:00:00Z' },
+    }));
+    expect(esito).toBe('handed_to_postino');
+  });
+
+  it('contesto GDO ma messaggio sulla live: risponde il lancio come sempre', async () => {
+    genera.mockResolvedValueOnce({ classe: 'domanda', passToHuman: false, visibleReply: 'Dura circa due ore.', lancioTag: null });
+    const { supabase } = makeSupabase();
+    const esito = await eseguiTurnoLancio(supabase, base({
+      rows: [WELCOME, inb('quanto dura la live?')], inboundBody: 'quanto dura la live?', contestoGdo: conGdo,
+    }));
+    expect(esito).toBe('active');
+    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe('Dura circa due ore.');
+  });
+
+  it('senza contesto GDO il prompt non lo sa e un ALTRO spurio non passa a nessuno', async () => {
+    genera.mockResolvedValueOnce({ classe: 'altro', passToHuman: false, visibleReply: 'Ne parliamo dopo la live.', lancioTag: null });
+    const { supabase } = makeSupabase();
+    const esito = await eseguiTurnoLancio(supabase, base({ rows: [WELCOME, inb(DOMANDA_CALL)], inboundBody: DOMANDA_CALL }));
+    expect(esito).toBe('active');
+    expect(genera.mock.calls[0][1]).not.toHaveProperty('contestoGdo');
+    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe('Ne parliamo dopo la live.');
+  });
+});

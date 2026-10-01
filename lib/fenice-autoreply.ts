@@ -618,12 +618,14 @@ export async function drainMarioReplies(
 
       // Finestra di accorpamento: aspetta, poi ricarica per includere ciò che è arrivato.
       await sleep(delayMs());
-      const rows = await loadHistory();
+      // `let`: se il turno del lancio passa un messaggio al postino a un giro successivo
+      // (Task 5), Mario deve rispondere sulla cronologia e sul messaggio di quel giro.
+      let rows = await loadHistory();
       if (nextUnansweredInboundIndex(rows) === -1) break;
 
       // Il messaggio del lead a cui stiamo rispondendo in questo giro.
       const inboundIdx = nextUnansweredInboundIndex(rows);
-      const inboundBody = inboundIdx >= 0 ? (rows[inboundIdx].body ?? '') : '';
+      let inboundBody = inboundIdx >= 0 ? (rows[inboundIdx].body ?? '') : '';
 
       if (lancioInCorso(lancio)) {
         // Il turno del lancio dura 5-20 secondi (modello + CRM + Twilio) e scrive la sua
@@ -649,6 +651,10 @@ export async function drainMarioReplies(
         // in QUESTO drain: 'handed_to_mario' non e' uno stato di ai_status e non deve mai
         // entrare in finalStatus (che il finally scrive grezzo in conversations).
         let passaggioAMario = false;
+        // Task 5 (conv 9676): chat del lancio che e' anche un lead GDO, e il messaggio
+        // riguarda la call col consulente. Risponde Mario nel ramo postino NELLO STESSO
+        // round, ma la fase del lancio NON cambia: il messaggio dopo torna al lancio.
+        let passaggioAlPostino = false;
         for (let giro = 0; giro < MAX_GIRI_LANCIO; giro++) {
           // La soglia si prende PRIMA del turno: dopo, la cronologia e' gia' cambiata.
           const ultimoVisto = ultimoInboundAt(righeTurno);
@@ -661,9 +667,14 @@ export async function drainMarioReplies(
             // Le risposte del riscaldamento (e il marcatore del congedo): senza, il turno
             // post-pitch ricomincerebbe da capo a ogni messaggio del lead.
             lancioInfo: infoTurno,
+            contestoGdo: { gdoAgendaAt, gdoAppuntamentoAt },
           });
           if (esitoTurno === 'handed_to_mario') {
             passaggioAMario = true;
+            break;
+          }
+          if (esitoTurno === 'handed_to_postino') {
+            passaggioAlPostino = true;
             break;
           }
           finalStatus = esitoTurno;
@@ -687,19 +698,31 @@ export async function drainMarioReplies(
           righeTurno = dopoIlTurno;
           inboundTurno = dopoIlTurno[iNuovo].body ?? '';
         }
-        if (!passaggioAMario) break;
-        // Ha risposto al follow-up: il turno ha chiuso il lancio, da qui in poi e' Mario
-        // standard NELLO STESSO round. La copia in memoria segue il DB, e finalStatus
-        // resta 'active' come per qualunque chat che Mario sta servendo.
-        lancio.lancio_fase = 'chiuso';
-        finalStatus = 'active';
-        // Il turno puo' aver scritto su `lancio_info` il marcatore del passaggio dopo la
-        // notte del webinar (`mario_dopo_notte`, decisione PO 25/09): e' quello che sceglie
-        // la nota di contesto qui sotto. Una lettura sola, e solo su questo passaggio.
-        const { data: dopoIlPassaggio } = await supabase
-          .from('conversations').select('lancio_info').eq('id', conversationId).maybeSingle();
-        const infoDopo = (dopoIlPassaggio as { lancio_info?: LancioInfo | null } | null)?.lancio_info;
-        if (infoDopo !== undefined) lancio.lancio_info = infoDopo;
+        if (passaggioAlPostino) {
+          // Niente `lancio_fase = 'chiuso'` e nessuna rilettura di `lancio_info`: la chat
+          // resta del lancio. `lancioStandardDrain` qui sotto resta falso (la fase e'
+          // attesa/posto_bloccato), quindi niente nota della live: Mario parte col solo
+          // contesto GDO, perche' `postino` e' vero (`gdo_agenda_at` valorizzato). Se il
+          // passaggio arriva a un giro successivo, Mario lavora su quel messaggio.
+          finalStatus = 'active';
+          rows = righeTurno;
+          inboundBody = inboundTurno;
+        } else if (passaggioAMario) {
+          // Ha risposto al follow-up: il turno ha chiuso il lancio, da qui in poi e' Mario
+          // standard NELLO STESSO round. La copia in memoria segue il DB, e finalStatus
+          // resta 'active' come per qualunque chat che Mario sta servendo.
+          lancio.lancio_fase = 'chiuso';
+          finalStatus = 'active';
+          // Il turno puo' aver scritto su `lancio_info` il marcatore del passaggio dopo la
+          // notte del webinar (`mario_dopo_notte`, decisione PO 25/09): e' quello che sceglie
+          // la nota di contesto qui sotto. Una lettura sola, e solo su questo passaggio.
+          const { data: dopoIlPassaggio } = await supabase
+            .from('conversations').select('lancio_info').eq('id', conversationId).maybeSingle();
+          const infoDopo = (dopoIlPassaggio as { lancio_info?: LancioInfo | null } | null)?.lancio_info;
+          if (infoDopo !== undefined) lancio.lancio_info = infoDopo;
+        } else {
+          break;
+        }
       }
 
       // Link ufficiali "in piu'" per questa conversazione: il video della live (lancio).

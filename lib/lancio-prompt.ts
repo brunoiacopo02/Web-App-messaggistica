@@ -28,6 +28,13 @@ export type LancioPromptInput = {
   /** Attesa e assistenza: la registrazione gli e' gia' stata promessa (marcatore in
    *  `lancio_info`). Il modello deve saperlo, o a un "e quindi?" risponderebbe da capo. */
   registrazionePromessa?: boolean;
+  /**
+   * Solo attesa / posto_bloccato: la chat e' anche un lead GDO (`gdo_agenda_at` o
+   * `gdo_appuntamento_at` valorizzati, Task 5). Vero = il prompt sa che questa persona ha
+   * una call col consulente gestita a parte e che quei messaggi vanno al postino col tag
+   * [LANCIO:ALTRO]. Falso o assente = il prompt di sempre, il tag non compare nemmeno.
+   */
+  contestoGdo?: boolean;
 };
 
 /** La domanda della scelta, verbatim dalla spec §5.4 (di notte) e la sua versione diurna. */
@@ -136,6 +143,22 @@ function conChiParla(nome: string | null): string {
   return firstNameOf(nome) ?? 'una persona';
 }
 
+/**
+ * Il blocco del lead GDO nel prompt dell'attesa (Task 5). Caso reale conv 9676: chat del
+ * lancio in `posto_bloccato` che era anche il lead di un GDO, con l'agenda gia' mandata;
+ * la lead scrive "Buongiorno, non dovevamo sentirci alle 12?" e il turno del lancio
+ * tace o le risponde "ne parliamo dopo la live". Di quella call il lancio non sa niente:
+ * la sa il postino (Mario/Marta col contesto GDO e la nota al CRM), e a lui va passata.
+ */
+const BLOCCO_CONTESTO_GDO = `
+QUESTA PERSONA HA ANCHE UNA CALL CON NOI
+- Oltre alla live, questa persona ha anche una call o un appuntamento con un nostro consulente, gestito a parte: tu non ne conosci giorno, ora e dettagli, e non devi rispondere tu.
+- Se il messaggio riguarda quella call, un appuntamento, un orario, una telefonata attesa o ricevuta, un video o un altro corso: rispondi SOLO con il tag [LANCIO:ALTRO] e nient'altro. Ci pensa chi segue quella call.
+- Se invece parla della live (link, orario della live, durata, registrazione), rispondi come sempre.
+`;
+const TAG_ALTRO =
+  "- [LANCIO:ALTRO] se il messaggio riguarda la call con il nostro consulente, un appuntamento, un orario, una telefonata attesa o ricevuta, un video o un altro corso: scrivi SOLO il tag, nient'altro.\n";
+
 /** Fase attesa / posto_bloccato: il prompt del B1 (dal 25/09 con la durata e senza passaggio a una persona). */
 function promptAttesa(i: LancioPromptInput): string {
   const quando = quandoLive(i.eventoAt);
@@ -168,13 +191,13 @@ COME SCRIVI
 - Non dire mai "ti blocco il posto" o simili in un turno [LANCIO:DOMANDA]: il posto si blocca solo con [LANCIO:SI].
 - ${MAI_PASSAGGIO('digli che ne parliamo dopo la live')}
 - Se il lead chiede di parlare con una persona: prima della live non è possibile; la sera della live, alla fine, potrà parlare con un nostro consulente. È un [LANCIO:DOMANDA].
-
+${i.contestoGdo ? BLOCCO_CONTESTO_GDO : ''}
 TAG TECNICI (il lead non li vede mai, vanno in fondo al messaggio)
 - [LANCIO:SI] se la persona conferma che vuole partecipare (sì, ok, ci sono, interessato...), e anche se ringrazia o conferma che il messaggio è arrivato o che il numero è attivo (grazie, ricevuto, arrivato, il numero è attivo): il primo messaggio le chiedeva proprio di rispondere per confermarlo.
 - [LANCIO:NO] SOLO per il rifiuto esplicito: dice che non le interessa, che vuole essere tolta dalla lista o che non vuole più messaggi.
 - [LANCIO:REGISTRAZIONE] se non può esserci quella sera o chiede la registrazione o il replay (anche come domanda: "sarà registrata?").
 - [LANCIO:DOMANDA] in tutti gli altri casi: hai risposto a una domanda o a un commento. Una domanda, anche dubbiosa o polemica ("c'è un investimento sì o no?", "serve la webcam?"), è sempre [LANCIO:DOMANDA], mai [LANCIO:NO].
-Esattamente UN tag [LANCIO:...] per messaggio, sempre. Quando usi [LANCIO:SI], [LANCIO:NO] o [LANCIO:REGISTRAZIONE] il testo che scrivi viene sostituito da una frase fissa: metti comunque una riga cortese, ma non promettere niente.`;
+${i.contestoGdo ? TAG_ALTRO : ''}Esattamente UN tag [LANCIO:...] per messaggio, sempre. Quando usi [LANCIO:SI], [LANCIO:NO] o [LANCIO:REGISTRAZIONE] il testo che scrivi viene sostituito da una frase fissa: metti comunque una riga cortese, ma non promettere niente.`;
 }
 
 /** Fase link_inviato (spec §5.3): assistenza al collegamento, dall'invio del link a mezzanotte. */

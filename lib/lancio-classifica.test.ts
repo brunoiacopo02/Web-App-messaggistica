@@ -251,3 +251,12 @@ describe('congedoDaRevocare — il messaggio scioglie il congedo?', () => {
     ]) expect(congedoDaRevocare(t), String(t)).toBe(false);
   });
 });
+
+describe('parseLancioReply — [LANCIO:ALTRO] (Task 5)', () => {
+  it('classe altro e il tag sparisce dal testo', () => {
+    const r = parseLancioReply('[LANCIO:ALTRO]');
+    expect(r.classe).toBe('altro');
+    expect(r.visibleReply).toBe('');
+    expect(parseLancioReply('Ne parla il consulente. [lancio:altro]')).toMatchObject({ classe: 'altro', visibleReply: 'Ne parla il consulente.' });
+  });
+});

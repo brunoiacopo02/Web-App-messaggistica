@@ -326,6 +326,7 @@ type ClaimedRow = {
   gdo_video_watched_at?: string | null;
   gdo_video_followups_sent?: number | null;
   gdo_noemi_reminded_at?: string | null;
+  gdo_appuntamento_at?: string | null;
   lancio_slug?: string | null;
   lancio_fase?: string | null;
   lancio_info?: unknown;
@@ -2444,6 +2445,100 @@ describe('drainMarioReplies — dopo il follow-up la chat passa a Mario nello ST
 
     expect(generateMarioReply).not.toHaveBeenCalled();
     expect(calls.finalStatusWrites).toEqual(['closed']);
+  });
+});
+
+// Task 5 (piano 2026-10-01), conv 9676: chat del lancio in posto_bloccato che e' anche
+// il lead di un GDO (agenda mandata). "Buongiorno, non dovevamo sentirci alle 12?" non e'
+// del lancio: il turno lo passa al postino e Mario/Marta risponde nello STESSO drain, col
+// contesto GDO e senza toccare la fase del lancio. Il messaggio dopo torna al lancio.
+describe('drainMarioReplies — messaggio del lancio passato al postino GDO (Task 5)', () => {
+  const AGENDA: FakeMsgRow = { direction: 'out', body: 'agenda del GDO', template_sid: 'HX_AG', created_at: '2026-10-01T08:00:00Z' };
+  const DOMANDA: FakeMsgRow = { direction: 'in', body: 'Buongiorno, non dovevamo sentirci alle 12?', template_sid: null, created_at: '2026-10-01T10:00:00Z' };
+  const riga = (): ClaimedRow => ({
+    id: 9676, ai_started_at: null, crm_lead_id: 'crm9676', bot_outcome: null,
+    gdo_agenda_at: '2026-10-01T08:00:00Z', gdo_video_url: 'https://corso.feniceacademy.it/video-gdo', gdo_video_sent_at: '2026-10-01T08:01:00Z',
+    gdo_appuntamento_at: '2026-10-01T10:00:00Z',
+    lancio_slug: 'webdev-2026-10', lancio_fase: 'posto_bloccato', lancio_info: null, leads: { first_name: 'Anna' },
+  });
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(eseguiTurnoLancio).mockReset();
+    vi.mocked(eseguiTurnoLancio).mockResolvedValue('active');
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('handed_to_postino: risponde il postino nello stesso drain, la fase del lancio non cambia', async () => {
+    vi.mocked(eseguiTurnoLancio).mockResolvedValueOnce('handed_to_postino');
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Ciao Anna! La call col consulente resta confermata.', appointmentFixed: false, passToHuman: false, videoWatched: false,
+    } as any);
+    const { supabase, calls, messagesRows } = makeDrainSupabase(riga(), [AGENDA, DOMANDA]);
+
+    await drainMarioReplies(supabase, 9676, '+391234567890', () => 0);
+
+    expect(eseguiTurnoLancio).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(eseguiTurnoLancio).mock.calls[0][1]).toMatchObject({
+      contestoGdo: { gdoAgendaAt: '2026-10-01T08:00:00Z', gdoAppuntamentoAt: '2026-10-01T10:00:00Z' },
+    });
+    expect(generateMarioReply).toHaveBeenCalledTimes(1);
+    const opts = vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string; personaName?: string };
+    // Ramo postino: contesto GDO e la firma dell'agenda, nessuna nota della live.
+    expect(opts.contextNote).toContain(GDO_CONTEXT_NOTE);
+    expect(opts.personaName).toBe('Marta');
+    expect(opts.contextNote).not.toContain('Non usare MAI [PASSAGGIO_UMANO]');
+    expect(calls.messageInserts.map((m: any) => m.body)).toEqual(['Ciao Anna! La call col consulente resta confermata.']);
+    expect(calls.convUpdates.some((u: any) => 'lancio_fase' in u)).toBe(false);
+    expect(calls.finalStatusWrites).toEqual(['active']);
+    expect(calls.finalStatusWrites).not.toContain('handed_to_postino');
+
+    // Il messaggio dopo torna al turno del lancio.
+    messagesRows.push({ direction: 'out', body: 'Ciao Anna! La call col consulente resta confermata.', template_sid: null, created_at: '2026-10-01T10:01:00Z' });
+    messagesRows.push({ direction: 'in', body: 'a che ora è la live?', template_sid: null, created_at: '2026-10-01T10:05:00Z' });
+    await drainMarioReplies(supabase, 9676, '+391234567890', () => 0);
+    expect(eseguiTurnoLancio).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(eseguiTurnoLancio).mock.calls[1][1]).toMatchObject({ fase: 'posto_bloccato', inboundBody: 'a che ora è la live?' });
+    expect(generateMarioReply).toHaveBeenCalledTimes(1);
+  });
+
+  it('passaggio al secondo giro: il postino risponde sul messaggio di quel giro', async () => {
+    let messaggi: FakeMsgRow[] = [];
+    vi.mocked(eseguiTurnoLancio)
+      .mockImplementationOnce(async () => {
+        // Durante il primo turno (una domanda sulla live) arriva la domanda sulla call.
+        messaggi.push({ direction: 'out', body: 'La live dura circa due ore.', template_sid: null, created_at: '2026-10-01T10:00:30Z' });
+        messaggi.push({ direction: 'in', body: 'E la call delle 12 è confermata?', template_sid: null, created_at: '2026-10-01T10:00:20Z' });
+        return 'active';
+      })
+      .mockResolvedValueOnce('handed_to_postino');
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Sì, confermata.', appointmentFixed: false, passToHuman: false, videoWatched: false,
+    } as any);
+    const { supabase, messagesRows } = makeDrainSupabase(riga(), [AGENDA, { ...DOMANDA, body: 'quanto dura la live?' }]);
+    messaggi = messagesRows;
+    // Ogni lettura della cronologia torna una COPIA (come il DB vero): senza, la cronologia
+    // del primo giro vedrebbe comunque i messaggi aggiunti dopo e il test non direbbe niente.
+    const from = supabase.from.bind(supabase);
+    supabase.from = (t: string) => {
+      const q = from(t);
+      if (t !== 'messages') return q;
+      const select = q.select.bind(q);
+      q.select = (...a: unknown[]) => {
+        const st = select(...a);
+        const then = st.then.bind(st);
+        st.then = (res: any) => then((r: any) => res({ ...r, data: [...r.data] }));
+        return st;
+      };
+      return q;
+    };
+
+    await drainMarioReplies(supabase, 9676, '+391234567890', () => 0);
+
+    expect(eseguiTurnoLancio).toHaveBeenCalledTimes(2);
+    const history = vi.mocked(generateMarioReply).mock.calls[0][0] as { content: string }[];
+    expect(history.map((h) => h.content)).toContain('E la call delle 12 è confermata?');
   });
 });
 

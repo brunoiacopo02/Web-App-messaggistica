@@ -493,3 +493,11 @@ describe('congedo sciolto', () => {
     expect(notaCongedoRevocato('x'.repeat(500))).toContain(`("${'x'.repeat(300)}")`);
   });
 });
+
+describe('decideLancioTurno — classe altro (Task 5)', () => {
+  it('nelle fasi del B1 passa al postino, fuori tace come sempre', () => {
+    expect(decideLancioTurno({ fase: 'attesa', classe: 'altro', scambiDomande: 0 })).toEqual({ kind: 'al_postino' });
+    expect(decideLancioTurno({ fase: 'posto_bloccato', classe: 'altro', scambiDomande: 0 })).toEqual({ kind: 'al_postino' });
+    expect(decideLancioTurno({ fase: 'link_inviato', classe: 'altro', scambiDomande: 0 }).kind).toBe('silenzio');
+  });
+});
