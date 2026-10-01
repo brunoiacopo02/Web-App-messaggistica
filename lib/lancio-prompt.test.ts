@@ -39,6 +39,17 @@ describe('buildLancioSystem — fase attesa', () => {
     expect(s).not.toMatch(/non serve installare niente/i);
     expect(s).toMatch(/da telefono conviene avere l'app Zoom/);
   });
+  it('il link Zoom è già nel primo messaggio ed è quello vero: mai dire che non vale (30/09/2026)', () => {
+    expect(s).toMatch(/è nel primo messaggio di questa chat, ed è quello vero e valido/);
+    expect(s).toMatch(/glielo rimandiamo comunque qui il giorno stesso/);
+    expect(s).toMatch(/Non dire MAI che un link non è valido, che non è vero o che "era solo una verifica"/);
+    expect(s).not.toMatch(/il link arriva qui su WhatsApp il giorno stesso/);
+  });
+  it('[LANCIO:SI] copre ringraziamenti e ricevute; [LANCIO:NO] solo il rifiuto esplicito; la domanda polemica è DOMANDA', () => {
+    expect(s).toMatch(/\[LANCIO:SI\][^\n]*ringrazia[^\n]*il numero è attivo/);
+    expect(s).toMatch(/\[LANCIO:NO\] SOLO per il rifiuto esplicito/);
+    expect(s).toMatch(/anche dubbiosa o polemica \("c'è un investimento sì o no\?", "serve la webcam\?"\), è sempre \[LANCIO:DOMANDA\]/);
+  });
   it('la data della live sta in un posto solo: se cambia, nel prompt non resta un 5 ottobre', () => {
     const altra = buildLancioSystem({ ...base, eventoAt: '2026-11-12T20:30:00+01:00' });
     expect(altra).toContain('giovedì 12 novembre alle 20:30');

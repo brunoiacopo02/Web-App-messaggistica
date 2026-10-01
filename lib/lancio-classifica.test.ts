@@ -59,6 +59,46 @@ describe('classificaLancio — il "no" isolato non è un martello: solo in testa
   });
 });
 
+describe('classificaLancio — le domande vere dei lead non sono un congedo (30/09/2026)', () => {
+  it.each([
+    "È richiesto l'uso di una web cam o basta soloun collegamento audio?",
+    'Ciao, basta djgitarlo sul pc giusto?',
+    'C’è un investimento iniziale sì o no',
+    'Investimento iniziale?',
+    "c'è un investimento si o no?",
+  ])('"%s" → domanda, mai no', (b) => expect(classificaLancio(b)).toBe('domanda'));
+
+  it.each(['basta', 'Basta', 'basta così', 'basta messaggi', 'basta scrivermi', 'Basta!'])(
+    '"%s" da solo resta un rifiuto → no', (b) => expect(classificaLancio(b)).toBe('no'),
+  );
+  it('"basta" dentro una frase senza domanda non è un rifiuto (né un sì): decide il modello', () => {
+    expect(classificaLancio('basta il telefono per collegarsi')).not.toBe('no');
+    expect(classificaLancio('ok basta il telefono')).toBe('incerto');
+  });
+  it.each([
+    'non mi interessa, chiaro?', 'non sono interessato?', 'toglimi dalla lista, ok?', 'cancellami?',
+    'non scrivetemi più!?', 'come faccio a disiscrivermi?', 'posso annullare l iscrizione?',
+    'numero sbagliato?', 'sbagliato numero?', 'lasciatemi in pace?',
+  ])('il rifiuto esplicito resta no anche col punto di domanda: "%s"', (b) => expect(classificaLancio(b)).toBe('no'));
+});
+
+describe('classificaLancio — ringraziamenti e ricevute sono un sì (punto 5)', () => {
+  it.each([
+    'grazie', 'Grazie', 'Grazie mille', 'Grazie mille ☺️', 'ok grazie', 'Ciao, grazie mille', 'ricevuto',
+    'Buongiorno, arrivato, grazie.', 'il numero è attivo', 'Buongiorno il numero è attivo', 'Si é attivo il numero', 'Grazie!',
+  ])('"%s" → si', (b) => expect(classificaLancio(b)).toBe('si'));
+  it.each(['no grazie', 'No grazie'])('"%s" resta no', (b) => expect(classificaLancio(b)).toBe('no'));
+  it('"grazie ma non posso" non è un sì', () => {
+    expect(classificaLancio('grazie ma non posso')).not.toBe('si');
+  });
+  it('"grazie, non mi interessa" è un no', () => {
+    expect(classificaLancio('grazie, non mi interessa')).toBe('no');
+  });
+  it('"il numero non è attivo" non è un sì', () => {
+    expect(classificaLancio('il numero non è attivo')).not.toBe('si');
+  });
+});
+
 describe('classificaLancio — incerto va al modello', () => {
   it.each(['', '   ', 'boh', 'vediamo', 'ne parlo con mio marito', 'chi sei', 'ok ma poi come funziona per il resto'])(
     '"%s" → incerto o domanda, mai sì/no', (b) => expect(['incerto', 'domanda']).toContain(classificaLancio(b)),
@@ -121,6 +161,12 @@ describe('congedoEsplicito — solo le frasi di rifiuto, mai il "no" secco', () 
   // a una domanda del bot, e lì il congedo non lo devono far scattare.
   it.each(['no', 'No', 'nope', 'nah', 'certo che no', 'assolutamente no'])(
     '"%s" → non è un congedo', (b) => expect(congedoEsplicito(b)).toBe(false),
+  );
+  it.each(['basta', 'basta così', 'basta messaggi', 'basta scrivermi', 'non sono interessato', 'cancellatemi', 'disiscrivimi', 'lasciatemi in pace'])(
+    '"%s" → congedo', (b) => expect(congedoEsplicito(b)).toBe(true),
+  );
+  it.each(["È richiesto l'uso di una web cam o basta soloun collegamento audio?", 'Ciao, basta djgitarlo sul pc giusto?', 'basta il telefono?'])(
+    '"basta" dentro una frase non è un congedo: "%s"', (b) => expect(congedoEsplicito(b)).toBe(false),
   );
   it('vuoto e media: falso, mai un congedo', () => {
     expect(congedoEsplicito('')).toBe(false);
