@@ -3,10 +3,10 @@ import {
   FASI_FOLLOWUP, inFinestraFollowup, finestraFollowupChiusa, ancoraLancio, inboundDopo, haInteragito,
   ultimoTestoInbound, haDettoNo, decideFollowup, lancioFollowupText, lancioStandardContextNote,
   lancioStandardDrain, NOTA_CONGEDO_FOLLOWUP, type CandidataFollowup, linkSviluppatoreContextNote, eventoLancioPassato,
-  bloccaPassaggioLancio, NOTA_LANCIO_NIENTE_PASSAGGIO, TESTO_LANCIO_NIENTE_PASSAGGIO, registrazionePromessa, lancioRegistrazioneText,
+  bloccaPassaggioLancio, NOTA_LANCIO_NIENTE_PASSAGGIO, TESTO_LANCIO_NIENTE_PASSAGGIO, lancioRegistrazioneText,
 } from './lancio-followup';
 import { fineNotteLancio } from './lancio-scelta';
-import type { RigaLancio } from './lancio-fase';
+import { registrazionePromessa, type RigaLancio } from './lancio-fase';
 
 const EVENTO = new Date('2026-10-05T21:00:00+02:00');
 const t = (iso: string) => new Date(iso);

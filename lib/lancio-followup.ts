@@ -1,6 +1,8 @@
 import { romeDayKey, romeHour, romeMinute } from './rome-time';
 import { giorniLancio } from './lancio-scelta';
-import { haCongedo, indiceUltimaPressionePulsante, type RigaLancio } from './lancio-fase';
+// `registrazionePromessa` e' una sola, in lancio-fase accanto a CHIAVE_REGISTRAZIONE_PROMESSA:
+// il turno la scrive e il cron la legge con la stessa chiave, mai con due copie che divergono.
+import { haCongedo, indiceUltimaPressionePulsante, registrazionePromessa, type RigaLancio } from './lancio-fase';
 import { congedoEsplicito } from './lancio-classifica';
 import { templateName } from './name';
 
@@ -143,18 +145,6 @@ export function ultimoTestoInbound(rows: RigaLancio[], ancoraIso: string): strin
  */
 export function haDettoNo(testo: string): boolean {
   return congedoEsplicito(testo);
-}
-
-/**
- * La promessa della registrazione (piano 2026-10-01): dal 1/10 il bot, a chi non puo'
- * esserci la sera della live o chiede la registrazione, risponde "dopo la live ti
- * mandiamo qui la registrazione" e timbra `lancio_info.registrazione_promessa_at`. Qui si
- * legge solo la chiave: una stringa non vuota e' la promessa, il resto no.
- */
-export function registrazionePromessa(lancioInfo: unknown): boolean {
-  if (!lancioInfo || typeof lancioInfo !== 'object' || Array.isArray(lancioInfo)) return false;
-  const v = (lancioInfo as Record<string, unknown>).registrazione_promessa_at;
-  return typeof v === 'string' && v.trim() !== '';
 }
 
 /**
