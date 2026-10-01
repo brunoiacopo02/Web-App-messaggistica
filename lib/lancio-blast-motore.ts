@@ -47,7 +47,7 @@ export const MAX_PAGINE = 20;
 export const PAGINA = 1000;
 
 export type EsitoInvio = 'sent' | 'riparato' | 'capped' | 'failed' | 'incerto' | 'skip' | 'errore' | 'bloccato';
-export type ColonnaTimbro = 'lancio_link_inviato_at' | 'lancio_followup_inviato_at' | 'lancio_inizio_inviato_at';
+export type ColonnaTimbro = 'lancio_link_inviato_at' | 'lancio_followup_inviato_at' | 'lancio_inizio_inviato_at' | 'lancio_promemoria_inviato_at';
 
 /** Lo stato condiviso fra i worker di un run: il fermo e i numeri che il freno legge. */
 export type StatoRun = { fermo: string | null; tentati: number; codici: (number | string)[] };
@@ -139,6 +139,8 @@ export const TOLLERANZA_GIORNI_EVENTO = {
   // "La live sta iniziando" (20:30-21:30 del giorno dell'evento): come il blast Zoom,
   // una data di ieri e' gia' il guasto.
   'lancio-inizio': 0,
+  // Il promemoria della mattina (10:00-12:00 del giorno dell'evento): idem.
+  'lancio-promemoria': 0,
   'lancio-followup': GIORNI_CONFIG_STANTIA,
   'lancio-restituzioni': GIORNI_CONFIG_STANTIA,
 } as const;

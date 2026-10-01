@@ -22,7 +22,7 @@ export async function impostaFaseLancio(
   supabase: Supa,
   conversationId: number,
   fase: LancioFase,
-  campi: { lancio_link_inviato_at?: string; lancio_followup_inviato_at?: string; lancio_inizio_inviato_at?: string; lancio_info?: Json } = {},
+  campi: { lancio_link_inviato_at?: string; lancio_followup_inviato_at?: string; lancio_inizio_inviato_at?: string; lancio_promemoria_inviato_at?: string; lancio_info?: Json } = {},
   /**
    * `soloDaFasi`: compare-and-set sulla fase di partenza. Serve a chi scrive la fase da
    * un cron, in parallelo a un turno che sta girando sulla stessa chat — il blast del

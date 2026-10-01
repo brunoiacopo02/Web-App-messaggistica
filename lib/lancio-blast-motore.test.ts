@@ -130,7 +130,7 @@ describe('eventoStantio — due regimi, perche i cron non vivono tutti prima del
   it('le tolleranze sono quelle dichiarate e non si spostano per sbaglio', () => {
     expect(GIORNI_CONFIG_STANTIA).toBe(14);
     expect(TOLLERANZA_GIORNI_EVENTO).toEqual({
-      'lancio-aperture': 0, 'lancio-zoom': 0, 'lancio-inizio': 0, 'lancio-followup': 14, 'lancio-restituzioni': 14,
+      'lancio-aperture': 0, 'lancio-zoom': 0, 'lancio-inizio': 0, 'lancio-promemoria': 0, 'lancio-followup': 14, 'lancio-restituzioni': 14,
     });
   });
 });
