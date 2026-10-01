@@ -647,14 +647,15 @@ describe('eseguiTurnoLancio — messaggio per il postino GDO', () => {
     expect(sendOutcome).not.toHaveBeenCalled();
   });
 
-  it('vale anche col solo appuntamento GDO', async () => {
-    genera.mockResolvedValueOnce({ classe: 'altro', passToHuman: false, visibleReply: '', lancioTag: null });
+  it('col solo appuntamento GDO, senza agenda, non passa: il ramo postino non si accenderebbe', async () => {
+    genera.mockResolvedValueOnce({ classe: 'altro', passToHuman: false, visibleReply: 'Ne parliamo dopo la live.', lancioTag: null });
     const { supabase } = makeSupabase();
     const esito = await eseguiTurnoLancio(supabase, base({
       rows: [WELCOME, inb(DOMANDA_CALL)], inboundBody: DOMANDA_CALL,
       contestoGdo: { gdoAgendaAt: null, gdoAppuntamentoAt: '2026-10-01T10:00:00Z' },
     }));
-    expect(esito).toBe('handed_to_postino');
+    expect(esito).toBe('active');
+    expect(genera.mock.calls[0][1]).not.toHaveProperty('contestoGdo');
   });
 
   it('contesto GDO ma messaggio sulla live: risponde il lancio come sempre', async () => {

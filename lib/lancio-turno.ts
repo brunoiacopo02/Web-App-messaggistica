@@ -143,7 +143,10 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
   const giaPromessa = registrazionePromessa(i.lancioInfo);
   // Lead anche di un GDO (Task 5, conv 9676): il prompt lo sa e puo' rispondere
   // [LANCIO:ALTRO] sui messaggi che riguardano la call. Senza, il tag non esiste.
-  const contestoGdo = !!(i.contestoGdo?.gdoAgendaAt || i.contestoGdo?.gdoAppuntamentoAt);
+  // Solo con l'agenda del GDO: e' `gdo_agenda_at` che nel drain accende il ramo postino.
+  // Con il solo `gdo_appuntamento_at` il passaggio finirebbe a Mario standard, che su un
+  // lead del GDO proverebbe a fissare una call sua.
+  const contestoGdo = !!i.contestoGdo?.gdoAgendaAt;
   // Il modello si interpella solo se puo' ancora rispondere: nelle fasi di B4/B5 il
   // turno e' silenzio comunque, oltre il fusibile degli scambi si tace, e su un inbound senza
   // testo (una foto, un audio) non c'e' niente da leggere. Chiedere una risposta per poi
