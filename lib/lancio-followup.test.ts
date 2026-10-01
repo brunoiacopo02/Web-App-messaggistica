@@ -3,7 +3,7 @@ import {
   FASI_FOLLOWUP, inFinestraFollowup, finestraFollowupChiusa, ancoraLancio, inboundDopo, haInteragito,
   ultimoTestoInbound, haDettoNo, decideFollowup, lancioFollowupText, lancioStandardContextNote,
   lancioStandardDrain, NOTA_CONGEDO_FOLLOWUP, type CandidataFollowup, linkSviluppatoreContextNote, eventoLancioPassato,
-  bloccaPassaggioLancio, NOTA_LANCIO_NIENTE_PASSAGGIO, TESTO_LANCIO_NIENTE_PASSAGGIO,
+  bloccaPassaggioLancio, NOTA_LANCIO_NIENTE_PASSAGGIO, TESTO_LANCIO_NIENTE_PASSAGGIO, registrazionePromessa, lancioRegistrazioneText,
 } from './lancio-followup';
 import { fineNotteLancio } from './lancio-scelta';
 import type { RigaLancio } from './lancio-fase';
@@ -120,7 +120,7 @@ describe('decideFollowup', () => {
     ...over,
   });
   it('le quattro fasi del perimetro con un inbound dopo l ancora (e la chat ferma): si manda', () => {
-    for (const f of FASI_FOLLOWUP) expect(decideFollowup(c({ lancio_fase: f })), f).toEqual({ kind: 'invia' });
+    for (const f of FASI_FOLLOWUP) expect(decideFollowup(c({ lancio_fase: f })), f).toEqual({ kind: 'invia', tipo: 'followup' });
     expect([...FASI_FOLLOWUP]).toEqual(['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch']);
   });
   it('fasi fuori perimetro: scelta_fatta, followup_inviato, chiuso, restituito, null', () => {
@@ -133,7 +133,7 @@ describe('decideFollowup', () => {
   // sempre — fuori dal follow-up, fuori dalle restituzioni, e fuori dal re-drive di Mario.
   it('post_pitch fermo dalla sera del pitch (ultimo inbound prima delle 03:00 del 6): si manda', () => {
     const rows = [out('benvenuto', ancora, WELCOME), inb('premuto il pulsante', '2026-10-05T21:40:00+02:00'), inb('si, lavoro', '2026-10-05T22:10:00+02:00')];
-    expect(decideFollowup(c({ lancio_fase: 'post_pitch', rows }))).toEqual({ kind: 'invia' });
+    expect(decideFollowup(c({ lancio_fase: 'post_pitch', rows }))).toEqual({ kind: 'invia', tipo: 'followup' });
   });
   it('post_pitch ancora vivo il 6 (un inbound dalle 03:00 in poi): salta, e in scelta non si interrompe', () => {
     const attivo = (quando: string) => c({
@@ -143,18 +143,18 @@ describe('decideFollowup', () => {
     expect(decideFollowup(attivo('2026-10-06T03:00:00+02:00'))).toEqual({ kind: 'salta', motivo: 'in_scelta' });
     expect(decideFollowup(attivo('2026-10-06T11:30:00+02:00'))).toEqual({ kind: 'salta', motivo: 'in_scelta' });
     // Il confine e' stretto: alle 02:59 la notte non e' finita e la chat e' ferma.
-    expect(decideFollowup(attivo('2026-10-06T02:59:00+02:00'))).toEqual({ kind: 'invia' });
+    expect(decideFollowup(attivo('2026-10-06T02:59:00+02:00'))).toEqual({ kind: 'invia', tipo: 'followup' });
   });
   it('entrata col pulsante e muta da allora: il follow-up ci va (non e "mai scritto")', () => {
     const rows = [inb('Ho visto la live Web Developer AI e voglio saperne di piu', '2026-10-05T21:40:00+02:00')];
     const ancoraPulsante = '2026-10-05T21:40:00+02:00';
-    expect(decideFollowup(c({ lancio_fase: 'post_pitch', rows, ancora: ancoraPulsante }))).toEqual({ kind: 'invia' });
+    expect(decideFollowup(c({ lancio_fase: 'post_pitch', rows, ancora: ancoraPulsante }))).toEqual({ kind: 'invia', tipo: 'followup' });
   });
 
   it('in_scelta vale solo per post_pitch: nelle altre fasi un inbound del 6 non ferma il follow-up', () => {
     const rows = [out('benvenuto', ancora, WELCOME), inb('eccomi', '2026-10-06T11:30:00+02:00')];
     for (const f of ['attesa', 'posto_bloccato', 'link_inviato']) {
-      expect(decideFollowup(c({ lancio_fase: f, rows })), f).toEqual({ kind: 'invia' });
+      expect(decideFollowup(c({ lancio_fase: f, rows })), f).toEqual({ kind: 'invia', tipo: 'followup' });
     }
   });
   it('post_pitch: un no esplicito si congeda anche se la chat e viva (il no vince su in_scelta)', () => {
@@ -177,11 +177,48 @@ describe('decideFollowup', () => {
   });
   it('un rifiuto seguito da un si non e un no: conta l ultimo', () => {
     const rows = [out('benvenuto', ancora, WELCOME), inb('non mi interessa', '2026-09-20T10:30:00Z'), inb('anzi si, mi interessa', '2026-09-20T10:35:00Z')];
-    expect(decideFollowup(c({ rows }))).toEqual({ kind: 'invia' });
+    expect(decideFollowup(c({ rows }))).toEqual({ kind: 'invia', tipo: 'followup' });
   });
   it('un no secco come ultimo inbound NON congeda: si manda (il no era la risposta a una domanda)', () => {
     const rows = [out('benvenuto', ancora, WELCOME), inb('si', '2026-09-20T10:30:00Z'), out('hai gia l app Zoom?', '2026-10-05T20:00:00Z'), inb('no', '2026-10-05T20:05:00Z')];
-    expect(decideFollowup(c({ lancio_fase: 'link_inviato', rows }))).toEqual({ kind: 'invia' });
+    expect(decideFollowup(c({ lancio_fase: 'link_inviato', rows }))).toEqual({ kind: 'invia', tipo: 'followup' });
+  });
+
+  // Piano 2026-10-01, Task 4: a chi non poteva esserci il bot ha promesso la registrazione.
+  describe('con la promessa della registrazione', () => {
+    const PROMESSA = { registrazione_promessa_at: '2026-10-02T09:00:00Z' };
+    it('riceve la registrazione anche se l ultimo testo e "non posso esserci"', () => {
+      const rows = [out('benvenuto', ancora, WELCOME), inb('Purtroppo lunedì non riesco, il 5 non potrò partecipare', '2026-10-02T08:59:00Z')];
+      expect(decideFollowup(c({ lancio_info: PROMESSA, rows }))).toEqual({ kind: 'invia', tipo: 'registrazione' });
+    });
+    it('la promessa vince anche su un no che il classificatore leggerebbe come rifiuto', () => {
+      const rows = [out('benvenuto', ancora, WELCOME), inb('non mi interessa', '2026-10-02T08:59:00Z')];
+      expect(decideFollowup(c({ lancio_info: PROMESSA, rows }))).toEqual({ kind: 'invia', tipo: 'registrazione' });
+      // Senza promessa lo stesso testo si congeda: e' la promessa a cambiare la regola.
+      expect(decideFollowup(c({ rows })).kind).toBe('congeda');
+    });
+    it('il congedo marcato vince sulla promessa', () => {
+      expect(decideFollowup(c({ lancio_info: { ...PROMESSA, congedo_at: '2026-10-03T10:00:00Z' } }))).toEqual({ kind: 'salta', motivo: 'congedato' });
+    });
+    it('le altre regole restano: timbro gia scritto, fase fuori perimetro, mai scritto dopo l ancora', () => {
+      expect(decideFollowup(c({ lancio_info: PROMESSA, lancio_followup_inviato_at: '2026-10-06T10:00:00Z' }))).toEqual({ kind: 'salta', motivo: 'gia_inviato' });
+      expect(decideFollowup(c({ lancio_info: PROMESSA, lancio_fase: 'scelta_fatta' }))).toEqual({ kind: 'salta', motivo: 'fase' });
+      expect(decideFollowup(c({ lancio_info: PROMESSA, rows: [out('benvenuto', ancora, WELCOME)] }))).toEqual({ kind: 'salta', motivo: 'mai_scritto' });
+    });
+    it('vale in ogni fase del perimetro', () => {
+      for (const f of ['attesa', 'posto_bloccato', 'link_inviato']) {
+        expect(decideFollowup(c({ lancio_fase: f, lancio_info: PROMESSA })), f).toEqual({ kind: 'invia', tipo: 'registrazione' });
+      }
+    });
+  });
+});
+
+describe('registrazionePromessa', () => {
+  it('vera solo con una stringa non vuota alla chiave registrazione_promessa_at', () => {
+    expect(registrazionePromessa({ registrazione_promessa_at: '2026-10-02T09:00:00Z' })).toBe(true);
+    for (const v of [null, undefined, 'x', [], {}, { registrazione_promessa_at: '' }, { registrazione_promessa_at: '  ' }, { registrazione_promessa_at: 123 }, { registrazione_promessa_at: null }]) {
+      expect(registrazionePromessa(v), JSON.stringify(v)).toBe(false);
+    }
   });
 });
 
@@ -200,6 +237,11 @@ describe('testi', () => {
   it('il follow-up e il template approvato (spec §7.3) col nome proprio', () => {
     expect(lancioFollowupText('Anna Verdi')).toBe(
       'Ciao Anna, ieri sera alla live abbiamo presentato il percorso Web Developer AI. Ti va di parlarne insieme? Rispondimi qui e ti mando anche il video riassuntivo della live.',
+    );
+  });
+  it('la registrazione e il template fenice_lancio_registrazione_v1 col nome proprio e il link', () => {
+    expect(lancioRegistrazioneText('Anna Verdi', 'https://x.it/reg')).toBe(
+      'Ciao Anna, come ci avevi chiesto ecco la registrazione della live Web Developer AI: https://x.it/reg - se dopo averla vista vuoi parlarne con un consulente, rispondi a questo messaggio.',
     );
   });
   it('la nota del congedo dal follow-up dice cosa e successo', () => {

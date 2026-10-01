@@ -18,6 +18,7 @@ import {
   ancoraLancio,
   decideFollowup,
   lancioFollowupText,
+  lancioRegistrazioneText,
   NOTA_CONGEDO_FOLLOWUP,
   type MotivoSalto,
 } from '@/lib/lancio-followup';
@@ -134,8 +135,11 @@ async function marcaAncoraIgnota(supabase: Supa, conversationId: number): Promis
   }
 }
 
-/** I motivi di `decideFollowup` piu' quello che nasce qui: da congedare ma senza numero. */
-type MotivoSaltoRoute = MotivoSalto | 'senza_telefono';
+/**
+ * I motivi di `decideFollowup` piu' quelli che nascono qui: da congedare ma senza numero,
+ * e registrazione promessa ma senza link o senza template da mandare.
+ */
+type MotivoSaltoRoute = MotivoSalto | 'senza_telefono' | 'registrazione_senza_link';
 
 const contatoreSalti = (): Record<MotivoSaltoRoute, number> => ({
   fase: 0,
@@ -145,6 +149,7 @@ const contatoreSalti = (): Record<MotivoSaltoRoute, number> => ({
   mai_scritto: 0,
   in_scelta: 0,
   senza_telefono: 0,
+  registrazione_senza_link: 0,
 });
 
 export async function GET(req: NextRequest) {
@@ -196,6 +201,12 @@ export async function GET(req: NextRequest) {
     !from && 'TWILIO_WHATSAPP_NUMBER_FENICE',
   ].filter((x): x is string => typeof x === 'string');
   if (missing.length > 0 || !sid || !from) return configError(missing);
+  // La registrazione promessa (piano 2026-10-01): template e link NON sono config del run.
+  // Senza, si saltano solo le chat con la promessa (`registrazione_senza_link`) e i
+  // follow-up degli altri partono lo stesso: fermare tutto per un link mancante
+  // toglierebbe il follow-up a centinaia di lead per colpa di poche decine.
+  const sidRegistrazione = process.env.LANCIO_REGISTRAZIONE_TEMPLATE_SID || null;
+  const linkRegistrazione = settings.videoLiveLink?.trim() || null;
 
   // Query dei candidati, uguale per il conteggio dei residui e per la lettura della coda.
   const bersaglio = (select: string, opzioni?: { head: true; count: 'exact' }) => {
@@ -274,6 +285,8 @@ export async function GET(req: NextRequest) {
   const max = batchMax(process.env.LANCIO_BATCH_MAX);
   const saltati = contatoreSalti();
   const targets: Candidata[] = [];
+  /** Le chat del lotto che ricevono la registrazione al posto del follow-up. */
+  const registrazioni = new Set<number>();
   const daCongedare: { c: Candidata; leadWords: string }[] = [];
   let valutati = 0;
   let lettureIntake = 0;
@@ -353,6 +366,17 @@ export async function GET(req: NextRequest) {
         daCongedare.push({ c, leadWords: decisione.leadWords });
         continue;
       }
+      if (decisione.tipo === 'registrazione') {
+        // Mai il follow-up generico al posto della registrazione: a questo lead abbiamo
+        // promesso un link, e "ti va di parlarne?" senza il link e' una promessa mancata
+        // detta in faccia. Si salta e basta: resta candidata, il run dopo la riprende
+        // appena qualcuno mette il link o l'env.
+        if (!sidRegistrazione || !linkRegistrazione) {
+          saltati.registrazione_senza_link++;
+          continue;
+        }
+        registrazioni.add(c.id);
+      }
       targets.push(c);
       if (targets.length >= max) break;
     }
@@ -361,8 +385,21 @@ export async function GET(req: NextRequest) {
   if (dry) {
     return NextResponse.json({
       ok: true, dry: true, candidati: coda.length, valutati, nonValutati: coda.length - valutati,
-      targets: targets.length, daCongedare: daCongedare.length, saltati, lettureIntake, blocchiTroncati, max, queryKo,
+      targets: targets.length, registrazioni: registrazioni.size, daCongedare: daCongedare.length, saltati, lettureIntake, blocchiTroncati, max, queryKo,
     });
+  }
+
+  // Il silenzio non e' mai muto (C7): le promesse in attesa del link si dichiarano a ogni
+  // run, come il lancio spento, finche' qualcuno non le sblocca dal pannello o da Vercel.
+  if (saltati.registrazione_senza_link > 0) {
+    const mancano = [
+      !linkRegistrazione && 'lancio_video_live_link',
+      !sidRegistrazione && 'LANCIO_REGISTRAZIONE_TEMPLATE_SID',
+    ].filter((x): x is string => typeof x === 'string');
+    await logEvento(supabase, 'lancio_registrazione_senza_link',
+      { chat: saltati.registrazione_senza_link, mancano },
+      `[lancio] registrazione promessa a ${saltati.registrazione_senza_link} chat ma manca ${mancano.join(', ')}: NON inviata, si riprova al run dopo`,
+      'warn');
   }
 
   // ─────────────── C1: chi ha detto di no si congeda, senza bolla ───────────────
@@ -409,7 +446,9 @@ export async function GET(req: NextRequest) {
       .from('messages')
       .select('conversation_id')
       .in('conversation_id', targets.map((c) => c.id))
-      .eq('template_sid', sid)
+      // Entrambi i template: la riparazione deve vedere anche la registrazione gia' spedita,
+      // o una chat con la promessa rimasta col timbro indietro la riceverebbe due volte.
+      .in('template_sid', sidRegistrazione ? [sid, sidRegistrazione] : [sid])
       .not('twilio_status', 'in', '(failed,undelivered)');
     // Type suo: da `event_log` si deve capire QUALE delle due query su `messages` e'
     // caduta — la cronologia (si smette di valutare) o questa (si rischia di rimandare).
@@ -418,8 +457,49 @@ export async function GET(req: NextRequest) {
   }
 
   const bodyRaw = await getTemplateBody(sid);
+  // Il body della registrazione solo se serve: nessuna chiamata a Twilio per un template
+  // che in questo run non parte.
+  const bodyRegistrazioneRaw = registrazioni.size > 0 && sidRegistrazione ? await getTemplateBody(sidRegistrazione) : null;
   const stato = nuovoStatoRun();
-  const inviaUno = (c: Candidata): Promise<EsitoInvio> => {
+  /** Gli esiti delle sole registrazioni: nel riepilogo si contano a parte. */
+  const contiRegistrazione = { targets: registrazioni.size, inviati: 0, riparati: 0, altri: 0 };
+  // Stesso motore, stessa colonna e stessa fase del follow-up: la registrazione ne prende
+  // il posto, non si aggiunge. `followup_inviato` vuol dire che se il lead risponde il
+  // turno lo passa a Mario standard col video della live, ed e' quello che vogliamo.
+  const inviaRegistrazione = (c: Candidata): Promise<EsitoInvio> => {
+    const phone = c.leads?.phone_e164 ?? null;
+    // Sid e link sono gia' garantiti dalla scelta dei bersagli; qui tengono contento il tipo.
+    if (stato.fermo || !phone || !sidRegistrazione || !linkRegistrazione) return Promise.resolve('skip');
+    return inviaTemplateTimbrato(supabase, stato, {
+      conv: { id: c.id, crm_lead_id: c.crm_lead_id, phone, nome: c.leads?.first_name ?? null, wa_number: c.wa_number },
+      colonna: 'lancio_followup_inviato_at',
+      faseDopo: 'followup_inviato',
+      sid: sidRegistrazione,
+      // Il numero della chat, come il follow-up (vedi sotto).
+      from: mittenteDiConversazione(c) ?? from,
+      costruisci: (conv) => {
+        const vars = { '1': templateName(conv.nome), '2': linkRegistrazione };
+        return {
+          vars,
+          body: bodyRegistrazioneRaw ? renderBodyTemplate(bodyRegistrazioneRaw, vars) : lancioRegistrazioneText(conv.nome, linkRegistrazione),
+        };
+      },
+      giaSpedito: giaSpediti.has(c.id),
+      soloDaFasi: FASI_FOLLOWUP,
+      prefisso: 'lancio_registrazione',
+      etichetta: 'registrazione',
+      eventoInvio: 'lancio_registrazione_inviata',
+    });
+  };
+  const inviaUno = async (c: Candidata): Promise<EsitoInvio> => {
+    if (!registrazioni.has(c.id)) return inviaFollowup(c);
+    const esito = await inviaRegistrazione(c);
+    if (esito === 'sent') contiRegistrazione.inviati++;
+    else if (esito === 'riparato') contiRegistrazione.riparati++;
+    else contiRegistrazione.altri++;
+    return esito;
+  };
+  const inviaFollowup = (c: Candidata): Promise<EsitoInvio> => {
     const phone = c.leads?.phone_e164 ?? null;
     if (stato.fermo || !phone) return Promise.resolve('skip');
     return inviaTemplateTimbrato(supabase, stato, {
@@ -489,6 +569,7 @@ export async function GET(req: NextRequest) {
     errori: conti.errori,
     residui,
     saltati,
+    registrazione: contiRegistrazione,
     lettureIntake,
     ancoreIgnoteMarcate,
     blocchiTroncati,
@@ -501,7 +582,7 @@ export async function GET(req: NextRequest) {
   };
   await scriviRun(
     riepilogo,
-    `[lancio] follow-up: ${conti.inviati} inviati, ${conti.riparati} riparati, ${conti.capped} cap, ${conti.falliti} falliti, ${conti.incerti} incerti, ${congedati} congedati, ${residui} residui (su ${targets.length} bersagli, ${coda.length} candidati)${stato.fermo ? ` — FERMO: ${stato.fermo}` : ''}`,
+    `[lancio] follow-up: ${conti.inviati} inviati, ${conti.riparati} riparati, ${conti.capped} cap, ${conti.falliti} falliti, ${conti.incerti} incerti, ${congedati} congedati, ${residui} residui, registrazioni ${contiRegistrazione.inviati}/${contiRegistrazione.targets} (su ${targets.length} bersagli, ${coda.length} candidati)${stato.fermo ? ` — FERMO: ${stato.fermo}` : ''}`,
     stato.fermo || conti.falliti > 0 || conti.incerti > 0 || conti.errori > 0 ? 'warn' : 'info',
   );
 
@@ -521,6 +602,7 @@ export async function GET(req: NextRequest) {
     errori: conti.errori,
     congedati,
     saltati,
+    registrazione: contiRegistrazione,
     residui,
     blocchiTroncati,
     fermo: stato.fermo,

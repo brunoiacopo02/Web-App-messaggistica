@@ -155,7 +155,9 @@ Come si prova lo stesso — tre strade, in ordine di preferenza:
       nomi**, i valori non si aprono e non si stampano): `LANCIO_WELCOME_TEMPLATE_SID`,
       `LANCIO_ZOOM_TEMPLATE_SID`, `LANCIO_FOLLOWUP_TEMPLATE_SID`,
       `TWILIO_WHATSAPP_NUMBER_FENICE`, `CRON_SECRET`, `BOT_WEBHOOK_SECRET`, `UTILITY_ONLY`.
-      **Verificato il 17/09: ci sono tutte.**
+      **Verificato il 17/09: ci sono tutte.** Dal 1/10 serve anche
+      `LANCIO_REGISTRAZIONE_TEMPLATE_SID` (la registrazione promessa, vedi §3 "6/10 —
+      follow-up"): senza, il follow-up parte ma le registrazioni promesse no.
 - [ ] Env di produzione **assenti**: `LANCIO_FAKE_NOW`, `LANCIO_FAKE_NOW_ARMED`
       (verificato il 17/09: assenti, come deve essere).
 - [ ] `LANCIO_ZOOM_BATCH_MAX`, `LANCIO_BATCH_MAX`, `LANCIO_RESTITUZIONI_MAX`,
@@ -315,6 +317,32 @@ a ogni run se `lancio_attivo` è spento) · `lancio_followup_config_error` ·
       inbound dopo le 03:00 (turno non ancora girato).
 - [ ] Chi risponde al follow-up torna al flusso standard di Mario, col video della live.
 - [ ] Chi risponde "no" dopo il follow-up lo gestisce Mario standard (`DA_SCARTARE`).
+
+#### La registrazione promessa (dal 1/10, piano 2026-10-01 Task 4)
+Dal 1/10 il bot, a chi non può esserci la sera della live o chiede la registrazione,
+risponde "dopo la live ti mandiamo qui la registrazione" e timbra
+`lancio_info.registrazione_promessa_at`. Nello stesso cron e nella stessa finestra, queste
+chat ricevono **al posto del follow-up** il template `fenice_lancio_registrazione_v1`
+(UTILITY, {{1}} nome, {{2}} `lancio_video_live_link`): stesso timbro
+`lancio_followup_inviato_at`, stessa fase `followup_inviato` (se risponde passa a Mario
+standard col video della live). La promessa vince sul "no" dell'ultimo testo, non su un
+congedo già marcato (`congedo_at`).
+
+- [ ] Template creato e approvato **UTILITY** sui tre account:
+      `node --env-file=.env.local scripts/create-lancio-registrazione-template.mjs`
+      (idempotente: rilanciato, stampa SID e stato). Il SID dell'account storico va
+      nell'env di produzione **`LANCIO_REGISTRAZIONE_TEMPLATE_SID`**; le copie sugli altri
+      account si traducono per nome (`lib/template-account.ts`).
+- [ ] Senza `lancio_video_live_link` (o senza l'env) queste chat **si saltano**: mai il
+      follow-up generico al posto della registrazione. Contano in
+      `saltati.registrazione_senza_link`, restano candidate per il run dopo, e ogni run
+      scrive un `lancio_registrazione_senza_link` (warn, `payload.mancano` dice cosa
+      manca). I follow-up degli altri partono lo stesso: non è un errore di configurazione.
+      Se a finestra chiusa il link non c'era, quelle chat restano senza registrazione.
+- [ ] Da guardare: `lancio_registrazione_inviata`, `registrazione` nel riepilogo di
+      `lancio_followup_run` (`targets`, `inviati`, `riparati`, `altri`), e gli eventi
+      `lancio_registrazione_*` del motore (`_freq_capped`, `_esito_incerto`, `_claim_error`, `_error`,
+      `_messaggio_non_costruito`).
 
 ### 7/10 in poi — restituzioni al pool
 

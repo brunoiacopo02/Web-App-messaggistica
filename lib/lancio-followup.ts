@@ -145,9 +145,29 @@ export function haDettoNo(testo: string): boolean {
   return congedoEsplicito(testo);
 }
 
+/**
+ * La promessa della registrazione (piano 2026-10-01): dal 1/10 il bot, a chi non puo'
+ * esserci la sera della live o chiede la registrazione, risponde "dopo la live ti
+ * mandiamo qui la registrazione" e timbra `lancio_info.registrazione_promessa_at`. Qui si
+ * legge solo la chiave: una stringa non vuota e' la promessa, il resto no.
+ */
+export function registrazionePromessa(lancioInfo: unknown): boolean {
+  if (!lancioInfo || typeof lancioInfo !== 'object' || Array.isArray(lancioInfo)) return false;
+  const v = (lancioInfo as Record<string, unknown>).registrazione_promessa_at;
+  return typeof v === 'string' && v.trim() !== '';
+}
+
+/**
+ * Quale template riceve chi e' bersaglio del cron: la registrazione mantiene la promessa,
+ * il follow-up e' per tutti gli altri. Sta nella decisione, e non nella route, perche' la
+ * promessa cambia anche la regola del "no" (vedi `decideFollowup`): le due cose si
+ * decidono insieme o si contraddicono.
+ */
+export type TipoInvioFollowup = 'registrazione' | 'followup';
+
 export type MotivoSalto = 'fase' | 'gia_inviato' | 'congedato' | 'ancora_ignota' | 'mai_scritto' | 'in_scelta';
 export type DecisioneFollowup =
-  | { kind: 'invia' }
+  | { kind: 'invia'; tipo: TipoInvioFollowup }
   | { kind: 'congeda'; leadWords: string }
   | { kind: 'salta'; motivo: MotivoSalto };
 
@@ -170,6 +190,12 @@ export type CandidataFollowup = {
  * perimetro e un timbro gia' scritto non si toccano; il congedo vince su tutto (C4); senza
  * ancora o senza inbound dopo l'ancora non si manda; chi ha detto no per ultimo si
  * congeda (C1) invece di ricevere "ti va di parlarne?".
+ *
+ * La promessa della registrazione vince sul "no" dell'ultimo testo, non sul congedo: il
+ * suo ultimo messaggio e' quasi sempre "non posso esserci", che non e' un rifiuto, e se
+ * il classificatore lo leggesse come tale il lead perderebbe proprio la cosa che gli
+ * abbiamo promesso. Un congedo marcato (`congedo_at`) invece e' una decisione gia' presa
+ * dal turno sul messaggio vero, e resta in testa.
  */
 export function decideFollowup(c: CandidataFollowup): DecisioneFollowup {
   if (!c.lancio_fase || !(FASI_FOLLOWUP as readonly string[]).includes(c.lancio_fase)) return { kind: 'salta', motivo: 'fase' };
@@ -177,8 +203,9 @@ export function decideFollowup(c: CandidataFollowup): DecisioneFollowup {
   if (haCongedo(c.lancio_info)) return { kind: 'salta', motivo: 'congedato' };
   if (!c.ancora) return { kind: 'salta', motivo: 'ancora_ignota' };
   if (!haInteragito(c.rows, c.ancora)) return { kind: 'salta', motivo: 'mai_scritto' };
+  const promessa = registrazionePromessa(c.lancio_info);
   const testo = ultimoTestoInbound(c.rows, c.ancora);
-  if (testo !== '' && haDettoNo(testo)) return { kind: 'congeda', leadWords: testo };
+  if (!promessa && testo !== '' && haDettoNo(testo)) return { kind: 'congeda', leadWords: testo };
   // `post_pitch`: il follow-up e' l'ultima rete per chi si e' fermato dopo il pulsante,
   // ma NON si interrompe chi sta ancora scegliendo. Il discrimine e' l'ultimo inbound:
   // prima delle 03:00 del giorno dopo la chat e' ferma dalla sera del pitch (il turno
@@ -189,7 +216,7 @@ export function decideFollowup(c: CandidataFollowup): DecisioneFollowup {
     const ultimo = ultimoInboundMs(c.rows, c.ancora);
     if (ultimo === null || ultimo >= c.fineNotte) return { kind: 'salta', motivo: 'in_scelta' };
   }
-  return { kind: 'invia' };
+  return { kind: 'invia', tipo: promessa ? 'registrazione' : 'followup' };
 }
 
 /** Nota al CRM col `DA_SCARTARE` del congedo deciso dal cron (nessuna bolla al lead). */
@@ -204,6 +231,19 @@ export function lancioFollowupText(name: string | null | undefined): string {
   return (
     `Ciao ${templateName(name)}, ieri sera alla live abbiamo presentato il percorso Web Developer AI. ` +
     'Ti va di parlarne insieme? Rispondimi qui e ti mando anche il video riassuntivo della live.'
+  );
+}
+
+/**
+ * Corpo del template `LANCIO_REGISTRAZIONE_TEMPLATE_SID` (`fenice_lancio_registrazione_v1`,
+ * scripts/create-lancio-registrazione-template.mjs) con {{1}} e {{2}} risolti: e' il
+ * ripiego quando Twilio non restituisce il body, come `lancioFollowupText`. Identico al
+ * template: se cambia uno, cambia l'altro.
+ */
+export function lancioRegistrazioneText(name: string | null | undefined, link: string): string {
+  return (
+    `Ciao ${templateName(name)}, come ci avevi chiesto ecco la registrazione della live Web Developer AI: ${link} - ` +
+    'se dopo averla vista vuoi parlarne con un consulente, rispondi a questo messaggio.'
   );
 }
 

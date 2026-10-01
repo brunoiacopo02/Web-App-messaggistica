@@ -115,8 +115,8 @@ function esegui(rec: Chiamata): { data: unknown; error: unknown; count?: number 
   }
   if (rec.table === 'messages') {
     const ids = (arg(rec, 'in', 'conversation_id')?.args[1] as number[] | undefined) ?? [];
-    // Con `eq('template_sid', …)` è la seconda idempotenza; senza, la cronologia.
-    if (arg(rec, 'eq', 'template_sid')) {
+    // Con un filtro su `template_sid` è la seconda idempotenza; senza, la cronologia.
+    if (arg(rec, 'eq', 'template_sid') || arg(rec, 'in', 'template_sid')) {
       if (stato.idempotenzaSelectError) return { data: null, error: stato.idempotenzaSelectError };
       return { data: stato.spediti.filter((m) => ids.includes(m.conversation_id)), error: null };
     }
@@ -176,7 +176,11 @@ const assertTemplateSendable = vi.fn();
 vi.mock('@/lib/twilio', () => ({
   sendTemplate: (...a: unknown[]) => sendTemplate(...a),
   assertTemplateSendable: (...a: unknown[]) => assertTemplateSendable(...a),
-  getTemplateBody: async () => 'Ciao {{1}}, ieri sera alla live...',
+  // Il body dipende dal SID: la registrazione deve finire in `messages` col SUO testo.
+  getTemplateBody: async (sid: string) =>
+    sid === 'HXregistrazione'
+      ? 'Ciao {{1}}, come ci avevi chiesto ecco la registrazione della live Web Developer AI: {{2}} - se dopo averla vista vuoi parlarne con un consulente, rispondi a questo messaggio.'
+      : 'Ciao {{1}}, ieri sera alla live...',
 }));
 
 // `impostaFaseLancio` ha i suoi test (B1): qui interessa CHE venga chiamata, con quale
@@ -246,7 +250,7 @@ const selectConv = () => chiamate.find((c) => c.table === 'conversations' && c.o
 /** La select della cronologia (l'altra select su `messages` è la seconda idempotenza). */
 const selectMessaggi = () =>
   chiamate.find(
-    (c) => c.table === 'messages' && c.op === 'select' && !c.filtri.some((f) => f.m === 'eq' && f.args[0] === 'template_sid'),
+    (c) => c.table === 'messages' && c.op === 'select' && !c.filtri.some((f) => (f.m === 'eq' || f.m === 'in') && f.args[0] === 'template_sid'),
   );
 const updateConv = (id: number) =>
   chiamate.filter(
@@ -751,5 +755,115 @@ describe('GET /api/cron/lancio-followup — mittente del secondo numero', () => 
     await richiesta();
     expect(assertTemplateSendable).not.toHaveBeenCalled();
     expect(sendTemplate.mock.calls.every((c) => c[0].from === PRIMARIO)).toBe(true);
+  });
+});
+
+// ─────────────── piano 2026-10-01, Task 4: la registrazione promessa ───────────────
+// Dal 1/10 il bot promette la registrazione a chi non puo' esserci e timbra
+// `lancio_info.registrazione_promessa_at`. Il 6 la promessa si mantiene QUI: stesso
+// motore, stessa colonna, stessa fase del follow-up, template diverso.
+describe('GET /api/cron/lancio-followup — registrazione promessa', () => {
+  const REG = 'HXregistrazione';
+  const LINK = 'https://corso.feniceacademy.it/registrazione-web-developer-ai';
+  const PROMESSA = { registrazione_promessa_at: '2026-10-02T09:00:00Z' };
+
+  beforeEach(() => {
+    vi.stubEnv('LANCIO_REGISTRAZIONE_TEMPLATE_SID', REG);
+    stato.settings.lancio_video_live_link = LINK;
+    // conv 1 ha la promessa e come ultimo testo un "non posso": deve avere la
+    // registrazione, non il congedo e non il follow-up. conv 2 e' un follow-up normale.
+    stato.convs = [conv(1, { lancio_info: { ...PROMESSA } }), conv(2, { leads: { phone_e164: tel(2), first_name: 'anna verdi' } })];
+    stato.messaggi.set(1, righe(1, ['Il mio numero è attivo ma so già per certo che il 5 non potrò partecipare', '2026-10-02T08:59:00Z']));
+  });
+
+  it('chi ha la promessa riceve la registrazione col link, gli altri il follow-up', async () => {
+    const res = await (await richiesta()).json();
+    expect(res).toMatchObject({ sent: 2, congedati: 0, registrazione: { targets: 1, inviati: 1, riparati: 0, altri: 0 } });
+    expect(sendTemplate).toHaveBeenCalledWith(expect.objectContaining({ to: tel(1), contentSid: REG, variables: { '1': 'Mario', '2': LINK } }));
+    expect(sendTemplate).toHaveBeenCalledWith(expect.objectContaining({ to: tel(2), contentSid: SID, variables: { '1': 'Anna' } }));
+    expect(sendTemplate).toHaveBeenCalledTimes(2);
+    const msg = insertIn('messages').find((m) => m.template_sid === REG);
+    expect(String(msg?.body)).toBe(
+      `Ciao Mario, come ci avevi chiesto ecco la registrazione della live Web Developer AI: ${LINK} - se dopo averla vista vuoi parlarne con un consulente, rispondi a questo messaggio.`,
+    );
+    // Stesso timbro e stessa fase del follow-up: se risponde, il turno lo passa a Mario
+    // standard col video della live.
+    expect(impostaFaseLancio).toHaveBeenCalledWith(
+      expect.anything(),
+      1,
+      'followup_inviato',
+      { lancio_followup_inviato_at: expect.any(String) },
+      { soloDaFasi: ['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch'] },
+    );
+    expect(stato.timbrateAllInvio[0]).toContain(1);
+    expect(tipiEvento()).toContain('lancio_registrazione_inviata');
+    expect(tipiEvento()).toContain('lancio_followup_inviato');
+    expect(marcaCongedo).not.toHaveBeenCalled();
+    const p = eventoRun()?.payload as Record<string, unknown>;
+    expect(p.registrazione).toMatchObject({ targets: 1, inviati: 1 });
+    expect(String(eventoRun()?.message)).toContain('registrazioni 1/1');
+  });
+
+  it('la promessa vince sul rifiuto dell ultimo testo; il congedo marcato no', async () => {
+    stato.messaggi.set(1, righe(1, ['non mi interessa', '2026-10-02T08:59:00Z']));
+    await expect((await richiesta()).json()).resolves.toMatchObject({ congedati: 0, registrazione: { inviati: 1 } });
+    expect(sendTemplate).toHaveBeenCalledWith(expect.objectContaining({ to: tel(1), contentSid: REG }));
+
+    chiamate.length = 0;
+    sendTemplate.mockClear();
+    stato.timbrate = new Set();
+    stato.convs = [conv(1, { lancio_info: { ...PROMESSA, congedo_at: '2026-10-03T10:00:00Z' } })];
+    await richiesta();
+    expect(sendTemplate).not.toHaveBeenCalled();
+  });
+
+  it('chi ha la promessa ha scritto per forza: passa il pre-filtro last_inbound_at e haInteragito', async () => {
+    await richiesta('dry=1');
+    expect(selectConv()?.filtri).toContainEqual({ m: 'not', args: ['last_inbound_at', 'is', null] });
+    // Una promessa senza alcun inbound dopo l'ancora (non dovrebbe esistere) non manda nulla.
+    chiamate.length = 0;
+    stato.messaggi.set(1, righe(1));
+    await expect((await richiesta()).json()).resolves.toMatchObject({ saltati: { mai_scritto: 1 } });
+    expect(sendTemplate).not.toHaveBeenCalledWith(expect.objectContaining({ to: tel(1) }));
+  });
+
+  it('senza lancio_video_live_link: la chat si salta (mai il follow-up generico), warn, i follow-up normali partono', async () => {
+    delete stato.settings.lancio_video_live_link;
+    const res = await (await richiesta()).json();
+    expect(res).toMatchObject({ sent: 1, saltati: { registrazione_senza_link: 1 }, registrazione: { targets: 0 } });
+    expect(sendTemplate).toHaveBeenCalledTimes(1);
+    expect(sendTemplate).toHaveBeenCalledWith(expect.objectContaining({ to: tel(2), contentSid: SID }));
+    expect(sendTemplate).not.toHaveBeenCalledWith(expect.objectContaining({ to: tel(1) }));
+    // Resta candidata: nessun timbro, il run dopo la riprende.
+    expect(stato.timbrate.has(1)).toBe(false);
+    const warn = eventi().find((e) => e.type === 'lancio_registrazione_senza_link');
+    expect(warn?.level).toBe('warn');
+    expect(warn?.payload).toMatchObject({ chat: 1, mancano: ['lancio_video_live_link'] });
+  });
+
+  it('senza LANCIO_REGISTRAZIONE_TEMPLATE_SID: stesso salto, e non e un errore di configurazione del run', async () => {
+    vi.stubEnv('LANCIO_REGISTRAZIONE_TEMPLATE_SID', '');
+    const res = await (await richiesta()).json();
+    expect(res.skipped).toBeUndefined();
+    expect(res).toMatchObject({ sent: 1, saltati: { registrazione_senza_link: 1 } });
+    expect(sendTemplate).not.toHaveBeenCalledWith(expect.objectContaining({ to: tel(1) }));
+    expect(eventi().find((e) => e.type === 'lancio_registrazione_senza_link')?.payload).toMatchObject({ mancano: ['LANCIO_REGISTRAZIONE_TEMPLATE_SID'] });
+    expect(tipiEvento()).not.toContain('lancio_followup_config_error');
+  });
+
+  it('nessuna promessa in coda: niente warn anche senza link', async () => {
+    delete stato.settings.lancio_video_live_link;
+    stato.convs = [conv(2)];
+    await richiesta();
+    expect(tipiEvento()).not.toContain('lancio_registrazione_senza_link');
+  });
+
+  it('la seconda idempotenza guarda entrambi i SID: una registrazione gia spedita si ripara, non si rimanda', async () => {
+    stato.spediti = [{ conversation_id: 1 }];
+    const res = await (await richiesta()).json();
+    expect(res).toMatchObject({ riparati: 1, registrazione: { riparati: 1, inviati: 0 } });
+    const idem = chiamate.find((c) => c.table === 'messages' && c.filtri.some((f) => f.m === 'in' && f.args[0] === 'template_sid'));
+    expect(idem?.filtri).toContainEqual({ m: 'in', args: ['template_sid', [SID, REG]] });
+    expect(sendTemplate).not.toHaveBeenCalledWith(expect.objectContaining({ to: tel(1) }));
   });
 });
