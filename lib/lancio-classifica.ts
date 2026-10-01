@@ -43,7 +43,10 @@ const NO_ESPLICITO = new RegExp(
 const NO_FRASI = new RegExp(
   '\\b(' +
     [
-      'no grazie', "non e per me", 'non fa per me', 'non voglio( piu)?( ricevere)?', 'stop',
+      // "non voglio piu" e basta: il vecchio `non voglio( piu)?` leggeva come rifiuto
+      // "non voglio perdermela!" e "non voglio partecipare e poi trovarmi costretta a
+      // comprare" (che e' una domanda). "non voglio piu ricevere" e' gia' in NO_ESPLICITO.
+      'no grazie', "non e per me", 'non fa per me', 'non voglio piu', 'stop',
       'non (mi sono|ho) (mai )?iscritt[oa]',
     ].join('|') +
     ')\\b',

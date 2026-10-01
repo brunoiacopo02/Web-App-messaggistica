@@ -82,6 +82,15 @@ describe('classificaLancio — le domande vere dei lead non sono un congedo (30/
   ])('il rifiuto esplicito resta no anche col punto di domanda: "%s"', (b) => expect(classificaLancio(b)).toBe('no'));
 });
 
+describe('classificaLancio — "non voglio" non è un rifiuto da solo (01/10/2026)', () => {
+  it('"Non voglio perdermela!" non è un no', () => {
+    expect(classificaLancio('Non voglio perdermela!')).not.toBe('no');
+  });
+  it('"non voglio più" resta no', () => {
+    expect(classificaLancio('non voglio più')).toBe('no');
+  });
+});
+
 describe('classificaLancio — ringraziamenti e ricevute sono un sì (punto 5)', () => {
   it.each([
     'grazie', 'Grazie', 'Grazie mille', 'Grazie mille ☺️', 'ok grazie', 'Ciao, grazie mille', 'ricevuto',
