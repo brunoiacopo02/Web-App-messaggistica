@@ -118,6 +118,67 @@ export async function marcaCongedo(
 }
 
 /**
+ * Scioglie il congedo (piano 2026-10-01, Task 3): toglie `congedo_at` da `lancio_info` e
+ * scrive `congedo_revocato_at`, tenendo tutte le altre chiavi (risposte di B4, promessa
+ * della registrazione) — stesso merge di `marcaCongedo`, letto prima di scrivere.
+ *
+ * Compare-and-set sul valore di `congedo_at` letto: due messaggi in volo insieme ("Vorrei
+ * sapere del percorso" e subito dopo "Durata, modalità e prezzo") devono sciogliere il
+ * congedo una volta sola, o al CRM arrivano due note e in event_log due revoche. Torna
+ * `revocato: true` solo a chi ha scritto davvero, con il `lancio_info` nuovo.
+ *
+ * Non lancia: su una lettura o una scrittura fallita la chat resta congedata (muta, come
+ * prima di questa regola) e resta la traccia a voce alta.
+ */
+export async function revocaCongedo(
+  supabase: Supa,
+  conversationId: number,
+  quandoIso: string = new Date().toISOString(),
+): Promise<{ revocato: boolean; lancioInfo: Record<string, unknown> | null }> {
+  const { data, error: erroreLettura } = await supabase
+    .from('conversations')
+    .select('lancio_info')
+    .eq('id', conversationId)
+    .maybeSingle();
+  if (erroreLettura) {
+    await supabase.from('event_log').insert({
+      type: 'lancio_congedo_non_revocato',
+      payload: { conversationId, errore: erroreLettura.message, fase: 'lettura' } as never,
+      message: `[lancio] conv ${conversationId}: lancio_info non letto, congedo NON sciolto — ${erroreLettura.message}`,
+      level: 'warn',
+    });
+    return { revocato: false, lancioInfo: null };
+  }
+  const attuale = (data as { lancio_info?: Json | null } | null)?.lancio_info;
+  const base =
+    attuale && typeof attuale === 'object' && !Array.isArray(attuale)
+      ? (attuale as Record<string, unknown>)
+      : {};
+  const congedoAt = base.congedo_at;
+  // Gia' sciolto da un'altra richiesta (o mai marcato): niente da fare qui.
+  if (typeof congedoAt !== 'string' || congedoAt.trim() === '') return { revocato: false, lancioInfo: base };
+  const nuovo: Record<string, unknown> = { ...base, congedo_revocato_at: quandoIso };
+  delete nuovo.congedo_at;
+  const { data: scritte, error } = await supabase
+    .from('conversations')
+    .update({ lancio_info: nuovo as Json })
+    .eq('id', conversationId)
+    .eq('lancio_info->>congedo_at', congedoAt)
+    .select('id');
+  if (error) {
+    await supabase.from('event_log').insert({
+      type: 'lancio_congedo_non_revocato',
+      payload: { conversationId, errore: error.message, fase: 'scrittura' } as never,
+      message: `[lancio] conv ${conversationId}: congedo NON sciolto — ${error.message}`,
+      level: 'warn',
+    });
+    return { revocato: false, lancioInfo: base };
+  }
+  if (!scritte || scritte.length === 0) return { revocato: false, lancioInfo: base };
+  return { revocato: true, lancioInfo: nuovo };
+}
+
+/**
  * Il marcatore durevole della registrazione promessa su `conversations.lancio_info`
  * (`registrazione_promessa_at`): si scrive quando la frase della promessa e' PARTITA.
  * Lo legge il turno, perche' la frase esca una volta sola, e il cron del follow-up, che

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { impostaFaseLancio, marcaCongedo, marcaNotaRestituzione, marcaRegistrazionePromessa, contaBenvenutiUltimaOra, leggiIngressiLancioAt } from './lancio-db';
+import { impostaFaseLancio, marcaCongedo, revocaCongedo, marcaNotaRestituzione, marcaRegistrazionePromessa, contaBenvenutiUltimaOra, leggiIngressiLancioAt } from './lancio-db';
 
 /**
  * Finto Supabase: registra gli update su `conversations`, gli insert su `event_log` e la
@@ -159,6 +159,38 @@ describe('marcaCongedo', () => {
     const { supabase, calls } = makeSupabase({ erroreScrittura: { message: 'update ko' } });
     await expect(marcaCongedo(supabase, 42)).resolves.toBeUndefined();
     expect(eventiDiTipo(calls, 'lancio_congedo_non_marcato')[0].payload).toMatchObject({ fase: 'scrittura' });
+  });
+});
+
+// Piano 2026-10-01, Task 3: il congedo si scioglie quando il lead riscrive con una domanda.
+describe('revocaCongedo', () => {
+  it('toglie congedo_at, scrive congedo_revocato_at e tiene le altre chiavi', async () => {
+    const { supabase, calls } = makeSupabase({ lancioInfo: { risposte: ['studio'], congedo_at: '2026-09-30T10:00:00.000Z' } });
+    const r = await revocaCongedo(supabase, 42, '2026-10-01T10:00:00.000Z');
+    expect(r.revocato).toBe(true);
+    expect(calls.updates[0].lancio_info).toEqual({ risposte: ['studio'], congedo_revocato_at: '2026-10-01T10:00:00.000Z' });
+    expect(r.lancioInfo).toEqual(calls.updates[0].lancio_info);
+    // Compare-and-set sul congedo letto: due inbound in volo lo sciolgono una volta sola.
+    expect(calls.updateFiltri[0]).toContainEqual(['eq', 'lancio_info->>congedo_at', '2026-09-30T10:00:00.000Z']);
+  });
+
+  it('senza congedo (gia sciolto da un altro inbound): nessuna scrittura', async () => {
+    const { supabase, calls } = makeSupabase({ lancioInfo: { congedo_revocato_at: 'x' } });
+    expect((await revocaCongedo(supabase, 42)).revocato).toBe(false);
+    expect(calls.updates).toHaveLength(0);
+  });
+
+  it('lettura fallita: niente scrittura, traccia warn, resta congedato', async () => {
+    const { supabase, calls } = makeSupabase({ lancioInfo: { congedo_at: 'x' }, erroreLettura: { message: 'connessione persa' } });
+    expect((await revocaCongedo(supabase, 42)).revocato).toBe(false);
+    expect(calls.updates).toHaveLength(0);
+    expect(eventiDiTipo(calls, 'lancio_congedo_non_revocato')[0].payload).toMatchObject({ fase: 'lettura' });
+  });
+
+  it('scrittura fallita: revocato false e traccia distinta, non lancia', async () => {
+    const { supabase, calls } = makeSupabase({ lancioInfo: { congedo_at: 'x' }, erroreScrittura: { message: 'update ko' } });
+    expect((await revocaCongedo(supabase, 42)).revocato).toBe(false);
+    expect(eventiDiTipo(calls, 'lancio_congedo_non_revocato')[0].payload).toMatchObject({ fase: 'scrittura' });
   });
 });
 

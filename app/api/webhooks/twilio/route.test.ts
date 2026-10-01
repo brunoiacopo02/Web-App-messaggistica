@@ -32,6 +32,8 @@ const stato = {
   waNumberChat: null as string | null,
   /** Righe tornate dal compare-and-set sullo slug del link Sviluppatore AI. */
   linkEntrate: [{ id: 7 }] as Riga[],
+  /** Righe tornate dal compare-and-set su `congedo_at` (revoca del congedo, Task 3). */
+  revocate: [{ id: 7 }] as Riga[],
 };
 
 function from(table: string) {
@@ -61,6 +63,7 @@ function from(table: string) {
       // Il compare-and-set dell'adozione: `.is('ai_owner', null)` + `.select('id')`.
       if ('is:ai_owner' in s.filtri) return { data: stato.adottate, error: null };
       if ('is:lancio_slug' in s.filtri) return { data: stato.linkEntrate, error: null };
+      if ('lancio_info->>congedo_at' in s.filtri) return { data: stato.revocate, error: null };
       return { data: null, error: null };
     }
     if (s.colonne.includes('unread_count')) {
@@ -164,6 +167,7 @@ beforeEach(() => {
   stato.updates = [];
   stato.waNumberChat = null;
   stato.linkEntrate = [{ id: 7 }];
+  stato.revocate = [{ id: 7 }];
   vi.mocked(pushLeadEntrante).mockClear();
 });
 
@@ -488,5 +492,94 @@ describe('pulsante dopo la notte su un congedato (PO 25/09)', () => {
     await inbound(TESTO_PULSANTE_WEBINAR);
     expect(stato.updates.find((u) => 'lancio_fase' in u.valori)).toBeUndefined();
     expect(stato.updates.some((u) => u.valori.ai_status === 'active')).toBe(false);
+  });
+});
+
+// Piano 2026-10-01, Task 3: chi riscrive dopo il congedo del lancio. Casi veri: conv 22484
+// ("Vorrei sapere del percorso") e 21596 ("È possibile avere una registrazione?") erano
+// rimaste mute per sempre.
+describe('congedato che riscrive (Task 3)', () => {
+  const settingsLancio = {
+    attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null,
+    offertaDelMeseLink: null, eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti' as const, sender: 'principale' as const, quotaSecondario: 0,
+  };
+  const attendiAfter = () => new Promise((r) => setTimeout(r, 0));
+  beforeEach(() => {
+    vi.mocked(getLancioSettings).mockResolvedValue(settingsLancio as never);
+    vi.mocked(sendCrmNota).mockClear();
+    vi.mocked(sendCrmNota).mockResolvedValue({ sent: true });
+    vi.mocked(drainMarioReplies).mockClear();
+    Object.assign(stato.conv, {
+      ai_owner: 'mario', ai_status: 'closed', crm_lead_id: 'L9', bot_outcome: 'DA_SCARTARE',
+      lancio_slug: 'webdev-2026-10', lancio_fase: 'chiuso', lancio_ingresso: 'lista',
+      lancio_info: { risposte: ['studio'], congedo_at: '2026-09-30T10:00:00.000Z' },
+    });
+  });
+  afterEach(() => { vi.mocked(getLancioSettings).mockReset(); });
+
+  it('prima della live: congedo sciolto, fase attesa, chat riaperta, evento, nota al CRM, drain', async () => {
+    vi.stubEnv('LANCIO_FAKE_NOW', '2026-10-01T18:00:00+02:00');
+    await inbound('Vorrei sapere del percorso');
+    await attendiAfter();
+    const info = stato.updates.find((u) => 'lancio_info' in u.valori)?.valori.lancio_info as Riga;
+    expect(info.congedo_at).toBeUndefined();
+    expect(typeof info.congedo_revocato_at).toBe('string');
+    expect(info.risposte).toEqual(['studio']);
+    expect(stato.updates.find((u) => 'lancio_fase' in u.valori)?.valori.lancio_fase).toBe('attesa');
+    expect(stato.updates.some((u) => u.valori.ai_status === 'active')).toBe(true);
+    expect(eventi('lancio_congedo_revocato')[0].payload).toMatchObject({ testo: 'Vorrei sapere del percorso', faseDa: 'chiuso', faseA: 'attesa' });
+    // Una nota sola: quella del congedo sciolto, non anche "il bot ha ripreso la chat".
+    expect(sendCrmNota).toHaveBeenCalledTimes(1);
+    expect(String(vi.mocked(sendCrmNota).mock.calls[0][2])).toBe(
+      'Lancio Web Dev AI: aveva detto di no, poi ha riscritto ("Vorrei sapere del percorso"): il bot ha ripreso la conversazione.',
+    );
+    expect(drainMarioReplies).toHaveBeenCalledTimes(1);
+  });
+
+  it('dopo la live: la fase resta chiuso (Mario standard col video), la chat si riapre', async () => {
+    vi.stubEnv('LANCIO_FAKE_NOW', '2026-10-06T12:00:00+02:00');
+    await inbound('Durata, modalità di svolgimento e prezzo');
+    expect(stato.updates.find((u) => 'lancio_fase' in u.valori)).toBeUndefined();
+    expect(eventi('lancio_congedo_revocato')[0].payload).toMatchObject({ faseDa: 'chiuso', faseA: 'chiuso' });
+    expect(stato.updates.some((u) => u.valori.ai_status === 'active')).toBe(true);
+    expect(drainMarioReplies).toHaveBeenCalledTimes(1);
+  });
+
+  it('una chiusura di cortesia o una protesta non sciolgono niente: muta come prima', async () => {
+    vi.stubEnv('LANCIO_FAKE_NOW', '2026-10-01T18:00:00+02:00');
+    for (const t of ['Grazie', 'Vergognatevi']) {
+      await inbound(t);
+    }
+    expect(stato.updates.find((u) => 'lancio_info' in u.valori)).toBeUndefined();
+    expect(stato.updates.some((u) => u.valori.ai_status === 'active')).toBe(false);
+    expect(eventi('lancio_congedo_revocato')).toHaveLength(0);
+    expect(drainMarioReplies).not.toHaveBeenCalled();
+  });
+
+  it('col fermo manuale non si scioglie', async () => {
+    stato.conv.ai_paused_at = '2026-10-01T09:00:00Z';
+    await inbound('Vorrei sapere del percorso');
+    expect(stato.updates.find((u) => 'lancio_info' in u.valori)).toBeUndefined();
+    expect(eventi('lancio_congedo_revocato')).toHaveLength(0);
+  });
+
+  it('compare-and-set perso (l ha sciolto un altro inbound): niente evento, niente nota, niente seconda riapertura', async () => {
+    vi.stubEnv('LANCIO_FAKE_NOW', '2026-10-01T18:00:00+02:00');
+    stato.revocate = [];
+    await inbound('Vorrei sapere del percorso');
+    await attendiAfter();
+    expect(eventi('lancio_congedo_revocato')).toHaveLength(0);
+    expect(sendCrmNota).not.toHaveBeenCalled();
+    expect(stato.updates.some((u) => u.valori.ai_status === 'active')).toBe(false);
+  });
+
+  it('il CRM rifiuta la nota: la chat si riapre lo stesso, resta la traccia', async () => {
+    vi.stubEnv('LANCIO_FAKE_NOW', '2026-10-01T18:00:00+02:00');
+    vi.mocked(sendCrmNota).mockResolvedValue({ sent: false, status: 500, error: 'http_500' });
+    await inbound('Vorrei sapere del percorso');
+    await attendiAfter();
+    expect(stato.updates.some((u) => u.valori.ai_status === 'active')).toBe(true);
+    expect(eventi('lancio_congedo_revocato_nota_fallita')).toHaveLength(1);
+    expect(drainMarioReplies).toHaveBeenCalledTimes(1);
   });
 });

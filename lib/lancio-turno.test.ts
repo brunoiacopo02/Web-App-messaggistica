@@ -124,6 +124,24 @@ describe('eseguiTurnoLancio — no', () => {
     expect(c2.convUpdates.some((u) => u.lancio_fase === 'posto_bloccato')).toBe(false);
   });
 
+  // Task 3 (piano 2026-10-01): il webhook ha sciolto il congedo perche' il lead ha
+  // riscritto con una domanda. La frase del congedo e' ancora in cronologia, ma il turno
+  // NON deve ritentare lo scarto: risponde alla domanda col modello.
+  it('congedo sciolto (congedo_revocato_at): niente ritentativo, risponde il modello', async () => {
+    genera.mockResolvedValueOnce({ classe: 'domanda', passToHuman: false, visibleReply: 'Il percorso dura sei mesi.' });
+    const { supabase, calls } = makeSupabase();
+    const stato = await eseguiTurnoLancio(supabase, base({
+      rows: [WELCOME, inb('non mi interessa'), outLibero(TESTO_CONGEDO), inb('Vorrei sapere del percorso')],
+      inboundBody: 'Vorrei sapere del percorso',
+      lancioInfo: { congedo_revocato_at: '2026-10-01T10:00:00Z' } as never,
+    }));
+    expect(stato).toBe('active');
+    expect(genera).toHaveBeenCalledTimes(1);
+    expect(sendOutcome).not.toHaveBeenCalled();
+    expect(vi.mocked(sendFreeText).mock.calls[0][0].body).toBe('Il percorso dura sei mesi.');
+    expect(calls.convUpdates.some((u) => u.lancio_fase === 'chiuso')).toBe(false);
+  });
+
   it('senza crmLeadId (arruolamento a mano) niente esito: chiude e basta', async () => {
     const { supabase } = makeSupabase();
     const stato = await eseguiTurnoLancio(supabase, base({ crmLeadId: null, rows: [WELCOME, inb('no')], inboundBody: 'no' }));

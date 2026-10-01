@@ -219,6 +219,71 @@ export function classificaLancio(body: string | null | undefined): ClasseLancio 
   return 'incerto';
 }
 
+/**
+ * Chi riscrive dopo il congedo (piano 2026-10-01, Task 3). Fino al 1/10 un lead del
+ * lancio congedato restava muto per sempre: conv 22484, dopo il congedo, ha scritto
+ * "Vorrei sapere del percorso" e "Durata, modalità di svolgimento e prezzo" senza
+ * ricevere niente; conv 21596 "È possibile avere una registrazione? O ci sarà una altra
+ * data per lo meno?". Quelle persone non stavano dicendo di nuovo no.
+ *
+ * Qui si decide se il messaggio scioglie il congedo. In dubbio NO: riaprire su chi
+ * protesta ("Vergognatevi", "x queste puttanate e da stalking") e' peggio che lasciare
+ * in silenzio un "grazie". Per questo la regola e' a segnale positivo, nell'ordine:
+ *  1. il rifiuto (esplicito o il "no" del classificatore) resta chiuso;
+ *  2. insulti e proteste restano chiusi;
+ *  3. le chiusure di cortesia ("grazie", "👍", "ok buona serata", "a lei grazie",
+ *     "altrettanto") restano chiuse: sono la risposta al congedo, non una richiesta;
+ *  4. riapre una domanda ("?"), una richiesta di informazioni, un ripensamento, chi non
+ *     puo' esserci o chiede la registrazione, un sì vero ("ci sarò");
+ *  5. tutto il resto ("Grazie a voi. E scusate ancora per il disguido") resta chiuso.
+ */
+const PROTESTA =
+  /\b(vergogn\w*|stalk\w*|puttan\w*|truff\w*|spam\w*|molest\w*|denunc\w*|perditempo|ridicol\w*|schif\w*|squallid\w*|imbroglion\w*|smettetela|smettila|cazz\w*|vaffa\w*|fanculo)\b/;
+/**
+ * Le richieste di uscita che `congedoEsplicito` non vede perche' non parlano al bot in
+ * seconda persona: "Eliminate ogni mio contatto", "vorrei essere cancellata". Qui
+ * bastano per tenere chiuso: "vorrei" da solo, piu' sotto, riaprirebbe.
+ */
+const USCITA = /\b(cancellat[oae]|cancellate|rimoss[oa]|elimina(te|to|ta)|non (voglio|desidero) (piu|essere)|non contattatemi|contattarmi piu)\b/;
+/** Le parole di una chiusura di cortesia: un messaggio fatto SOLO di queste non riapre. */
+const CORTESIA = new Set([
+  'grazie', 'mille', 'tante', 'ok', 'okay', 'okey', 'va', 'bene', 'vabene', 'si', 'buona', 'buon', 'buonanotte',
+  'buonasera', 'buongiorno', 'giornata', 'serata', 'notte', 'sera', 'pomeriggio', 'weekend', 'domenica',
+  'a', 'lei', 'te', 'voi', 'anche', 'altrettanto', 'ciao', 'salve', 'arrivederci', 'saluti', 'cordiali',
+  'ricevuto', 'ricevuta', 'perfetto', 'gentile', 'gentilissimo', 'gentilissima', 'gentilissimi', 'presto',
+  'capito', 'chiaro', "d'accordo", 'daccordo', 'figurati', 'prego', 'e', 'di', 'cuore', 'tutto', 'ancora',
+]);
+/** I segnali che il lead vuole parlare: informazioni, ripensamento, altre date. */
+const RIAPRE = new RegExp(
+  [
+    'vorrei', 'volevo (sapere|capire|chiedere)', 'sapere', 'informazion[ei]', 'info', 'dettagli',
+    'percorso', 'corso', 'durata', 'modalita', 'prezz[oi]', 'cost[oia]', 'programma',
+    // ripensamento: "Intendevo spero non sia interessante" chiariva un messaggio letto male
+    'intendevo', 'volevo dire', 'mi sono (spiegat|sbagliat)[oa]', 'ho sbagliato', 'ci ho ripensato', 'ripensato',
+    'in realta', 'anzi', '(sono|sarei) (ancora )?interessat[oa]', 'mi interessa',
+    'altr[ae] dat[ae]', 'prossim[ao] (data|live|evento|webinar)',
+    // "Avevo piacere poterlo vedere" (conv 21596, dopo la data persa): vuole la live.
+    'avevo piacere', 'mi (piacerebbe|farebbe piacere)', '(poterl[ao] |di )?veder(e|l[ao])',
+  ].map((p) => `\\b${p}\\b`).join('|'),
+);
+
+export function congedoDaRevocare(body: string | null | undefined): boolean {
+  const raw = (body ?? '').trim();
+  if (!raw) return false;
+  const t = rimuoviIdiomiNeutri(normalizza(raw));
+  // Solo emoji, sticker in testo, punteggiatura: "👍" e' un saluto, non una richiesta.
+  if (!t || !/\p{L}/u.test(t)) return false;
+  if (congedoEsplicito(raw)) return false;
+  const classe = classificaLancio(raw);
+  if (classe === 'no') return false;
+  if (PROTESTA.test(t) || USCITA.test(t)) return false;
+  const parole = t.replace(/\?/g, ' ').split(/\s+/).filter(Boolean);
+  if (parole.every((p) => CORTESIA.has(p))) return false;
+  if (t.includes('?')) return true;
+  if (classe === 'domanda' || classe === 'registrazione' || classe === 'si') return true;
+  return RIAPRE.test(t);
+}
+
 export type LancioReplyParsed = {
   classe: 'si' | 'no' | 'domanda' | 'registrazione';
   passToHuman: boolean;

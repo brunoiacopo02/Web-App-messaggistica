@@ -8,6 +8,7 @@ import {
   tagliaRigheDalLancio, lancioRipartePerRiarruolamento, LANCIO_FASE_RIPARTE_AL_RIARRUOLAMENTO,
   linkSviluppatoreEntraNelLancio, registrazionePromessa,
   TESTO_REGISTRAZIONE_PROMESSA, TESTO_REGISTRAZIONE_PROMESSA_STASERA,
+  congedoInPiedi, congedoRevocato, faseDopoRevocaCongedo, notaCongedoRevocato,
 } from './lancio-fase';
 
 describe('costanti della spec §3.2 / §5.2', () => {
@@ -451,5 +452,44 @@ describe('dopo la notte del webinar (PO 25/09)', () => {
     expect(risposteRiscaldamento(info)).toEqual(['a', 'b']);
     expect(risposteRiscaldamento({ risposte: ['ok', 3, ' '] })).toEqual(['ok']);
     expect(risposteRiscaldamento(null)).toEqual([]);
+  });
+});
+
+// Piano 2026-10-01, Task 3: il congedo sciolto dal webhook quando il lead riscrive.
+describe('congedo sciolto', () => {
+  const out = (body: string) => ({ direction: 'out', body, template_sid: null });
+  const inb = (body: string) => ({ direction: 'in', body, template_sid: null });
+  const righe = [inb('non mi interessa'), out(TESTO_CONGEDO), inb('Vorrei sapere del percorso')];
+
+  it('congedoInPiedi: la frase in cronologia non basta piu se il congedo e stato sciolto', () => {
+    expect(congedoInPiedi(righe, { congedo_at: 'x' })).toBe(true);
+    // marcatore non scritto (lettura fallita al congedo): vale la cronologia, come prima
+    expect(congedoInPiedi(righe, null)).toBe(true);
+    expect(congedoInPiedi(righe, { congedo_revocato_at: '2026-10-01T10:00:00Z' })).toBe(false);
+    // sciolto e poi congedato di nuovo: vale il congedo nuovo
+    expect(congedoInPiedi(righe, { congedo_revocato_at: 'x', congedo_at: 'y' })).toBe(true);
+    expect(congedoInPiedi([inb('ciao')], { congedo_at: 'x' })).toBe(false);
+  });
+
+  it('congedoRevocato legge il marcatore', () => {
+    expect(congedoRevocato({ congedo_revocato_at: '2026-10-01T10:00:00Z' })).toBe(true);
+    expect(congedoRevocato({ congedo_at: 'x' })).toBe(false);
+    expect(congedoRevocato(null)).toBe(false);
+  });
+
+  it('faseDopoRevocaCongedo: attesa prima della live, chiuso dall ora della live o senza data', () => {
+    const evento = '2026-10-05T21:00:00+02:00';
+    expect(faseDopoRevocaCongedo(new Date('2026-10-01T10:00:00+02:00'), evento)).toBe('attesa');
+    expect(faseDopoRevocaCongedo(new Date('2026-10-05T21:00:00+02:00'), evento)).toBe('chiuso');
+    expect(faseDopoRevocaCongedo(new Date('2026-10-06T10:00:00+02:00'), evento)).toBe('chiuso');
+    expect(faseDopoRevocaCongedo(new Date('2026-10-01T10:00:00+02:00'), null)).toBe('chiuso');
+    expect(faseDopoRevocaCongedo(new Date('2026-10-01T10:00:00+02:00'), 'non una data')).toBe('chiuso');
+  });
+
+  it('notaCongedoRevocato: la frase del PO con le parole del lead, tagliate a 300', () => {
+    expect(notaCongedoRevocato('  Vorrei sapere del percorso ')).toBe(
+      'Lancio Web Dev AI: aveva detto di no, poi ha riscritto ("Vorrei sapere del percorso"): il bot ha ripreso la conversazione.',
+    );
+    expect(notaCongedoRevocato('x'.repeat(500))).toContain(`("${'x'.repeat(300)}")`);
   });
 });

@@ -4,7 +4,7 @@ import type { TurnoLancioInput } from './lancio-turno';
 import { generateLancioReply } from './lancio-reply';
 import { congedoEsplicito } from './lancio-classifica';
 import {
-  congedoGiaInviato, inboundDelLotto, paroleDelCongedo, registrazionePromessa,
+  congedoInPiedi, inboundDelLotto, paroleDelCongedo, registrazionePromessa,
   TESTO_REGISTRAZIONE_PROMESSA_STASERA, ultimoTestoDelLotto,
 } from './lancio-fase';
 import { marcaRegistrazionePromessa } from './lancio-db';
@@ -55,7 +55,8 @@ export async function turnoAssistenza(
   // al lead: un ritentativo alle 09:00 del 6 costa una chiamata al CRM e toglie dal
   // limbo un lead che aveva già detto no. Niente modello, niente seconda bolla, nessuna
   // riclassificazione — chi ha detto no resta un no anche se poi scrive "ok".
-  if (congedoGiaInviato(i.rows)) {
+  // Un congedo sciolto (Task 3) non si ritenta: la frase e' in cronologia, il no no.
+  if (congedoInPiedi(i.rows, i.lancioInfo)) {
     return congedoLancio(supabase, c, paroleDelCongedo(i.rows) ?? '', NOTA_CONGEDO, { giaInviato: true });
   }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { shouldAutoReply, shouldReopen, shouldAdoptInbound, nextUnansweredInboundIndex, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS, canSendOutcome, drainMarioReplies, isLockStale, LOCK_TTL_MS, shouldSendGdoVideo, martaSidsFromEnv, isSoloPresaDAtto, serveRedrive } from './fenice-autoreply';
+import { shouldAutoReply, shouldReopen, revocaCongedoLancio, shouldAdoptInbound, nextUnansweredInboundIndex, lastIsUnansweredInbound, isOrphanedReplyingLock, REPLYING_ORPHAN_MS, canSendOutcome, drainMarioReplies, isLockStale, LOCK_TTL_MS, shouldSendGdoVideo, martaSidsFromEnv, isSoloPresaDAtto, serveRedrive } from './fenice-autoreply';
 
 vi.mock('./mario', () => ({ generateMarioReply: vi.fn(), GDO_CONTEXT_NOTE: 'CONTESTO-GDO' }));
 vi.mock('./twilio', () => ({ sendFreeText: vi.fn(async () => ({ sid: 'SM_fake', status: 'queued' })) }));
@@ -233,6 +233,44 @@ describe('shouldReopen', () => {
     expect(shouldReopen({ aiOwner: 'mario', aiStatus: 'closed', lancioSlug: 'webdev-2026-10', lancioInfo: null })).toBe(true);
     // Senza `lancio_slug` non e' una chat del lancio: il marcatore non c'entra.
     expect(shouldReopen({ aiOwner: 'mario', aiStatus: 'closed', lancioInfo: { congedo_at: '2026-09-21T10:00:00Z' } })).toBe(true);
+  });
+
+  // Task 3 (piano 2026-10-01): il webhook scioglie il congedo PRIMA di chiamare
+  // shouldReopen, togliendo `congedo_at` e lasciando `congedo_revocato_at`.
+  it('a congedo sciolto la chat del lancio si riapre', () => {
+    expect(shouldReopen({
+      aiOwner: 'mario', aiStatus: 'closed',
+      lancioSlug: 'webdev-2026-10', lancioFase: 'chiuso', lancioInfo: { congedo_revocato_at: '2026-10-01T10:00:00Z' },
+    })).toBe(true);
+  });
+});
+
+describe('revocaCongedoLancio — chi riscrive dopo il congedo', () => {
+  const base = {
+    aiOwner: 'mario', aiStatus: 'closed', aiPausedAt: null, handedOffAt: null,
+    lancioSlug: 'webdev-2026-10', lancioFase: 'chiuso', lancioInfo: { congedo_at: '2026-09-30T10:00:00Z' },
+  };
+  it('scioglie su una domanda (conv 22484, 21596)', () => {
+    expect(revocaCongedoLancio({ ...base, testo: 'Vorrei sapere del percorso' })).toBe(true);
+    expect(revocaCongedoLancio({ ...base, testo: 'È possibile avere una registrazione? O ci sarà una altra data per lo meno?' })).toBe(true);
+    // Congedo con lo scarto ancora da ritentare: chat 'active', fase non terminale.
+    expect(revocaCongedoLancio({ ...base, aiStatus: 'active', lancioFase: 'attesa', testo: 'Vorrei sapere del percorso' })).toBe(true);
+  });
+  it('non scioglie su cortesia o protesta', () => {
+    for (const testo of ['Grazie', '👍', 'Vergognatevi', 'Ok buona serata']) {
+      expect(revocaCongedoLancio({ ...base, testo }), testo).toBe(false);
+    }
+  });
+  it('mai col fermo, con una persona, su un restituito, fuori dal lancio, senza congedo o a turno in volo', () => {
+    const t = 'Vorrei sapere del percorso';
+    expect(revocaCongedoLancio({ ...base, aiPausedAt: '2026-10-01T09:00:00Z', testo: t })).toBe(false);
+    expect(revocaCongedoLancio({ ...base, handedOffAt: '2026-10-01T09:00:00Z', testo: t })).toBe(false);
+    expect(revocaCongedoLancio({ ...base, aiStatus: 'handed_off', testo: t })).toBe(false);
+    expect(revocaCongedoLancio({ ...base, aiStatus: 'replying', testo: t })).toBe(false);
+    expect(revocaCongedoLancio({ ...base, lancioFase: 'restituito', testo: t })).toBe(false);
+    expect(revocaCongedoLancio({ ...base, lancioSlug: null, testo: t })).toBe(false);
+    expect(revocaCongedoLancio({ ...base, aiOwner: null, testo: t })).toBe(false);
+    expect(revocaCongedoLancio({ ...base, lancioInfo: null, testo: t })).toBe(false);
   });
 });
 

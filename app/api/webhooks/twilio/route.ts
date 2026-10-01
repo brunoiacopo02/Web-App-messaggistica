@@ -4,7 +4,7 @@ import { validateTwilioSignature } from '@/lib/twilio';
 import { toE164 } from '@/lib/phone';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getAutoReply } from '@/lib/fenice-settings';
-import { shouldAutoReply, shouldReopen, shouldAdoptInbound, drainMarioReplies } from '@/lib/fenice-autoreply';
+import { shouldAutoReply, shouldReopen, shouldAdoptInbound, drainMarioReplies, revocaCongedoLancio } from '@/lib/fenice-autoreply';
 import { isAudioInbound, transcribeTwilioAudio } from '@/lib/transcribe';
 import { handleGdoDeliveryUpdate } from '@/lib/send-agenda-gdo';
 import { sendCrmNota } from '@/lib/bot-outcome';
@@ -16,11 +16,12 @@ import {
 import {
   LANCIO_SLUG, pulsanteRiportaInPostPitch, pulsanteRiapreChat, pulsanteScriveFase, serveNotaRestituzione,
   linkSviluppatoreEntraNelLancio, pulsantePassaAMario, conMarioDopoNotte, haCongedo,
+  faseDopoRevocaCongedo, notaCongedoRevocato,
 } from '@/lib/lancio-fase';
 import { dallaLiveDelLancio, dopoLaNotteDelLancio } from '@/lib/lancio-scelta';
 import { adessoLancio } from '@/lib/lancio-orologio';
 import type { Json } from '@/lib/supabase/types';
-import { impostaFaseLancio, marcaNotaRestituzione } from '@/lib/lancio-db';
+import { impostaFaseLancio, marcaNotaRestituzione, revocaCongedo } from '@/lib/lancio-db';
 import { notaInboundDopoRestituzione } from '@/lib/lancio-restituzioni';
 import { getLancioSettings } from '@/lib/lancio-settings';
 import { pushLeadEntrante } from '@/lib/lead-entrante';
@@ -574,6 +575,69 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      // Chi riscrive dopo il congedo del lancio (piano 2026-10-01, Task 3). Fino al 1/10
+      // restava muto per sempre: conv 22484 ha chiesto "Vorrei sapere del percorso" e
+      // "Durata, modalità di svolgimento e prezzo" dopo il congedo, conv 21596 "È possibile
+      // avere una registrazione?", e nessuno ha risposto. Se il messaggio e' una domanda o
+      // un ripensamento (non un rifiuto, una protesta o un "grazie") il congedo si scioglie
+      // QUI, prima di `shouldReopen`: tolto `congedo_at`, la chat 'closed' si riapre per la
+      // strada di sempre e il drain risponde a questo messaggio.
+      // Il pulsante e il link Sviluppatore hanno le loro regole qui sopra (il pulsante su un
+      // congedato resta un no, PO 25/09): non passano di qui.
+      let congedoSciolto = false;
+      if (conv && !markerPulsante && !isMarkerLinkSviluppatore(messageBody) && revocaCongedoLancio({
+        aiOwner: conv.ai_owner,
+        aiStatus: conv.ai_status,
+        aiPausedAt: conv.ai_paused_at,
+        handedOffAt: conv.handed_off_at,
+        lancioSlug: conv.lancio_slug,
+        lancioInfo: conv.lancio_info,
+        lancioFase: conv.lancio_fase,
+        testo: messageBody,
+      })) {
+        // Compare-and-set sul congedo: di due inbound in volo insieme lo scioglie uno solo,
+        // e solo quello scrive fase, evento e nota.
+        const revoca = await revocaCongedo(supabase, conversationId);
+        if (revoca.revocato) {
+          congedoSciolto = true;
+          conv.lancio_info = revoca.lancioInfo as typeof conv.lancio_info;
+          // Prima della live torna nell'attesa (il turno del lancio le risponde); dall'ora
+          // della live resta Mario standard col video (`chiuso`).
+          const { eventoAt } = await getLancioSettings(supabase);
+          const faseDa = conv.lancio_fase;
+          const faseA = faseDopoRevocaCongedo(adessoLancio(), eventoAt);
+          if (faseDa !== faseA) {
+            await impostaFaseLancio(supabase, conversationId, faseA);
+            conv.lancio_fase = faseA;
+          }
+          await supabase.from('event_log').insert({
+            type: 'lancio_congedo_revocato',
+            payload: { conversationId, crmLeadId: conv.crm_lead_id, testo: messageBody.slice(0, 300), faseDa, faseA } as never,
+            message: `[lancio] ${phone} ha riscritto dopo il congedo (conv ${conversationId}): il bot riprende la conversazione, fase ${faseA}`,
+            level: 'info',
+          });
+          // La NOTA passa da `sendCrmNota` e non da `sendOutcome({ outcome: 'NOTA' })`: su
+          // una chat senza esito APPUNTAMENTO quest'ultimo PERSISTE `bot_outcome: 'NOTA'` e
+          // chiude `ai_status` (vedi la trappola in app/api/cron/sequence-touches) — cioe'
+          // richiuderebbe proprio la chat che stiamo riaprendo. Un CRM che risponde male non
+          // ferma niente: la chat si riapre lo stesso, e resta la traccia.
+          if (conv.crm_lead_id) {
+            const nota = notaCongedoRevocato(messageBody);
+            after((async () => {
+              const r = await sendCrmNota(supabase, conversationId, nota);
+              if (!r.sent) {
+                await supabase.from('event_log').insert({
+                  type: 'lancio_congedo_revocato_nota_fallita',
+                  payload: { conversationId, status: r.status ?? null, errore: r.error ?? null } as never,
+                  message: `[lancio] conv ${conversationId}: nota "ha riscritto dopo il congedo" NON arrivata al CRM (${r.error ?? r.status ?? '?'})`,
+                  level: 'warn',
+                });
+              }
+            })());
+          }
+        }
+      }
+
       if (conv && shouldReopen({
         aiOwner: conv.ai_owner,
         aiStatus: conv.ai_status,
@@ -590,7 +654,9 @@ export async function POST(req: NextRequest) {
         // a vuoto (caso Marina Destefanis). APPUNTAMENTO è escluso: lì il lead è già in
         // agenda e la riapertura ha il suo canale, le note del lead terminale.
         // Dopo la risposta a Twilio: la loro rete non deve rallentare il webhook.
-        if (conv.crm_lead_id && conv.bot_outcome && conv.bot_outcome !== 'APPUNTAMENTO') {
+        // Su un congedo appena sciolto la nota e' gia' partita qui sopra, con le parole del
+        // lead: una seconda campanella per lo stesso fatto e' rumore.
+        if (!congedoSciolto && conv.crm_lead_id && conv.bot_outcome && conv.bot_outcome !== 'APPUNTAMENTO') {
           after(
             sendCrmNota(
               supabase,

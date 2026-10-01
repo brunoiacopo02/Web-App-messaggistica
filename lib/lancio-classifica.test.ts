@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classificaLancio, congedoEsplicito, parseLancioReply } from './lancio-classifica';
+import { classificaLancio, congedoEsplicito, parseLancioReply, congedoDaRevocare } from './lancio-classifica';
 
 describe('classificaLancio — il sì che blocca il posto', () => {
   it.each(['sì', 'si', 'Si!', 'ok', 'Ok grazie', 'certo', 'confermo', 'sono interessato', 'interessata', 'ci sono', 'ci sarò', 'va bene', 'perfetto', 'bloccami il posto', 'ci sto'])(
@@ -221,5 +221,33 @@ describe('parseLancioReply — [LANCIO:REGISTRAZIONE]', () => {
   });
   it('minuscolo: riconosciuto lo stesso', () => {
     expect(parseLancioReply('ok [lancio:registrazione]').classe).toBe('registrazione');
+  });
+});
+
+// Piano 2026-10-01, Task 3: chi riscrive dopo il congedo. Casi veri: conv 22484 e 21596
+// hanno chiesto del percorso e della registrazione dopo il congedo e sono rimasti senza
+// risposta; le chiusure di cortesia e le proteste invece restano chiuse.
+describe('congedoDaRevocare — il messaggio scioglie il congedo?', () => {
+  it('riapre su domande, richieste di informazioni, ripensamenti', () => {
+    for (const t of [
+      'Vorrei sapere del percorso',
+      'Durata, modalità di svolgimento e prezzo',
+      'È possibile avere una registrazione? O ci sarà una altra data per lo meno?',
+      'Purtroppo. Però sono interessato in altre date. Grazie.',
+      'Intendevo spero non sia interessante',
+      'Avevo piacere poterlo vedere',
+      'Quanto costa?',
+      'Ci sarò',
+    ]) expect(congedoDaRevocare(t), t).toBe(true);
+  });
+  it('resta chiusa su cortesia, rifiuti, insulti e proteste', () => {
+    for (const t of [
+      'Grazie', '👍', 'Altrettanto', 'Grazie a voi. E scusate ancora per il disguido', 'Buona giornata',
+      'Vergognatevi',
+      'Eliminate ogni mio contatto dalla vostra academy, non voglio più essere contattato per nessuna ragione',
+      'Scrivere alle 7.36 x queste puttanate e da stalking',
+      'Ok buona serata', 'a lei grazie', 'No perditempo grazie', 'non mi interessa', 'Vorrei essere cancellata',
+      '', '   ', null, undefined,
+    ]) expect(congedoDaRevocare(t), String(t)).toBe(false);
   });
 });

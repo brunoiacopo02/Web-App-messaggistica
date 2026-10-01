@@ -18,6 +18,7 @@ import { confermaVideoVisto } from './video-visto';
 import { notaPrimoContatto } from './primo-contatto-note';
 import { haCongedo, lancioInCorso, marioDopoNotte, risposteRiscaldamento } from './lancio-fase';
 import { eseguiTurnoLancio } from './lancio-turno';
+import { congedoDaRevocare } from './lancio-classifica';
 import {
   lancioStandardDrain, lancioStandardContextNote, linkSviluppatoreContextNote, eventoLancioPassato,
   bloccaPassaggioLancio, NOTA_LANCIO_NIENTE_PASSAGGIO, TESTO_LANCIO_NIENTE_PASSAGGIO, pulsanteDopoNotteContextNote,
@@ -83,6 +84,11 @@ export function shouldAutoReply(g: AutoReplyGate): boolean {
  * dove trovarla. I chiamanti che non leggono le colonne del lancio non passano questi
  * campi e si comportano come prima.
  *
+ * Il congedo pero' si puo' sciogliere (piano 2026-10-01, Task 3): se il lead riscrive
+ * con una domanda o un ripensamento (`revocaCongedoLancio`) il webhook toglie
+ * `congedo_at` PRIMA di chiamare questa funzione, e da li' la chat si riapre come
+ * qualunque chat 'closed' di Mario.
+ *
  * Falso anche per una chat del lancio in fase `restituito`: il lead e' tornato al pool
  * del CRM (ruling C8).
  */
@@ -101,6 +107,39 @@ export function shouldReopen(g: {
   // rimetterebbe Mario su una persona che un GDO sta chiamando. Il webhook avvisa il CRM.
   if (g.lancioSlug && g.lancioFase === 'restituito') return false;
   return g.aiStatus === 'closed';
+}
+
+/**
+ * Pure: il congedo del lancio va sciolto per questo inbound? (piano 2026-10-01, Task 3)
+ *
+ * Fino al 1/10 chi era stato congedato restava muto per sempre, anche quando riscriveva
+ * per chiedere: conv 22484 "Vorrei sapere del percorso", "Durata, modalità di
+ * svolgimento e prezzo"; conv 21596 "È possibile avere una registrazione? O ci sarà una
+ * altra data per lo meno?". Nessuno dei due ha avuto risposta.
+ *
+ * Vero solo per una chat del lancio di Mario col congedo marcato e un testo che NON e'
+ * un rifiuto, una protesta o una chiusura di cortesia (`congedoDaRevocare`). Mai col
+ * fermo manuale, mai su una chat passata a una persona, mai su un restituito (e' del CRM,
+ * ruling C8). Lo stato deve essere 'closed' (congedo accettato dal CRM) o 'active'
+ * (congedo con lo scarto ancora da ritentare): 'replying' vuol dire un turno in volo, e
+ * cambiargli fase e marcatori sotto i piedi e' peggio di aspettare il messaggio dopo.
+ */
+export function revocaCongedoLancio(g: {
+  aiOwner: string | null;
+  aiStatus: string | null;
+  aiPausedAt?: string | null;
+  handedOffAt?: string | null;
+  lancioSlug?: string | null;
+  lancioInfo?: unknown;
+  lancioFase?: string | null;
+  testo: string;
+}): boolean {
+  if (g.aiPausedAt || g.handedOffAt) return false;
+  if (g.aiOwner !== 'mario') return false;
+  if (g.aiStatus !== 'closed' && g.aiStatus !== 'active') return false;
+  if (!g.lancioSlug || g.lancioFase === 'restituito') return false;
+  if (!haCongedo(g.lancioInfo)) return false;
+  return congedoDaRevocare(g.testo);
 }
 
 export type AdoptGate = {

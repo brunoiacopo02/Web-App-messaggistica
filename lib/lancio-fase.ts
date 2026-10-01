@@ -456,6 +456,49 @@ export function haCongedo(lancioInfo: unknown): boolean {
   return typeof v === 'string' && v.trim() !== '';
 }
 
+/** La chiave che resta in `lancio_info` quando un congedo viene sciolto (Task 3). */
+export const CHIAVE_CONGEDO_REVOCATO = 'congedo_revocato_at';
+
+/**
+ * Il congedo e' stato sciolto: il lead ha riscritto con una domanda o un ripensamento
+ * e il webhook ha tolto `congedo_at` (piano 2026-10-01, Task 3).
+ */
+export function congedoRevocato(lancioInfo: unknown): boolean {
+  if (!lancioInfo || typeof lancioInfo !== 'object' || Array.isArray(lancioInfo)) return false;
+  const v = (lancioInfo as Record<string, unknown>)[CHIAVE_CONGEDO_REVOCATO];
+  return typeof v === 'string' && v.trim() !== '';
+}
+
+/**
+ * Il congedo trovato in cronologia vale ancora? `congedoGiaInviato` legge la frase nei
+ * messaggi, e la frase resta li' anche dopo che il lead ha riscritto "Vorrei sapere del
+ * percorso" e il webhook ha sciolto il congedo: senza questa guardia il turno dopo lo
+ * avrebbe "ritentato" — DA_SCARTARE al CRM in silenzio, la stessa persona che avevamo
+ * appena ripreso. Vale ancora se non c'e' revoca, o se dopo la revoca e' arrivato un
+ * congedo nuovo (`congedo_at` di nuovo valorizzato).
+ */
+export function congedoInPiedi(rows: RigaLancio[], lancioInfo: unknown): boolean {
+  if (!congedoGiaInviato(rows)) return false;
+  return haCongedo(lancioInfo) || !congedoRevocato(lancioInfo);
+}
+
+/**
+ * Dove torna una chat del lancio quando il congedo si scioglie: prima della live
+ * nell'attesa (il turno del lancio le risponde e le tiene il posto), dall'ora della live
+ * in poi Mario standard col video (`chiuso`, vedi `lancioStandardDrain`). Senza
+ * `lancio_evento_at` leggibile non sappiamo se la live c'e' gia' stata: `chiuso`, cioe'
+ * Mario standard, che risponde comunque e non promette una sera che non conosciamo.
+ */
+export function faseDopoRevocaCongedo(now: Date, eventoAtIso: string | null | undefined): LancioFase {
+  const t = eventoAtIso ? Date.parse(eventoAtIso) : Number.NaN;
+  return !Number.isNaN(t) && now.getTime() < t ? 'attesa' : 'chiuso';
+}
+
+/** La nota al CRM quando il congedo si scioglie: chi lo ha in carico deve saperlo. */
+export function notaCongedoRevocato(testo: string): string {
+  return `Lancio Web Dev AI: aveva detto di no, poi ha riscritto ("${testo.trim().slice(0, 300)}"): il bot ha ripreso la conversazione.`;
+}
+
 /**
  * La registrazione gli e' gia' stata promessa, letto dal marcatore durevole
  * `lancio_info.registrazione_promessa_at`. Serve al turno (la frase fissa esce una volta

@@ -6,7 +6,7 @@ import { getLancioSettings, type LancioSettings } from './lancio-settings';
 import { generateLancioReply } from './lancio-reply';
 import { classificaLancio, type LancioReplyParsed } from './lancio-classifica';
 import {
-  congedoGiaInviato, contaScambiDomande, decideLancioTurno, faseGestitaB1, inboundDelLotto,
+  congedoInPiedi, contaScambiDomande, decideLancioTurno, faseGestitaB1, inboundDelLotto,
   MAX_SCAMBI_DOMANDE, paroleDelCongedo, tagliaRigheDalLancio, TESTO_CHIUSURA_DOMANDE, TESTO_CONGEDO,
   TESTO_NIENTE_PASSAGGIO, ultimoTestoDelLotto, registrazionePromessa,
   type ClasseLancio, type LancioAzione, type RigaLancio,
@@ -107,7 +107,9 @@ export async function eseguiTurnoLancio(supabase: Supa, i: TurnoLancioInput): Pr
   // Il congedo e' uscito ma la fase non e' terminale: il CRM aveva rifiutato l'esito e
   // questo turno serve solo a ritentarlo. Niente modello, niente seconda bolla e
   // nessuna riclassificazione — chi ha detto no resta un no anche se poi scrive "ok".
-  const daRitentare = faseGestita && congedoGiaInviato(righe);
+  // Un congedo sciolto dal webhook (il lead ha riscritto con una domanda) non si
+  // ritenta: la frase e' ancora in cronologia, ma il no non vale piu'.
+  const daRitentare = faseGestita && congedoInPiedi(righe, i.lancioInfo);
 
   // Si risponde al LOTTO, non al singolo inbound che il drain ha scelto: il drain passa
   // il primo messaggio rimasto senza risposta, e classificare quello lasciava nel buio
