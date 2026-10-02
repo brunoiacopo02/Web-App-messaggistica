@@ -323,7 +323,9 @@ export function testoAtNonValido(o: OreTreStrade, now: Date): string {
   return `Quell'ora non riesco a fissarla. ${testoOreTreStrade(o, now)}`;
 }
 
-export const TESTO_NESSUN_VENDITORE = 'Stasera i consulenti sono tutti occupati: fissiamo una videocall domani?';
+/** Senza ora del giorno ("stasera", "domani"): esce anche fra mezzanotte e le 03:00 del 6 e
+ *  di giorno, e lo segue sempre `testoOreTreStrade`, che chiede gia' "a che ora ci saresti?". */
+export const TESTO_NESSUN_VENDITORE = 'In questo momento i consulenti sono tutti al telefono: fissiamo una videocall.';
 export const TESTO_CHIAMATA_FUORI_ORARIO = 'A quest\'ora fissiamo direttamente la videocall.';
 export const TESTO_ERRORE_CRM = 'Ho un problema tecnico a registrare la scelta in questo momento: riscrivimi tra qualche minuto e la fisso subito.';
 export const TESTO_DOPO_SCELTA = 'Ricevuto, lo passo al consulente che ti chiama.';

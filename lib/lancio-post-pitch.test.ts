@@ -158,13 +158,15 @@ describe('turnoPostPitch — [LANCIO:CHIAMA_ORA] dentro il percorso chiamata', (
     expect(eventi(calls, 'fenice_ai_reply')).toHaveLength(1);
   });
 
-  it('409 nessun_venditore: "tutti occupati" + le ore, percorso azzerato, active', async () => {
+  it('409 nessun_venditore: "tutti al telefono" + le ore, percorso e conteggio azzerati, active', async () => {
     genera.mockResolvedValueOnce(modello({ lancioTag: { tag: 'CHIAMA_ORA' } }));
     vi.mocked(lancioCallNow).mockResolvedValueOnce({ ok: false, motivo: 'nessun_venditore' });
     const { supabase, calls } = makeSupabase();
     expect(await turnoPostPitch(supabase, inPercorso('adesso', { percorso: 'chiamata', domande: 1 }), ctx())).toBe('active');
     expect(bolle()).toEqual([`${TESTO_NESSUN_VENDITORE} ${SLOT_TEXT_NOTTE}`]);
-    expect(infoSalvata(calls)).toMatchObject({ percorso: null, domande: 2, slotsMostratiAt: NOTTE.toISOString() });
+    // Le risposte della chiamata restano (vanno al CRM), il conteggio no: non e' la prequalifica.
+    expect(infoSalvata(calls)).toMatchObject({ percorso: null, domande: 0, slotsMostratiAt: NOTTE.toISOString() });
+    expect(infoSalvata(calls).risposte).toEqual(['studio informatica', 'il progetto finale', 'adesso']);
     expect(impostaFaseLancio).not.toHaveBeenCalled();
   });
 
@@ -461,6 +463,55 @@ describe('turnoPostPitch — le tre strade', () => {
     expect(bolle()).toEqual([TESTO_NESSUNA_ORA]);
     expect(vi.mocked(sendCrmNota).mock.calls[0][2]).toContain('30 giorni');
     expect(eventi(calls, 'lancio_slots_vuoti')).toHaveLength(1);
+  });
+
+  // Fix round 1: `domande` passa SOLO fra le due strade di prenotazione (spec §2.2 p.4).
+  it('a. chiamata senza venditori, poi un ora della mattina: prequalifica da capo (domande 0), niente book', async () => {
+    genera.mockResolvedValueOnce(modello({ visibleReply: 'Ok!' }));
+    vi.mocked(lancioCallNow).mockResolvedValueOnce({ ok: false, motivo: 'nessun_venditore' });
+    const primo = makeSupabase();
+    expect(await turnoPostPitch(primo.supabase, inPercorso('perché ho perso il lavoro', { percorso: 'chiamata', domande: 1 }), ctx())).toBe('active');
+    expect(lancioCallNow).toHaveBeenCalledTimes(1);
+    const salvata = infoSalvata(primo.calls);
+    expect(salvata).toMatchObject({ percorso: null, domande: 0 });
+
+    vi.mocked(sendFreeText).mockClear();
+    genera.mockResolvedValueOnce(modello({ lancioTag: { tag: 'PRENOTA', at: AT10 } }));
+    genera.mockResolvedValueOnce(modello({ visibleReply: 'Cosa non va oggi nel tuo lavoro?' }));
+    const secondo = makeSupabase();
+    expect(await turnoPostPitch(secondo.supabase, scelta('domattina alle 10', { lancioInfo: salvata }), ctx())).toBe('active');
+    expect(lancioBook).not.toHaveBeenCalled();
+    expect(genera.mock.calls[2][1]).toMatchObject({ percorso: 'mattina', domandeFatte: 0 });
+    expect(infoSalvata(secondo.calls)).toMatchObject({ percorso: 'mattina', oraScelta: AT10, domande: 0 });
+    expect(bolle()).toEqual([`${TESTO_INTRO_PREQUALIFICA} Cosa non va oggi nel tuo lavoro?`]);
+  });
+
+  it('a2. PRENOTA direttamente dalla chiamata: il conteggio della chiamata non vale per la prenotazione', async () => {
+    genera.mockResolvedValueOnce(modello({ lancioTag: { tag: 'PRENOTA', at: AT10 } }));
+    genera.mockResolvedValueOnce(modello({ visibleReply: 'Cosa non va oggi nel tuo lavoro?' }));
+    const { supabase, calls } = makeSupabase();
+    expect(await turnoPostPitch(supabase, inPercorso('anzi, domattina alle 10', { percorso: 'chiamata', domande: 2 }), ctx())).toBe('active');
+    expect(lancioBook).not.toHaveBeenCalled();
+    expect(lancioCallNow).not.toHaveBeenCalled();
+    expect(infoSalvata(calls)).toMatchObject({ percorso: 'mattina', oraScelta: AT10, domande: 0 });
+    expect(bolle()[0].startsWith(TESTO_INTRO_PREQUALIFICA)).toBe(true);
+  });
+
+  it('b. mattina a meta delle domande, di notte chiede la chiamata: percorso chiamata da capo, ora scelta cancellata', async () => {
+    genera.mockResolvedValueOnce(modello({ lancioTag: { tag: 'CHIAMA_ORA' } }));
+    genera.mockResolvedValueOnce(modello({ visibleReply: 'Cosa ti spinge a voler fare un percorso come questo?' }));
+    const { supabase, calls } = makeSupabase();
+    expect(await turnoPostPitch(supabase, inPercorso('anzi chiamami adesso', { percorso: 'mattina', oraScelta: AT10, domande: 2 }), ctx())).toBe('active');
+    expect(lancioCallNow).not.toHaveBeenCalled();
+    expect(lancioBook).not.toHaveBeenCalled();
+    expect(genera.mock.calls[1][1]).toMatchObject({ percorso: 'chiamata', domandeFatte: 0 });
+    expect(infoSalvata(calls)).toMatchObject({ percorso: 'chiamata', domande: 0, oraScelta: null });
+    expect(bolle()).toEqual(['Cosa ti spinge a voler fare un percorso come questo?']);
+  });
+
+  it('il testo "nessun venditore" non nomina ne stasera ne domani: esce anche alle 01:00 del 6', () => {
+    expect(TESTO_NESSUN_VENDITORE).toBe('In questo momento i consulenti sono tutti al telefono: fissiamo una videocall.');
+    expect(TESTO_NESSUN_VENDITORE).not.toMatch(/stasera|domani|oggi/i);
   });
 
   it('al CRM va solo { risposte }: percorso, oraScelta e domande restano nel bot', async () => {

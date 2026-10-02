@@ -151,7 +151,7 @@ export async function turnoPostPitch(
   const domandeIniziali = info.domande ?? 0;
   if (percorsoIniziale) info.domande = domandeIniziali + testi.length;
   const domande = () => info.domande ?? 0;
-  /** Prenotazione o chiamata: la strada della mattina e quella delle Conferme hanno un'ora. */
+  /** Le due strade di prenotazione (mattina e Conferme): hanno un'ora, e fra loro il conteggio delle domande passa. */
   const conOra = (p: PercorsoLancio | null): p is 'mattina' | 'conferme' => p === 'mattina' || p === 'conferme';
 
   // Il tocco di un pulsante non passa dal modello (delibera PO 17/09): il titolo del
@@ -367,9 +367,12 @@ export async function turnoPostPitch(
     }
     if (esito.motivo === 'gia_prenotato') return giaPrenotato(esito, 'CHIAMA_ORA');
     if (esito.motivo === 'nessun_venditore') {
-      // Turno SERA vuoto: si ripiega sulla prenotazione. Le risposte restano (e `domande`
-      // con loro: chi ha gia' risposto non ricomincia da capo).
+      // Turno SERA vuoto: si ripiega sulla prenotazione. Le risposte restano (vanno al
+      // CRM), ma il conteggio no: le due domande della chiamata non sono la prequalifica
+      // della videocall, che si fa da capo (fix round 1). `domande` passa SOLO fra le due
+      // strade di prenotazione, mattina e Conferme (spec §2.2 punto 4).
       info.percorso = null;
+      info.domande = 0;
       return mostraOre((o) => `${TESTO_NESSUN_VENDITORE} ${testoOreTreStrade(o, now)}`);
     }
     // `conflitto` compreso: il client l'ha già ritentato una volta, qui si dice al lead
@@ -418,13 +421,12 @@ export async function turnoPostPitch(
   switch (tag?.tag) {
     case 'CHIAMA_ORA': {
       // Dentro la chiamata (seconda risposta, obiezione, tocco ripetuto) si chiama. Da
-      // fuori si entra nel percorso e si fa la prima domanda — salvo chi le domande le ha
-      // gia' fatte su un'altra strada (es. dopo un'ora esaurita): lui si chiama subito.
-      if (modo !== 'notte' || percorsoIniziale === 'chiamata' || domande() >= DOMANDE_PER_PERCORSO.chiamata) {
-        if (modo === 'notte') info.percorso = 'chiamata';
-        return chiamaOra();
-      }
+      // fuori si entra nel percorso e si fa la prima domanda. Le risposte della
+      // prenotazione NON valgono per la chiamata (fix round 1): le domande sono altre, il
+      // conteggio riparte da zero e l'ora scelta prima non vale piu'.
+      if (modo !== 'notte' || percorsoIniziale === 'chiamata') return chiamaOra();
       info.oraScelta = null;
+      info.domande = 0;
       return primaDomanda('chiamata', false);
     }
     case 'CONFERMA': {
@@ -441,8 +443,10 @@ export async function turnoPostPitch(
         return mostraOre((o) => testoAtNonValido(o, now));
       }
       // Dentro una prenotazione, cambiare ora non e' una risposta a una domanda: il
-      // conteggio del lotto si toglie.
+      // conteggio del lotto si toglie. Dalla chiamata alla prenotazione il conteggio
+      // riparte da zero: le risposte della chiamata non sono la prequalifica.
       if (conOra(percorsoIniziale)) info.domande = domandeIniziali;
+      if (percorsoIniziale === 'chiamata') info.domande = 0;
       const nuovo: 'mattina' | 'conferme' = v.kind === 'mattina' ? 'mattina' : 'conferme';
       info.oraScelta = tag.at;
       info.percorso = nuovo;
