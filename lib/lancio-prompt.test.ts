@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { FRASI_VIETATE } from './lancio-scelta';
 import { buildLancioSystem, DOMANDA_SCELTA_NOTTE, DOMANDA_SCELTA_GIORNO, DURATA_LIVE } from './lancio-prompt';
 
 const base = { fase: 'attesa', nome: 'ANNA BIANCHI', eventoAt: '2026-10-05T21:00:00+02:00' };
@@ -158,19 +159,15 @@ describe('buildLancioSystem — fase post_pitch (riscaldamento e scelta)', () =>
   const pp = (over: Partial<Parameters<typeof buildLancioSystem>[0]>) =>
     buildLancioSystem({ ...base, fase: 'post_pitch', modo: 'notte', risposteRaccolte: 0, bloccoSlot: null, ...over });
 
-  it('con 0 o 1 risposte fa UNA sola domanda di riscaldamento e non propone ancora la scelta', () => {
-    const s = pp({ risposteRaccolte: 0 });
-    expect(s).toContain('Risposte di riscaldamento già raccolte: 0 su 2');
-    expect(s).toMatch(/Fai UNA sola domanda/);
-    expect(s).toMatch(/cosa fa oggi/);
-    expect(s).toMatch(/cosa l'ha colpita della live/);
-    expect(s).not.toContain('Adesso è il momento della scelta');
-    expect(pp({ risposteRaccolte: 1 })).toContain('1 su 2');
-  });
-  it('se il lead taglia corto durante il riscaldamento, la domanda esatta ce l ha già sotto gli occhi', () => {
+  it('senza percorso niente riscaldamento: la scelta subito, con la domanda esatta', () => {
+    for (const modo of ['notte', 'giorno'] as const) {
+      const s = pp({ risposteRaccolte: 0, modo });
+      expect(s).toContain('Adesso è il momento della scelta');
+      expect(s).not.toContain('Risposte di riscaldamento già raccolte');
+      expect(s).not.toMatch(/cosa fa oggi/);
+    }
     expect(pp({ risposteRaccolte: 0 })).toContain(DOMANDA_SCELTA_NOTTE);
-    expect(pp({ risposteRaccolte: 1, modo: 'giorno' })).toContain(DOMANDA_SCELTA_GIORNO);
-    expect(pp({ risposteRaccolte: 0 })).toMatch(/salta il riscaldamento e chiedi esattamente/);
+    expect(pp({ risposteRaccolte: 0, modo: 'giorno' })).toContain(DOMANDA_SCELTA_GIORNO);
   });
   it('con 2 risposte pone la domanda della scelta, verbatim dalla spec §5.4', () => {
     const s = pp({ risposteRaccolte: 2 });
@@ -250,5 +247,36 @@ describe('buildLancioSystem — attesa con contesto GDO', () => {
   });
   it('le altre fasi non lo ricevono', () => {
     expect(buildLancioSystem({ ...base, fase: 'link_inviato', contestoGdo: true })).not.toContain('[LANCIO:ALTRO]');
+  });
+});
+
+describe('percorsi', () => {
+  const base2 = { fase: 'post_pitch', nome: 'Giulia', eventoAt: '2026-10-05T21:00:00+02:00', modo: 'notte' as const };
+  it('chiamata: le due domande e il tutor sulle obiezioni', () => {
+    const p = buildLancioSystem({ ...base2, percorso: 'chiamata', domandeFatte: 0 });
+    expect(p).toContain('cosa ti spinge');
+    expect(p).toContain('perché proprio adesso');
+    expect(p).toContain('ne parli direttamente col tutor');
+    expect(p).toContain('[LANCIO:CHIAMA_ORA]');
+  });
+  it('mattina: pacchetti senza prezzi e impegno a decidere', () => {
+    const p = buildLancioSystem({ ...base2, percorso: 'mattina', domandeFatte: 1 });
+    expect(p).toContain('Advance, Gold ed Exclusive');
+    expect(p).toContain('le vedi col tutor in call');
+    expect(p).toContain('un sì o un no');
+    expect(p).toContain('[LANCIO:CONFERMA]');
+  });
+  it('conferme: domande leggere su situazione, pain point e budget, niente impegno', () => {
+    const p = buildLancioSystem({ ...base2, percorso: 'conferme', domandeFatte: 0 });
+    expect(p).toMatch(/budget|investire/i);
+    expect(p).not.toContain('un sì o un no');
+  });
+  it('nessun prompt suggerisce condizionali sulla chiusura', () => {
+    for (const percorso of [null, 'chiamata', 'mattina', 'conferme'] as const) {
+      const p = buildLancioSystem({ ...base2, percorso, domandeFatte: 0 });
+      // Le frasi vietate possono comparire SOLO dentro la regola che le vieta.
+      const senzaRegola = p.replace(/MAI formule condizionali[^\n]*/g, '');
+      for (const re of FRASI_VIETATE) expect(senzaRegola).not.toMatch(re);
+    }
   });
 });

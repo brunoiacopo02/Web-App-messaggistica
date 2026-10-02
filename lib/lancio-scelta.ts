@@ -23,7 +23,7 @@ export type MotivoAtNonValido = 'formato' | 'giorno_non_ammesso' | 'ora_non_tond
 export type ValidazioneAt =
   | { ok: true; kind: LancioKind; date: string; hour: number }
   | { ok: false; motivo: MotivoAtNonValido };
-export type LancioTag = { tag: 'CHIAMA_ORA' } | { tag: 'PRENOTA'; at: string } | { tag: 'SLOTS' } | { tag: 'NO' };
+export type LancioTag = { tag: 'CHIAMA_ORA' } | { tag: 'PRENOTA'; at: string } | { tag: 'SLOTS' } | { tag: 'NO' } | { tag: 'CONFERMA' };
 export type OreProponibili = { mattina: number[]; pomeriggio: number[]; dopodomani: number[]; mattinaEsaurita: boolean };
 
 const H = 3600_000;
@@ -175,7 +175,7 @@ export function validaAtLancio(at: string, now: Date, eventoAt: Date): Validazio
   return { ok: true, kind, date, hour };
 }
 
-const TAG_RE = /\[LANCIO:(CHIAMA_ORA|PRENOTA|SLOTS|NO)(?:\|([^\]]*))?\]/gi;
+const TAG_RE = /\[LANCIO:(CHIAMA_ORA|PRENOTA|SLOTS|NO|CONFERMA)(?:\|([^\]]*))?\]/gi;
 
 /** Il primo tag del lancio nel testo del modello. PRENOTA senza argomento non vale. */
 export function parseLancioTag(raw: string): LancioTag | null {
@@ -185,6 +185,7 @@ export function parseLancioTag(raw: string): LancioTag | null {
     if (kind === 'CHIAMA_ORA') return { tag: 'CHIAMA_ORA' };
     if (kind === 'SLOTS') return { tag: 'SLOTS' };
     if (kind === 'NO') return { tag: 'NO' };
+    if (kind === 'CONFERMA') return { tag: 'CONFERMA' };
     if (kind === 'PRENOTA' && arg) return { tag: 'PRENOTA', at: arg };
   }
   return null;

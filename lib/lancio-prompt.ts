@@ -2,6 +2,8 @@ import { firstNameOf } from './name';
 import { formatRomeDateTime } from './rome-time';
 import type { ModoPostPitch } from './lancio-scelta';
 
+export type PercorsoLancio = 'chiamata' | 'mattina' | 'conferme';
+
 /**
  * System prompt del lancio "Web Developer AI", SEPARATO da mario-prompt.ts (spec §5.2):
  * qui non esistono pitch, quote, call standard, video, form. Un prompt per fase:
@@ -24,6 +26,10 @@ export type LancioPromptInput = {
    *  sono già in `lancio_info`, il blocco ORE PRENOTABILI costruito da `bloccoSlotPerPrompt`. */
   modo?: ModoPostPitch;
   risposteRaccolte?: number;
+  /** Solo post_pitch: il percorso scelto dal lead (Task 5/8) e quante domande del percorso
+   *  ha già ricevuto risposta. Senza percorso il lead sta ancora scegliendo. */
+  percorso?: PercorsoLancio | null;
+  domandeFatte?: number;
   bloccoSlot?: string | null;
   /** Attesa e assistenza: la registrazione gli e' gia' stata promessa (marcatore in
    *  `lancio_info`). Il modello deve saperlo, o a un "e quindi?" risponderebbe da capo. */
@@ -66,8 +72,35 @@ export function testoScelta(modo: ModoPostPitch): string {
   return modo === 'notte' ? `${DOMANDA_SCELTA_NOTTE} ${SPINTA_CHIAMATA_NOTTE}` : DOMANDA_SCELTA_GIORNO;
 }
 
-/** Quante risposte di riscaldamento prima della scelta (spec §5.4: "due domande"). */
-export const RISPOSTE_RISCALDAMENTO = 2;
+/** Quante risposte di riscaldamento prima della scelta. PO 02/10: niente riscaldamento
+ *  prima della scelta, le domande vengono dopo, per percorso (`DOMANDE_PER_PERCORSO`). */
+export const RISPOSTE_RISCALDAMENTO = 0;
+
+/** PO 02/10: la chiusura è data per scontata, mai condizionale. Questa riga è l'UNICA
+ *  del prompt che può nominare le frasi vietate (il test la toglie prima di controllare). */
+const CHIUSURA_PRESUNTA =
+  'MAI formule condizionali sulla chiusura ("se ti convince", "se ti interessa", "eventualmente"): la call col tutor serve a chiudere le ultime cose e fare l\'iscrizione, e lo dai per scontato.';
+
+function dovePercorso(percorso: PercorsoLancio | null | undefined, fatte: number, domandaScelta: string): string {
+  switch (percorso) {
+    case 'chiamata':
+      return `Il lead vuole essere chiamato subito. Prima gli fai due domande brevi, UNA alla volta (già fatte: ${fatte} su 2):
+1) cosa ti spinge a voler fare un percorso come questo?
+2) e perché proprio adesso hai deciso di muoverti?
+Quando ha risposto alla seconda → [LANCIO:CHIAMA_ORA]. Se fa un'obiezione, non vuole rispondere o insiste per essere chiamato: rispondi in breve "ne parli direttamente col tutor" e metti [LANCIO:CHIAMA_ORA]. Le domande non sono un esame: non insistere mai.`;
+    case 'mattina':
+      return `Il lead ha scelto un'ora con un venditore. I posti sono limitati: prima di fissare fai tre domande, UNA alla volta (già fatte: ${fatte} su 3):
+1) cosa non va oggi nel suo lavoro o nella sua situazione (il motivo vero per cui vuole cambiare);
+2) "Durante la live abbiamo presentato Advance, Gold ed Exclusive: a quale pensavi?" Non dire MAI prezzi né cosa contengono i pacchetti: se chiede le differenze, "le vedi col tutor in call";
+3) "In call col tutor chiudete le ultime cose e fai l'iscrizione: l'obiettivo è decidere lì, un sì o un no. Ti va bene?"
+Dopo la terza risposta → [LANCIO:CONFERMA]. Se fa un'obiezione su una domanda: "ne parli direttamente col tutor" e passa alla successiva (o [LANCIO:CONFERMA] se era l'ultima). Se cambia ora scegliendone un'altra dal blocco ORE PRENOTABILI → [LANCIO:PRENOTA|<ISO>].`;
+    case 'conferme':
+      return `Il lead ha scelto un'ora per la videocall. Prima di fissare fai qualche domanda leggera, UNA alla volta, senza spingere (già fatte: ${fatte} su 3): la sua situazione oggi (studio, lavoro); cosa vorrebbe cambiare; quanto sarebbe disposto a investire su sé stesso per riuscirci, senza dire cifre tu. Dopo la terza risposta, o se preferisce non rispondere → [LANCIO:CONFERMA]. Se cambia ora scegliendone un'altra dal blocco ORE PRENOTABILI → [LANCIO:PRENOTA|<ISO>].`;
+    default:
+      // Nessun percorso: il lead sta ancora scegliendo (pulsanti invariati).
+      return `Adesso è il momento della scelta. Se non l'hai ancora fatto, chiedi esattamente: "${domandaScelta}". Poi leggi la risposta e usa il tag giusto.`;
+  }
+}
 
 const QUANDO_DEFAULT = 'lunedì 5 ottobre alle 21:00';
 
@@ -254,17 +287,10 @@ function promptPostPitch(i: LancioPromptInput): string {
   const quando = quandoLive(i.eventoAt);
   const conChi = conChiParla(i.nome);
   const modo: ModoPostPitch = i.modo ?? 'giorno';
-  const n = Math.max(0, i.risposteRaccolte ?? 0);
   const blocco = i.bloccoSlot?.trim() || null;
 
-  // La domanda della scelta sta nel prompt in ENTRAMBI i rami: se il lead taglia corto
-  // durante il riscaldamento, il modello deve avere sotto gli occhi la frase esatta da
-  // usare, non improvvisarne una sua.
   const domandaScelta = testoScelta(modo);
-  const doveSiamo =
-    n < RISPOSTE_RISCALDAMENTO
-      ? `Fai UNA sola domanda di riscaldamento, breve e naturale, e rispondi a quello che dice. Esempi: cosa fa oggi (studio, lavoro); cosa l'ha colpita della live. Una domanda alla volta, niente interrogatorio. Non proporre ancora la scelta, a meno che sia il lead a chiedere di essere chiamato o di fissare: in quel caso salta il riscaldamento e chiedi esattamente: "${domandaScelta}".`
-      : `Adesso è il momento della scelta. Se non l'hai ancora fatto, chiedi esattamente: "${domandaScelta}". Poi leggi la risposta e usa il tag giusto.`;
+  const doveSiamo = dovePercorso(i.percorso ?? null, Math.max(0, i.domandeFatte ?? 0), domandaScelta);
 
   const regolaAdesso =
     modo === 'notte'
@@ -283,6 +309,7 @@ function promptPostPitch(i: LancioPromptInput): string {
     ...(modo === 'notte' ? ['[LANCIO:CHIAMA_ORA]'] : []),
     ...(blocco ? ['[LANCIO:PRENOTA|...]'] : []),
     '[LANCIO:SLOTS]',
+    ...(i.percorso === 'mattina' || i.percorso === 'conferme' ? ['[LANCIO:CONFERMA]'] : []),
   ];
   const tagSostituiti =
     tagDellaScelta.length === 1
@@ -292,7 +319,6 @@ function promptPostPitch(i: LancioPromptInput): string {
   return `${IDENTITA(conChi, `che ha appena seguito la live "Web Developer AI" di Fenice Academy (${quando}) e ha premuto il pulsante per saperne di più: è interessata al percorso.`)}
 
 DOVE SIAMO
-Risposte di riscaldamento già raccolte: ${n} su ${RISPOSTE_RISCALDAMENTO}.
 ${doveSiamo}
 
 LA SCELTA (regole)
@@ -300,7 +326,7 @@ ${regolaAdesso}
 ${regolaOre}
 - Non vuole essere chiamato, non gli interessa, "ci penso" definitivo → [LANCIO:NO].
 - Chiede di parlare con una persona: la persona è il consulente della call, quindi è la scelta. Se non l'hai ancora chiesta, chiedi esattamente "${domandaScelta}" → [LANCIO:DOMANDA]; se ha già scelto, il tag giusto qui sopra.
-- Tutto il resto (risposte al riscaldamento, domande sue, commenti) → [LANCIO:DOMANDA].
+- Tutto il resto (risposte alle tue domande, domande sue, commenti) → [LANCIO:DOMANDA].
 ${blocco ? `\n${blocco}\n` : ''}
 COSA SAI (e non una parola di più)
 - La live era gratuita; del percorso "Web Developer AI" ti parla il consulente nella call: ${REGOLA_PREZZI}
@@ -313,6 +339,7 @@ COME SCRIVI
 - Niente asterischi, niente markdown, niente trattino lungo; al massimo 35 parole.
 - Non proporre MAI un video, un modulo, un link o un altro appuntamento: l'unica cosa che si fissa qui è la call con il consulente.
 - Non inventare informazioni su Fenice Academy, sul percorso o sui consulenti.
+- ${CHIUSURA_PRESUNTA}
 - ${MAI_PASSAGGIO('digli che te lo spiega il consulente nella call')}
 - Se non conosci il suo nome non chiederglielo e non inventarlo. Non chiedere mai dati personali (email, cognome, età, indirizzo).
 - ${ANTI_INIEZIONE('sulla scelta di cui sopra')}

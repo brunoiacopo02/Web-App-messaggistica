@@ -97,13 +97,13 @@ beforeEach(() => {
 });
 
 describe('turnoPostPitch — riscaldamento', () => {
-  it('primo turno (il pulsante): niente slot, modello con 0 risposte in modo notte, UNA bolla, lancio_info senza il marker', async () => {
+  it('primo turno (il pulsante): PO 02/10 niente riscaldamento, le ore ci sono subito; modello con 0 risposte in modo notte, UNA bolla, lancio_info senza il marker', async () => {
     genera.mockResolvedValueOnce(modello({ visibleReply: 'Ciao Anna! Cosa fai oggi nella vita?' }));
     const { supabase, calls } = makeSupabase();
     const stato = await turnoPostPitch(supabase, base(), ctx());
     expect(stato).toBe('active');
-    expect(lancioSlots).not.toHaveBeenCalled();
-    expect(genera.mock.calls[0][1]).toMatchObject({ fase: 'post_pitch', nome: 'Anna', modo: 'notte', risposteRaccolte: 0, bloccoSlot: null, now: NOTTE });
+    expect(lancioSlots).toHaveBeenCalledWith('2026-10-06');
+    expect(genera.mock.calls[0][1]).toMatchObject({ fase: 'post_pitch', nome: 'Anna', modo: 'notte', risposteRaccolte: 0, now: NOTTE });
     expect(bolle()).toEqual(['Ciao Anna! Cosa fai oggi nella vita?']);
     expect(infoSalvata(calls)).toEqual({ risposte: [] });
     expect(eventi(calls, 'lancio_post_pitch_domanda')).toHaveLength(1);
@@ -617,13 +617,11 @@ describe('turnoPostPitch — il tocco di un pulsante si classifica prima del mod
     },
   );
 
-  it('durante il riscaldamento lo stesso testo NON e un tocco: risponde il modello', async () => {
-    genera.mockResolvedValueOnce(modello({ visibleReply: 'Ricevuto!' }));
+  it('PO 02/10: senza riscaldamento il testo del pulsante e subito un tocco, senza modello', async () => {
     const { supabase, calls } = makeSupabase();
     await turnoPostPitch(supabase, base({ rows: [LINK, PULSANTE, inb('Domani mattina')], inboundBody: 'Domani mattina' }), ctx());
-    expect(genera).toHaveBeenCalledTimes(1);
-    expect(bolle()).toEqual(['Ricevuto!']);
-    expect(eventi(calls, 'lancio_scelta_pulsante_tap')).toHaveLength(0);
+    expect(genera).not.toHaveBeenCalled();
+    expect(eventi(calls, 'lancio_scelta_pulsante_tap')).toHaveLength(1);
   });
 });
 

@@ -96,6 +96,7 @@ describe('tag', () => {
     expect(parseLancioTag('[LANCIO:PRENOTA|2026-10-06T09:00:00+02:00] ok')).toEqual({ tag: 'PRENOTA', at: '2026-10-06T09:00:00+02:00' });
     expect(parseLancioTag('Vediamo le ore [LANCIO:SLOTS]')).toEqual({ tag: 'SLOTS' });
     expect(parseLancioTag('[lancio:no]')).toEqual({ tag: 'NO' });
+    expect(parseLancioTag('ok [LANCIO:CONFERMA]')).toEqual({ tag: 'CONFERMA' });
     expect(parseLancioTag('nessun tag')).toBeNull();
     expect(stripLancioTags('Ciao [LANCIO:SLOTS] a te [LANCIO:PRENOTA|x]')).toBe('Ciao  a te');
   });
