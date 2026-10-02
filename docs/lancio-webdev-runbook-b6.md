@@ -151,6 +151,8 @@ Prova col numero di test dopo il deploy (nessun lead vero toccato).
 - [ ] **CRM in produzione PRIMA del bot** (il bot nuovo legge i campi nuovi di `slots`/`book`).
 - [ ] `LANCIO_FAKE_NOW` solo fuori prod / anteprima.
 
+**Rollback**: dopo il deploy del CRM nuovo, mai riportare indietro solo il bot (il bot vecchio non conosce kind 'conferme' e non applica il tetto); rollback solo in coppia CRM+bot.
+
 **1. Chiamami subito (di notte)**
 - [ ] Premere "Chiamami subito" -> il bot fa **2 domande**, una alla volta.
 - [ ] Dopo la seconda -> testo della chiamata **col nome del venditore**.
