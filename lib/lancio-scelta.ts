@@ -1,4 +1,4 @@
-import type { LancioSlots, LancioKind, LancioInfo } from './lancio-crm';
+import type { LancioSlots, LancioKind, LancioInfo, LancioProssimi, LancioOreGiorno } from './lancio-crm';
 import { isoWithOffset } from './bot-contract';
 import { romeDayKey, romeHour, romeMinute, romeOffset } from './rome-time';
 import { isMarkerPulsanteWebinar } from './primo-messaggio';
@@ -147,21 +147,32 @@ export function puoRispondere(now: Date, eventoAt: Date, fase: 'link_inviato' | 
 const kindDi = (date: string, hour: number, g: GiorniLancio): LancioKind =>
   date === g.dopodomani ? 'dopodomani' : hour < PRIMA_ORA_POMERIGGIO ? 'mattina' : 'pomeriggio';
 
-/** Le regole dure sull'ora scelta (spec §5.4). L'ordine dei motivi va dal più grave al più fine. */
+const FASCIA_CONFERME = { da: 9, a: 20 };
+/** 'YYYY-MM-DD' è una domenica? Ancora UTC a mezzogiorno: il giorno della settimana non scivola. */
+const domenica = (ymd: string) => new Date(`${ymd}T12:00:00Z`).getUTCDay() === 0;
+
+/**
+ * Le regole dure sull'ora scelta (spec §5.4). L'ordine dei motivi va dal più grave al più fine.
+ *
+ * Tre strade (PO 02/10): il giorno dopo la live resta com'era (9-14 `mattina` dai venditori,
+ * 15-20 `pomeriggio` alle Conferme); da lì in poi, lun-sab 9-20 e SENZA data di fine, tutto
+ * va alle Conferme (`conferme`). La domenica e il giorno della live non esistono.
+ */
 export function validaAtLancio(at: string, now: Date, eventoAt: Date): ValidazioneAt {
   if (!isoWithOffset(at)) return { ok: false, motivo: 'formato' };
   const ms = Date.parse(at);
   const d = new Date(ms);
   const g = giorniLancio(eventoAt);
   const date = romeDayKey(d);
-  if (date !== g.giornoDopo && date !== g.dopodomani) return { ok: false, motivo: 'giorno_non_ammesso' };
+  // Chiavi 'YYYY-MM-DD': l'ordine alfabetico è l'ordine cronologico.
+  if (date < g.giornoDopo || domenica(date)) return { ok: false, motivo: 'giorno_non_ammesso' };
   // Roma ha sempre un offset a ore intere: minuti e secondi UTC sono quelli italiani.
   if (d.getUTCMinutes() !== 0 || d.getUTCSeconds() !== 0 || d.getUTCMilliseconds() !== 0) return { ok: false, motivo: 'ora_non_tonda' };
   const hour = romeHour(d);
-  const fascia = date === g.giornoDopo ? FASCIA_GIORNO_DOPO : FASCIA_DOPODOMANI;
-  if (hour < fascia.da || hour > fascia.a) return { ok: false, motivo: 'fuori_fascia' };
+  if (hour < FASCIA_CONFERME.da || hour > FASCIA_CONFERME.a) return { ok: false, motivo: 'fuori_fascia' };
   if (ms < now.getTime() + ANTICIPO_MINIMO_MS) return { ok: false, motivo: 'troppo_vicino' };
-  return { ok: true, kind: kindDi(date, hour, g), date, hour };
+  const kind: LancioKind = date === g.giornoDopo ? (hour < PRIMA_ORA_POMERIGGIO ? 'mattina' : 'pomeriggio') : 'conferme';
+  return { ok: true, kind, date, hour };
 }
 
 const TAG_RE = /\[LANCIO:(CHIAMA_ORA|PRENOTA|SLOTS|NO)(?:\|([^\]]*))?\]/gi;
@@ -304,23 +315,111 @@ const oraLeggibile = (at: string) => {
 };
 
 export function testoConfermaChiamata(nomeVenditore: string): string {
-  return `Perfetto, ti chiama ${nomeVenditore} tra pochissimo.`;
+  return `Perfetto, ti faccio chiamare subito da ${nomeVenditore}. È una chiamata breve per valutare insieme le ultime cose e fare l'iscrizione, così blocchi il tuo posto: sono limitati.`;
 }
 
 /**
  * Il giorno dopo non e' una telefonata: e' una videocall su Google Meet (PO 30/09). La
- * mattina l'invito parte subito dal calendario del venditore, all'email del lead; il
- * pomeriggio e il 7 l'appuntamento passa dalle Conferme, che lo confermano e mandano il
- * link. Prima diceva "tieni il telefono a portata di mano": il lead aspettava una
- * chiamata che non arrivava e non guardava l'invito.
+ * mattina l'invito parte subito dal calendario del venditore, all'email del lead; tutto il
+ * resto (pomeriggio del 6, dal 7 in poi) passa dalle Conferme, che chiamano per confermare
+ * e mandano il link (PO 02/10). Il giorno è assoluto ("giovedì 8 ottobre"), non "domani":
+ * il lead rilegge il messaggio il giorno dopo.
  */
 export function testoConfermaPrenotazione(kind: LancioKind, at: string, nomeVenditore?: string | null): string {
-  const conChi = kind === 'mattina' && nomeVenditore ? ` con ${nomeVenditore}` : ' con un nostro consulente';
-  const link = kind === 'mattina'
-    ? 'il link per collegarti ti arriva per email'
-    : 'prima ti contattiamo per confermarla e mandarti il link';
-  return `Perfetto, ci vediamo in videocall ${oraLeggibile(at)}${conChi}: ${link}.`;
+  const d = new Date(Date.parse(at));
+  if (kind !== 'mattina') {
+    return `Fissato per ${etichettaGiorno(romeDayKey(d))} alle ${romeHour(d)}:00. Ti chiamerà Noemi per confermare e mandarti il link della videocall: rispondile!`;
+  }
+  const conChi = nomeVenditore ? ` con ${nomeVenditore}` : ' con un nostro consulente';
+  return `Perfetto, ci vediamo in videocall ${oraLeggibile(at)}${conChi}: il link per collegarti ti arriva per email.`;
 }
+
+/** Le ore delle tre strade: la mattina dei venditori e il primo giorno utile delle Conferme. */
+export type OreTreStrade = {
+  mattina: { date: string; ore: number[] } | null;
+  conferme: { date: string; ore: number[] } | null;
+  saltati: string[];
+};
+
+/**
+ * Dal calendario del CRM alle ore da proporre. Il CRM ha già applicato i suoi filtri, ma
+ * tra la lettura e il messaggio passa tempo: si rifiltra l'anticipo di un'ora, così non si
+ * promette un'ora che `validaAtLancio` poi rifiuterebbe. Un giorno senza ore sparisce.
+ * `null` (CRM non raggiungibile) = niente da proporre: chi chiama decide cosa dire.
+ */
+export function oreDaProssimi(p: LancioProssimi | null, now: Date): OreTreStrade {
+  if (!p) return { mattina: null, conferme: null, saltati: [] };
+  const avanti = (date: string, h: number) => Date.parse(atIso(date, h)) >= now.getTime() + ANTICIPO_MINIMO_MS;
+  const giorno = (x: LancioOreGiorno | null) => {
+    if (!x) return null;
+    const ore = [...new Set(x.ore.filter((o) => o.liberi > 0).map((o) => o.hour))].sort((a, b) => a - b).filter((h) => avanti(x.date, h));
+    return ore.length > 0 ? { date: x.date, ore } : null;
+  };
+  return { mattina: giorno(p.mattina), conferme: giorno(p.conferme), saltati: p.saltati };
+}
+
+/**
+ * Come si chiama un giorno ADESSO: 'oggi', 'domani', altrimenti per esteso. Si deriva dal
+ * giorno di Roma di `now`: dopo mezzanotte il 6 è già "oggi" e il 7 "domani".
+ */
+export function etichettaRelativa(date: string, now: Date): string {
+  const oggi = romeDayKey(now);
+  if (date === oggi) return 'oggi';
+  if (date === aggiungiGiorni(oggi, 1)) return 'domani';
+  return etichettaGiorno(date);
+}
+
+/** "alle 9, alle 10 o alle 11" per pochi orari, "dalle 9 alle 20" per una fascia continua. */
+const oreLeggibili = (ore: number[]) =>
+  ore.length > 3 && ore[ore.length - 1] - ore[0] === ore.length - 1 ? fasciaOre(ore) : elencoOre(ore);
+
+export const TESTO_NESSUNA_ORA = 'In questi giorni siamo pieni: lascio nota e ti scriviamo appena si libera un posto.';
+
+/**
+ * Il messaggio con le ore delle tre strade, scritto dal codice. Mattina dei venditori
+ * (se c'è) e giorno delle Conferme; i giorni `saltati` (senza ore) si dicono "pieni" così
+ * il lead non si chiede dove sia finito il pomeriggio.
+ */
+export function testoOreTreStrade(o: OreTreStrade, now: Date): string {
+  const parti: string[] = [];
+  if (o.mattina) {
+    const g = etichettaRelativa(o.mattina.date, now);
+    parti.push(`${g === 'domani' ? 'domattina' : g === 'oggi' ? 'stamattina' : `${g} mattina`} ${oreLeggibili(o.mattina.ore)}`);
+  }
+  if (o.conferme) {
+    const g = etichettaRelativa(o.conferme.date, now);
+    const pom = o.conferme.ore.every((h) => h >= PRIMA_ORA_POMERIGGIO);
+    parti.push(`${g}${pom && (g === 'domani' || g === 'oggi') ? ' pomeriggio' : ''} ${oreLeggibili(o.conferme.ore)}`);
+  }
+  if (parti.length === 0) return TESTO_NESSUNA_ORA;
+  const pieni = o.saltati.length > 0
+    ? `${maiuscola(o.saltati.map((d) => {
+        const g = etichettaRelativa(d, now);
+        return d === o.mattina?.date ? `${g} pomeriggio` : g;
+      }).join(' e '))} siamo pieni. `
+    : '';
+  return `${pieni}Per la videocall ho ${parti.join(', oppure ')}: a che ora ci saresti?`;
+}
+
+/** Il blocco per il system prompt: le sole stringhe che il modello può mettere nel tag. */
+export function bloccoOrePerPrompt(o: OreTreStrade, now: Date): string {
+  const riga = (date: string, h: number, nota: string) => `- ${atIso(date, h)} → ${etichettaRelativa(date, now)} alle ${h}:00 (${nota})`;
+  const righe = [
+    ...(o.mattina?.ore ?? []).map((h) => riga(o.mattina!.date, h, 'videocall col venditore')),
+    ...(o.conferme?.ore ?? []).map((h) => riga(o.conferme!.date, h, 'videocall, la conferma la fa Noemi')),
+  ];
+  return [
+    'ORE PRENOTABILI (nel tag [LANCIO:PRENOTA|...] copia ESATTAMENTE una di queste stringhe ISO, nessun altro giorno o ora esiste):',
+    ...(righe.length > 0 ? righe : ['- (nessuna ora libera: rispondi con [LANCIO:SLOTS] e basta)']),
+  ].join('\n');
+}
+
+/** Quante domande di prequalifica per strada prima di proporre l'ora o la chiamata. */
+export const DOMANDE_PER_PERCORSO = { chiamata: 2, mattina: 3, conferme: 3 } as const;
+/** Formule che svalutano la scelta: il lead non deve mai sentirle (PO 02/10). */
+export const FRASI_VIETATE = [/se ti convince/i, /se ti interessa/i, /eventualmente/i];
+export const TESTO_INTRO_PREQUALIFICA =
+  'Visto che i posti sono limitati, prima della videocall ti faccio un paio di domande per capire se il percorso è in linea con te.';
 
 export function testoOraEsaurita(
   hour: number,
@@ -347,7 +446,8 @@ export const TESTO_ERRORE_CRM = 'Ho un problema tecnico a registrare la scelta i
 export const TESTO_DOPO_SCELTA = 'Ricevuto, lo passo al consulente che ti chiama.';
 export const TESTO_CONGEDO_POST_PITCH = 'Nessun problema, grazie per aver seguito la live! Se ci ripensi, scrivimi qui.';
 
-const MAX_RISPOSTE = 6;
+/** Prequalifica: la scelta, l'ora e fino a 3 domande, ognuna con la sua risposta. */
+export const MAX_RISPOSTE = 12;
 const MAX_LUNGHEZZA_RISPOSTA = 300;
 
 /** Le parole del lead nel post-pitch, accumulate: sono le "info" che vanno al venditore. */

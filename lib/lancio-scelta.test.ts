@@ -3,6 +3,7 @@ import {
   giorniLancio, modoPostPitch, fineNotteLancio, modoEtichette, puoRispondere, validaAtLancio, parseLancioTag, stripLancioTags,
   oreProponibili, atIso, etichettaGiorno, testoSlots, bloccoSlotPerPrompt,
   testoConfermaChiamata, testoConfermaPrenotazione, testoOraEsaurita, raccogliRisposte,
+  etichettaRelativa, testoOreTreStrade, TESTO_INTRO_PREQUALIFICA, FRASI_VIETATE, oreDaProssimi, bloccoOrePerPrompt, DOMANDE_PER_PERCORSO,
 } from './lancio-scelta';
 import * as scelta from './lancio-scelta';
 import { MARKER_PULSANTE_WEBINAR } from './primo-messaggio';
@@ -61,26 +62,26 @@ describe('validaAtLancio: le regole dure', () => {
     expect(validaAtLancio('2026-10-06T09:00:00+02:00', NOTTE, EVENTO)).toEqual({ ok: true, kind: 'mattina', date: '2026-10-06', hour: 9 });
     expect(validaAtLancio('2026-10-06T14:00:00+02:00', NOTTE, EVENTO)).toMatchObject({ ok: true, kind: 'mattina' });
   });
-  it('15-20 del 6: pomeriggio; 9-14 del 7: dopodomani', () => {
+  it('15-20 del 6: pomeriggio; dal 7 le Conferme', () => {
     expect(validaAtLancio('2026-10-06T15:00:00+02:00', NOTTE, EVENTO)).toMatchObject({ ok: true, kind: 'pomeriggio' });
     expect(validaAtLancio('2026-10-06T20:00:00+02:00', NOTTE, EVENTO)).toMatchObject({ ok: true, kind: 'pomeriggio' });
-    expect(validaAtLancio('2026-10-07T14:00:00+02:00', NOTTE, EVENTO)).toMatchObject({ ok: true, kind: 'dopodomani' });
+    expect(validaAtLancio('2026-10-07T14:00:00+02:00', NOTTE, EVENTO)).toMatchObject({ ok: true, kind: 'conferme' });
   });
   it('senza offset: formato; l ora UTC equivalente conta come Roma', () => {
     expect(validaAtLancio('2026-10-06T09:00:00', NOTTE, EVENTO)).toEqual({ ok: false, motivo: 'formato' });
     expect(validaAtLancio('2026-10-06T07:00:00Z', NOTTE, EVENTO)).toMatchObject({ ok: true, hour: 9 });
   });
-  it('giorno non ammesso: il 5, l 8', () => {
+  it('giorno non ammesso: il 5 (la live) e la domenica', () => {
     expect(validaAtLancio('2026-10-05T23:00:00+02:00', NOTTE, EVENTO)).toEqual({ ok: false, motivo: 'giorno_non_ammesso' });
-    expect(validaAtLancio('2026-10-08T10:00:00+02:00', NOTTE, EVENTO)).toEqual({ ok: false, motivo: 'giorno_non_ammesso' });
+    expect(validaAtLancio('2026-10-11T10:00:00+02:00', NOTTE, EVENTO)).toEqual({ ok: false, motivo: 'giorno_non_ammesso' });
   });
   it('ora non tonda', () => {
     expect(validaAtLancio('2026-10-06T09:30:00+02:00', NOTTE, EVENTO)).toEqual({ ok: false, motivo: 'ora_non_tonda' });
   });
-  it('fuori fascia: 8 e 21 del 6, 15 del 7', () => {
+  it('fuori fascia: 8 e 21 del 6, 21 dell 8', () => {
     expect(validaAtLancio('2026-10-06T08:00:00+02:00', NOTTE, EVENTO)).toEqual({ ok: false, motivo: 'fuori_fascia' });
     expect(validaAtLancio('2026-10-06T21:00:00+02:00', NOTTE, EVENTO)).toEqual({ ok: false, motivo: 'fuori_fascia' });
-    expect(validaAtLancio('2026-10-07T15:00:00+02:00', NOTTE, EVENTO)).toEqual({ ok: false, motivo: 'fuori_fascia' });
+    expect(validaAtLancio('2026-10-08T21:00:00+02:00', NOTTE, EVENTO)).toEqual({ ok: false, motivo: 'fuori_fascia' });
   });
   it('troppo vicino: alle 09:10 del 6 le 9 e le 10 sono andate, le 11 no', () => {
     expect(validaAtLancio('2026-10-06T09:00:00+02:00', MATTINA6, EVENTO)).toEqual({ ok: false, motivo: 'troppo_vicino' });
@@ -206,21 +207,21 @@ describe('testi', () => {
     expect(b).not.toContain('2026-10-06T21:00:00+02:00');
   });
   it('conferme fisse', () => {
-    expect(testoConfermaChiamata('Luca')).toBe('Perfetto, ti chiama Luca tra pochissimo.');
+    expect(testoConfermaChiamata('Luca')).toBe("Perfetto, ti faccio chiamare subito da Luca. È una chiamata breve per valutare insieme le ultime cose e fare l'iscrizione, così blocchi il tuo posto: sono limitati.");
     expect(testoConfermaPrenotazione('mattina', '2026-10-06T09:00:00+02:00', 'Luca')).toBe('Perfetto, ci vediamo in videocall martedì 6 ottobre alle 9:00 con Luca: il link per collegarti ti arriva per email.');
-    expect(testoConfermaPrenotazione('pomeriggio', '2026-10-06T17:00:00+02:00')).toBe('Perfetto, ci vediamo in videocall martedì 6 ottobre alle 17:00 con un nostro consulente: prima ti contattiamo per confermarla e mandarti il link.');
+    expect(testoConfermaPrenotazione('pomeriggio', '2026-10-06T17:00:00+02:00')).toBe('Fissato per martedì 6 ottobre alle 17:00. Ti chiamerà Noemi per confermare e mandarti il link della videocall: rispondile!');
     expect(testoOraEsaurita(9, oreProponibili(SLOTS, NOTTE, EVENTO), GIORNI, 'notte')).toMatch(/^Le 9 si sono appena riempite\. Per la videocall ho libero/);
   });
 });
 
 describe('raccogliRisposte', () => {
-  it('accumula le parole del lead, salta il marker del pulsante, taglia a 6 e a 300 caratteri', () => {
+  it('accumula le parole del lead, salta il marker del pulsante, taglia a 12 e a 300 caratteri', () => {
     const uno = raccogliRisposte(null, ['Ho seguito la live Web Developer AI e voglio saperne di più 🚀', 'faccio il barista']);
     expect(uno.risposte).toEqual(['faccio il barista']);
     const lunga = 'x'.repeat(400);
-    const due = raccogliRisposte(uno, ['a', 'b', 'c', 'd', 'e', lunga, '  ']);
-    expect(due.risposte).toHaveLength(6);
-    expect(due.risposte[5]).toHaveLength(300);
+    const due = raccogliRisposte(uno, ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'l', 'm', lunga, '  ']);
+    expect(due.risposte).toHaveLength(12);
+    expect(due.risposte[11]).toHaveLength(300);
     expect(MARKER_PULSANTE_WEBINAR.test('ho seguito la LIVE web developer AI')).toBe(true);
   });
   it('conserva slotsMostratiAt', () => {
@@ -272,5 +273,70 @@ describe('dallaLiveDelLancio (PO 30/09): il pulsante si accende da solo alla liv
   it('senza evento o con un evento illeggibile non scatta mai', () => {
     expect(scelta.dallaLiveDelLancio(new Date('2026-10-05T22:00:00+02:00'), null)).toBe(false);
     expect(scelta.dallaLiveDelLancio(new Date('2026-10-05T22:00:00+02:00'), 'boh')).toBe(false);
+  });
+});
+
+describe('tre strade', () => {
+  const EV = new Date('2026-10-05T21:00:00+02:00');
+  const NOTTE = new Date('2026-10-05T22:30:00+02:00');
+  const DOPO_MEZZANOTTE = new Date('2026-10-06T01:00:00+02:00');
+
+  it('validaAtLancio: dal 7 lun-sab 9-20 alle Conferme, domenica no', () => {
+    expect(validaAtLancio('2026-10-06T10:00:00+02:00', NOTTE, EV)).toMatchObject({ ok: true, kind: 'mattina' });
+    expect(validaAtLancio('2026-10-06T16:00:00+02:00', NOTTE, EV)).toMatchObject({ ok: true, kind: 'pomeriggio' });
+    expect(validaAtLancio('2026-10-07T17:00:00+02:00', NOTTE, EV)).toMatchObject({ ok: true, kind: 'conferme' });
+    expect(validaAtLancio('2026-10-10T09:00:00+02:00', NOTTE, EV)).toMatchObject({ ok: true, kind: 'conferme' });
+    expect(validaAtLancio('2026-10-11T10:00:00+02:00', NOTTE, EV)).toEqual({ ok: false, motivo: 'giorno_non_ammesso' });
+    expect(validaAtLancio('2026-10-08T21:00:00+02:00', NOTTE, EV)).toEqual({ ok: false, motivo: 'fuori_fascia' });
+  });
+
+  it('etichettaRelativa dopo mezzanotte: il 6 è oggi, il 7 è domani', () => {
+    expect(etichettaRelativa('2026-10-06', NOTTE)).toBe('domani');
+    expect(etichettaRelativa('2026-10-06', DOPO_MEZZANOTTE)).toBe('oggi');
+    expect(etichettaRelativa('2026-10-07', DOPO_MEZZANOTTE)).toBe('domani');
+    expect(etichettaRelativa('2026-10-08', NOTTE)).toBe('giovedì 8 ottobre');
+  });
+
+  it('testoOreTreStrade: mattina venditori + giorno Conferme, e dice pieno sui saltati', () => {
+    const o = { mattina: { date: '2026-10-06', ore: [9, 10] }, conferme: { date: '2026-10-07', ore: [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20] }, saltati: ['2026-10-06'] };
+    const t = testoOreTreStrade(o, NOTTE);
+    expect(t).toContain('domattina alle 9 o alle 10');
+    expect(t).toMatch(/domani pomeriggio siamo pieni/i);
+    expect(t).toContain('mercoledì 7 ottobre dalle 9 alle 20');
+    expect(t).toMatch(/a che ora ci saresti\?$/);
+  });
+
+  it('oreDaProssimi: null, liberi a zero e anticipo di un ora', () => {
+    expect(oreDaProssimi(null, NOTTE)).toEqual({ mattina: null, conferme: null, saltati: [] });
+    const p = {
+      mattina: { date: '2026-10-06', ore: [{ hour: 9, liberi: 0 }, { hour: 10, liberi: 2 }] },
+      conferme: { date: '2026-10-07', ore: [{ hour: 9, liberi: 1 }] },
+      saltati: [],
+    };
+    expect(oreDaProssimi(p, NOTTE)).toEqual({ mattina: { date: '2026-10-06', ore: [10] }, conferme: { date: '2026-10-07', ore: [9] }, saltati: [] });
+    // Alle 09:30 del 6 le 10 sono a meno di un'ora: la mattina sparisce.
+    expect(oreDaProssimi(p, new Date('2026-10-06T09:30:00+02:00')).mattina).toBeNull();
+  });
+
+  it('bloccoOrePerPrompt: stringhe ISO e nessuna ora', () => {
+    const b = bloccoOrePerPrompt({ mattina: { date: '2026-10-06', ore: [10] }, conferme: { date: '2026-10-07', ore: [9] }, saltati: [] }, NOTTE);
+    expect(b).toContain('2026-10-06T10:00:00+02:00 → domani alle 10:00');
+    expect(b).toContain('2026-10-07T09:00:00+02:00');
+    expect(bloccoOrePerPrompt({ mattina: null, conferme: null, saltati: [] }, NOTTE)).toContain('nessuna ora libera');
+  });
+
+  it('nessun testo fisso contiene frasi vietate', () => {
+    const testi = [
+      testoConfermaChiamata('Marco'), TESTO_INTRO_PREQUALIFICA,
+      testoConfermaPrenotazione('conferme', '2026-10-07T10:00:00+02:00'),
+      testoConfermaPrenotazione('mattina', '2026-10-06T10:00:00+02:00', 'Marco'),
+    ];
+    for (const t of testi) for (const re of FRASI_VIETATE) expect(t).not.toMatch(re);
+  });
+
+  it('testi verbatim', () => {
+    expect(testoConfermaChiamata('Marco')).toBe("Perfetto, ti faccio chiamare subito da Marco. È una chiamata breve per valutare insieme le ultime cose e fare l'iscrizione, così blocchi il tuo posto: sono limitati.");
+    expect(testoConfermaPrenotazione('conferme', '2026-10-08T10:00:00+02:00')).toBe('Fissato per giovedì 8 ottobre alle 10:00. Ti chiamerà Noemi per confermare e mandarti il link della videocall: rispondile!');
+    expect(DOMANDE_PER_PERCORSO).toEqual({ chiamata: 2, mattina: 3, conferme: 3 });
   });
 });

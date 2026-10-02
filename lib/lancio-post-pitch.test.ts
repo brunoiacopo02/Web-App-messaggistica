@@ -142,7 +142,7 @@ describe('turnoPostPitch — [LANCIO:CHIAMA_ORA]', () => {
     const stato = await turnoPostPitch(supabase, scelta('adesso'), ctx());
     expect(stato).toBe('closed');
     expect(lancioCallNow).toHaveBeenCalledWith({ leadId: 'crm-L1', info: { risposte: ['studio informatica', 'il progetto finale', 'adesso'] }, note: NOTA_SCELTA });
-    expect(bolle()).toEqual(['Perfetto, ti chiama Luca tra pochissimo.']);
+    expect(bolle()).toEqual(["Perfetto, ti faccio chiamare subito da Luca. È una chiamata breve per valutare insieme le ultime cose e fare l'iscrizione, così blocchi il tuo posto: sono limitati."]);
     expect(impostaFaseLancio).toHaveBeenCalledWith(expect.anything(), 42, 'scelta_fatta', { lancio_info: { risposte: ['studio informatica', 'il progetto finale', 'adesso'] } });
     expect(eventi(calls, 'lancio_scelta')[0].payload).toMatchObject({ tipo: 'chiama_ora', venditore: { id: 'u7', nome: 'Luca' } });
     expect(eventi(calls, 'fenice_ai_reply')).toHaveLength(1);
@@ -232,7 +232,7 @@ describe('turnoPostPitch — [LANCIO:PRENOTA|iso]', () => {
     vi.mocked(lancioBook).mockResolvedValueOnce({ ok: true, kind: 'pomeriggio' });
     const { supabase } = makeSupabase();
     await turnoPostPitch(supabase, scelta('alle 17'), ctx());
-    expect(bolle()).toEqual(['Perfetto, ci vediamo in videocall martedì 6 ottobre alle 17:00 con un nostro consulente: prima ti contattiamo per confermarla e mandarti il link.']);
+    expect(bolle()).toEqual(['Fissato per martedì 6 ottobre alle 17:00. Ti chiamerà Noemi per confermare e mandarti il link della videocall: rispondile!']);
   });
 
   it('409 ora_esaurita: ripropone dagli slot AGGIORNATI del CRM, non da quelli letti prima', async () => {
@@ -276,7 +276,7 @@ describe('turnoPostPitch — [LANCIO:PRENOTA|iso]', () => {
 
   it('at fuori dalle regole dure (ora non tonda, giorno sbagliato, troppo vicino): niente book, si chiede un altra ora', async () => {
     const { supabase, calls } = makeSupabase();
-    for (const at of ['2026-10-06T09:30:00+02:00', '2026-10-08T10:00:00+02:00', '2026-10-05T23:00:00+02:00']) {
+    for (const at of ['2026-10-06T09:30:00+02:00', '2026-10-11T10:00:00+02:00', '2026-10-05T23:00:00+02:00']) {
       genera.mockResolvedValueOnce(prenota(at));
       await turnoPostPitch(supabase, scelta('boh'), ctx());
     }
@@ -444,7 +444,7 @@ describe('turnoPostPitch — numero sconosciuto senza crm_lead_id', () => {
     });
     expect(PROVENIENZA_LANCIO).toBe('Lancio Web Dev AI');
     expect(lancioCallNow).toHaveBeenCalledWith(expect.objectContaining({ leadId: 'crm-NEW' }));
-    expect(bolle()).toEqual(['Perfetto, ti chiama Sara tra pochissimo.']);
+    expect(bolle()).toEqual(["Perfetto, ti faccio chiamare subito da Sara. È una chiamata breve per valutare insieme le ultime cose e fare l'iscrizione, così blocchi il tuo posto: sono limitati."]);
   });
 
   it('chat riusata: il primo messaggio spinto al CRM e quello del PULSANTE, non il vecchio giro di Mario', async () => {
@@ -489,7 +489,7 @@ describe('turnoPostPitch — numero sconosciuto senza crm_lead_id', () => {
 describe('turnoDopoScelta — fase scelta_fatta', () => {
   it('primo messaggio dopo la scelta: "Ricevuto" una volta, le parole al CRM come nota, closed', async () => {
     const { supabase, calls } = makeSupabase();
-    const stato = await turnoDopoScelta(supabase, base({ fase: 'scelta_fatta', rows: [LINK, PULSANTE, out('Perfetto, ti chiama Luca tra pochissimo.'), inb('grazie, aspetto')], inboundBody: 'grazie, aspetto' }), ctx());
+    const stato = await turnoDopoScelta(supabase, base({ fase: 'scelta_fatta', rows: [LINK, PULSANTE, out("Perfetto, ti faccio chiamare subito da Luca. È una chiamata breve per valutare insieme le ultime cose e fare l'iscrizione, così blocchi il tuo posto: sono limitati."), inb('grazie, aspetto')], inboundBody: 'grazie, aspetto' }), ctx());
     expect(stato).toBe('closed');
     expect(bolle()).toEqual([TESTO_DOPO_SCELTA]);
     expect(vi.mocked(sendCrmNota).mock.calls[0].slice(1)).toEqual([42, expect.stringContaining('"grazie, aspetto"')]);
@@ -602,7 +602,7 @@ describe('turnoPostPitch — il tocco di un pulsante si classifica prima del mod
     expect(await turnoPostPitch(supabase, scelta('Chiamami subito'), ctx())).toBe('closed');
     expect(genera).not.toHaveBeenCalled();
     expect(lancioCallNow).toHaveBeenCalledTimes(1);
-    expect(bolle()).toEqual(['Perfetto, ti chiama Luca tra pochissimo.']);
+    expect(bolle()).toEqual(["Perfetto, ti faccio chiamare subito da Luca. È una chiamata breve per valutare insieme le ultime cose e fare l'iscrizione, così blocchi il tuo posto: sono limitati."]);
     expect(eventi(calls, 'lancio_scelta_pulsante_tap')[0].payload).toMatchObject({ titolo: 'Chiamami subito', tag: 'CHIAMA_ORA', modo: 'notte' });
   });
 
