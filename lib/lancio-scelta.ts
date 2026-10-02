@@ -45,6 +45,9 @@ function aggiungiGiorni(ymd: string, n: number): string {
   return `${a.getUTCFullYear()}-${pad(a.getUTCMonth() + 1)}-${pad(a.getUTCDate())}`;
 }
 
+/** Il giorno dopo una chiave 'YYYY-MM-DD' (per chiedere al CRM il giorno Conferme successivo). */
+export const giornoSuccessivo = (ymd: string): string => aggiungiGiorni(ymd, 1);
+
 export function giorniLancio(eventoAt: Date): GiorniLancio {
   const evento = romeDayKey(eventoAt);
   return { evento, giornoDopo: aggiungiGiorni(evento, 1), dopodomani: aggiungiGiorni(evento, 2) };
@@ -226,11 +229,17 @@ export function testoConfermaPrenotazione(kind: LancioKind, at: string, nomeVend
   return `Perfetto, ci vediamo in videocall ${oraLeggibile(at)}${conChi}: il link per collegarti ti arriva per email.`;
 }
 
-/** Le ore delle tre strade: la mattina dei venditori e il primo giorno utile delle Conferme. */
+/**
+ * Le ore delle tre strade: la mattina dei venditori e il primo giorno utile delle Conferme.
+ * `confermeAlternativo` (fix review finale) e' il giorno Conferme SUCCESSIVO al primo: non
+ * si propone nel testo (l'ordine di riempimento e' del PO), sta solo nel prompt, cosi' chi
+ * non puo' il primo giorno ha un'ora vera da prenotare invece di restare bloccato.
+ */
 export type OreTreStrade = {
   mattina: { date: string; ore: number[] } | null;
   conferme: { date: string; ore: number[] } | null;
   saltati: string[];
+  confermeAlternativo?: { date: string; ore: number[] } | null;
 };
 
 /**
@@ -299,6 +308,8 @@ export function bloccoOrePerPrompt(o: OreTreStrade, now: Date): string {
   const righe = [
     ...(o.mattina?.ore ?? []).map((h) => riga(o.mattina!.date, h, 'videocall col venditore')),
     ...(o.conferme?.ore ?? []).map((h) => riga(o.conferme!.date, h, 'videocall, la conferma la fa Noemi')),
+    ...(o.confermeAlternativo?.ore ?? []).map((h) =>
+      riga(o.confermeAlternativo!.date, h, 'videocall, la conferma la fa Noemi; solo se il lead non può il giorno prima')),
   ];
   return [
     'ORE PRENOTABILI (nel tag [LANCIO:PRENOTA|...] copia ESATTAMENTE una di queste stringhe ISO, nessun altro giorno o ora esiste):',
@@ -312,6 +323,9 @@ export const DOMANDE_PER_PERCORSO = { chiamata: 2, mattina: 3, conferme: 3 } as 
 export const FRASI_VIETATE = [/se ti convince/i, /se ti interessa/i, /eventualmente/i];
 export const TESTO_INTRO_PREQUALIFICA =
   'Visto che i posti sono limitati, prima della videocall ti faccio un paio di domande per capire se il percorso è in linea con te.';
+/** Sulla strada delle Conferme l'introduzione spinge meno (spec: "meno spinta"). */
+export const TESTO_INTRO_CONFERME =
+  'Prima di fissare ti faccio un paio di domande veloci, così chi ti chiama sa già da dove partire.';
 
 /** L'ora scelta e' stata presa mentre il lead rispondeva: le ore aggiornate, dal 409. */
 export function testoOraEsaurita(hour: number, o: OreTreStrade, now: Date): string {

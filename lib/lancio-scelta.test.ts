@@ -3,7 +3,7 @@ import {
   giorniLancio, modoPostPitch, fineNotteLancio, modoEtichette, puoRispondere, validaAtLancio, parseLancioTag, stripLancioTags,
   atIso, etichettaGiorno,
   testoConfermaChiamata, testoConfermaPrenotazione, testoOraEsaurita, testoAtNonValido, raccogliRisposte,
-  etichettaRelativa, testoOreTreStrade, TESTO_INTRO_PREQUALIFICA, FRASI_VIETATE, oreDaProssimi, bloccoOrePerPrompt, DOMANDE_PER_PERCORSO,
+  etichettaRelativa, testoOreTreStrade, TESTO_INTRO_PREQUALIFICA, TESTO_INTRO_CONFERME, giornoSuccessivo, FRASI_VIETATE, oreDaProssimi, bloccoOrePerPrompt, DOMANDE_PER_PERCORSO,
 } from './lancio-scelta';
 import * as scelta from './lancio-scelta';
 import { MARKER_PULSANTE_WEBINAR } from './primo-messaggio';
@@ -233,9 +233,32 @@ describe('tre strade', () => {
     expect(bloccoOrePerPrompt({ mattina: null, conferme: null, saltati: [] }, NOTTE)).toContain('nessuna ora libera');
   });
 
+  // Fix review finale (ruling 1): il secondo giorno Conferme sta nel prompt, mai nel testo.
+  it('confermeAlternativo: nel blocco del prompt con la sua etichetta, NON nel testo al lead', () => {
+    const o = {
+      mattina: null, conferme: { date: '2026-10-07', ore: [9, 10] }, saltati: [],
+      confermeAlternativo: { date: '2026-10-08', ore: [11, 12] },
+    };
+    const b = bloccoOrePerPrompt(o, NOTTE);
+    expect(b).toContain('2026-10-07T09:00:00+02:00');
+    expect(b).toContain('2026-10-08T11:00:00+02:00');
+    expect(b).toContain('2026-10-08T12:00:00+02:00');
+    expect(b).toMatch(/2026-10-08T11:00:00\+02:00[^\n]*solo se il lead non può il giorno prima/);
+    expect(b).not.toMatch(/2026-10-07T09:00:00\+02:00[^\n]*solo se/);
+    const testo = testoOreTreStrade(o, NOTTE);
+    expect(testo).not.toContain('8 ottobre');
+    expect(testo).not.toContain('11');
+    expect(testo).toBe(testoOreTreStrade({ ...o, confermeAlternativo: null }, NOTTE));
+  });
+
+  it('giornoSuccessivo: il giorno dopo, anche a cavallo del mese', () => {
+    expect(giornoSuccessivo('2026-10-07')).toBe('2026-10-08');
+    expect(giornoSuccessivo('2026-10-31')).toBe('2026-11-01');
+  });
+
   it('nessun testo fisso contiene frasi vietate', () => {
     const testi = [
-      testoConfermaChiamata('Marco'), TESTO_INTRO_PREQUALIFICA,
+      testoConfermaChiamata('Marco'), TESTO_INTRO_PREQUALIFICA, TESTO_INTRO_CONFERME,
       testoConfermaPrenotazione('conferme', '2026-10-07T10:00:00+02:00'),
       testoConfermaPrenotazione('mattina', '2026-10-06T10:00:00+02:00', 'Marco'),
     ];
@@ -246,5 +269,6 @@ describe('tre strade', () => {
     expect(testoConfermaChiamata('Marco')).toBe("Perfetto, ti faccio chiamare subito da Marco. È una chiamata breve per valutare insieme le ultime cose e fare l'iscrizione, così blocchi il tuo posto: sono limitati.");
     expect(testoConfermaPrenotazione('conferme', '2026-10-08T10:00:00+02:00')).toBe('Fissato per giovedì 8 ottobre alle 10:00. Ti chiamerà Noemi per confermare e mandarti il link della videocall: rispondile!');
     expect(DOMANDE_PER_PERCORSO).toEqual({ chiamata: 2, mattina: 3, conferme: 3 });
+    expect(TESTO_INTRO_CONFERME).toBe('Prima di fissare ti faccio un paio di domande veloci, così chi ti chiama sa già da dove partire.');
   });
 });

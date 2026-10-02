@@ -16,10 +16,10 @@ import { romeDayKey, romeHour } from './rome-time';
 import {
   giorniLancio, modoPostPitch, puoRispondere, validaAtLancio, oreDaProssimi, testoOreTreStrade, bloccoOrePerPrompt,
   testoConfermaChiamata, testoConfermaPrenotazione, testoOraEsaurita, testoAtNonValido, raccogliRisposte,
-  etichettaGiorno, dopoLaNotteDelLancio, DOMANDE_PER_PERCORSO,
+  etichettaGiorno, dopoLaNotteDelLancio, DOMANDE_PER_PERCORSO, giornoSuccessivo,
   type LancioTag, type OreTreStrade,
   TESTO_NESSUN_VENDITORE, TESTO_CHIAMATA_FUORI_ORARIO, TESTO_ERRORE_CRM, TESTO_DOPO_SCELTA, TESTO_CONGEDO_POST_PITCH,
-  TESTO_INTRO_PREQUALIFICA,
+  TESTO_INTRO_PREQUALIFICA, TESTO_INTRO_CONFERME,
 } from './lancio-scelta';
 import {
   congedoLancio, contestoDi, historyDi, eventoAtDa, inviaBollaLancio, inviaSceltaLancio, eventoLancio, tracciaTurnoLancio,
@@ -109,16 +109,29 @@ export async function turnoPostPitch(
   // regola 08:30-23:00 era del dopo-pitch, e Mario risponde come a chiunque.
   // Chi invece resta in silenzio non passa di qui: resta `post_pitch`, riceve il
   // follow-up del 6 e torna a Mario quando risponde.
-  if (dopoLaNotteDelLancio(now, ctx.settings.eventoAt)) {
+  const aMario = async (): Promise<'handed_to_mario'> => {
     const lancioInfo = conMarioDopoNotte(i.lancioInfo ?? null, 'post_pitch', now.toISOString());
     await impostaFaseLancio(supabase, c.conversationId, 'chiuso', { lancio_info: lancioInfo as unknown as Json });
     await eventoLancio(supabase, c, 'lancio_post_pitch_a_mario', { risposte: (i.lancioInfo?.risposte ?? []).length },
       `[lancio] conv ${c.conversationId}: post-pitch dopo la notte del webinar, la chat passa a Mario standard`);
     return 'handed_to_mario';
-  }
+  };
+  // Eccezione (fix review finale, ruling 2): chi alle 03:00 era a meta' delle domande con
+  // un'ora GIA' scelta (mattina o Conferme) e ancora valida non la perde: si prenota quella
+  // ora con le risposte raccolte fin qui, poi conferma e `scelta_fatta`. Se il book non va
+  // (ora esaurita, regole, CRM giu') si torna al passaggio a Mario di sempre.
+  const dopoNotte = dopoLaNotteDelLancio(now, ctx.settings.eventoAt);
+  const percorsoSalvato = i.lancioInfo?.percorso ?? null;
+  const oraSalvata = i.lancioInfo?.oraScelta ?? null;
+  const oraDaSalvare = dopoNotte && (percorsoSalvato === 'mattina' || percorsoSalvato === 'conferme')
+    && oraSalvata && validaAtLancio(oraSalvata, now, eventoAt).ok
+    ? oraSalvata
+    : null;
+  if (dopoNotte && !oraDaSalvare) return aMario();
 
   // Fuori orario (03:00-08:30, dopo le 23:00): silenzio TEMPORANEO, senza traccia, così
-  // il re-drive di bot-followups delle 08:30 rifà il turno e risponde.
+  // il re-drive di bot-followups delle 08:30 rifà il turno e risponde. Vale anche per
+  // l'ora da salvare dopo la notte: la prenotazione parte dal re-drive delle 08:30.
   if (!puoRispondere(now, eventoAt, 'post_pitch')) return silenzioLancio(supabase, c, 'fuori_orario', false);
 
   // Si lavora sul LOTTO, non sull'inbound che il drain ha scelto (il primo rimasto senza
@@ -133,7 +146,8 @@ export async function turnoPostPitch(
   // nessun inbound): come nell'assistenza si tace, con la traccia perche' il re-drive non
   // ci torni ogni ora. Senza questa guardia il turno pagava il modello, spendeva una
   // bolla su una cronologia vuota e poteva spingere al CRM un lead senza primo messaggio.
-  if (testoLead === '') return silenzioLancio(supabase, c, 'inbound_senza_testo', true);
+  // Dopo la notte con un'ora da salvare si prenota anche su un lotto di soli media.
+  if (testoLead === '' && !oraDaSalvare) return silenzioLancio(supabase, c, 'inbound_senza_testo', true);
 
   // Le parole del lead, accumulate (il marker del pulsante no): sono le "info" per chi
   // chiama. Tutto il lotto, non solo l'ultimo: se ha risposto in due messaggi, al
@@ -149,6 +163,7 @@ export async function turnoPostPitch(
   // PRIMA del modello, cosi' il prompt sa a che domanda siamo ("già fatte: 2 su 3").
   const percorsoIniziale: PercorsoLancio | null = info.percorso ?? null;
   const domandeIniziali = info.domande ?? 0;
+  const oraSceltaIniziale = info.oraScelta ?? null;
   if (percorsoIniziale) info.domande = domandeIniziali + testi.length;
   const domande = () => info.domande ?? 0;
   /** Le due strade di prenotazione (mattina e Conferme): hanno un'ora, e fra loro il conteggio delle domande passa. */
@@ -183,7 +198,23 @@ export async function turnoPostPitch(
       ore = null;
       return null;
     }
-    ore = oreDaProssimi(r.prossimi, now);
+    const lette = oreDaProssimi(r.prossimi, now);
+    // Fix review finale (ruling 1): il giorno Conferme DOPO il primo, una sola lettura in
+    // piu'. Non va nel testo al lead (l'ordine di riempimento e' del PO), solo nel prompt:
+    // chi non puo' il primo giorno lo dice, e il modello ha un'ora vera da mettere nel tag.
+    // Una lettura fallita non toglie niente: resta il primo giorno, come prima.
+    if (lette.conferme) {
+      const primo = lette.conferme.date;
+      const r2 = await lancioProssimi(giornoSuccessivo(primo));
+      if (r2.ok) {
+        const alt = oreDaProssimi({ mattina: null, conferme: r2.prossimi.conferme, saltati: [] }, now).conferme;
+        // Chiavi 'YYYY-MM-DD': l'ordine alfabetico e' quello cronologico.
+        if (alt && alt.date > primo) lette.confermeAlternativo = alt;
+      } else {
+        await eventoLancio(supabase, c, 'lancio_slots_alternativo_non_letti', { motivo: r2.motivo }, `[lancio] conv ${c.conversationId}: secondo giorno Conferme non letto (${r2.motivo})`, 'warn');
+      }
+    }
+    ore = lette;
     return ore;
   };
 
@@ -217,7 +248,7 @@ export async function turnoPostPitch(
       const nota = await sendCrmNota(supabase, c.conversationId, NOTA_SENZA_ORE);
       await eventoLancio(supabase, c, 'lancio_slots_vuoti', { notaInviata: nota.sent, errore: nota.error ?? null }, `[lancio] conv ${c.conversationId}: nessuna ora libera nei prossimi giorni, nota al CRM`, 'warn');
     } else {
-      await eventoLancio(supabase, c, 'lancio_slots_mostrati', { mattina: o.mattina, conferme: o.conferme, saltati: o.saltati, modo }, `[lancio] conv ${c.conversationId}: ore proposte`);
+      await eventoLancio(supabase, c, 'lancio_slots_mostrati', { mattina: o.mattina, conferme: o.conferme, confermeAlternativo: o.confermeAlternativo ?? null, saltati: o.saltati, modo }, `[lancio] conv ${c.conversationId}: ore proposte`);
     }
     await tracciaTurnoLancio(supabase, c, 'slots');
     return 'active';
@@ -275,6 +306,57 @@ export async function turnoPostPitch(
     return sceltaFatta('gia_prenotato', { at: esito.appointmentAt, kind: esito.kind, tag });
   };
 
+  /**
+   * La prenotazione dell'ora scelta: `book` col CRM. Solo quando le domande sono fatte.
+   * `seFallisce` (solo dopo la notte, ruling 2): ogni esito che non e' una prenotazione
+   * (lead senza CRM, ora esaurita, regole, errore) non riapre la scelta delle ore ma
+   * passa la chat a Mario come prima.
+   */
+  const prenota = async (
+    at: string,
+    daTag: string,
+    seFallisce?: () => Promise<'handed_to_mario'>,
+  ): Promise<StatoTurno | 'handed_to_mario'> => {
+    const leadId = await leadIdPerCrm();
+    if (!leadId) return seFallisce ? seFallisce() : erroreCrm('lancio_lead_senza_crm', { tag: daTag, at });
+    const esito = await lancioBook({ leadId, at, info: { risposte: info.risposte }, note: NOTA_SCELTA });
+    if (esito.ok) {
+      await inviaBollaLancio(supabase, c, testoConfermaPrenotazione(esito.kind, at, esito.venditore?.nome ?? null));
+      return sceltaFatta('prenota', { at, kind: esito.kind, venditore: esito.venditore ?? null, deduped: esito.deduped === true, domande: domande() });
+    }
+    if (esito.motivo === 'gia_prenotato') return giaPrenotato(esito, daTag);
+    if (seFallisce) {
+      await eventoLancio(supabase, c, 'lancio_prenota_dopo_notte_fallita', { at, ...esito }, `[lancio] conv ${c.conversationId}: ora ${at} non prenotata dopo la notte (${esito.motivo}), passa a Mario`, 'warn');
+      return seFallisce();
+    }
+    if (esito.motivo === 'ora_esaurita') {
+      // L'ora si e' riempita mentre il lead rispondeva. Percorso e ora si azzerano, le
+      // domande NO: chi ha gia' risposto non le rifa', e alla prossima ora scelta si
+      // prenota subito (spec §2.2 punto 4: dalla mattina piena si passa alle Conferme
+      // senza rifare le domande). Le ore aggiornate sono nel 409; se il CRM non le ha
+      // mandate si rileggono, non si ripropongono quelle di prima.
+      info.percorso = null;
+      info.oraScelta = null;
+      const h = romeHour(new Date(Date.parse(at)));
+      if (!esito.prossimi) oreLette = false;
+      const fresche = esito.prossimi ? oreDaProssimi(esito.prossimi, now) : null;
+      return mostraOre((o) => testoOraEsaurita(h, o, now), fresche);
+    }
+    if (esito.motivo === 'nessun_venditore') {
+      info.percorso = null;
+      info.oraScelta = null;
+      return mostraOre((o) => `${TESTO_NESSUN_VENDITORE} ${testoOreTreStrade(o, now)}`);
+    }
+    if (esito.motivo === 'fuori_regole') {
+      await eventoLancio(supabase, c, 'lancio_at_non_valido', { at, motivo: 'crm_fuori_regole' }, `[lancio] conv ${c.conversationId}: il CRM rifiuta ${at} (422)`, 'warn');
+      // Come per l'ora esaurita: si torna alla scelta dell'ora, le domande restano.
+      info.percorso = null;
+      info.oraScelta = null;
+      return mostraOre((o) => testoAtNonValido(o, now));
+    }
+    return erroreCrm('lancio_crm_errore', { tag: daTag, at, ...esito });
+  };
+
   // Con un tocco la scelta e' gia' fatta: niente prompt, niente ore nel prompt, niente
   // chiamata al modello. E' anche il turno piu' veloce della serata, che e' esattamente
   // quando la coda dei post-pitch e' piu' lunga.
@@ -282,7 +364,16 @@ export async function turnoPostPitch(
     const o = await leggiOre();
     return o ? bloccoOrePerPrompt(o, now) : null;
   };
-  const bloccoSlot = faseScelta && !tap ? await bloccoDalleOre() : null;
+  // Dopo la notte, con un'ora valida gia' scelta: si prenota subito, senza modello.
+  if (oraDaSalvare) {
+    await eventoLancio(supabase, c, 'lancio_prenota_dopo_notte', { at: oraDaSalvare, percorso: percorsoSalvato, domande: domande() },
+      `[lancio] conv ${c.conversationId}: dopo la notte, prenota l'ora gia' scelta ${oraDaSalvare}`);
+    return prenota(oraDaSalvare, 'DOPO_NOTTE', aMario);
+  }
+
+  // Sulla chiamata le ore non servono (ruling 5, latenza la sera del lancio): se poi il
+  // lead chiede un'ora, `primaDomanda` e `mostraOre` le leggono allora.
+  const bloccoSlot = faseScelta && !tap && percorsoIniziale !== 'chiamata' ? await bloccoDalleOre() : null;
   const opzioniModello = {
     fase: 'post_pitch', nome: i.nome, eventoAt: ctx.settings.eventoAt, now,
     modo, risposteRaccolte: info.risposte.length, bloccoSlot,
@@ -341,9 +432,20 @@ export async function turnoPostPitch(
       percorso: p, domandeFatte: domande(),
     });
     const domanda = (r2.visibleReply ?? '').trim();
-    const testo = intro ? [TESTO_INTRO_PREQUALIFICA, domanda].filter(Boolean).join(' ') : domanda;
+    if (!domanda) {
+      // Ruling 3: senza domanda l'introduzione da sola non parte. Il turno non cambia lo
+      // stato del percorso (percorso, ora, conteggio restano quelli di inizio turno: la
+      // domanda non e' stata fatta); le parole del lead restano nelle risposte.
+      info.percorso = percorsoIniziale;
+      info.oraScelta = oraSceltaIniziale;
+      info.domande = domandeIniziali;
+      await salvaInfo(info);
+      return silenzioLancio(supabase, c, 'risposta_vuota', true);
+    }
+    // Ruling 4: sulle Conferme l'introduzione spinge meno.
+    const testoIntro = p === 'conferme' ? TESTO_INTRO_CONFERME : TESTO_INTRO_PREQUALIFICA;
+    const testo = intro ? `${testoIntro} ${domanda}` : domanda;
     await salvaInfo(info);
-    if (!testo) return silenzioLancio(supabase, c, 'risposta_vuota', true);
     await inviaBollaLancio(supabase, c, testo);
     await eventoLancio(supabase, c, 'lancio_percorso', { percorso: p, oraScelta: info.oraScelta ?? null, domande: domande(), da: percorsoIniziale },
       `[lancio] conv ${c.conversationId}: percorso ${p}${info.oraScelta ? ` (${info.oraScelta})` : ''}`);
@@ -378,44 +480,6 @@ export async function turnoPostPitch(
     // `conflitto` compreso: il client l'ha già ritentato una volta, qui si dice al lead
     // di riscrivere invece di martellare il CRM dentro il turno.
     return erroreCrm('lancio_crm_errore', { tag: 'CHIAMA_ORA', ...esito });
-  };
-
-  /** La prenotazione dell'ora scelta: `book` col CRM. Solo quando le domande sono fatte. */
-  const prenota = async (at: string, daTag: string): Promise<StatoTurno> => {
-    const leadId = await leadIdPerCrm();
-    if (!leadId) return erroreCrm('lancio_lead_senza_crm', { tag: daTag, at });
-    const esito = await lancioBook({ leadId, at, info: { risposte: info.risposte }, note: NOTA_SCELTA });
-    if (esito.ok) {
-      await inviaBollaLancio(supabase, c, testoConfermaPrenotazione(esito.kind, at, esito.venditore?.nome ?? null));
-      return sceltaFatta('prenota', { at, kind: esito.kind, venditore: esito.venditore ?? null, deduped: esito.deduped === true, domande: domande() });
-    }
-    if (esito.motivo === 'gia_prenotato') return giaPrenotato(esito, daTag);
-    if (esito.motivo === 'ora_esaurita') {
-      // L'ora si e' riempita mentre il lead rispondeva. Percorso e ora si azzerano, le
-      // domande NO: chi ha gia' risposto non le rifa', e alla prossima ora scelta si
-      // prenota subito (spec §2.2 punto 4: dalla mattina piena si passa alle Conferme
-      // senza rifare le domande). Le ore aggiornate sono nel 409; se il CRM non le ha
-      // mandate si rileggono, non si ripropongono quelle di prima.
-      info.percorso = null;
-      info.oraScelta = null;
-      const h = romeHour(new Date(Date.parse(at)));
-      if (!esito.prossimi) oreLette = false;
-      const fresche = esito.prossimi ? oreDaProssimi(esito.prossimi, now) : null;
-      return mostraOre((o) => testoOraEsaurita(h, o, now), fresche);
-    }
-    if (esito.motivo === 'nessun_venditore') {
-      info.percorso = null;
-      info.oraScelta = null;
-      return mostraOre((o) => `${TESTO_NESSUN_VENDITORE} ${testoOreTreStrade(o, now)}`);
-    }
-    if (esito.motivo === 'fuori_regole') {
-      await eventoLancio(supabase, c, 'lancio_at_non_valido', { at, motivo: 'crm_fuori_regole' }, `[lancio] conv ${c.conversationId}: il CRM rifiuta ${at} (422)`, 'warn');
-      // Come per l'ora esaurita: si torna alla scelta dell'ora, le domande restano.
-      info.percorso = null;
-      info.oraScelta = null;
-      return mostraOre((o) => testoAtNonValido(o, now));
-    }
-    return erroreCrm('lancio_crm_errore', { tag: daTag, at, ...esito });
   };
 
   switch (tag?.tag) {
