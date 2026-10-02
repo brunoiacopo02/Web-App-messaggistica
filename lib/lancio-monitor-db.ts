@@ -329,6 +329,7 @@ export const TIPI_TIMELINE = [
   'lancio_zoom_freq_capped', 'lancio_zoom_esito_incerto', 'lancio_zoom_claim_error', 'lancio_zoom_messaggio_non_costruito', 'lancio_zoom_meta_incompleta', 'lancio_zoom_error', 'lancio_zoom_config_error',
   'lancio_inizio_freq_capped', 'lancio_inizio_esito_incerto', 'lancio_inizio_claim_error', 'lancio_inizio_messaggio_non_costruito', 'lancio_inizio_meta_incompleta', 'lancio_inizio_error', 'lancio_inizio_config_error',
   'lancio_post_pitch_domanda', 'lancio_scelta_pulsanti', 'lancio_scelta_pulsante_tap', 'lancio_scelta', 'lancio_dopo_scelta',
+  'lancio_percorso', 'lancio_percorso_chiuso_dal_codice',
   'lancio_slots_mostrati', 'lancio_slots_vuoti', 'lancio_slots_non_letti', 'lancio_at_non_valido',
   'lancio_crm_errore', 'lancio_crm_call', 'lancio_lead_senza_crm', 'lancio_nota_dopo_scelta_non_inviata',
   'lancio_followup', 'lancio_followup_inviato', 'lancio_followup_risposta', 'lancio_followup_freq_capped', 'lancio_followup_esito_incerto',

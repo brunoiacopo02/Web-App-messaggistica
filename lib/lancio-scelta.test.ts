@@ -1,13 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   giorniLancio, modoPostPitch, fineNotteLancio, modoEtichette, puoRispondere, validaAtLancio, parseLancioTag, stripLancioTags,
-  oreProponibili, atIso, etichettaGiorno, testoSlots, bloccoSlotPerPrompt,
-  testoConfermaChiamata, testoConfermaPrenotazione, testoOraEsaurita, raccogliRisposte,
+  atIso, etichettaGiorno,
+  testoConfermaChiamata, testoConfermaPrenotazione, testoOraEsaurita, testoAtNonValido, raccogliRisposte,
   etichettaRelativa, testoOreTreStrade, TESTO_INTRO_PREQUALIFICA, FRASI_VIETATE, oreDaProssimi, bloccoOrePerPrompt, DOMANDE_PER_PERCORSO,
 } from './lancio-scelta';
 import * as scelta from './lancio-scelta';
 import { MARKER_PULSANTE_WEBINAR } from './primo-messaggio';
-import type { LancioSlots } from './lancio-crm';
 
 const EVENTO = new Date('2026-10-05T21:00:00+02:00');
 const t = (iso: string) => new Date(iso);
@@ -105,113 +104,21 @@ describe('tag', () => {
   });
 });
 
-const SLOTS: LancioSlots = { date: '2026-10-06', mattina: [{ hour: 9, liberi: 1 }, { hour: 11, liberi: 2 }, { hour: 13, liberi: 0 }, { hour: 14, liberi: 1 }], pomeriggio: { aperto: true, ore: [15, 16, 17, 18, 19, 20] }, mattinaEsaurita: false };
-const GIORNI = giorniLancio(EVENTO);
-
-describe('oreProponibili', () => {
-  it('di notte: mattina dagli slot con liberi>0, pomeriggio intero, dopodomani 9-14', () => {
-    expect(oreProponibili(SLOTS, NOTTE, EVENTO)).toEqual({ mattina: [9, 11, 14], pomeriggio: [15, 16, 17, 18, 19, 20], dopodomani: [9, 10, 11, 12, 13, 14], mattinaEsaurita: false });
-  });
-  it('senza slot (CRM giu): niente mattina, pomeriggio e dopodomani restano', () => {
-    expect(oreProponibili(null, NOTTE, EVENTO)).toMatchObject({ mattina: [], pomeriggio: [15, 16, 17, 18, 19, 20], mattinaEsaurita: true });
-  });
-  it('alle 09:10 del 6 la regola +1h taglia 9 e 10', () => {
-    expect(oreProponibili(SLOTS, MATTINA6, EVENTO).mattina).toEqual([11, 14]);
-  });
-  it('alle 19:30 del 6 resta solo il 7', () => {
-    const ore = oreProponibili(SLOTS, t('2026-10-06T19:30:00+02:00'), EVENTO);
-    expect(ore.pomeriggio).toEqual([]);
-    expect(ore.dopodomani).toEqual([9, 10, 11, 12, 13, 14]);
-  });
-});
-
 describe('testi', () => {
   it('atIso ed etichetta', () => {
     expect(atIso('2026-10-06', 9)).toBe('2026-10-06T09:00:00+02:00');
     expect(etichettaGiorno('2026-10-07')).toBe('mercoledì 7 ottobre');
   });
-  it('slot di notte: mattina elencata, pomeriggio a fascia', () => {
-    const s = testoSlots(oreProponibili(SLOTS, NOTTE, EVENTO), GIORNI, 'notte');
-    expect(s).toBe('Per la videocall ho libero domattina alle 9, alle 11 o alle 14, oppure domani pomeriggio dalle 15 alle 20: che ora preferisci?');
-  });
-  it('mattina piena: si propone il pomeriggio e il 7 solo per chi puo solo la mattina', () => {
-    const s = testoSlots(oreProponibili({ ...SLOTS, mattina: [], mattinaEsaurita: true }, NOTTE, EVENTO), GIORNI, 'notte');
-    expect(s).toContain('Domattina è tutto pieno');
-    expect(s).toContain('domani pomeriggio dalle 15 alle 20');
-    expect(s).toContain('mercoledì 7 ottobre dalle 9 alle 14');
-  });
-  it('di giorno non si nomina la mattina di oggi anche se ha ore', () => {
-    const s = testoSlots(oreProponibili(SLOTS, MATTINA6, EVENTO), GIORNI, 'giorno');
-    expect(s).not.toMatch(/alle 11/);
-    expect(s).toContain('oggi pomeriggio dalle 15 alle 20');
-    expect(s).toContain('domani mattina');
-  });
-  // Il pulsante premuto alle 20:40 del 5 (il link e' gia' partito, la live non e' ancora
-  // cominciata): fuori dalla notte del webinar la mattina non si propone da sola, ma i
-  // giorni si chiamano col nome del 5 — il 6 e' domani, il 7 e' "mercoledi 7 ottobre".
-  it('alle 20:40 del 5 i giorni hanno il nome del 5, e la mattina non si propone', () => {
-    const ora = t('2026-10-05T20:40:00+02:00');
-    const s = testoSlots(oreProponibili(SLOTS, ora, EVENTO), GIORNI, modoEtichette(ora, EVENTO), modoPostPitch(ora, EVENTO) === 'notte');
-    expect(s).toBe('Per la videocall ho domani pomeriggio dalle 15 alle 20: che ora preferisci? Se puoi solo la mattina, ho mercoledì 7 ottobre dalle 9 alle 14.');
-    expect(s).not.toContain('oggi');
-  });
-  // Alle 02:00 del 6 le due decisioni divergono: la mattina si propone ancora (siamo
-  // nella notte del webinar, `modoPostPitch`), ma si chiama "stamattina" perche' il
-  // giorno di Roma e' gia' il 6.
-  it('alle 02:00 del 6 la mattina si propone ancora, ma si chiama stamattina', () => {
-    const ora = t('2026-10-06T02:00:00+02:00');
-    const ore = oreProponibili(SLOTS, ora, EVENTO);
-    const s = testoSlots(ore, GIORNI, modoEtichette(ora, EVENTO), modoPostPitch(ora, EVENTO) === 'notte');
-    expect(s).toBe('Per la videocall ho libero stamattina alle 9, alle 11 o alle 14, oppure oggi pomeriggio dalle 15 alle 20: che ora preferisci?');
-    expect(s).not.toContain('domattina');
-    // E il modello le vede come ore da proporre, senza il "solo se la chiede il lead".
-    const b = bloccoSlotPerPrompt(ore, GIORNI, modoEtichette(ora, EVENTO), true);
-    expect(b).toContain('2026-10-06T09:00:00+02:00 → martedì 6 ottobre alle 9:00 (stamattina)');
-    expect(b).not.toContain('non proporla tu');
-  });
-
-  it('alle 02:00 del 6 con la mattina piena: "Stamattina e tutto pieno", non "Domattina"', () => {
-    const ora = t('2026-10-06T02:00:00+02:00');
-    const ore = oreProponibili({ ...SLOTS, mattina: [], mattinaEsaurita: true }, ora, EVENTO);
-    const s = testoSlots(ore, GIORNI, modoEtichette(ora, EVENTO), true);
-    expect(s).toContain('Stamattina è tutto pieno');
-    expect(s).toContain('oggi pomeriggio dalle 15 alle 20');
-  });
-
-  // Le due decisioni sono separate anche nell'altro verso: alle 20:40 del 5 le etichette
-  // sono quelle della notte ma la mattina NON si propone (la live non e' ancora finita:
-  // chi risponde al pulsante alle 20:40 e' fuori dalla notte di `modoPostPitch`).
-  it('etichette e proposta della mattina sono due parametri distinti', () => {
-    const ore = oreProponibili(SLOTS, NOTTE, EVENTO);
-    expect(testoSlots(ore, GIORNI, 'notte', false)).toBe('Per la videocall ho domani pomeriggio dalle 15 alle 20: che ora preferisci? Se puoi solo la mattina, ho mercoledì 7 ottobre dalle 9 alle 14.');
-    expect(testoSlots(ore, GIORNI, 'giorno', true)).toContain('stamattina alle 9, alle 11 o alle 14');
-  });
-  // Il 7 il 6 non esiste piu': le sue ore sono tutte passate e non si nomina.
-  it('alle 09:30 del 7 la mattina di oggi e stamattina, e del 6 non si parla', () => {
-    const ora = t('2026-10-07T09:30:00+02:00');
-    const ore = oreProponibili(SLOTS, ora, EVENTO);
-    expect(ore.mattina).toEqual([]);
-    expect(ore.pomeriggio).toEqual([]);
-    const s = testoSlots(ore, GIORNI, modoEtichette(ora, EVENTO));
-    expect(s).toBe('Per la videocall ho stamattina dalle 11 alle 14: che ora preferisci?');
-    expect(s).not.toMatch(/domani|ieri|non ho piu/);
-    const b = bloccoSlotPerPrompt(ore, GIORNI, modoEtichette(ora, EVENTO));
-    expect(b).toContain('2026-10-07T11:00:00+02:00 → mercoledì 7 ottobre alle 11:00 (stamattina)');
-    expect(b).not.toContain('2026-10-06T');
-  });
-  it('il blocco per il prompt elenca stringhe ISO da copiare', () => {
-    const b = bloccoSlotPerPrompt(oreProponibili(SLOTS, NOTTE, EVENTO), GIORNI, 'notte');
-    expect(b).toContain('2026-10-06T09:00:00+02:00');
-    expect(b).toContain('2026-10-06T20:00:00+02:00');
-    expect(b).toContain('2026-10-07T14:00:00+02:00');
-    expect(b).not.toContain('2026-10-06T13:00:00+02:00');
-    expect(b).not.toContain('2026-10-06T21:00:00+02:00');
-  });
   it('conferme fisse', () => {
     expect(testoConfermaChiamata('Luca')).toBe("Perfetto, ti faccio chiamare subito da Luca. È una chiamata breve per valutare insieme le ultime cose e fare l'iscrizione, così blocchi il tuo posto: sono limitati.");
     expect(testoConfermaPrenotazione('mattina', '2026-10-06T09:00:00+02:00', 'Luca')).toBe('Perfetto, ci vediamo in videocall martedì 6 ottobre alle 9:00 con Luca: il link per collegarti ti arriva per email.');
     expect(testoConfermaPrenotazione('pomeriggio', '2026-10-06T17:00:00+02:00')).toBe('Fissato per martedì 6 ottobre alle 17:00. Ti chiamerà Noemi per confermare e mandarti il link della videocall: rispondile!');
-    expect(testoOraEsaurita(9, oreProponibili(SLOTS, NOTTE, EVENTO), GIORNI, 'notte')).toMatch(/^Le 9 si sono appena riempite\. Per la videocall ho libero/);
+  });
+  it('ora esaurita e ora non valida: la frase fissa davanti alle ore delle tre strade', () => {
+    const o = { mattina: { date: '2026-10-06', ore: [11] }, conferme: { date: '2026-10-06', ore: [15, 16, 17, 18, 19, 20] }, saltati: [] };
+    const ore = 'Per la videocall ho domattina alle 11, oppure domani pomeriggio dalle 15 alle 20: a che ora ci saresti?';
+    expect(testoOraEsaurita(9, o, NOTTE)).toBe(`Le 9 si sono appena riempite. ${ore}`);
+    expect(testoAtNonValido(o, NOTTE)).toBe(`Quell'ora non riesco a fissarla. ${ore}`);
   });
 });
 

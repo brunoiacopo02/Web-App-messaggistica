@@ -1,4 +1,4 @@
-import type { LancioSlots, LancioKind, LancioInfo, LancioProssimi, LancioOreGiorno } from './lancio-crm';
+import type { LancioKind, LancioInfo, LancioProssimi, LancioOreGiorno } from './lancio-crm';
 import { isoWithOffset } from './bot-contract';
 import { romeDayKey, romeHour, romeMinute, romeOffset } from './rome-time';
 import { isMarkerPulsanteWebinar } from './primo-messaggio';
@@ -24,13 +24,10 @@ export type ValidazioneAt =
   | { ok: true; kind: LancioKind; date: string; hour: number }
   | { ok: false; motivo: MotivoAtNonValido };
 export type LancioTag = { tag: 'CHIAMA_ORA' } | { tag: 'PRENOTA'; at: string } | { tag: 'SLOTS' } | { tag: 'NO' } | { tag: 'CONFERMA' };
-export type OreProponibili = { mattina: number[]; pomeriggio: number[]; dopodomani: number[]; mattinaEsaurita: boolean };
 
 const H = 3600_000;
 /** Un'ora prenotabile deve stare almeno un'ora avanti: i venditori vanno avvisati. */
 const ANTICIPO_MINIMO_MS = 1 * H;
-const FASCIA_GIORNO_DOPO = { da: 9, a: 20 };
-const FASCIA_DOPODOMANI = { da: 9, a: 14 };
 const PRIMA_ORA_POMERIGGIO = 15;
 /** Fine della notte del webinar: dopo, si risponde solo in fascia. */
 const FINE_NOTTE_HHMM = '03:00';
@@ -144,9 +141,6 @@ export function puoRispondere(now: Date, eventoAt: Date, fase: 'link_inviato' | 
   return m >= FASCIA_RISPOSTE.daMin && m < FASCIA_RISPOSTE.aMin;
 }
 
-const kindDi = (date: string, hour: number, g: GiorniLancio): LancioKind =>
-  date === g.dopodomani ? 'dopodomani' : hour < PRIMA_ORA_POMERIGGIO ? 'mattina' : 'pomeriggio';
-
 const FASCIA_CONFERME = { da: 9, a: 20 };
 /** 'YYYY-MM-DD' è una domenica? Ancora UTC a mezzogiorno: il giorno della settimana non scivola. */
 const domenica = (ymd: string) => new Date(`${ymd}T12:00:00Z`).getUTCDay() === 0;
@@ -195,26 +189,6 @@ export function stripLancioTags(raw: string): string {
   return raw.replace(TAG_RE, '').replace(/[ \t]{2,}/g, '  ').trim();
 }
 
-const oreDa = (da: number, a: number) => Array.from({ length: a - da + 1 }, (_, i) => da + i);
-
-/**
- * Le ore che si possono proporre adesso. La mattina del giorno dopo la decide il CRM
- * (calendario dei venditori); il pomeriggio e la mattina di dopodomani vanno alle
- * Conferme e non hanno tetto (decisione 8), quindi restano proponibili anche se la
- * chiamata agli slot è fallita — il lead non deve restare senza un'ora per un timeout.
- */
-export function oreProponibili(slots: LancioSlots | null, now: Date, eventoAt: Date): OreProponibili {
-  const g = giorniLancio(eventoAt);
-  const abbastanzaAvanti = (date: string, hour: number) => Date.parse(atIso(date, hour)) >= now.getTime() + ANTICIPO_MINIMO_MS;
-  const mattinaGrezza = slots && Array.isArray(slots.mattina)
-    ? slots.mattina.filter((s) => s.liberi > 0 && s.hour >= FASCIA_GIORNO_DOPO.da && s.hour < PRIMA_ORA_POMERIGGIO).map((s) => s.hour)
-    : [];
-  const mattina = [...new Set(mattinaGrezza)].sort((a, b) => a - b).filter((h) => abbastanzaAvanti(g.giornoDopo, h));
-  const pomeriggio = oreDa(PRIMA_ORA_POMERIGGIO, FASCIA_GIORNO_DOPO.a).filter((h) => abbastanzaAvanti(g.giornoDopo, h));
-  const dopodomani = oreDa(FASCIA_DOPODOMANI.da, FASCIA_DOPODOMANI.a).filter((h) => abbastanzaAvanti(g.dopodomani, h));
-  return { mattina, pomeriggio, dopodomani, mattinaEsaurita: slots?.mattinaEsaurita === true || mattina.length === 0 };
-}
-
 const fmtGiorno = new Intl.DateTimeFormat('it-IT', { timeZone: 'UTC', weekday: 'long', day: 'numeric', month: 'long' });
 
 /** 'martedì 6 ottobre' da 'YYYY-MM-DD'. */
@@ -226,89 +200,6 @@ const elencoOre = (ore: number[]) =>
   ore.length === 1 ? `alle ${ore[0]}` : `${ore.slice(0, -1).map((h) => `alle ${h}`).join(', ')} o alle ${ore[ore.length - 1]}`;
 const fasciaOre = (ore: number[]) => (ore.length === 1 ? `alle ${ore[0]}` : `dalle ${ore[0]}` + ` alle ${ore[ore.length - 1]}`);
 const maiuscola = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-
-/**
- * Come chiamare i due giorni a seconda del giorno in cui siamo: il giorno dell'evento il
- * 6 è "domani", il 6 è "oggi", il 7 il 7 è "stamattina" (e del 6 non resta niente da
- * nominare: le sue ore sono tutte passate).
- */
-function nomiGiorni(g: GiorniLancio, modo: ModoEtichette) {
-  if (modo === 'dopodomani') {
-    return { mattinaDopo: 'stamattina', pomDopo: 'oggi pomeriggio', giornoDopo: 'oggi', dopodomani: 'oggi', dopodomaniMattina: 'stamattina' };
-  }
-  return modo === 'notte'
-    ? { mattinaDopo: 'domattina', pomDopo: 'domani pomeriggio', giornoDopo: 'domani', dopodomani: etichettaGiorno(g.dopodomani), dopodomaniMattina: etichettaGiorno(g.dopodomani) }
-    : { mattinaDopo: 'stamattina', pomDopo: 'oggi pomeriggio', giornoDopo: 'oggi', dopodomani: 'domani', dopodomaniMattina: 'domani mattina' };
-}
-
-/**
- * Il messaggio con le ore, scritto dal codice.
- *
- * Due decisioni diverse, due parametri: `modo` dice COME si chiamano i giorni (dal giorno
- * di Roma, `modoEtichette`), `mattinaProponibile` dice SE la mattina del giorno dopo si
- * propone da soli — ed è la notte del webinar di `modoPostPitch`, cioè fino alle 03:00.
- * Alle 02:00 del 6 le due cose divergono: la mattina si propone ancora (il lead ha appena
- * visto la live), ma si chiama "stamattina", non "domattina". Di default il vecchio
- * accoppiamento, così chi passa solo `modo` si comporta come prima.
- */
-export function testoSlots(
-  ore: OreProponibili,
-  giorni: GiorniLancio,
-  modo: ModoEtichette,
-  mattinaProponibile: boolean = modo === 'notte',
-): string {
-  const n = nomiGiorni(giorni, modo);
-  const mattina = mattinaProponibile ? ore.mattina : [];
-  // La fascia del giorno dopodomani si scrive dalle ore che restano davvero: il 7 alle
-  // 09:30 le 9 e le 10 sono già passate, e "dalle 9 alle 14" sarebbe un'ora promessa e
-  // poi rifiutata dalla regola dell'anticipo.
-  const ddTesto = ore.dopodomani.length > 0 ? `${n.dopodomaniMattina} ${fasciaOre(ore.dopodomani)}` : null;
-  if (mattina.length > 0 && ore.pomeriggio.length > 0) {
-    return `Per la videocall ho libero ${n.mattinaDopo} ${elencoOre(mattina)}, oppure ${n.pomDopo} ${fasciaOre(ore.pomeriggio)}: che ora preferisci?`;
-  }
-  if (ore.pomeriggio.length > 0) {
-    // "Domattina è tutto pieno" si dice solo se la mattina era da proporre: di giorno non
-    // si nomina nemmeno per dire che è piena.
-    const testa = mattinaProponibile ? `${maiuscola(n.mattinaDopo)} è tutto pieno. ` : '';
-    const coda = ddTesto ? ` Se puoi solo la mattina, ho ${ddTesto}.` : '';
-    return `${testa}Per la videocall ho ${n.pomDopo} ${fasciaOre(ore.pomeriggio)}: che ora preferisci?${coda}`;
-  }
-  // Il 7 il giorno "senza più ore libere" sarebbe ieri: non si nomina, si propongono e
-  // basta le ore che restano.
-  if (ddTesto) {
-    return modo === 'dopodomani'
-      ? `Per la videocall ho ${ddTesto}: che ora preferisci?`
-      : `Per ${n.giornoDopo} non ho più ore libere. Ho ${ddTesto}: che ora preferisci?`;
-  }
-  return 'Per questi due giorni non ho più ore libere: ti fa richiamare un nostro consulente, lascio nota.';
-}
-
-/** Il blocco per il system prompt: le sole stringhe che il modello può mettere nel tag. */
-export function bloccoSlotPerPrompt(
-  ore: OreProponibili,
-  giorni: GiorniLancio,
-  modo: ModoEtichette,
-  mattinaProponibile: boolean = modo === 'notte',
-): string {
-  const riga = (date: string, h: number, nota: string) => `- ${atIso(date, h)} → ${etichettaGiorno(date)} alle ${h}:00 (${nota})`;
-  const n = nomiGiorni(giorni, modo);
-  const notaDopodomani = modo === 'notte'
-    ? 'dopodomani mattina, solo se il lead può solo la mattina o lo chiede'
-    : modo === 'giorno' ? 'domani mattina' : 'stamattina';
-  // Le ore della mattina restano SEMPRE prenotabili (se il lead le chiede, si fissano):
-  // quello che cambia è se il modello può proporle lui.
-  const notaMattina = mattinaProponibile ? n.mattinaDopo : `${n.mattinaDopo}, SOLO se la chiede il lead: non proporla tu`;
-  const righe = [
-    ...ore.mattina.map((h) => riga(giorni.giornoDopo, h, notaMattina)),
-    ...ore.pomeriggio.map((h) => riga(giorni.giornoDopo, h, n.pomDopo)),
-    ...ore.dopodomani.map((h) => riga(giorni.dopodomani, h, notaDopodomani)),
-  ];
-  return [
-    'ORE PRENOTABILI (nel tag [LANCIO:PRENOTA|...] copia ESATTAMENTE una di queste stringhe ISO, nessun altro giorno o ora esiste):',
-    ...(righe.length > 0 ? righe : ['- (nessuna ora libera: rispondi con [LANCIO:SLOTS] e basta)']),
-    ore.mattina.length === 0 ? `Mattina di ${etichettaGiorno(giorni.giornoDopo)}: NESSUNA ora libera, non proporla.` : '',
-  ].filter(Boolean).join('\n');
-}
 
 const oraLeggibile = (at: string) => {
   const d = new Date(Date.parse(at));
@@ -422,23 +313,14 @@ export const FRASI_VIETATE = [/se ti convince/i, /se ti interessa/i, /eventualme
 export const TESTO_INTRO_PREQUALIFICA =
   'Visto che i posti sono limitati, prima della videocall ti faccio un paio di domande per capire se il percorso è in linea con te.';
 
-export function testoOraEsaurita(
-  hour: number,
-  ore: OreProponibili,
-  giorni: GiorniLancio,
-  modo: ModoEtichette,
-  mattinaProponibile: boolean = modo === 'notte',
-): string {
-  return `Le ${hour} si sono appena riempite. ${testoSlots(ore, giorni, modo, mattinaProponibile)}`;
+/** L'ora scelta e' stata presa mentre il lead rispondeva: le ore aggiornate, dal 409. */
+export function testoOraEsaurita(hour: number, o: OreTreStrade, now: Date): string {
+  return `Le ${hour} si sono appena riempite. ${testoOreTreStrade(o, now)}`;
 }
 
-export function testoAtNonValido(
-  ore: OreProponibili,
-  giorni: GiorniLancio,
-  modo: ModoEtichette,
-  mattinaProponibile: boolean = modo === 'notte',
-): string {
-  return `Quell'ora non riesco a fissarla. ${testoSlots(ore, giorni, modo, mattinaProponibile)}`;
+/** L'ora del tag non passa le regole dure (o il CRM la rifiuta con 422): le ore vere. */
+export function testoAtNonValido(o: OreTreStrade, now: Date): string {
+  return `Quell'ora non riesco a fissarla. ${testoOreTreStrade(o, now)}`;
 }
 
 export const TESTO_NESSUN_VENDITORE = 'Stasera i consulenti sono tutti occupati: fissiamo una videocall domani?';

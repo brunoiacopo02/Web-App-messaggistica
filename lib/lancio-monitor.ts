@@ -716,8 +716,8 @@ export function calcolaAvvisi(i: InputAvvisi): Avviso[] {
     out.push({
       id: 'slot_vuoti', gravita: 'attenzione', conteggio: vuoti.length, chat: chatDi(vuoti), ultimoAt: ultimo(vuoti),
       titolo: 'Nessuna ora libera da proporre: turni venditori mancanti?',
-      significato: 'Il CRM non ha restituito ore libere nei due giorni proposti: al lead non si può fissare niente e parte solo una nota al CRM.',
-      cosaFare: 'Controllare nel CRM il calendario dei venditori per domani e dopodomani.',
+      significato: 'Il CRM non ha restituito ore libere né sulla mattina dei venditori né sulle Conferme: al lead non si può fissare niente e parte solo una nota al CRM.',
+      cosaFare: 'Controllare nel CRM il calendario dei venditori e il tetto orario delle Conferme.',
     });
   }
   const nonLetti = recenti((t) => t === 'lancio_slots_non_letti', 2 * ORA);
@@ -725,7 +725,7 @@ export function calcolaAvvisi(i: InputAvvisi): Avviso[] {
     out.push({
       id: 'slot_non_letti', gravita: 'attenzione', conteggio: nonLetti.length, chat: chatDi(nonLetti), ultimoAt: ultimo(nonLetti),
       titolo: 'Il CRM non risponde sulle ore libere',
-      significato: 'La lettura delle ore dal CRM è fallita: il bot propone fasce generiche (pomeriggio, dopodomani) invece delle ore vere.',
+      significato: 'La lettura delle ore dal CRM è fallita: il bot non propone nessuna ora e chiede al lead di riscrivere tra qualche minuto.',
       cosaFare: 'Verificare che il CRM sia raggiungibile e che l’endpoint degli slot risponda.',
     });
   }
