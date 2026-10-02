@@ -237,7 +237,7 @@ describe('turnoPostPitch — [LANCIO:PRENOTA|iso]', () => {
 
   it('409 ora_esaurita: ripropone dagli slot AGGIORNATI del CRM, non da quelli letti prima', async () => {
     genera.mockResolvedValueOnce(prenota(AT9));
-    vi.mocked(lancioBook).mockResolvedValueOnce({ ok: false, motivo: 'ora_esaurita', slots: { date: '2026-10-06', mattina: [{ hour: 11, liberi: 1 }], pomeriggio: { aperto: true, ore: [15, 16, 17, 18, 19, 20] }, mattinaEsaurita: false } });
+    vi.mocked(lancioBook).mockResolvedValueOnce({ ok: false, motivo: 'ora_esaurita', slots: { date: '2026-10-06', mattina: [{ hour: 11, liberi: 1 }], pomeriggio: { aperto: true, ore: [15, 16, 17, 18, 19, 20] }, mattinaEsaurita: false }, prossimi: null });
     const { supabase, calls } = makeSupabase();
     expect(await turnoPostPitch(supabase, scelta('alle 9'), ctx())).toBe('active');
     expect(bolle()).toEqual(['Le 9 si sono appena riempite. Per la videocall ho libero domattina alle 11, oppure domani pomeriggio dalle 15 alle 20: che ora preferisci?']);

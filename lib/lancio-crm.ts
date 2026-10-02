@@ -24,7 +24,16 @@ const TENTATIVI_MAX = 2;
 /** Quanto di un corpo di errore ha senso portarsi dietro in un log. */
 const MAX_DETAIL = 300;
 
-export type LancioKind = 'mattina' | 'pomeriggio' | 'dopodomani';
+export type LancioKind = 'mattina' | 'pomeriggio' | 'dopodomani' | 'conferme';
+/** Un giorno con le sue ore ancora prenotabili (solo `liberi > 0`). */
+export type LancioOreGiorno = { date: string; ore: { hour: number; liberi: number }[] };
+/** I prossimi giorni utili per le due corsie con posti: la mattina dei venditori e le
+ *  Conferme. `saltati` sono i giorni scartati perche' pieni o chiusi. */
+export type LancioProssimi = {
+  mattina: LancioOreGiorno | null;
+  conferme: LancioOreGiorno | null;
+  saltati: string[];
+};
 export type LancioVenditore = { id: string; nome: string };
 export type LancioSlots = {
   date: string;
@@ -37,13 +46,21 @@ export type LancioSlots = {
   oreAmmesse?: number[];
 };
 /** Il contenuto di `conversations.lancio_info`: le risposte di riscaldamento, piu' lo
- *  stato interno del turno post-pitch. Al CRM viaggia dentro `info`. */
-export type LancioInfo = { risposte: string[]; slotsMostratiAt?: string | null };
+ *  stato interno del turno post-pitch. Al CRM viaggia dentro `info` solo `{ risposte }`:
+ *  gli altri campi restano nel DB del bot. */
+export type LancioInfo = {
+  risposte: string[];
+  slotsMostratiAt?: string | null;
+  percorso?: 'chiamata' | 'mattina' | 'conferme' | null;
+  oraScelta?: string | null;
+  domande?: number;
+};
 
 export type LancioCrmErrore =
   /** 409: l'ora scelta e' stata presa da qualcun altro. `slots` e' la fotografia
-   *  aggiornata da cui riproporre (null se il CRM non ha saputo ricalcolarla). */
-  | { ok: false; motivo: 'ora_esaurita'; slots: LancioSlots | null }
+   *  aggiornata da cui riproporre (null se il CRM non ha saputo ricalcolarla);
+   *  `prossimi` sono i giorni utili successivi, se il CRM li ha mandati. */
+  | { ok: false; motivo: 'ora_esaurita'; slots: LancioSlots | null; prossimi: LancioProssimi | null }
   /** 409: questo lead ha gia' un appuntamento. Non e' un fallimento: e' la sua ora. */
   | { ok: false; motivo: 'gia_prenotato'; appointmentAt: string | null; kind: LancioKind | null }
   /** 409: corsa persa anche al secondo tentativo. */
@@ -204,7 +221,7 @@ function erroreDaStatus(g: Grezza): LancioCrmErrore | null {
   if (g.status === 422) return { ok: false, motivo: 'fuori_regole' };
   if (g.status === 400 && motivo === 'info_non_valida') return { ok: false, motivo: 'info_non_valida' };
   if (g.status === 409) {
-    if (motivo === 'ora_esaurita') return { ok: false, motivo: 'ora_esaurita', slots: leggiSlots(g.json?.slots) };
+    if (motivo === 'ora_esaurita') return { ok: false, motivo: 'ora_esaurita', slots: leggiSlots(g.json?.slots), prossimi: leggiProssimi(g.json?.prossimi) };
     if (motivo === 'gia_prenotato') {
       return {
         ok: false,
@@ -228,7 +245,7 @@ function httpErrore(g: Grezza): LancioCrmErrore {
 }
 
 function leggiKind(raw: unknown): LancioKind | null {
-  return raw === 'mattina' || raw === 'pomeriggio' || raw === 'dopodomani' ? raw : null;
+  return raw === 'mattina' || raw === 'pomeriggio' || raw === 'dopodomani' || raw === 'conferme' ? raw : null;
 }
 
 function leggiSlots(raw: unknown): LancioSlots | null {
@@ -265,6 +282,27 @@ function leggiSlots(raw: unknown): LancioSlots | null {
   };
 }
 
+function leggiOreGiorno(raw: unknown): LancioOreGiorno | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.date !== 'string' || !Array.isArray(o.ore)) return null;
+  const ore = o.ore
+    .filter((s): s is { hour: number; liberi?: unknown } => !!s && typeof s === 'object' && typeof (s as { hour?: unknown }).hour === 'number')
+    .map((s) => ({ hour: s.hour, liberi: typeof s.liberi === 'number' ? s.liberi : 0 }))
+    .filter((s) => s.liberi > 0);
+  return ore.length > 0 ? { date: o.date, ore } : null;
+}
+
+function leggiProssimi(raw: unknown): LancioProssimi | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  return {
+    mattina: leggiOreGiorno(o.mattina),
+    conferme: leggiOreGiorno(o.conferme),
+    saltati: Array.isArray(o.saltati) ? o.saltati.filter((d): d is string => typeof d === 'string') : [],
+  };
+}
+
 function leggiVenditore(raw: unknown): LancioVenditore | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const o = raw as Record<string, unknown>;
@@ -280,6 +318,16 @@ export async function lancioSlots(date: string): Promise<LancioSlotsResult> {
     // Un 200 che non contiene una data leggibile non e' una risposta: meglio il ramo
     // "CRM giu'" (pomeriggio e dopodomani restano proponibili) che ore inventate.
     return slots ? { ok: true as const, slots } : httpErrore(g);
+  });
+}
+
+/** I prossimi giorni con posti (mattina venditori e Conferme) a partire da `from`. */
+export async function lancioProssimi(from: string): Promise<{ ok: true; prossimi: LancioProssimi } | LancioCrmErrore> {
+  return chiamaLancio('slots', { from }, { date: from }, (g) => {
+    const err = erroreDaStatus(g);
+    if (err) return err;
+    const prossimi = leggiProssimi(g.json);
+    return prossimi ? { ok: true as const, prossimi } : httpErrore(g);
   });
 }
 

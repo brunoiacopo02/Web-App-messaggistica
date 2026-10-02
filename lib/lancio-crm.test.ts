@@ -16,7 +16,7 @@ vi.mock('./supabase/admin', () => ({
   },
 }));
 
-import { lancioSlots, lancioBook, lancioCallNow, LANCIO_CRM_TIMEOUT_MS } from './lancio-crm';
+import { lancioSlots, lancioProssimi, lancioBook, lancioCallNow, LANCIO_CRM_TIMEOUT_MS } from './lancio-crm';
 import { signPayload } from './bot-hmac';
 
 const risposta = (status: number, body: unknown) => ({
@@ -135,7 +135,59 @@ describe('lancioSlots', () => {
   });
 });
 
+describe('lancioProssimi', () => {
+  it('legge mattina, conferme e saltati, con body { from }', async () => {
+    fetchMock.mockResolvedValue(risposta(200, {
+      ok: true,
+      mattina: { date: '2026-10-06', ore: [{ hour: 9, liberi: 2 }] },
+      conferme: { date: '2026-10-07', ore: [{ hour: 10, liberi: 25 }] },
+      saltati: ['2026-10-06'],
+    }));
+    const r = await lancioProssimi('2026-10-06');
+    expect(r).toEqual({
+      ok: true,
+      prossimi: {
+        mattina: { date: '2026-10-06', ore: [{ hour: 9, liberi: 2 }] },
+        conferme: { date: '2026-10-07', ore: [{ hour: 10, liberi: 25 }] },
+        saltati: ['2026-10-06'],
+      },
+    });
+    expect((fetchMock.mock.calls[0][1] as RequestInit).body).toBe(JSON.stringify({ from: '2026-10-06' }));
+  });
+
+  it('giorno senza ore libere o null diventa null; saltati assente diventa []', async () => {
+    fetchMock.mockResolvedValue(risposta(200, {
+      ok: true,
+      mattina: { date: '2026-10-06', ore: [{ hour: 9, liberi: 0 }] },
+      conferme: null,
+    }));
+    expect(await lancioProssimi('2026-10-06')).toEqual({
+      ok: true,
+      prossimi: { mattina: null, conferme: null, saltati: [] },
+    });
+  });
+
+  it('errori del CRM restano errori tipizzati', async () => {
+    fetchMock.mockResolvedValue(risposta(422, { ok: false }));
+    expect(await lancioProssimi('2026-10-06')).toEqual({ ok: false, motivo: 'fuori_regole' });
+  });
+});
+
 describe('lancioBook', () => {
+  it('ora_esaurita porta anche prossimi', async () => {
+    fetchMock.mockResolvedValue(risposta(409, {
+      ok: false, motivo: 'ora_esaurita', slots: null,
+      prossimi: { mattina: null, conferme: { date: '2026-10-08', ore: [{ hour: 11, liberi: 3 }] }, saltati: [] },
+    }));
+    const r = await lancioBook({ leadId: 'l1', at: '2026-10-07T10:00:00+02:00' });
+    expect(r).toMatchObject({ ok: false, motivo: 'ora_esaurita', prossimi: { conferme: { date: '2026-10-08' } } });
+  });
+
+  it('book ok con kind conferme', async () => {
+    fetchMock.mockResolvedValue(risposta(200, { ok: true, kind: 'conferme' }));
+    expect(await lancioBook({ leadId: 'l1', at: '2026-10-08T10:00:00+02:00' })).toEqual({ ok: true, kind: 'conferme' });
+  });
+
   const args = {
     leadId: 'L1',
     at: '2026-10-06T09:00:00+02:00',
@@ -176,12 +228,13 @@ describe('lancioBook', () => {
     expect(await lancioBook(args)).toEqual({
       ok: false, motivo: 'ora_esaurita',
       slots: { date: '2026-10-06', mattina: [], pomeriggio: { aperto: true, ore: [15] }, mattinaEsaurita: true, oreAmmesse: [15] },
+      prossimi: null,
     });
   });
 
   it('409 ora_esaurita con slots null (data fuori regole lato CRM): slots null, non un oggetto vuoto', async () => {
     fetchMock.mockResolvedValue(risposta(409, { ok: false, motivo: 'ora_esaurita', slots: null }));
-    expect(await lancioBook(args)).toEqual({ ok: false, motivo: 'ora_esaurita', slots: null });
+    expect(await lancioBook(args)).toEqual({ ok: false, motivo: 'ora_esaurita', slots: null, prossimi: null });
   });
 
   it('409 gia_prenotato torna ora e tipo dell appuntamento che il lead ha gia', async () => {
