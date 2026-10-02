@@ -142,6 +142,36 @@ Come si prova lo stesso — tre strade, in ordine di preferenza:
 
 ---
 
+### 1.5 Tre strade (02/10)
+
+Prova col numero di test dopo il deploy (nessun lead vero toccato).
+
+**Prerequisiti**
+- [ ] Turni **SERA** e **GIORNO_DOPO** compilati su `/lancio` da Bruno (senza, `slots` non restituisce ore venditore e `call-now` risponde `nessun_venditore`).
+- [ ] **CRM in produzione PRIMA del bot** (il bot nuovo legge i campi nuovi di `slots`/`book`).
+- [ ] `LANCIO_FAKE_NOW` solo fuori prod / anteprima.
+
+**1. Chiamami subito (di notte)**
+- [ ] Premere "Chiamami subito" -> il bot fa **2 domande**, una alla volta.
+- [ ] Dopo la seconda -> testo della chiamata **col nome del venditore**.
+- [ ] Variante: obiezione sulla prima domanda -> viene chiamato lo stesso (`CHIAMA_ORA`).
+- [ ] Con turno SERA vuoto -> `In questo momento i consulenti sono tutti al telefono: fissiamo una videocall.`
+
+**2. Fissiamo domani, ora mattina (venditore)**
+- [ ] Premere "Fissiamo domani" -> testo con le ore: **mattina dei venditori + primo giorno Conferme**.
+- [ ] Scegliere un'ora della mattina -> introduzione + **3 domande** (pain point, pacchetto **senza prezzi**, impegno).
+- [ ] Poi prenotazione **col venditore**; le risposte compaiono nel campo risposte del CRM.
+
+**3. Fissiamo domani, ora Conferme**
+- [ ] Scegliere un'ora Conferme -> domande leggere (max 3).
+- [ ] Chiusura: `Fissato per ... Ti chiamerà Noemi ...`. Niente agenda, video, Jotform.
+
+**4. Ora piena (`ora_esaurita`)**
+- [ ] Riempire davvero 25 prenotazioni **non e' ammesso**: la verifica del tetto si fa con i **test unitari del CRM** (`bookLancio`, regole `classifyAt`), non dal vivo.
+- [ ] Dal vivo si osserva solo il comportamento del bot su un `409 ora_esaurita` (es. ora di mattina presa da un altro numero di test mentre le domande girano): il bot propone le ore rimaste **senza rifare le domande**; evento `ora_esaurita` nel log del lead.
+
+---
+
 ## 2. Prima del 5/10 (da fare entro il 4)
 
 - [ ] I tre template `fenice_lancio_*` **approvati UTILITY** sull'account in uso:
