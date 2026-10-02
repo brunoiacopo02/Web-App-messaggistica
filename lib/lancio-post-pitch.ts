@@ -364,11 +364,45 @@ export async function turnoPostPitch(
     const o = await leggiOre();
     return o ? bloccoOrePerPrompt(o, now) : null;
   };
-  // Dopo la notte, con un'ora valida gia' scelta: si prenota subito, senza modello.
+  // Dopo la notte, con un'ora valida gia' scelta: si prenota, ma prima si legge cosa ha
+  // scritto il lead (PO 02/10, fix review finale). Col testo il modello gira UNA volta col
+  // prompt del percorso aperto e le ore: NO → congedo, niente book; PRENOTA su un'ora
+  // valida → si prenota QUELLA; tutto il resto (CONFERMA, domanda, nessun tag, SLOTS,
+  // passaggio a persona) → l'ora gia' scelta. Senza testo (solo media) niente modello.
   if (oraDaSalvare) {
-    await eventoLancio(supabase, c, 'lancio_prenota_dopo_notte', { at: oraDaSalvare, percorso: percorsoSalvato, domande: domande() },
-      `[lancio] conv ${c.conversationId}: dopo la notte, prenota l'ora gia' scelta ${oraDaSalvare}`);
-    return prenota(oraDaSalvare, 'DOPO_NOTTE', aMario);
+    let at = oraDaSalvare;
+    let esitoModello: string = 'senza_testo';
+    if (testoLead !== '') {
+      const rN = await genera(historyDi(i.rows), {
+        fase: 'post_pitch', nome: i.nome, eventoAt: ctx.settings.eventoAt, now,
+        modo, risposteRaccolte: info.risposte.length, bloccoSlot: await bloccoDalleOre(),
+        percorso: percorsoIniziale, domandeFatte: domande(),
+      });
+      const t = rN.lancioTag;
+      if (t?.tag === 'NO') {
+        await eventoLancio(supabase, c, 'lancio_prenota_dopo_notte', { at: oraDaSalvare, percorso: percorsoSalvato, esitoModello: 'no' },
+          `[lancio] conv ${c.conversationId}: dopo la notte il lead dice no, niente prenotazione`);
+        // Come il NO del turno normale: le risposte prima del congedo (vedi sotto).
+        await salvaInfo(info);
+        return congedoLancio(supabase, c, testoLead, NOTA_CONGEDO, { testo: TESTO_CONGEDO_POST_PITCH });
+      }
+      if (t?.tag === 'PRENOTA') {
+        const v = validaAtLancio(t.at, now, eventoAt);
+        if (v.ok) {
+          at = t.at;
+          info.oraScelta = t.at;
+          info.percorso = v.kind === 'mattina' ? 'mattina' : 'conferme';
+          esitoModello = 'altra_ora';
+        } else {
+          esitoModello = `prenota_non_valida_${v.motivo}`;
+        }
+      } else {
+        esitoModello = t?.tag ?? 'nessun_tag';
+      }
+    }
+    await eventoLancio(supabase, c, 'lancio_prenota_dopo_notte', { at, oraScelta: oraDaSalvare, percorso: percorsoSalvato, domande: domande(), esitoModello },
+      `[lancio] conv ${c.conversationId}: dopo la notte, prenota ${at} (${esitoModello})`);
+    return prenota(at, 'DOPO_NOTTE', aMario);
   }
 
   // Sulla chiamata le ore non servono (ruling 5, latenza la sera del lancio): se poi il

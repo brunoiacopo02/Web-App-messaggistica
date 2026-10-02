@@ -996,11 +996,15 @@ describe('turnoPostPitch — fix review finale', () => {
 
   // Ruling 2: alle 03:00 del 6 l'ora gia' scelta non si perde.
   it('2a. 08:40 del 6, percorso mattina con le 10 scelte: si prenota subito, conferma, scelta_fatta, niente Mario', async () => {
+    genera.mockResolvedValueOnce(modello({ visibleReply: 'Ottimo!' }));
     vi.mocked(lancioBook).mockResolvedValueOnce({ ok: true, kind: 'mattina', venditore: { id: 'u7', nome: 'Luca' } });
     const { supabase, calls } = makeSupabase();
     const stato = await turnoPostPitch(supabase, inPercorso('lavoro in un negozio', { percorso: 'mattina', oraScelta: AT10, domande: 1 }), ctx(new Date('2026-10-06T08:40:00+02:00')));
     expect(stato).toBe('closed');
-    expect(genera).not.toHaveBeenCalled();
+    // Il modello gira una volta, col prompt del percorso aperto e le ore.
+    expect(genera).toHaveBeenCalledTimes(1);
+    expect(genera.mock.calls[0][1]).toMatchObject({ percorso: 'mattina' });
+    expect(genera.mock.calls[0][1].bloccoSlot).toContain('2026-10-06T11:00:00+02:00');
     expect(lancioBook).toHaveBeenCalledWith({ leadId: 'crm-L1', at: AT10, info: { risposte: ['studio informatica', 'il progetto finale', 'lavoro in un negozio'] }, note: NOTA_SCELTA });
     expect(bolle()).toEqual(['Perfetto, ci vediamo in videocall martedì 6 ottobre alle 10:00 con Luca: il link per collegarti ti arriva per email.']);
     expect(faseScritta()[2]).toBe('scelta_fatta');
@@ -1020,6 +1024,7 @@ describe('turnoPostPitch — fix review finale', () => {
   });
 
   it('2a-ter. percorso conferme con il 7 alle 10 scelto, il 6 alle 10: si prenota', async () => {
+    genera.mockResolvedValueOnce(modello({ visibleReply: 'Perfetto', lancioTag: { tag: 'CONFERMA' } }));
     vi.mocked(lancioBook).mockResolvedValueOnce({ ok: true, kind: 'conferme' });
     const { supabase } = makeSupabase();
     expect(await turnoPostPitch(supabase, inPercorso('ok', { percorso: 'conferme', oraScelta: AT7_10, domande: 2 }), ctx(GIORNO6))).toBe('closed');
@@ -1040,14 +1045,58 @@ describe('turnoPostPitch — fix review finale', () => {
     ['rete', { ok: false, motivo: 'rete', detail: 'ECONNRESET' }],
     ['fuori_regole', { ok: false, motivo: 'fuori_regole' }],
   ])('2b-bis. book fallito (%s): Mario come prima, nessuna bolla del bot', async (_m, esito) => {
+    genera.mockResolvedValueOnce(modello({ visibleReply: 'Ok' }));
     vi.mocked(lancioBook).mockResolvedValueOnce(esito as any);
     const { supabase, calls } = makeSupabase();
     const stato = await turnoPostPitch(supabase, inPercorso('ok', { percorso: 'mattina', oraScelta: AT10, domande: 1 }), ctx(new Date('2026-10-06T08:40:00+02:00')));
     expect(stato).toBe('handed_to_mario');
     expect(sendFreeText).not.toHaveBeenCalled();
-    expect(lancioProssimi).not.toHaveBeenCalled();
     expect(faseScritta()[2]).toBe('chiuso');
     expect(eventi(calls, 'lancio_post_pitch_a_mario')).toHaveLength(1);
+  });
+
+  // Dopo le 03:00 il messaggio del lead si legge prima di prenotare (PO 02/10).
+  const MATTINA_0840 = new Date('2026-10-06T08:40:00+02:00');
+  it('2d. dopo le 03:00 il lead dice "non mi interessa più", il modello dice NO: niente book, congedo', async () => {
+    genera.mockResolvedValueOnce(modello({ classe: 'no', visibleReply: 'Capisco', lancioTag: { tag: 'NO' } }));
+    const { supabase, calls } = makeSupabase();
+    const stato = await turnoPostPitch(supabase, inPercorso('no grazie, non mi interessa più', { percorso: 'mattina', oraScelta: AT10, domande: 1 }), ctx(MATTINA_0840));
+    expect(stato).toBe('closed');
+    expect(lancioBook).not.toHaveBeenCalled();
+    expect(bolle()).toEqual([TESTO_CONGEDO_POST_PITCH]);
+    expect(marcaCongedo).toHaveBeenCalled();
+    expect(eventi(calls, 'lancio_post_pitch_a_mario')).toHaveLength(0);
+  });
+
+  it('2e. dopo le 03:00 il modello mette PRENOTA su un altra ora valida: si prenota QUELLA', async () => {
+    const AT15 = '2026-10-06T15:00:00+02:00';
+    genera.mockResolvedValueOnce(modello({ lancioTag: { tag: 'PRENOTA', at: AT15 } }));
+    vi.mocked(lancioBook).mockResolvedValueOnce({ ok: true, kind: 'pomeriggio' });
+    const { supabase } = makeSupabase();
+    const stato = await turnoPostPitch(supabase, inPercorso('alle 10 non posso, meglio alle 15', { percorso: 'mattina', oraScelta: AT10, domande: 1 }), ctx(MATTINA_0840));
+    expect(stato).toBe('closed');
+    expect(lancioBook).toHaveBeenCalledTimes(1);
+    expect(lancioBook).toHaveBeenCalledWith(expect.objectContaining({ at: AT15 }));
+    expect(faseScritta()[2]).toBe('scelta_fatta');
+    expect((faseScritta()[3] as any).lancio_info).toMatchObject({ oraScelta: AT15, percorso: 'conferme' });
+  });
+
+  it('2f. dopo le 03:00 "ok perfetto", nessun tag dal modello: si prenota l ora gia scelta', async () => {
+    genera.mockResolvedValueOnce(modello({ visibleReply: 'Benissimo' }));
+    vi.mocked(lancioBook).mockResolvedValueOnce({ ok: true, kind: 'mattina' });
+    const { supabase } = makeSupabase();
+    expect(await turnoPostPitch(supabase, inPercorso('ok perfetto', { percorso: 'mattina', oraScelta: AT10, domande: 1 }), ctx(MATTINA_0840))).toBe('closed');
+    expect(genera).toHaveBeenCalledTimes(1);
+    expect(lancioBook).toHaveBeenCalledWith(expect.objectContaining({ at: AT10 }));
+  });
+
+  it('2g. dopo le 03:00 un lotto di soli media: si prenota l ora gia scelta senza modello', async () => {
+    vi.mocked(lancioBook).mockResolvedValueOnce({ ok: true, kind: 'mattina' });
+    const { supabase } = makeSupabase();
+    const chat = scelta('', { lancioInfo: { risposte: ['studio informatica', 'il progetto finale'], percorso: 'mattina', oraScelta: AT10, domande: 1 } });
+    expect(await turnoPostPitch(supabase, chat, ctx(MATTINA_0840))).toBe('closed');
+    expect(genera).not.toHaveBeenCalled();
+    expect(lancioBook).toHaveBeenCalledWith(expect.objectContaining({ at: AT10 }));
   });
 
   it('2c. percorso chiamata dopo le 03:00: Mario come prima', async () => {
