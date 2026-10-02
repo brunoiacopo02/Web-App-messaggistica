@@ -332,7 +332,9 @@ export async function GET(req: NextRequest) {
           );
           // Dopo il primo follow-up riuscito: una NOTA al CRM (una volta sola, perché
           // il touch 1 parte una volta sola) che dice fino a quando la sequenza va
-          // avanti. Fino al 22/09/2026 era un RICHIAMO interim con `date = t0 + 4
+          // avanti. Dal 02/10/2026 la chiusura (SEQUENCE_END_DAYS = 1) coincide con
+          // l'offset del touch 1 e in `decideTrackA` viene prima: il touch, e con lui
+          // questa nota, non parte più. Il blocco resta per quando la chiusura risalisse. Fino al 22/09/2026 era un RICHIAMO interim con `date = t0 + 4
           // giorni`: una `recallDate` con i secondi della macchina addosso, che finiva
           // nei "Richiami" di un GDO appena il lead passava a un umano (es. richiamo
           // alle 09:02:49 per una persona mai sentita — 396 lead così). Serve

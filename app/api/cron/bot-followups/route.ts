@@ -66,8 +66,8 @@ async function formGiaTrattenuto(
  *
  *  Serve all'INTERROTTO qui sotto. Quella fascia non manda niente al CRM e lascia la
  *  chat aperta; ma il lead ha risposto, quindi sta sul Track B (`decideTrackB`): un solo
- *  nudge free-text a 12-24h e poi, a 96h di silenzio, la restituzione come chat
- *  interrotta. Senza questa lettura il GDO riceveva un INTERROTTO generico e il giorno
+ *  nudge free-text a 12-24h e poi, a TRACKB_GIVEUP_H di silenzio (24h dal 02/10/2026,
+ *  prima 96h), la restituzione come chat interrotta. Senza questa lettura il GDO riceveva un INTERROTTO generico e il giorno
  *  che il lead aveva chiesto andava perso. Il payload è quello scritto da `sendOutcome`
  *  (`lib/bot-outcome.ts`): `{ conversationId, crmLeadId, date, quando }`. Vince l'ultimo
  *  "quando" non nullo: se il lead l'ha cambiato, conta quello più recente. */
@@ -311,8 +311,9 @@ export async function GET(req: NextRequest) {
         // WhatsApp non ha consegnato niente: quasi sempre il numero non ha WhatsApp
         // (63024), non è inesistente. Decisione PO 25/09/2026: mai scartarlo, torna a
         // un GDO da chiamare a voce. Era un DA_SCARTARE "numero inesistente" con una
-        // nota che parlava di 14 giorni, quando la soglia vera è 48h (fast-fail) o 4
-        // giorni (fine sequenza). Vedi `esitoMaiConsegnato`.
+        // nota che parlava di 14 giorni, quando la soglia vera è la fine sequenza
+        // (SEQUENCE_END_DAYS: 24h dal 02/10/2026, prima 4 giorni; il fast-fail a 48h oggi
+        // non arriva mai prima). Vedi `esitoMaiConsegnato`.
         await sendOutcome(supabase, c.id, esitoMaiConsegnato(rows));
         report.push({ id: c.id, action });
       } else if (action === 'non_risposto') {
@@ -323,7 +324,8 @@ export async function GET(req: NextRequest) {
         await sendOutcome(supabase, c.id, {
           outcome: 'NON_RISPOSTO',
           // Niente durata nella nota: "12 giorni" era rimasto dalla sequenza lunga, la
-          // soglia vera è SEQUENCE_END_DAYS (4 giorni dal primo messaggio).
+          // soglia vera è SEQUENCE_END_DAYS (24h dal primo messaggio dal 02/10/2026,
+          // prima 4 giorni).
           note: `Sequenza completa: ${nDelivered} messaggi consegnati, mai una risposta. Da provare a voce.`,
         });
         report.push({ id: c.id, action });

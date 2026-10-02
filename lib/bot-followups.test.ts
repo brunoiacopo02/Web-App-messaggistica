@@ -92,9 +92,14 @@ describe('decideFollowupAction — APPUNTAMENTO terminale', () => {
 });
 
 describe('decideFollowupAction — Track A (mai risposto)', () => {
-  it('25h con 1 out consegnato → none (niente piu NON_RISPOSTO a 24h)', () => {
-    const a = decide({ msgs: [out(25 * H, 'delivered')] });
-    expect(a).toBe('none');
+  // 02/10/2026 (PO): i lead nuovi tornano ai GDO dopo 24 ore (era 4 giorni).
+  it('23h con 1 out consegnato → none: il lead è ancora nostro', () => {
+    expect(decide({ msgs: [out(23 * H, 'delivered')] })).toBe('none');
+    expect(decide({ msgs: [out(24 * H - 60_000, 'delivered')] })).toBe('none');
+  });
+
+  it('24h con 1 out consegnato → non_risposto: torna ai GDO', () => {
+    expect(decide({ msgs: [out(24 * H, 'delivered')] })).toBe('non_risposto');
   });
 
   it('14g con consegne → non_risposto', () => {
@@ -102,7 +107,7 @@ describe('decideFollowupAction — Track A (mai risposto)', () => {
     expect(a).toBe('non_risposto');
   });
 
-  it('oltre i 4g di sequenza, mai consegnato nulla → mai_consegnato', () => {
+  it('oltre la fine sequenza, mai consegnato nulla → mai_consegnato', () => {
     const a = decide({ msgs: [out(14 * D, 'failed'), out(13 * D, 'undelivered', 'HXseq1')] });
     expect(a).toBe('mai_consegnato');
   });
@@ -112,10 +117,17 @@ describe('decideFollowupAction — Track A (mai risposto)', () => {
     expect(a).toBe('mai_consegnato');
   });
 
-  it('touch dovuto (sequenceEnabled, in fascia) → none: gli invii non sono compito del cron classificatore', () => {
-    // 1 out consegnato 30h fa, 0 touch sequenza → decideTrackA direbbe send_touch(1).
-    const a = decide({ msgs: [out(30 * H, 'delivered')], sequenceEnabled: true });
-    expect(a).toBe('none');
+  it('mai consegnato nulla: a 23h none, a 24h mai_consegnato (non si aspetta il fast-fail delle 48h)', () => {
+    expect(decide({ msgs: [out(23 * H, 'failed')] })).toBe('none');
+    expect(decide({ msgs: [out(24 * H, 'failed')] })).toBe('mai_consegnato');
+  });
+
+  // Il touch di sequenza (offset 24h) dal 02/10/2026 non e' piu' raggiungibile: la
+  // chiusura a 24h viene prima. A sequenza accesa e in fascia, prima della chiusura il
+  // classificatore non produce niente; dopo, solo la classificazione.
+  it('sequenza accesa, in fascia: a 23h none, a 24h non_risposto (mai un invio dal classificatore)', () => {
+    expect(decide({ msgs: [out(23 * H, 'delivered')], sequenceEnabled: true })).toBe('none');
+    expect(decide({ msgs: [out(24 * H, 'delivered')], sequenceEnabled: true })).toBe('non_risposto');
   });
 
   it('nessun outbound → none (apertura la fa sequence-touches)', () => {
@@ -125,21 +137,15 @@ describe('decideFollowupAction — Track A (mai risposto)', () => {
 });
 
 describe('decideFollowupAction — Track B (risposto poi silente)', () => {
-  it('24h di silenzio → none (niente piu INTERROTTO a 24h)', () => {
+  // La resa e scesa da 288h (12gg) a 96h (4gg) il 24/08, e da 96h a 24h il 02/10/2026
+  // (PO: dopo 24 ore che la persona non risponde torna ai GDO).
+  it('23h di silenzio, nudge gia speso → none: il lead e ancora nostro', () => {
+    const a = decide({ msgs: [out(30 * H, 'delivered'), inb(23 * H)], hasInbound: true, lastInboundAtMs: NOW - 23 * H, nudgesSent: 1 });
+    expect(a).toBe('none');
+  });
+
+  it('24h di silenzio → interrotto_classify', () => {
     const a = decide({ msgs: [out(30 * H, 'delivered'), inb(24 * H)], hasInbound: true, lastInboundAtMs: NOW - 24 * H });
-    expect(a).toBe('none');
-  });
-
-  // La resa e scesa da 288h (12gg) a 96h (4gg) il 24/08: oltre le 96h di silenzio,
-  // su 55 lead tornati a scrivere, ZERO hanno poi fissato. Tenerli fermi altri otto
-  // giorni non recuperava niente e ritardava la restituzione ai GDO.
-  it('95h di silenzio → none: il lead e ancora nostro', () => {
-    const a = decide({ msgs: [out(105 * H, 'delivered'), inb(95 * H)], hasInbound: true, lastInboundAtMs: NOW - 95 * H });
-    expect(a).toBe('none');
-  });
-
-  it('96h di silenzio → interrotto_classify', () => {
-    const a = decide({ msgs: [out(110 * H, 'delivered'), inb(96 * H)], hasInbound: true, lastInboundAtMs: NOW - 96 * H });
     expect(a).toBe('interrotto_classify');
   });
 
@@ -244,13 +250,16 @@ describe('serveCronologia — chi si salta a costo zero', () => {
 });
 
 describe('serveCronologia — Track A (il lead non ha mai risposto)', () => {
-  it('arruolato da meno di 48h: nessun esito può ancora scattare', () => {
-    expect(serveCronologia(conv({ ai_started_at: at(47 * H) }), NOW)).toBe(false);
+  it('arruolato da meno di 24h: nessun esito può ancora scattare', () => {
+    expect(serveCronologia(conv({ ai_started_at: at(23 * H) }), NOW)).toBe(false);
   });
 
-  // 48h è la soglia più bassa che classifica (numero morto di decideTrackA).
-  it('arruolato da 48h: si carica', () => {
-    expect(serveCronologia(conv({ ai_started_at: at(48 * H) }), NOW)).toBe(true);
+  // 24h è la soglia più bassa che classifica: la chiusura a SEQUENCE_END_DAYS di
+  // decideTrackA (dal 02/10/2026). Era 48h scritta a mano (il fast-fail, quando la
+  // chiusura stava a 4 giorni): con quel numero i lead fra 24 e 48h non si caricavano e
+  // la restituzione ai GDO slittava di un giorno.
+  it('arruolato da 24h: si carica', () => {
+    expect(serveCronologia(conv({ ai_started_at: at(24 * H) }), NOW)).toBe(true);
   });
 
   it('senza ai_started_at si ripiega su created_at', () => {
@@ -265,22 +274,24 @@ describe('serveCronologia — Track A (il lead non ha mai risposto)', () => {
 });
 
 describe('serveCronologia — Track B (il lead ha risposto, poi silenzio)', () => {
-  it('silenzio sotto la resa (95h): non c è niente da restituire', () => {
-    const c = conv({ last_inbound_at: at(95 * H), last_message_at: at(94 * H) });
+  it('silenzio sotto la resa (23h): non c è niente da restituire', () => {
+    const c = conv({ last_inbound_at: at(23 * H), last_message_at: at(22 * H) });
     expect(serveCronologia(c, NOW)).toBe(false);
   });
 
-  it('silenzio oltre la resa (96h): si carica per classificare', () => {
-    const c = conv({ last_inbound_at: at(96 * H), last_message_at: at(95 * H) });
+  it('silenzio alla resa (24h): si carica per classificare', () => {
+    const c = conv({ last_inbound_at: at(24 * H), last_message_at: at(23 * H) });
     expect(serveCronologia(c, NOW)).toBe(true);
   });
 
   // Un inbound arrivato PRIMA dell'arruolamento non è nella finestra che legge il cron:
-  // per la classificazione quel lead è Track A, e la sua soglia è 48h, non 96h.
-  // Senza questa distinzione il suo esito slitterebbe di due giorni.
-  it('inbound precedente all arruolamento → vale la soglia Track A', () => {
-    const c = conv({ ai_started_at: at(50 * H), last_inbound_at: at(60 * H), last_message_at: at(H) });
-    expect(serveCronologia(c, NOW)).toBe(true);
+  // per la classificazione quel lead è Track A, e conta l'età dall'arruolamento, non il
+  // silenzio dall'inbound. Con le due soglie oggi uguali (24h) la differenza la fa il
+  // riferimento: un lead arruolato da 10h con un inbound vecchio di 30h non ha ancora
+  // niente da classificare.
+  it('inbound precedente all arruolamento → vale la soglia Track A, dall arruolamento', () => {
+    expect(serveCronologia(conv({ ai_started_at: at(10 * H), last_inbound_at: at(30 * H), last_message_at: at(H) }), NOW)).toBe(false);
+    expect(serveCronologia(conv({ ai_started_at: at(24 * H), last_inbound_at: at(30 * H), last_message_at: at(H) }), NOW)).toBe(true);
   });
 });
 
@@ -376,7 +387,7 @@ describe('esitoMaiConsegnato — numero senza WhatsApp: al GDO da chiamare, mai 
     expect(note).toMatch(/chiamare a voce/i);
   });
 
-  it('la nota non parla piu\' di 14 giorni (la soglia vera e\' 48h / 4 giorni) ne\' di numero inesistente', () => {
+  it('la nota non parla piu\' di 14 giorni (la soglia vera e\' la fine sequenza, 24h) ne\' di numero inesistente', () => {
     const { note } = esitoMaiConsegnato([morto(63024)]);
     expect(note).not.toMatch(/14 giorni/);
     expect(note).not.toMatch(/inesistente|morto/i);

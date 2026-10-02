@@ -25,38 +25,46 @@ describe('costanti', () => {
   it('valori del piano', () => {
     // Un solo follow-up: i touch 2/3/4 sono stati rimossi il 01/08/2026.
     expect(TOUCH_OFFSETS_DAYS).toEqual([1]);
-    expect(SEQUENCE_END_DAYS).toBe(4);
-    // 24/08/2026: resa da 288h (12gg) a 96h (4gg) e nudge da [18,24) a [12,24).
-    // Misurato su 1.074 chat e 205 silenzi: vedi i commenti in lib/sequence.ts.
-    expect([NUDGE1_MIN_H, NUDGE1_MAX_H, TRACKB_GIVEUP_H]).toEqual([12, 24, 96]);
+    // 02/10/2026 (PO): i lead nuovi tornano ai GDO dopo 24 ore. Chiusura Track A da 4
+    // giorni a 1, resa Track B da 96h a 24h; il nudge resta a [12,24).
+    expect(SEQUENCE_END_DAYS).toBe(1);
+    expect([NUDGE1_MIN_H, NUDGE1_MAX_H, TRACKB_GIVEUP_H]).toEqual([12, 24, 24]);
+  });
+
+  it("il touch di sequenza cade dentro la chiusura: non puo' partire (voluto)", () => {
+    // decideTrackA controlla la chiusura PRIMA del touch: con l'offset del touch 1 non
+    // inferiore alla chiusura, il touch non esce mai. Se qualcuno riabbassa l'offset o
+    // rialza la chiusura, questo test lo obbliga a chiedersi se il touch deve ripartire.
+    expect(TOUCH_OFFSETS_DAYS[0]).toBeGreaterThanOrEqual(SEQUENCE_END_DAYS);
   });
 });
 
-// La resa a 4 giorni non è un numero scelto a occhio: oltre le 96h di silenzio, su
-// 55 lead tornati a scrivere, ZERO hanno poi fissato. Tutti gli 11 recuperi che sono
-// finiti in appuntamento vengono da silenzi sotto le 96h.
-describe('decideTrackB — la resa a 4 giorni', () => {
+// 02/10/2026 — decisione PO: "dopo 24 ore che la persona non risponde torna ai GDO".
+// La resa del Track B scende da 96h a 24h; il nudge free-text a 12-24h resta.
+describe('decideTrackB — la resa a 24 ore', () => {
   const base = { nudgesSent: 1, sequenceEnabled: true };
   // Mezzogiorno di Roma: dentro la fascia d'invio, così il ramo nudge non interferisce.
   const ORA = Date.parse('2026-08-26T10:00:00Z');
   const silenzioDa = (ore: number) => ({ nowMs: ORA, lastInboundAtMs: ORA - ore * 3600_000, ...base });
 
-  it('a 95 ore il lead è ancora nostro: non si restituisce', () => {
-    expect(decideTrackB(silenzioDa(95)).kind).not.toBe('classify');
+  it('a 23 ore il lead è ancora nostro: non si restituisce', () => {
+    expect(decideTrackB(silenzioDa(23))).toEqual({ kind: 'wait' });
+    expect(decideTrackB(silenzioDa(23.99))).toEqual({ kind: 'wait' });
   });
 
-  it('a 96 ore tonde si restituisce', () => {
-    expect(decideTrackB(silenzioDa(96))).toEqual({ kind: 'classify' });
+  it('a 24 ore tonde si restituisce', () => {
+    expect(decideTrackB(silenzioDa(24))).toEqual({ kind: 'classify' });
   });
 
-  it('non aspetta piu' + ' i 12 giorni di prima', () => {
-    expect(decideTrackB(silenzioDa(200))).toEqual({ kind: 'classify' });
+  it('non aspetta piu' + ' le 96h di prima', () => {
+    expect(decideTrackB(silenzioDa(48))).toEqual({ kind: 'classify' });
+    expect(decideTrackB(silenzioDa(95))).toEqual({ kind: 'classify' });
   });
 
   it('la resa classifica anche a sequenza spenta e fuori fascia: non è un invio', () => {
     const notte = Date.parse('2026-08-26T01:00:00Z');
     expect(
-      decideTrackB({ nowMs: notte, lastInboundAtMs: notte - 100 * 3600_000, nudgesSent: 1, sequenceEnabled: false })
+      decideTrackB({ nowMs: notte, lastInboundAtMs: notte - 24 * 3600_000, nudgesSent: 1, sequenceEnabled: false })
     ).toEqual({ kind: 'classify' });
   });
 });
@@ -166,16 +174,47 @@ describe('decideTrackA — apertura differita', () => {
   });
 });
 
-// La fascia larga vale SOLO per la prima apertura. Un template di follow-up alle 22
-// arriva a qualcuno che non aspetta niente da noi: quello resta in fascia stretta.
-describe('decideTrackA — il touch non segue la fascia larga delle aperture', () => {
-  it('touch dovuto ma sono le 22 → wait', () => {
-    const msgs = [out(30, 'delivered', 'HXopening', NOW_NIGHT)];
-    expect(decideTrackA({ nowMs: NOW_NIGHT, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'wait' });
+// 02/10/2026: la chiusura scende a 24h, e 24h e' anche l'offset del touch 1. In
+// decideTrackA la chiusura viene controllata prima del touch, quindi il touch non parte
+// MAI, a nessuna ora, con qualunque combinazione di flag: e' voluto (il touch e' anche
+// sospeso da env dal 24/09). Questi test sostituiscono quelli che verificavano fascia,
+// anti-doppione e kill-switch del touch: con il touch irraggiungibile erano ridondanti.
+describe('decideTrackA — il touch di sequenza non parte mai prima della chiusura', () => {
+  const tutteLeCombinazioni = (ore: number, status: string, from: number) =>
+    [true, false].flatMap((sequenceEnabled) => [true, false].map((touchEnabled) =>
+      decideTrackA({ nowMs: from, msgs: [out(ore, status, 'HXopening', from)], seqSids: SEQ, sequenceEnabled, touchEnabled })));
+
+  it('a mezzogiorno e alle 22, da 0 a 14 giorni, con qualunque flag: mai send_touch', () => {
+    for (const from of [NOW, NOW_NIGHT]) {
+      for (let ore = 0; ore <= 14 * 24; ore += 0.5) {
+        for (const status of ['delivered', 'read', 'sent', 'undelivered']) {
+          for (const a of tutteLeCombinazioni(ore, status, from)) expect(a.kind).not.toBe('send_touch');
+        }
+      }
+    }
   });
-  it('lo stesso touch a mezzogiorno parte', () => {
-    const msgs = [out(30, 'delivered', 'HXopening')];
-    expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'send_touch', touchIndex: 1 });
+
+  it('sotto le 24h si aspetta, da 24h si chiude: niente in mezzo', () => {
+    const decidi = (ore: number) =>
+      decideTrackA({ nowMs: NOW, msgs: [out(ore, 'delivered', 'HXopening')], seqSids: SEQ, sequenceEnabled: true, touchEnabled: true });
+    for (let ore = 1; ore < 24; ore += 0.5) expect(decidi(ore)).toEqual({ kind: 'wait' });
+    expect(decidi(23.99)).toEqual({ kind: 'wait' });
+    for (const ore of [24, 24.5, 26, 30, 48]) expect(decidi(ore)).toEqual({ kind: 'non_risposto' });
+  });
+
+  it('conversazione della vecchia sequenza (più touch già presi) → mai un altro touch, si chiude', () => {
+    // Chi era già a metà sequenza quando i tagli sono entrati in vigore: i touch storici
+    // restano contati, e si va dritti alla classificazione.
+    const msgs = [
+      out(80, 'delivered'),
+      out(60, 'delivered', 'HX1'), out(40, 'delivered', 'HX2'), out(21, 'delivered', 'HX3'),
+    ];
+    expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'non_risposto' });
+  });
+
+  it('offset del touch non ancora raggiunto (12h dal primo out) → wait', () => {
+    const msgs = [out(12, 'delivered')];
+    expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'wait' });
   });
 });
 
@@ -183,20 +222,24 @@ describe('decideTrackA — il touch non segue la fascia larga delle aperture', (
 // sospeso per la qualita' dei numeri. Le aperture differite e la chiusura a fine
 // sequenza non dipendono da lui e devono continuare.
 describe('decideTrackA — touch sospeso', () => {
-  it('touch dovuto ma sospeso → wait', () => {
-    const msgs = [out(30, 'delivered', 'HXopening')];
+  it('touch sospeso, prima della chiusura → wait', () => {
+    const msgs = [out(23, 'delivered', 'HXopening')];
     expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true, touchEnabled: false })).toEqual({ kind: 'wait' });
   });
   it("con il touch sospeso l'apertura differita parte lo stesso", () => {
     expect(decideTrackA({ nowMs: NOW, msgs: [], seqSids: SEQ, sequenceEnabled: true, touchEnabled: false })).toEqual({ kind: 'send_opening' });
   });
-  it('con il touch sospeso la chiusura a fine sequenza arriva lo stesso', () => {
-    const msgs = [out(5 * 24, 'delivered', 'HXopening')];
+  it('con il touch sospeso la chiusura a fine sequenza arriva lo stesso, a 24h', () => {
+    const msgs = [out(24, 'delivered', 'HXopening')];
     expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true, touchEnabled: false })).toEqual({ kind: 'non_risposto' });
   });
 });
 
-describe('decideTrackA — fast-fail numero morto', () => {
+// Il fast-fail (48h, serve un touch gia' partito) dal 02/10/2026 non arriva mai prima
+// della chiusura a 24h: un numero mai consegnato esce a 24h come discard_dead dalla
+// chiusura, con lo stesso esito che gli avrebbe dato il fast-fail. Questi test
+// verificano che i due rami non si contraddicano.
+describe('decideTrackA — numero morto: la chiusura a 24h arriva prima del fast-fail', () => {
   it('1 touch, tutto undelivered/failed, 49h da t0 → discard_dead', () => {
     const msgs = [out(49, 'undelivered'), out(25, 'failed', 'HX1')];
     expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'discard_dead' });
@@ -205,77 +248,53 @@ describe('decideTrackA — fast-fail numero morto', () => {
     const msgs = [out(49, 'undelivered'), out(25, 'failed', 'HX1')];
     expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: false })).toEqual({ kind: 'discard_dead' });
   });
-  it('0 touch (solo apertura morta) a 49h → NO fast-fail (serve touches>=1)', () => {
-    const msgs = [out(49, 'undelivered')];
-    // in fascia: tocca il touch 1 (offset 1g superato, anti-doppione ok)
-    expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'send_touch', touchIndex: 1 });
+  it('solo apertura morta (0 touch): a 23h wait, a 24h discard_dead senza aspettare le 48h', () => {
+    expect(decideTrackA({ nowMs: NOW, msgs: [out(23, 'undelivered')], seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'wait' });
+    expect(decideTrackA({ nowMs: NOW, msgs: [out(24, 'undelivered')], seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'discard_dead' });
   });
-  it('touch morto ma solo 40h da t0 → niente fast-fail', () => {
+  it('touch morto a 40h: il fast-fail non è ancora scattato, la chiusura sì → discard_dead', () => {
     const msgs = [out(40, 'undelivered'), out(21, 'failed', 'HX1')];
-    expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'wait' });
+    expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'discard_dead' });
+  });
+  it('fra le 24 e le 60h un numero morto ha sempre lo stesso esito, con o senza touch', () => {
+    for (let ore = 24; ore <= 60; ore++) {
+      const senzaTouch = [out(ore, 'failed')];
+      const conTouch = [out(ore, 'failed'), out(ore / 2, 'undelivered', 'HX1')];
+      for (const msgs of [senzaTouch, conTouch]) {
+        expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'discard_dead' });
+      }
+    }
   });
 });
 
-describe('decideTrackA — classificazione finale a 4 giorni', () => {
-  it('4g, almeno un delivered → non_risposto', () => {
-    const msgs = [out(4 * 24, 'delivered'), out(3 * 24, 'sent', 'HX1')];
+describe('decideTrackA — classificazione finale a 24 ore', () => {
+  it('24h, almeno un delivered → non_risposto', () => {
+    const msgs = [out(24, 'delivered')];
     expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'non_risposto' });
   });
-  it('3g e mezzo, touch già speso → wait (non ancora chiusa)', () => {
-    const msgs = [out(84, 'delivered'), out(60, 'delivered', 'HX1')];
+  it('23h, consegnato → wait (non ancora chiusa: il lead è ancora nostro)', () => {
+    const msgs = [out(23, 'delivered')];
     expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'wait' });
   });
-  it('4g, mai consegnato nulla → discard_dead', () => {
-    const msgs = [out(4 * 24, 'sent'), out(3 * 24, 'sent', 'HX1')];
+  it('24h, mai consegnato nulla → discard_dead', () => {
+    const msgs = [out(24, 'sent')];
     expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'discard_dead' });
   });
+  it('23h, mai consegnato nulla → wait', () => {
+    const msgs = [out(23, 'sent')];
+    expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'wait' });
+  });
   it('classificazione finale ATTIVA con kill-switch off', () => {
-    const msgs = [out(4 * 24, 'delivered')];
+    const msgs = [out(24, 'delivered')];
     expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: false })).toEqual({ kind: 'non_risposto' });
   });
   it('classificazione finale anche fuori fascia', () => {
-    const msgs = [out(4 * 24, 'delivered', null, NOW_NIGHT)];
+    const msgs = [out(24, 'delivered', null, NOW_NIGHT)];
     expect(decideTrackA({ nowMs: NOW_NIGHT, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'non_risposto' });
   });
   it('vecchia conversazione a 14g resta classificabile', () => {
     const msgs = [out(14 * 24, 'delivered'), out(13 * 24, 'sent', 'HX1')];
     expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'non_risposto' });
-  });
-});
-
-describe('decideTrackA — touch della sequenza', () => {
-  it('touch 1 dovuto a +1g dal primo out (delivered) → send_touch(1)', () => {
-    const msgs = [out(26, 'delivered')];
-    expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'send_touch', touchIndex: 1 });
-  });
-  it('touch già speso a +3g → wait: il secondo follow-up non esiste più', () => {
-    const msgs = [out(3 * 24, 'delivered'), out(2 * 24, 'delivered', 'HX1')];
-    expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'wait' });
-  });
-  it('anti-doppione: ultimo out < 20h fa → wait', () => {
-    const msgs = [out(26, 'delivered'), out(5, 'sent')];
-    expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'wait' });
-  });
-  it('touch dovuto ma fuori fascia → wait', () => {
-    const msgs = [out(26, 'delivered', null, NOW_NIGHT)];
-    expect(decideTrackA({ nowMs: NOW_NIGHT, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'wait' });
-  });
-  it('touch dovuto ma kill-switch off → wait', () => {
-    const msgs = [out(26, 'delivered')];
-    expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: false })).toEqual({ kind: 'wait' });
-  });
-  it('offset non ancora raggiunto (12h dal primo out) → wait', () => {
-    const msgs = [out(12, 'delivered')];
-    expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'wait' });
-  });
-  it('conversazione della vecchia sequenza (più touch già presi) → mai un altro touch', () => {
-    // Chi era già a metà sequenza quando il taglio è entrato in vigore: i touch
-    // storici restano contati, quindi si va dritti alla classificazione.
-    const msgs = [
-      out(80, 'delivered'),
-      out(60, 'delivered', 'HX1'), out(40, 'delivered', 'HX2'), out(21, 'delivered', 'HX3'),
-    ];
-    expect(decideTrackA({ nowMs: NOW, msgs, seqSids: SEQ, sequenceEnabled: true })).toEqual({ kind: 'wait' });
   });
 });
 
@@ -293,23 +312,24 @@ describe('decideTrackB', () => {
   it('20h, in fascia, 0 nudge → nudge_free', () => expect(dec(20, 0)).toEqual({ kind: 'nudge_free' }));
   it('20h ma fuori fascia → wait', () => expect(dec(20, 0, { now: NOW_NIGHT })).toEqual({ kind: 'wait' }));
   it('20h ma kill-switch off → wait', () => expect(dec(20, 0, { enabled: false })).toEqual({ kind: 'wait' }));
-  it('24h esatte, 0 nudge → wait (finestra [12,24) chiusa, e la resa e ancora lontana)', () => expect(dec(24, 0)).toEqual({ kind: 'wait' }));
+  // La resa a 24h non ruba la finestra del nudge: fino a 23h59 il nudge e' ancora dovuto.
+  it('23h, in fascia, 0 nudge → nudge_free (l ultima ora utile della finestra)', () => expect(dec(23, 0)).toEqual({ kind: 'nudge_free' }));
+  it('24h esatte, 0 nudge → classify (finestra [12,24) chiusa, ed e la resa)', () => expect(dec(24, 0)).toEqual({ kind: 'classify' }));
   it('nudge già speso: nessun secondo richiamo finche non scatta la resa', () => {
-    for (const h of [20, 30, 48, 50, 95]) expect(dec(h, 1)).toEqual({ kind: 'wait' });
+    for (const h of [12, 20, 23, 23.99]) expect(dec(h, 1)).toEqual({ kind: 'wait' });
+    expect(dec(24, 1)).toEqual({ kind: 'classify' });
   });
-  it('50h con nudgesSent=0 → wait (niente template fuori finestra)', () =>
-    expect(dec(50, 0)).toEqual({ kind: 'wait' }));
-  // 24/08/2026: la resa scende a 96h. Su 55 lead tornati dopo piu' di 96h di
-  // silenzio, ZERO hanno poi fissato: tenerli fermi altri otto giorni non recupera
-  // niente e ritarda solo la restituzione ai GDO.
-  it('96h con nudgesSent=0 → classify: e la resa, non un invio', () => expect(dec(96, 0)).toEqual({ kind: 'classify' }));
-  it('a 120h si classifica: oltre le 96h non torna piu nessuno che converta', () => {
+  it('50h con nudgesSent=0 → classify, mai un template fuori finestra', () =>
+    expect(dec(50, 0)).toEqual({ kind: 'classify' }));
+  // 02/10/2026: la resa scende da 96h a 24h (PO: dopo 24 ore di silenzio il lead torna
+  // ai GDO). Era 96h dal 24/08, 288h prima ancora.
+  it('a 120h si classifica: ben oltre la resa', () => {
     expect(dec(120, 1)).toEqual({ kind: 'classify' });
     expect(dec(200, 1, { now: NOW_NIGHT, enabled: false })).toEqual({ kind: 'classify' });
   });
 
   it('la resa classifica anche fuori fascia e con kill-switch off', () => {
-    expect(dec(96, 0)).toEqual({ kind: 'classify' });
+    expect(dec(24, 0, { now: NOW_NIGHT, enabled: false })).toEqual({ kind: 'classify' });
     expect(dec(300, 3, { now: NOW_NIGHT, enabled: false })).toEqual({ kind: 'classify' });
   });
 
@@ -324,10 +344,10 @@ describe('decideTrackB', () => {
     // non consente piu' il free-text, e un template non si manda (costa reputazione
     // su un numero LOW e non ha mai portato un appuntamento).
     expect(dec(20, 0, { now: NOW_NIGHT })).toEqual({ kind: 'wait' });
-    expect(dec(30, 0)).toEqual({ kind: 'wait' });
-    expect(dec(48, 0)).toEqual({ kind: 'wait' });
-    // Resta solo la resa, ora a 96h.
-    expect(dec(96, 0)).toEqual({ kind: 'classify' });
+    expect(dec(23, 0, { now: NOW_NIGHT })).toEqual({ kind: 'wait' });
+    // Resta solo la resa, ora a 24h: nessun invio fra la finestra persa e la restituzione.
+    expect(dec(24, 0)).toEqual({ kind: 'classify' });
+    expect(dec(24, 0, { now: NOW_NIGHT })).toEqual({ kind: 'classify' });
   });
 });
 

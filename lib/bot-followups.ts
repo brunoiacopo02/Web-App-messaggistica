@@ -1,14 +1,20 @@
-import { decideTrackA, decideTrackB, TRACKB_GIVEUP_H, type MsgLite } from './sequence';
+import { decideTrackA, decideTrackB, FAST_FAIL_H, SEQUENCE_END_DAYS, TRACKB_GIVEUP_H, type MsgLite } from './sequence';
 import { lancioInCorso } from './lancio-fase';
 
 const H = 3600_000;
 
 /**
- * Soglia più bassa a cui una classificazione Track A può scattare: è il fast-fail
- * "numero morto" di `decideTrackA` (48h dal primo outbound). Prima di allora leggere
- * la cronologia di quel lead non può produrre niente.
+ * Soglia più bassa a cui una classificazione Track A può scattare: la prima fra il
+ * fast-fail "numero morto" di `decideTrackA` (48h dal primo outbound) e la chiusura a
+ * `SEQUENCE_END_DAYS`. Prima di allora leggere la cronologia di quel lead non può
+ * produrre niente.
+ *
+ * Fino al 02/10/2026 era scritta a mano a 48h (con la chiusura a 4 giorni il fast-fail
+ * era davvero il primo). Con la chiusura scesa a 24h quel 48 avrebbe fatto saltare la
+ * cronologia ai lead fra le 24 e le 48h, e la restituzione ai GDO sarebbe slittata di un
+ * giorno: per questo ora si ricava dalle costanti di `lib/sequence.ts`.
  */
-export const TRACKA_MIN_CLASSIFY_H = 48;
+export const TRACKA_MIN_CLASSIFY_H = Math.min(FAST_FAIL_H, SEQUENCE_END_DAYS * 24);
 
 /** Lo stretto necessario per decidere, dalla sola riga conversations, se serve leggere i messaggi. */
 export type CronConvRow = {

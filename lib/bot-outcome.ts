@@ -770,10 +770,11 @@ export async function sendOutcome(
     });
 
     if (fascia === 'tieni_aperta') {
-      // Non è un esito: nessun POST, la chat resta aperta. NON la ripesca la sequenza
-      // dei 4 giorni (SEQUENCE_END_DAYS vale solo per chi non ha mai risposto, Track A):
+      // Non è un esito: nessun POST, la chat resta aperta. NON la ripesca la chiusura
+      // della sequenza (SEQUENCE_END_DAYS vale solo per chi non ha mai risposto, Track A):
       // questo lead ha risposto, quindi sta sul Track B (`decideTrackB`) — un nudge
-      // free-text a 12-24h di silenzio e poi, a 96h, la restituzione come INTERROTTO.
+      // free-text a 12-24h di silenzio e poi, a TRACKB_GIVEUP_H (24h dal 02/10/2026,
+      // prima 96h), la restituzione come INTERROTTO.
       // È questo evento, con il suo `quando`, che il cron (bot-followups, ramo
       // `interrotto_classify`) rilegge per dire al GDO quando il lead voleva essere
       // risentito: il payload non si cambia senza cambiare anche lì.

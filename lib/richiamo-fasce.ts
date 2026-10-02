@@ -19,10 +19,12 @@ import { paroleDelLead } from './bot-outcome-rules';
 import { formatRomeDateTime, romeDaysBetween } from './rome-time';
 
 /** Entro questi giorni non si chiude niente: nessun esito al CRM, la chat resta aperta.
- *  Quello che succede dopo NON è la sequenza dei 4 giorni (SEQUENCE_END_DAYS vale solo
+ *  Quello che succede dopo NON è la chiusura della sequenza (SEQUENCE_END_DAYS vale solo
  *  per chi non ha mai risposto, Track A): il lead ha risposto, quindi sta sul Track B
  *  (`decideTrackB` in `lib/sequence.ts`) — un solo nudge free-text a 12-24h di silenzio,
- *  poi a 96h la restituzione a un GDO come INTERROTTO. Il cron (bot-followups) in quel
+ *  poi a TRACKB_GIVEUP_H (24h dal 02/10/2026, prima 96h) la restituzione a un GDO come
+ *  INTERROTTO. Quindi anche un "sentiamoci fra 3 giorni" torna a un GDO dopo 24h di
+ *  silenzio, non al giorno chiesto: è la nota che gli porta il "quando". Il cron (bot-followups) in quel
  *  momento rilegge l'evento `richiamo_tenuto_aperto` e mette nella nota dell'INTERROTTO
  *  `buildRichiamoRestituitoNote`: il GDO sa quando il lead voleva essere risentito. */
 export const RICHIAMO_FASCIA_APERTA_GG = 3;
@@ -147,7 +149,7 @@ function fasciaDaGiorni(giorni: number | null): FasciaRichiamo {
  * Una data assente, illeggibile o nel passato NON è un esito: torna `tieni_aperta`. Il
  * chiamante (`sendOutcome`) in quel caso non manda NIENTE al CRM — nessuna nota, nessun
  * esito: la chat resta aperta e segue il Track B (nudge a 12-24h, restituzione come
- * INTERROTTO a 96h — vedi `RICHIAMO_FASCIA_APERTA_GG`). Non si deduce mai una data da niente: è esattamente
+ * INTERROTTO a TRACKB_GIVEUP_H, 24h dal 02/10/2026 — vedi `RICHIAMO_FASCIA_APERTA_GG`). Non si deduce mai una data da niente: è esattamente
  * il bug chiuso il 06/08.
  */
 export function classificaRichiamo(input: {

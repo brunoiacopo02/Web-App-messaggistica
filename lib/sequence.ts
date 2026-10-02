@@ -11,7 +11,11 @@ const D = 24 * H;
 // (54% → 42% → 38%). Sono template MARKETING verso chi non risponde: il prezzo lo paga
 // la reputazione del numero (qualità Meta scesa a LOW), il ricavo non esiste.
 export const TOUCH_OFFSETS_DAYS: number[] = [1];
-export const SEQUENCE_END_DAYS = 4;
+// 02/10/2026 — la chiusura scende da 4 giorni a 1 (PO): il touch di sequenza e' spento
+// dal 24/09 (qualita' LOW), quindi fra il primo giorno e il quarto il bot non faceva piu'
+// niente per chi non ha mai risposto. Tenerlo tre giorni in piu' voleva dire solo
+// toglierlo ai GDO. Con la chiusura a 1 giorno il touch (offset 1) non parte comunque.
+export const SEQUENCE_END_DAYS = 1;
 // Track B (lead che ha risposto poi tace): finestra del nudge gratuito e resa.
 // I due template di riaggancio sono stati rimossi (18 risposte su 74 consegnati, metà
 // delle quali un "NO" secco, zero appuntamenti): resta il solo nudge free-text, che
@@ -37,9 +41,17 @@ export const NUDGE1_MIN_H = 12; export const NUDGE1_MAX_H = 24;
 // stesso lead senza vedersi — caso Marina Destefanis) resta valido come rischio, ma
 // vale solo per i lead che tornano E convertono: quelli, i dati dicono, stanno tutti
 // sotto le 96h.
-export const TRACKB_GIVEUP_H = 96;
+//
+// 02/10/2026 — la resa scende da 96h a 24h (PO: "dopo 24 ore che la persona non
+// risponde torna ai GDO"). Il nudge free-text a 12-24h resta: la resa scatta solo quando
+// il nudge e' gia' partito o la sua finestra e' passata (`abbiamoFinito`).
+export const TRACKB_GIVEUP_H = 24;
 
-const FAST_FAIL_H = 48;   // numero morto: touch>=1 e mai nulla consegnato
+// Numero morto: touch>=1 e mai nulla consegnato. Dal 02/10/2026 la chiusura a
+// SEQUENCE_END_DAYS (24h) arriva sempre prima: oltre le 48h il fast-fail darebbe comunque
+// lo stesso `discard_dead` della chiusura (mai consegnato nulla). Resta come rete se la
+// chiusura tornasse sopra le 48h. Esportata per il pre-filtro di `lib/bot-followups.ts`.
+export const FAST_FAIL_H = 48;
 const MIN_GAP_OUT_H = 20; // anti-doppione tra due out consecutivi
 
 export type MsgLite = { direction: string; twilio_status: string | null; template_sid: string | null; created_at: string; is_template?: boolean };
@@ -146,8 +158,8 @@ export function decideTrackA(input: {
   if (touches >= 1 && allOutboundDeadNoDelivery(msgs) && nowMs - t0 >= FAST_FAIL_H * H) {
     return { kind: 'discard_dead' };
   }
-  // Chiusura a SEQUENCE_END_DAYS (4g dal 01/08, era 14g): classificazione SEMPRE attiva,
-  // anche a kill-switch spento. Mai consegnato nulla → al GDO da chiamare (bot-followups).
+  // Chiusura a SEQUENCE_END_DAYS (1g dal 02/10/2026; 4g dal 01/08, prima 14g):
+  // classificazione SEMPRE attiva, anche a kill-switch spento. Mai consegnato nulla → al GDO da chiamare (bot-followups).
   if (nowMs - t0 >= SEQUENCE_END_DAYS * D) {
     return anyDelivered(msgs) ? { kind: 'non_risposto' } : { kind: 'discard_dead' };
   }
@@ -173,7 +185,7 @@ export type TrackBAction =
  *
  *  Ci passa anche chi ha chiesto "sentiamoci fra N giorni" con N ≤ 3 (fascia
  *  `tieni_aperta` di `lib/richiamo-fasce.ts`): nessun trattamento a parte, stesso nudge
- *  a 12-24h e stessa resa a 96h. Il giorno chiesto non si perde: alla resa il cron
+ *  a 12-24h e stessa resa a TRACKB_GIVEUP_H (24h dal 02/10/2026). Il giorno chiesto non si perde: alla resa il cron
  *  (bot-followups) rilegge l'evento `richiamo_tenuto_aperto` e lo scrive nella nota
  *  dell'INTERROTTO. `SEQUENCE_END_DAYS` qui non c'entra: vale solo per il Track A. */
 export function decideTrackB(input: {
