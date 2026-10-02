@@ -1,4 +1,4 @@
-import { romeDayKey, romeHour, formatRomeDateTime } from './rome-time';
+import { romeDayKey, formatRomeDateTime } from './rome-time';
 import { giorniLancio } from './lancio-scelta';
 import { haCongedo } from './lancio-fase';
 
@@ -47,33 +47,13 @@ const FASI_PRIMA_DEL_FOLLOWUP: readonly string[] = ['attesa', 'posto_bloccato', 
  * CRM e si scrive una fase — e il cron gira una volta l'ora, quindi e' un tetto ORARIO.
  *
  * Decisione PO del 25/09: le restituzioni arrivano a scaglioni graduali, non tutte
- * insieme. 100 l'ora dentro la fascia `inFasciaRestituzioni` (10 run al giorno) fanno
- * ~1.000 lead al giorno: i ~2.000 del lancio tornano al pool in 2-3 giorni lavorativi,
- * invece di 500 alla volta anche di notte.
+ * insieme. Fino al 02/10 c'era anche una fascia (lun-sab 09-18 di Roma, mai di notte ne'
+ * di domenica). Il 02/10 il PO l'ha tolta: "per la restituzione devono arrivare a
+ * qualsiasi ora ai GDO, non mettiamo limiti orari". Resta il tetto, che non e' un limite
+ * orario ma il passo dei lotti: 100 a run, un run all'ora per 24 ore, ~2.400 lead al
+ * giorno — i ~2.000 del lancio tornano al pool in un giorno circa.
  */
 export const RESTITUZIONI_MAX_DEFAULT = 100;
-
-/**
- * La fascia in cui si restituisce, in ora di Roma (decisione PO del 25/09: mai di notte).
- * Da lunedi' a sabato, run delle 09:00 fino a quello delle 18:00 compreso; domenica mai.
- *
- * Perche' questa: i GDO lavorano i feriali 13:30-20:00 e il sabato 10:00-16:30 (turno
- * dichiarato dal PO, memoria "produttivita' GDO"), e il pool `LANCIO_WEBDEV_2026` di
- * `/import` lo assegna un admin in orario d'ufficio. Partendo alle 09:00 il pool e' gia'
- * pieno per l'inizio del turno, e l'ultimo scaglione (18:00) lascia ancora due ore di
- * turno; la domenica non c'e' nessuno che li chiami. Il cron di `vercel.json` gira ogni ora
- * 07-17 UTC, che copre 09-18 di Roma sia con l'ora legale (fino al 25/10) sia senza: la
- * fascia vera la decide questa funzione.
- */
-export const FASCIA_RESTITUZIONI = { daOra: 9, aOra: 18 } as const;
-
-export function inFasciaRestituzioni(now: Date): boolean {
-  // 0 = domenica. Il giorno della settimana italiano, dal giorno di calendario di Roma.
-  const giorno = new Date(`${romeDayKey(now)}T12:00:00Z`).getUTCDay();
-  if (giorno === 0) return false;
-  const ora = romeHour(now);
-  return ora >= FASCIA_RESTITUZIONI.daOra && ora <= FASCIA_RESTITUZIONI.aOra;
-}
 
 /**
  * Da dopodomani compreso (regola a data, derivata dall'evento: nessuno stato). Per
@@ -84,16 +64,20 @@ export function restituzioniAttive(now: Date, eventoAt: Date): boolean {
 }
 
 /**
- * Le date del cron in `vercel.json` sono scritte a mano (7-31 ottobre, 1-15 novembre) e
+ * Le date del cron in `vercel.json` sono scritte a mano (6-31 ottobre, 1-15 novembre) e
  * NON si derivano dall'evento: Vercel non legge i nostri setting. Se qualcuno sposta
  * `lancio_evento_at` senza toccare `vercel.json`, le restituzioni diventano attive in un
  * giorno in cui il cron non gira piu' — e non succede niente, in silenzio. Questa e' la
  * finestra vera del cron, in UTC come i cron di Vercel.
+ *
+ * Parte dal 6 in UTC e non dal 7 (02/10, a ogni ora): la mezzanotte del 7 a Roma e' il 6
+ * alle 22:00 UTC, e con il 7 i run delle 00:00 e delle 01:00 di Roma non ci sarebbero. I
+ * run del 6 prima di quell'ora escono da soli con `prima_della_data`.
  */
 export function dentroFinestraCron(now: Date): boolean {
   const mese = now.getUTCMonth() + 1;
   const giorno = now.getUTCDate();
-  return (mese === 10 && giorno >= 7) || (mese === 11 && giorno <= 15);
+  return (mese === 10 && giorno >= 6) || (mese === 11 && giorno <= 15);
 }
 
 /** Le restituzioni sarebbero attive ma il calendario del cron non le copre: bandierina
