@@ -1,6 +1,6 @@
 import { firstNameOf } from './name';
 import { formatRomeDateTime } from './rome-time';
-import type { ModoPostPitch } from './lancio-scelta';
+import { DOMANDE_PER_PERCORSO, type ModoPostPitch } from './lancio-scelta';
 
 export type PercorsoLancio = 'chiamata' | 'mattina' | 'conferme';
 
@@ -23,7 +23,7 @@ export type LancioPromptInput = {
   zoomLink?: string | null;
   meetingId?: string | null;
   /** Solo post_pitch: notte/giorno (`modoPostPitch`), quante risposte di riscaldamento
-   *  sono già in `lancio_info`, il blocco ORE PRENOTABILI costruito da `bloccoSlotPerPrompt`. */
+   *  sono già in `lancio_info`, il blocco ORE PRENOTABILI costruito da `bloccoOrePerPrompt`. */
   modo?: ModoPostPitch;
   risposteRaccolte?: number;
   /** Solo post_pitch: il percorso scelto dal lead (Task 5/8) e quante domande del percorso
@@ -81,21 +81,24 @@ export const RISPOSTE_RISCALDAMENTO = 0;
 const CHIUSURA_PRESUNTA =
   'MAI formule condizionali sulla chiusura ("se ti convince", "se ti interessa", "eventualmente"): la call col tutor serve a chiudere le ultime cose e fare l\'iscrizione, e lo dai per scontato.';
 
+/** Quante domande ha il percorso: lo stesso numero con cui il codice chiude (`DOMANDE_PER_PERCORSO`). */
+const su = (p: PercorsoLancio, fatte: number) => `già fatte: ${fatte} su ${DOMANDE_PER_PERCORSO[p]}`;
+
 function dovePercorso(percorso: PercorsoLancio | null | undefined, fatte: number, domandaScelta: string): string {
   switch (percorso) {
     case 'chiamata':
-      return `Il lead vuole essere chiamato subito. Prima gli fai due domande brevi, UNA alla volta (già fatte: ${fatte} su 2):
+      return `Il lead vuole essere chiamato subito. Prima gli fai due domande brevi, UNA alla volta (${su('chiamata', fatte)}):
 1) cosa ti spinge a voler fare un percorso come questo?
 2) e perché proprio adesso hai deciso di muoverti?
-Quando ha risposto alla seconda → [LANCIO:CHIAMA_ORA]. Se fa un'obiezione, non vuole rispondere o insiste per essere chiamato: rispondi in breve "ne parli direttamente col tutor" e metti [LANCIO:CHIAMA_ORA]. Le domande non sono un esame: non insistere mai.`;
+Quando ha risposto alla seconda → [LANCIO:CHIAMA_ORA]. NON usare [LANCIO:CHIAMA_ORA] prima della risposta alla seconda domanda, salvo i casi qui sotto. Se fa un'obiezione, non vuole rispondere o insiste per essere chiamato: rispondi in breve "ne parli direttamente col tutor" e metti [LANCIO:CHIAMA_ORA]. Le domande non sono un esame: non insistere mai.`;
     case 'mattina':
-      return `Il lead ha scelto un'ora con un venditore. I posti sono limitati: prima di fissare fai tre domande, UNA alla volta (già fatte: ${fatte} su 3):
+      return `Il lead ha scelto un'ora con un venditore. I posti sono limitati: prima di fissare fai tre domande, UNA alla volta (${su('mattina', fatte)}):
 1) cosa non va oggi nel suo lavoro o nella sua situazione (il motivo vero per cui vuole cambiare);
 2) "Durante la live abbiamo presentato Advance, Gold ed Exclusive: a quale pensavi?" Non dire MAI prezzi né cosa contengono i pacchetti: se chiede le differenze, "le vedi col tutor in call";
 3) "In call col tutor chiudete le ultime cose e fai l'iscrizione: l'obiettivo è decidere lì, un sì o un no. Ti va bene?"
 Dopo la terza risposta → [LANCIO:CONFERMA]. Se fa un'obiezione su una domanda: "ne parli direttamente col tutor" e passa alla successiva (o [LANCIO:CONFERMA] se era l'ultima). Se cambia ora scegliendone un'altra dal blocco ORE PRENOTABILI → [LANCIO:PRENOTA|<ISO>].`;
     case 'conferme':
-      return `Il lead ha scelto un'ora per la videocall. Prima di fissare fai qualche domanda leggera, UNA alla volta, senza spingere (già fatte: ${fatte} su 3): la sua situazione oggi (studio, lavoro); cosa vorrebbe cambiare; quanto sarebbe disposto a investire su sé stesso per riuscirci, senza dire cifre tu. Dopo la terza risposta, o se preferisce non rispondere → [LANCIO:CONFERMA]. Se cambia ora scegliendone un'altra dal blocco ORE PRENOTABILI → [LANCIO:PRENOTA|<ISO>].`;
+      return `Il lead ha scelto un'ora per la videocall. Prima di fissare fai qualche domanda leggera, UNA alla volta, senza spingere (${su('conferme', fatte)}): la sua situazione oggi (studio, lavoro); cosa vorrebbe cambiare; quanto sarebbe disposto a investire su sé stesso per riuscirci, senza dire cifre tu. Dopo la terza risposta, o se preferisce non rispondere → [LANCIO:CONFERMA]. Se cambia ora scegliendone un'altra dal blocco ORE PRENOTABILI → [LANCIO:PRENOTA|<ISO>].`;
     default:
       // Nessun percorso: il lead sta ancora scegliendo (pulsanti invariati).
       return `Adesso è il momento della scelta. Se non l'hai ancora fatto, chiedi esattamente: "${domandaScelta}". Poi leggi la risposta e usa il tag giusto.`;
@@ -292,8 +295,19 @@ function promptPostPitch(i: LancioPromptInput): string {
   const domandaScelta = testoScelta(modo);
   const doveSiamo = dovePercorso(i.percorso ?? null, Math.max(0, i.domandeFatte ?? 0), domandaScelta);
 
-  const regolaAdesso =
-    modo === 'notte'
+  // Con un percorso la scelta e' gia' fatta (review Task 7): la spinta notturna verso
+  // "adesso" e la domanda della scelta a chi chiede una persona tirerebbero il modello
+  // fuori dal percorso, a rifare una scelta che il lead ha gia' fatto. Restano solo le
+  // regole che col percorso non litigano.
+  const percorso = i.percorso ?? null;
+  const regolaAdesso = percorso
+    ? '- Il lead ha già scelto: non riproporre la scelta.'
+      + (percorso === 'chiamata'
+        ? ''
+        : modo === 'notte'
+          ? '\n- Se adesso chiede lui di essere chiamato subito → [LANCIO:CHIAMA_ORA].'
+          : '\n- A quest\'ora non si chiama subito: non offrire MAI "adesso".')
+    : modo === 'notte'
       ? '- "Adesso" (anche a quest\'ora): un consulente lo chiama fra pochi minuti → [LANCIO:CHIAMA_ORA].\n'
         + "- CONSIGLIA la chiamata subito: i posti per l'offerta sono limitati e si assegnano in ordine di chiamata, se finiscono non ci si può più accedere, e in questo momento stiamo chiamando tante persone. Una riga sola di incoraggiamento, dandogli del tu: non promettere NIENTE, niente garanzie, niente prezzi, niente numeri (né posti rimasti né persone in attesa), niente scadenze inventate."
       : '- A quest\'ora non si chiama subito: si fissa una call. Non offrire MAI "adesso"; se lo chiede lui, digli che fissiamo l\'ora più vicina e usa [LANCIO:SLOTS].';
@@ -301,6 +315,12 @@ function promptPostPitch(i: LancioPromptInput): string {
   const regolaOre = blocco
     ? '- "Una call" / "domani" / "oggi pomeriggio": serve un\'ora precisa, e le ore possibili sono SOLO quelle del blocco ORE PRENOTABILI qui sotto. Quando il lead ne sceglie una, copia la stringa ISO nel tag [LANCIO:PRENOTA|<ISO>]. Se dice "domani" senza un\'ora, o chiede quali ore ci sono, rispondi con [LANCIO:SLOTS] e basta: le ore le scrive il sistema, non tu.'
     : '- "Una call" / "domani" / "oggi pomeriggio": rispondi con [LANCIO:SLOTS] e basta. Non hai ancora le ore: le scrive il sistema, non tu. Non scrivere MAI tu un\'ora o un giorno.';
+
+  const regolaPersona = percorso === 'chiamata'
+    ? '- Chiede di parlare con una persona: la persona è il tutor che lo chiama → [LANCIO:CHIAMA_ORA].'
+    : percorso
+      ? '- Chiede di parlare con una persona: la persona è il tutor della videocall che ha già scelto; rispondi in breve e continua con le domande → [LANCIO:DOMANDA].'
+      : `- Chiede di parlare con una persona: la persona è il consulente della call, quindi è la scelta. Se non l'hai ancora chiesta, chiedi esattamente "${domandaScelta}" → [LANCIO:DOMANDA]; se ha già scelto, il tag giusto qui sopra.`;
 
   // Nel prompt compaiono SOLO i tag che in questo momento hanno senso: di giorno non
   // esiste la chiamata immediata, e senza ore non esiste una prenotazione. Un tag che
@@ -325,7 +345,7 @@ LA SCELTA (regole)
 ${regolaAdesso}
 ${regolaOre}
 - Non vuole essere chiamato, non gli interessa, "ci penso" definitivo → [LANCIO:NO].
-- Chiede di parlare con una persona: la persona è il consulente della call, quindi è la scelta. Se non l'hai ancora chiesta, chiedi esattamente "${domandaScelta}" → [LANCIO:DOMANDA]; se ha già scelto, il tag giusto qui sopra.
+${regolaPersona}
 - Tutto il resto (risposte alle tue domande, domande sue, commenti) → [LANCIO:DOMANDA].
 ${blocco ? `\n${blocco}\n` : ''}
 COSA SAI (e non una parola di più)

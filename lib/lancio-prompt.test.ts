@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { FRASI_VIETATE } from './lancio-scelta';
+import { FRASI_VIETATE, DOMANDE_PER_PERCORSO } from './lancio-scelta';
 import { buildLancioSystem, DOMANDA_SCELTA_NOTTE, DOMANDA_SCELTA_GIORNO, DURATA_LIVE } from './lancio-prompt';
 
 const base = { fase: 'attesa', nome: 'ANNA BIANCHI', eventoAt: '2026-10-05T21:00:00+02:00' };
@@ -270,6 +270,32 @@ describe('percorsi', () => {
     const p = buildLancioSystem({ ...base2, percorso: 'conferme', domandeFatte: 0 });
     expect(p).toMatch(/budget|investire/i);
     expect(p).not.toContain('un sì o un no');
+  });
+  // Review Task 7: con un percorso la scelta e' gia' fatta. Le regole generiche della
+  // scelta (la spinta notturna verso "adesso", la domanda della scelta a chi chiede una
+  // persona) tirerebbero il modello fuori dal percorso: non devono esserci.
+  it('con un percorso le regole generiche della scelta spariscono: niente spinta, niente domanda della scelta', () => {
+    const senza = buildLancioSystem({ ...base2, percorso: null, domandeFatte: 0 });
+    expect(senza).toContain('CONSIGLIA la chiamata subito');
+    expect(senza).toContain('chiedi esattamente');
+    expect(senza).not.toContain('Il lead ha già scelto: non riproporre la scelta.');
+    for (const percorso of ['chiamata', 'mattina', 'conferme'] as const) {
+      const p = buildLancioSystem({ ...base2, percorso, domandeFatte: 0 });
+      expect(p).toContain('Il lead ha già scelto: non riproporre la scelta.');
+      expect(p).not.toContain('CONSIGLIA la chiamata subito');
+      expect(p).not.toContain("\"Adesso\" (anche a quest'ora)");
+      expect(p).not.toContain('chiedi esattamente');
+      expect(p).not.toContain(DOMANDA_SCELTA_NOTTE);
+    }
+    // Nella chiamata la seconda domanda viene prima della chiamata, salvo obiezioni.
+    const c = buildLancioSystem({ ...base2, percorso: 'chiamata', domandeFatte: 1 });
+    expect(c).toMatch(/NON usare \[LANCIO:CHIAMA_ORA\] prima della risposta alla seconda domanda/);
+  });
+  it('il conteggio delle domande viene da DOMANDE_PER_PERCORSO, non da un numero scritto a mano', () => {
+    for (const percorso of ['chiamata', 'mattina', 'conferme'] as const) {
+      const p = buildLancioSystem({ ...base2, percorso, domandeFatte: 1 });
+      expect(p).toContain(`già fatte: 1 su ${DOMANDE_PER_PERCORSO[percorso]}`);
+    }
   });
   it('nessun prompt suggerisce condizionali sulla chiusura', () => {
     for (const percorso of [null, 'chiamata', 'mattina', 'conferme'] as const) {
