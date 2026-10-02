@@ -100,7 +100,7 @@ function from(table: string) {
 
 vi.mock('@/lib/supabase/admin', () => ({ getSupabaseAdmin: () => ({ from }) }));
 vi.mock('@/lib/twilio', () => ({ validateTwilioSignature: async () => true }));
-vi.mock('@/lib/fenice-settings', () => ({ getAutoReply: async () => true }));
+vi.mock('@/lib/fenice-settings', () => ({ getAutoReply: vi.fn(async () => true) }));
 vi.mock('@/lib/lancio-settings', async (originale) => ({
   ...(await originale<Record<string, unknown>>()),
   getLancioSettings: vi.fn(async () => ({
@@ -131,6 +131,7 @@ import { getLancioSettings } from '@/lib/lancio-settings';
 import { TESTO_PULSANTE_WEBINAR, TESTO_LINK_SVILUPPATORE } from '@/lib/primo-messaggio';
 import { sendCrmNota } from '@/lib/bot-outcome';
 import { drainMarioReplies } from '@/lib/fenice-autoreply';
+import { getAutoReply } from '@/lib/fenice-settings';
 
 const FENICE = 'whatsapp:+390000000000';
 
@@ -266,7 +267,9 @@ describe('lead restituito al pool che riscrive (C8)', () => {
   });
 });
 
-describe('pulsante del webinar su una chat restituita (C8)', () => {
+// Fino al 02/10 il pulsante su un restituito non muoveva niente (C8). Dal 02/10 il PO:
+// il pulsante vince su ogni regola, anche sul restituito.
+describe('pulsante del webinar su una chat restituita (PO 02/10/2026)', () => {
   beforeEach(() => {
     vi.mocked(getLancioSettings).mockResolvedValue({
       attivo: true, pulsanteAttivo: true, zoomLink: null, videoLiveLink: null,
@@ -282,12 +285,18 @@ describe('pulsante del webinar su una chat restituita (C8)', () => {
     vi.mocked(getLancioSettings).mockReset();
   });
 
-  it('la fase non si muove e nemmeno ai_status: la chat resta closed e il cron non la ridraina', async () => {
+  it('la sera: il bot la riprende, post_pitch, evento warn, niente nota "il bot non risponde", drain', async () => {
+    vi.mocked(drainMarioReplies).mockClear();
+    vi.mocked(sendCrmNota).mockClear();
     await inbound(TESTO_PULSANTE_WEBINAR);
-    expect(stato.updates.find((u) => 'lancio_fase' in u.valori)).toBeUndefined();
-    expect(stato.updates.some((u) => u.valori.ai_status === 'active')).toBe(false);
-    expect(eventi('lancio_pulsante')[0].payload).toMatchObject({ faseInvariata: true });
-    expect(drainMarioReplies).not.toHaveBeenCalled();
+    expect(stato.updates.find((u) => 'lancio_fase' in u.valori)?.valori.lancio_fase).toBe('post_pitch');
+    expect(stato.updates.some((u) => u.valori.ai_status === 'active')).toBe(true);
+    expect(eventi('lancio_pulsante_su_restituito')).toHaveLength(1);
+    expect(eventi('lancio_pulsante_su_restituito')[0]).toMatchObject({ level: 'warn' });
+    expect(eventi('lancio_pulsante_presa_chat')[0].payload).toMatchObject({ prima: { lancioFase: 'restituito' }, faseDopo: 'post_pitch' });
+    expect(eventi('lancio_inbound_dopo_restituzione')).toHaveLength(0);
+    expect(sendCrmNota).not.toHaveBeenCalled();
+    expect(drainMarioReplies).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -468,18 +477,32 @@ describe('pulsante del webinar dopo la notte (PO 25/09): Mario standard, niente 
     expect(faseUpdate()?.valori.lancio_info).toMatchObject({ risposte: ['studio'], mario_dopo_notte: { da: 'pulsante' } });
   });
 
-  it.each(['followup_inviato', 'scelta_fatta', 'chiuso'])('il 6 su una chat in %s: fase invariata', async (fase) => {
+  it.each(['followup_inviato', 'chiuso', 'restituito'])('il 6 su una chat in %s: chiuso col marcatore anche lei (PO 02/10)', async (fase) => {
     vi.stubEnv('LANCIO_FAKE_NOW', '2026-10-06T10:00:00+02:00');
     vi.mocked(getLancioSettings).mockResolvedValueOnce(settings(true));
-    Object.assign(stato.conv, { ai_owner: 'mario', ai_status: 'active', lancio_slug: 'webdev-2026-10', lancio_fase: fase, lancio_ingresso: 'lista' });
+    Object.assign(stato.conv, { ai_owner: 'mario', ai_status: 'closed', lancio_slug: 'webdev-2026-10', lancio_fase: fase, lancio_ingresso: 'lista' });
+    await inbound(TESTO_PULSANTE_WEBINAR);
+    expect(faseUpdate()?.valori.lancio_fase).toBe('chiuso');
+    expect(faseUpdate()?.valori.lancio_info).toMatchObject({ mario_dopo_notte: { da: 'pulsante' } });
+    expect(stato.updates.some((u) => u.valori.ai_status === 'active')).toBe(true);
+  });
+
+  it('il 6 su una chat in scelta_fatta: fase invariata (ha gia scelto), ma la chat si riprende', async () => {
+    vi.stubEnv('LANCIO_FAKE_NOW', '2026-10-06T10:00:00+02:00');
+    vi.mocked(getLancioSettings).mockResolvedValueOnce(settings(true));
+    Object.assign(stato.conv, { ai_owner: 'mario', ai_status: 'closed', lancio_slug: 'webdev-2026-10', lancio_fase: 'scelta_fatta', lancio_ingresso: 'lista' });
     await inbound(TESTO_PULSANTE_WEBINAR);
     expect(faseUpdate()).toBeUndefined();
+    expect(stato.updates.some((u) => u.valori.ai_status === 'active')).toBe(true);
     expect(eventi('lancio_pulsante')[0].payload).toMatchObject({ faseInvariata: true, dopoNotte: true });
   });
 });
 
-describe('pulsante dopo la notte su un congedato (PO 25/09)', () => {
-  it('resta un no: fase invariata, chat non riaperta', async () => {
+// Fino al 02/10 un congedato restava un no anche col pulsante (PO 25/09). Dal 02/10 il
+// pulsante scioglie il congedo.
+describe('pulsante dopo la notte su un congedato (PO 02/10/2026)', () => {
+  it('congedo sciolto, chiuso col marcatore, chat riaperta, drain', async () => {
+    vi.mocked(drainMarioReplies).mockClear();
     vi.stubEnv('LANCIO_FAKE_NOW', '2026-10-06T10:00:00+02:00');
     vi.mocked(getLancioSettings).mockResolvedValueOnce({
       attivo: true, pulsanteAttivo: true, zoomLink: null, videoLiveLink: null,
@@ -490,8 +513,130 @@ describe('pulsante dopo la notte su un congedato (PO 25/09)', () => {
       lancio_info: { risposte: [], congedo_at: '2026-10-01T10:00:00Z' },
     });
     await inbound(TESTO_PULSANTE_WEBINAR);
-    expect(stato.updates.find((u) => 'lancio_fase' in u.valori)).toBeUndefined();
-    expect(stato.updates.some((u) => u.valori.ai_status === 'active')).toBe(false);
+    // Prima la revoca (compare-and-set sul congedo), poi la fase col marcatore.
+    const revoca = stato.updates.find((u) => 'lancio_info->>congedo_at' in u.filtri);
+    expect(revoca?.valori.lancio_info).not.toHaveProperty('congedo_at');
+    const fase = stato.updates.find((u) => 'lancio_fase' in u.valori);
+    expect(fase?.valori.lancio_fase).toBe('chiuso');
+    const info = fase?.valori.lancio_info as Riga;
+    expect(info).not.toHaveProperty('congedo_at');
+    expect(typeof info.congedo_revocato_at).toBe('string');
+    expect(info).toMatchObject({ risposte: [], mario_dopo_notte: { da: 'pulsante' } });
+    expect(stato.updates.some((u) => u.valori.ai_status === 'active')).toBe(true);
+    expect(eventi('lancio_pulsante_presa_chat')[0].payload).toMatchObject({ prima: { congedoAt: '2026-10-01T10:00:00Z' } });
+    expect(drainMarioReplies).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('il pulsante vince su ogni regola, la sera del webinar (PO 02/10/2026)', () => {
+  const settingsSera = {
+    attivo: true, pulsanteAttivo: true, zoomLink: null, videoLiveLink: null,
+    offertaDelMeseLink: null, eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti' as const, sender: 'principale' as const, quotaSecondario: 0,
+  };
+  const presa = () => stato.updates.find((u) => 'handed_off_at' in u.valori);
+  const faseScritta = () => stato.updates.find((u) => 'lancio_fase' in u.valori)?.valori.lancio_fase;
+  beforeEach(() => {
+    vi.stubEnv('LANCIO_FAKE_NOW', '2026-10-05T22:30:00+02:00');
+    vi.mocked(getLancioSettings).mockResolvedValue(settingsSera);
+    vi.mocked(drainMarioReplies).mockClear();
+    Object.assign(stato.conv, {
+      ai_owner: 'mario', ai_status: 'active', ai_started_at: '2026-09-20T10:00:00Z', crm_lead_id: 'L9',
+      lancio_slug: 'webdev-2026-10', lancio_fase: 'link_inviato', lancio_ingresso: 'lista', lancio_info: { risposte: [] },
+    });
+  });
+  afterEach(() => {
+    vi.mocked(getLancioSettings).mockReset();
+    vi.mocked(getAutoReply).mockResolvedValue(true);
+  });
+
+  const presaCompleta = () => {
+    expect(presa()?.valori).toMatchObject({
+      ai_status: 'active', ai_paused_at: null, handed_off_at: null, handed_off_reason: null,
+    });
+    expect(faseScritta()).toBe('post_pitch');
+    expect(drainMarioReplies).toHaveBeenCalledTimes(1);
+    expect(eventi('lancio_pulsante_presa_chat')).toHaveLength(1);
+  };
+
+  it('chat passata a una persona: presa, post_pitch, drain', async () => {
+    Object.assign(stato.conv, { ai_status: 'handed_off', handed_off_at: '2026-10-05T20:00:00Z' });
+    await inbound(TESTO_PULSANTE_WEBINAR);
+    presaCompleta();
+    expect(eventi('lancio_pulsante_presa_chat')[0].payload).toMatchObject({
+      prima: { aiOwner: 'mario', aiStatus: 'handed_off', handedOffAt: '2026-10-05T20:00:00Z', lancioFase: 'link_inviato' },
+      faseDopo: 'post_pitch',
+    });
+    // ai_started_at c'era: non si tocca.
+    expect(presa()?.valori).not.toHaveProperty('ai_started_at');
+  });
+
+  it('chat in pausa manuale: presa, il fermo si toglie', async () => {
+    stato.conv.ai_paused_at = '2026-10-05T19:00:00Z';
+    await inbound(TESTO_PULSANTE_WEBINAR);
+    presaCompleta();
+    expect(eventi('lancio_pulsante_presa_chat')[0].payload).toMatchObject({ prima: { aiPausedAt: '2026-10-05T19:00:00Z' } });
+  });
+
+  it('chat di un altro padrone: passa a Mario, e ai_started_at nullo si valorizza', async () => {
+    Object.assign(stato.conv, { ai_owner: 'marta', ai_started_at: null });
+    await inbound(TESTO_PULSANTE_WEBINAR);
+    presaCompleta();
+    expect(presa()?.valori.ai_owner).toBe('mario');
+    expect(typeof presa()?.valori.ai_started_at).toBe('string');
+  });
+
+  it('chat senza padrone e con una storia, ad adozione spenta: adottata col pulsante e spinta al CRM', async () => {
+    vi.stubEnv('INBOUND_ADOPTION_ENABLED', '0');
+    stato.outbound = 3;
+    Object.assign(stato.conv, {
+      ai_owner: null, ai_status: null, ai_started_at: null, crm_lead_id: null,
+      lancio_slug: null, lancio_fase: null, lancio_ingresso: null, lancio_info: null,
+    });
+    await inbound(TESTO_PULSANTE_WEBINAR);
+    expect(presa()?.valori).not.toHaveProperty('ai_owner');
+    expect(presa()?.valori).toMatchObject({ lancio_slug: 'webdev-2026-10', lancio_ingresso: 'pulsante_webinar' });
+    const adozione = stato.updates.find((u) => 'is:ai_owner' in u.filtri);
+    expect(adozione?.valori).toMatchObject({ ai_owner: 'mario', crm_funnel: 'Lancio Web Dev AI' });
+    expect(pushLeadEntrante).toHaveBeenCalledTimes(1);
+    expect(faseScritta()).toBe('post_pitch');
+    expect(drainMarioReplies).toHaveBeenCalledTimes(1);
+  });
+
+  it('chat congedata: il congedo si scioglie, post_pitch, chat riaperta', async () => {
+    Object.assign(stato.conv, { ai_status: 'closed', lancio_fase: 'chiuso', lancio_info: { risposte: [], congedo_at: '2026-10-03T10:00:00Z' } });
+    await inbound(TESTO_PULSANTE_WEBINAR);
+    presaCompleta();
+    const revoca = stato.updates.find((u) => 'lancio_info->>congedo_at' in u.filtri);
+    expect(revoca?.valori.lancio_info).not.toHaveProperty('congedo_at');
+    // Il ramo "congedato che riscrive" non scatta: il pulsante il congedo lo scioglie da se'.
+    expect(eventi('lancio_congedo_revocato')).toHaveLength(0);
+  });
+
+  it('chat in followup_inviato: post_pitch anche lei', async () => {
+    Object.assign(stato.conv, { ai_status: 'closed', lancio_fase: 'followup_inviato' });
+    await inbound(TESTO_PULSANTE_WEBINAR);
+    presaCompleta();
+  });
+
+  it('bot spento (freno d emergenza): orfano bot_spento, niente presa, niente fase, niente drain', async () => {
+    vi.mocked(getAutoReply).mockResolvedValue(false);
+    Object.assign(stato.conv, { ai_status: 'handed_off', handed_off_at: '2026-10-05T20:00:00Z' });
+    await inbound(TESTO_PULSANTE_WEBINAR);
+    expect(presa()).toBeUndefined();
+    expect(faseScritta()).toBeUndefined();
+    expect(eventi('lancio_pulsante')[0].payload).toMatchObject({ orfano: true, motivo: 'bot_spento' });
+    expect(drainMarioReplies).not.toHaveBeenCalled();
+  });
+
+  it('pulsante che non vale (prima della live, interruttore spento): niente presa, orfano pulsante_spento', async () => {
+    vi.stubEnv('LANCIO_FAKE_NOW', '2026-10-05T18:00:00+02:00');
+    vi.mocked(getLancioSettings).mockResolvedValue({ ...settingsSera, pulsanteAttivo: false });
+    Object.assign(stato.conv, { ai_status: 'handed_off', handed_off_at: '2026-10-05T17:00:00Z' });
+    await inbound(TESTO_PULSANTE_WEBINAR);
+    expect(presa()).toBeUndefined();
+    expect(faseScritta()).toBeUndefined();
+    expect(eventi('lancio_pulsante')[0].payload).toMatchObject({ orfano: true, motivo: 'pulsante_spento' });
+    expect(drainMarioReplies).not.toHaveBeenCalled();
   });
 });
 

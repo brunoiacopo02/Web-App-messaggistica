@@ -23,53 +23,41 @@ export function isLancioFase(v: unknown): v is LancioFase {
 export const LANCIO_FASI_TERMINALI: readonly LancioFase[] = ['chiuso', 'restituito'];
 
 /**
- * Le UNICHE fasi da cui il pulsante del webinar riporta in `post_pitch`. Elenco chiuso:
- * quello che non è qui dentro non si tocca (`''` = chat mai entrata nel lancio).
- */
-const FASI_CHE_IL_PULSANTE_RIPORTA: ReadonlySet<string> = new Set<string>([
-  '', 'attesa', 'posto_bloccato', 'link_inviato', 'chiuso',
-]);
-
-/**
- * Il pulsante del webinar deve (ri)portare questa chat in `post_pitch`?
+ * Il pulsante del webinar vince su ogni regola (decisione PO, Bruno, 02/10/2026): "se
+ * scrivono la sera del webinar deve riprenderle in ogni caso, se scrivono per il webinar
+ * deve sovrastare ogni regola e parlarci il bot e fissarli a un sales, o alle Conferme se
+ * lo prende dal pomeriggio del giorno dopo in poi". Fino al 2/10 il pulsante si fermava
+ * davanti a una chat passata a una persona, in pausa, di un altro padrone, senza padrone
+ * ad adozione spenta, congedata, restituita: chi aveva appena visto la live e alzato la
+ * mano restava senza risposta proprio nel momento in cui era piu' caldo.
  *
- * Il marker vince su chi possiede la chat e su quello che il lead aveva detto prima — una
- * chat in `attesa`, col link già inviato, o perfino `chiuso` da un no di settimane fa
- * torna al dopo-pitch, e così una chat che nel lancio non c'è mai entrata (fase nulla).
- * Non vince invece su chi ha già preso in mano quella persona DOPO il pitch:
- *
- *  - `post_pitch` e `scelta_fatta` sono già il dopo-pitch: riscriverli lascerebbe solo un
- *    `lancio_fase_cambiata` in più (e su `scelta_fatta` cancellerebbe l'avanzamento);
- *  - da `followup_inviato` il flusso standard di B5 possiede la chat, e il pulsante
- *    premuto una seconda volta non deve rimetterla in coda al pitch;
- *  - `restituito` vuol dire che quel lead è tornato al GDO: riportarlo nel lancio
- *    glielo toglierebbe di mano.
- *
- * Nei casi in cui torna falso il pulsante si registra lo stesso (evento `lancio_pulsante`
- * con `faseInvariata`): il fatto che l'abbia premuto si vede nei pannelli comunque.
+ * La sera la fase va in `post_pitch` (pitch e scelta: chiamata subito o call col
+ * venditore) da QUALUNQUE fase, compresi `followup_inviato`, `chiuso` (anche congedato:
+ * il congedo lo scioglie il webhook) e `restituito` (dal 7/10 il lead e' di un GDO, e il
+ * webhook lo segnala con `lancio_pulsante_su_restituito`). Una fase illeggibile va in
+ * `post_pitch` anche lei: lasciarla com'e' vorrebbe dire una chat presa ma fuori da tutti
+ * i turni. Restano dove sono:
+ *  - `post_pitch`: e' gia' il dopo-pitch, riscriverlo lascerebbe solo un
+ *    `lancio_fase_cambiata` in piu';
+ *  - `scelta_fatta`: ha gia' scelto e la sua ora ce l'ha il CRM. Il pulsante ripremuto
+ *    non deve rifargli la scelta (al CRM arriverebbe un secondo `book`/`call-now`, che
+ *    nel migliore dei casi torna `gia_prenotato`): la chat si riprende lo stesso, e
+ *    risponde il turno del dopo-scelta.
  */
 export function pulsanteRiportaInPostPitch(fase: string | null | undefined): boolean {
-  return FASI_CHE_IL_PULSANTE_RIPORTA.has(fase ?? '');
+  return fase !== 'post_pitch' && fase !== 'scelta_fatta';
 }
 
 /**
- * Le UNICHE fasi da cui il pulsante premuto DOPO la notte del webinar (dalle 03:00 del
- * giorno dopo, decisione PO 25/09) passa la chat a Mario standard, cioe' in `chiuso`.
- * Sono le stesse da cui la sera la riporterebbe in `post_pitch`, piu' `post_pitch` stesso
- * (chi aveva premuto la sera e ripreme la mattina: i pulsanti della sera non valgono
- * piu'). Restano fuori, e il pulsante si registra a fase invariata:
- *  - `chiuso`: e' gia' Mario standard (dal follow-up, dal link, o da un congedo — e un
- *    congedato non si riapre, vedi `shouldReopen`);
- *  - `followup_inviato`: al prossimo turno il ramo del follow-up la passa a Mario da se';
- *  - `scelta_fatta`: il lead ha gia' la sua ora sul CRM;
- *  - `restituito`: e' del GDO (ruling C8).
+ * Dopo la notte del webinar (dalle 03:00 del giorno dopo, decisione PO 25/09) il pulsante
+ * passa la chat a Mario standard, cioe' `chiuso` col marcatore `mario_dopo_notte`, che
+ * fissa l'appuntamento alle Conferme con la nota della live. Dal 2/10 da QUALUNQUE fase,
+ * compresi `chiuso` (il marcatore si riscrive: ha appena visto la live e premuto),
+ * `followup_inviato` e `restituito` — con l'unica eccezione di `scelta_fatta`, per la
+ * stessa ragione della sera (vedi `pulsanteRiportaInPostPitch`).
  */
-const FASI_CHE_IL_PULSANTE_PASSA_A_MARIO: ReadonlySet<string> = new Set<string>([
-  '', 'attesa', 'posto_bloccato', 'link_inviato', 'post_pitch',
-]);
-
 export function pulsantePassaAMario(fase: string | null | undefined): boolean {
-  return FASI_CHE_IL_PULSANTE_PASSA_A_MARIO.has(fase ?? '');
+  return fase !== 'scelta_fatta';
 }
 
 /**
@@ -107,81 +95,73 @@ export function risposteRiscaldamento(info: unknown): string[] {
 }
 
 /**
- * Il pulsante deve riportare ad 'active' una chat chiusa?
- *
- * Solo se la fase si e' mossa davvero (`cambiaFase`, cioe' `pulsanteRiportaInPostPitch`).
- * Prima bastava "di Mario e chiusa", e su una chat gia' `restituito` questo bastava a
- * riaccenderla: la fase restava `restituito` — giusto, il lead e' del GDO — ma la riga
- * tornava 'active' con un inbound senza risposta, e il cron `bot-followups` fa re-drive
- * proprio su quella forma. Mario avrebbe risposto a una persona che un GDO sta chiamando,
- * cioe' il danno che il ruling C8 esiste per evitare. Vale allo stesso modo per le altre
- * fasi che il pulsante non muove (`followup_inviato`, `post_pitch`, `scelta_fatta`): se la
- * fase resta dov'e', lo stato non si tocca.
+ * Perche' il pulsante non prende la chat. Dal 2/10 (PO) restano solo due motivi, e
+ * nessuno dei due dice chi ha in mano la chat — quello non conta piu':
+ *  - `pulsante_spento`: il pulsante non vale (interruttore `lancio_pulsante_attivo`
+ *    spento e live non ancora iniziata): il marker e' solo del testo;
+ *  - `bot_spento`: l'interruttore generale dell'auto-risposta e' spento. E' il freno
+ *    d'emergenza durante un incidente, e vale anche sul pulsante: prendere una chat che
+ *    nessuno puo' servire la toglierebbe dalle reti di recupero senza una risposta.
  */
-export function pulsanteRiapreChat(g: {
-  cambiaFase: boolean;
-  aiOwner: string | null;
-  aiStatus: string | null;
-}): boolean {
-  return g.cambiaFase && g.aiOwner === 'mario' && g.aiStatus === 'closed';
-}
-
-/** Perché il pulsante non ha potuto scrivere: chi ha in mano quella chat, o cosa è spento. */
-export type MotivoPulsanteOrfano =
-  | 'pulsante_spento' | 'bot_spento' | 'adozione_spenta' | 'in_pausa' | 'passata_umano' | 'altro_owner';
+export type MotivoPulsanteOrfano = 'pulsante_spento' | 'bot_spento';
 
 export type DecisionePulsante =
-  | { scrive: true }
-  | { scrive: false; motivo: MotivoPulsanteOrfano };
+  | { prende: true }
+  | { prende: false; motivo: MotivoPulsanteOrfano };
 
 /**
- * Il pulsante del webinar può scrivere lo stato del lancio su questa chat?
+ * Il pulsante del webinar prende questa chat? (decisione PO 02/10/2026, vedi
+ * `pulsanteRiportaInPostPitch`)
  *
- * Il rischio che chiude è la **finestra orfana**: scrivere `lancio_slug` e `post_pitch`
- * su una chat che nessuno guida. Con lo slug addosso quella riga sparisce da
- * `adotta-mai-risposti` (che esclude `lancio_slug` non nullo) e dalle altre reti di
- * recupero, ma nessuno le risponde — a bot spento, ad adozione spenta, in pausa, o se la
- * chat è in mano a una persona. Sarebbe il silenzio che l'adozione esiste per chiudere,
- * con in più l'illusione che qualcuno se ne stia occupando.
- *
- * Si scrive quindi in due soli casi:
- *  (a) la chat è di Mario ed è libera (nessun fermo manuale, nessun passaggio a umano);
- *  (b) la sta adottando QUESTA richiesta (`shouldAdoptInbound` con `lancioPulsante`).
- *
- * Negli altri casi l'evento `lancio_pulsante` si scrive lo stesso, con `orfano` e il
- * `motivo`: la chat resta visibile alle reti di recupero, e `adotta-mai-risposti`
- * riclassifica quel pulsante e la porta in `post_pitch` quando l'adozione si accende.
+ * Fino al 2/10 questa funzione (`pulsanteScriveFase`) chiudeva la "finestra orfana":
+ * scriveva lo stato del lancio solo su una chat di Mario libera o che la richiesta stava
+ * adottando, e lasciava stare quelle passate a una persona, in pausa, di un altro
+ * padrone o senza padrone ad adozione spenta. Ora il pulsante le prende tutte (vedi
+ * `colonnePresaPulsante`): la finestra orfana non si apre piu' perche' la chat passa
+ * sempre a Mario, attiva. Resta orfano solo dove nessuno puo' rispondere comunque.
  */
-export function pulsanteScriveFase(i: {
-  /** `lancio_pulsante_attivo` da `app_settings`: spento, il marker non vale niente. */
-  pulsanteAttivo: boolean;
-  aiOwner: string | null;
-  aiPausedAt?: string | null;
-  handedOffAt?: string | null;
-  /** L'adozione di questa richiesta prende in carico la chat (`shouldAdoptInbound`). */
-  adottaOra: boolean;
+export function pulsantePrendeChat(i: {
+  /** Il pulsante vale: interruttore acceso, oppure dall'ora della live / dopo la notte. */
+  pulsanteVale: boolean;
   /** L'interruttore generale dell'auto-risposta, dal pannello. */
   autoReplyOn: boolean;
-  /** `INBOUND_ADOPTION_ENABLED === '1'`. */
-  adozioneAttiva: boolean;
 }): DecisionePulsante {
-  // L'interruttore viene prima di tutto: spento, il marker e' solo del testo, e chi lo
-  // scrive e' un inbound come un altro. Il pulsante premuto si registra lo stesso —
-  // vedere le pressioni PRIMA di accendere e' metà del motivo per cui esiste la traccia.
-  if (!i.pulsanteAttivo) return { scrive: false, motivo: 'pulsante_spento' };
-  if (i.aiOwner === 'mario' && !i.aiPausedAt && !i.handedOffAt) return { scrive: true };
-  if (i.adottaOra) return { scrive: true };
-  // L'ordine dice CHI ha in mano la chat prima di dire cosa è spento: un passaggio a
-  // umano o un fermo manuale restano la spiegazione giusta anche a bot spento.
-  if (i.handedOffAt) return { scrive: false, motivo: 'passata_umano' };
-  if (i.aiPausedAt) return { scrive: false, motivo: 'in_pausa' };
-  if (i.aiOwner !== null) return { scrive: false, motivo: 'altro_owner' };
-  if (!i.autoReplyOn) return { scrive: false, motivo: 'bot_spento' };
-  // Resta: nessun padrone, tutto acceso, e l'adozione non scatta. Dal webhook vuol dire
-  // `adozioneAttiva` falso (col pulsante il gate non guarda altro), e con l'adozione
-  // accesa è un caso che non si produce: `adozione_spenta` è la lettura giusta in
-  // entrambi i sensi — nessuno ha preso in carico questa chat.
-  return { scrive: false, motivo: 'adozione_spenta' };
+  // L'interruttore del pulsante viene prima: spento, chi scrive e' un inbound come un
+  // altro, e il motivo giusto da leggere nei pannelli e' quello.
+  if (!i.pulsanteVale) return { prende: false, motivo: 'pulsante_spento' };
+  if (!i.autoReplyOn) return { prende: false, motivo: 'bot_spento' };
+  return { prende: true };
+}
+
+/** Quanto indietro si porta `ai_started_at` quando il pulsante lo valorizza (vedi sotto). */
+export const PRESA_PULSANTE_STARTED_INDIETRO_MS = 5 * 60_000;
+
+/**
+ * Le colonne che il pulsante scrive per prendere la chat (PO 02/10/2026): Mario,
+ * attiva, nessun fermo manuale, nessun passaggio a una persona. Sono le condizioni del
+ * claim del drain (`ai_status='active'`, `ai_paused_at` nullo) e di `shouldAutoReply`
+ * (`ai_owner='mario'`): senza una sola di queste il drain non risponderebbe.
+ *
+ *  - `ai_owner` si scrive solo se la chat ha gia' un padrone: una chat senza padrone la
+ *    prende l'adozione del webhook, col suo compare-and-set e il push del lead al CRM
+ *    (col pulsante l'adozione scatta anche a `INBOUND_ADOPTION_ENABLED` spento).
+ *  - `ai_started_at` si scrive solo se manca, cinque minuti indietro come fa l'adozione:
+ *    il messaggio del pulsante e' stato inserito con l'orologio di Postgres, e un
+ *    `ai_started_at` piu' recente lo lascerebbe fuori dalla cronologia del drain. Se c'e'
+ *    gia' non si tocca: la cronologia di prima serve al modello.
+ */
+export function colonnePresaPulsante(c: {
+  aiOwner: string | null;
+  aiStartedAt: string | null;
+}, nowMs: number): Record<string, string | null> {
+  return {
+    ai_status: 'active',
+    ai_paused_at: null,
+    handed_off_at: null,
+    handed_off_reason: null,
+    ...(c.aiOwner !== null ? { ai_owner: 'mario' } : {}),
+    ...(c.aiStartedAt ? {} : { ai_started_at: new Date(nowMs - PRESA_PULSANTE_STARTED_INDIETRO_MS).toISOString() }),
+  };
 }
 
 /**
@@ -191,7 +171,8 @@ export function pulsanteScriveFase(i: {
  * video della live, cioe' nella stessa condizione di chi ha risposto al follow-up del
  * giorno dopo (fase `chiuso`, vedi `lancioStandardDrain`). Si scrive solo:
  *  - su una chat di Mario libera (appena adottata dal webhook, o gia' sua): una chat senza
- *    padrone, in pausa o passata a una persona resta com'e', come per il pulsante;
+ *    padrone, in pausa o passata a una persona resta com'e' (il pulsante del webinar
+ *    invece le prende tutte dal 02/10, vedi `pulsantePrendeChat`: il link no);
  *  - su una chat MAI entrata nel lancio: chi e' gia' dentro lo sta gestendo il lancio, e
  *    un `restituito` e' del GDO (ruling C8). Riscriverle vorrebbe dire togliere la chat a
  *    chi ce l'ha.
@@ -271,11 +252,12 @@ export function lancioInCorso(c: { lancio_slug?: string | null; lancio_fase?: st
  * ogni riga `active`/`replying` con un inbound senza risposta, e il blocco che tiene il
  * lancio fuori da Mario (`lancioInCorso`) viene DOPO — ed e' gia' falso su `restituito`,
  * che e' una fase terminale. Le porte che dovrebbero impedire a una chat restituita di
- * restare `active` ci sono tutte (`pulsanteRiapreChat`, il veto di `shouldReopen`), ma
- * basta che una sola non tenga — un 200 `returnedToPool:false` dopo la chiusura locale,
- * una riapertura scritta da una strada nuova — perche' Mario risponda a una persona che
- * un GDO sta chiamando. E' il danno esatto che il ruling C8 esiste per evitare, quindi
- * la fase vale da sola, senza guardare `ai_status`.
+ * restare `active` ci sono tutte (il veto di `shouldReopen`), ma basta che una sola non
+ * tenga — un 200 `returnedToPool:false` dopo la chiusura locale, una riapertura scritta
+ * da una strada nuova — perche' Mario risponda a una persona che un GDO sta chiamando.
+ * E' il danno esatto che il ruling C8 esiste per evitare, quindi la fase vale da sola,
+ * senza guardare `ai_status`. L'unica strada che riprende un restituito di proposito e'
+ * il pulsante del webinar (PO 02/10/2026), e lo fa togliendogli la fase `restituito`.
  */
 export function lancioRestituito(c: { lancio_fase?: string | null }): boolean {
   return (c.lancio_fase ?? '') === 'restituito';

@@ -3,8 +3,8 @@ import {
   LANCIO_SLUG, LANCIO_FASI, LANCIO_FASI_TERMINALI, FILTRO_FUORI_LANCIO, MAX_SCAMBI_DOMANDE,
   TESTO_POSTO_BLOCCATO, TESTO_CONGEDO, TESTO_CHIUSURA_DOMANDE, TESTO_PASSAGGIO_UMANO,
   isLancioFase, lancioInCorso, decideLancioTurno, contaScambiDomande, lancioFaseLabel, lancioBenvenutoText,
-  inboundDelLotto, ultimoTestoDelLotto, haCongedo, pulsanteRiportaInPostPitch, pulsanteScriveFase,
-  pulsanteRiapreChat, serveNotaRestituzione, NOTA_RESTITUZIONE_OGNI_MS, lancioRestituito,
+  inboundDelLotto, ultimoTestoDelLotto, haCongedo, pulsanteRiportaInPostPitch, pulsantePrendeChat,
+  colonnePresaPulsante, serveNotaRestituzione, NOTA_RESTITUZIONE_OGNI_MS, lancioRestituito,
   tagliaRigheDalLancio, lancioRipartePerRiarruolamento, LANCIO_FASE_RIPARTE_AL_RIARRUOLAMENTO,
   linkSviluppatoreEntraNelLancio, registrazionePromessa,
   TESTO_REGISTRAZIONE_PROMESSA, TESTO_REGISTRAZIONE_PROMESSA_STASERA,
@@ -214,9 +214,9 @@ describe('haCongedo — il marcatore durevole', () => {
   });
 });
 
-describe('pulsanteRiportaInPostPitch — elenco chiuso di fasi che il pulsante riporta', () => {
-  it('riporta a post_pitch dalle quattro fasi del prima-e-durante, chiuso compreso', () => {
-    for (const fase of ['attesa', 'posto_bloccato', 'link_inviato', 'chiuso']) {
+describe('pulsanteRiportaInPostPitch — la sera il pulsante porta al dopo-pitch da ogni fase (PO 02/10)', () => {
+  it('riporta a post_pitch dal prima-e-durante, e anche da followup_inviato, chiuso e restituito', () => {
+    for (const fase of ['attesa', 'posto_bloccato', 'link_inviato', 'followup_inviato', 'chiuso', 'restituito']) {
       expect(pulsanteRiportaInPostPitch(fase)).toBe(true);
     }
   });
@@ -227,86 +227,54 @@ describe('pulsanteRiportaInPostPitch — elenco chiuso di fasi che il pulsante r
     expect(pulsanteRiportaInPostPitch('')).toBe(true);
   });
 
-  it('non riscrive post_pitch né scelta_fatta: nessun lancio_fase_cambiata doppio', () => {
+  it('non riscrive post_pitch (c e gia) ne scelta_fatta (ha gia scelto, ce l ha il CRM)', () => {
     expect(pulsanteRiportaInPostPitch('post_pitch')).toBe(false);
     expect(pulsanteRiportaInPostPitch('scelta_fatta')).toBe(false);
   });
 
-  it('non tocca followup_inviato (la chat è del flusso standard di B5) né restituito (è del GDO)', () => {
-    expect(pulsanteRiportaInPostPitch('followup_inviato')).toBe(false);
-    expect(pulsanteRiportaInPostPitch('restituito')).toBe(false);
-  });
-
-  it('una fase che non riconosce non si tocca: l elenco è chiuso', () => {
-    expect(pulsanteRiportaInPostPitch('boh')).toBe(false);
+  it('una fase illeggibile va nel dopo-pitch: una chat presa non resta fuori da tutti i turni', () => {
+    expect(pulsanteRiportaInPostPitch('boh')).toBe(true);
   });
 });
 
-describe('pulsanteScriveFase — la finestra orfana non si apre', () => {
-  // Chat governata da Mario e libera, tutto spento: e' il caso (a), gli interruttori
-  // non c'entrano perche' nessuno sta adottando niente.
-  const base = { pulsanteAttivo: true, aiOwner: 'mario', aiPausedAt: null, handedOffAt: null, adottaOra: false, autoReplyOn: false, adozioneAttiva: false };
-
-  it('(a) chat di Mario e libera: scrive, anche a bot spento', () => {
-    expect(pulsanteScriveFase(base)).toEqual({ scrive: true });
+describe('pulsantePrendeChat — il pulsante prende la chat in ogni caso (PO 02/10)', () => {
+  it('pulsante che vale e bot acceso: prende, chiunque avesse la chat', () => {
+    expect(pulsantePrendeChat({ pulsanteVale: true, autoReplyOn: true })).toEqual({ prende: true });
   });
 
-  it('interruttore spento: pulsante_spento, e viene prima di tutto il resto', () => {
-    expect(pulsanteScriveFase({ ...base, pulsanteAttivo: false }))
-      .toEqual({ scrive: false, motivo: 'pulsante_spento' });
-    // Chat passata a umano, in pausa, di un altro, bot spento: col pulsante spento il
-    // motivo resta uno solo, perche' e' quello che spiega davvero il non-fatto.
-    expect(pulsanteScriveFase({
-      pulsanteAttivo: false, aiOwner: 'marta', aiPausedAt: '2026-10-05T21:00:00Z',
-      handedOffAt: '2026-10-05T21:00:00Z', adottaOra: true, autoReplyOn: false, adozioneAttiva: false,
-    })).toEqual({ scrive: false, motivo: 'pulsante_spento' });
+  it('pulsante che non vale: orfano, pulsante_spento — e viene prima del bot spento', () => {
+    expect(pulsantePrendeChat({ pulsanteVale: false, autoReplyOn: true }))
+      .toEqual({ prende: false, motivo: 'pulsante_spento' });
+    expect(pulsantePrendeChat({ pulsanteVale: false, autoReplyOn: false }))
+      .toEqual({ prende: false, motivo: 'pulsante_spento' });
   });
 
-  it('(b) chat che questa richiesta sta adottando: scrive', () => {
-    expect(pulsanteScriveFase({
-      pulsanteAttivo: true, aiOwner: null, aiPausedAt: null, handedOffAt: null,
-      adottaOra: true, autoReplyOn: true, adozioneAttiva: true,
-    })).toEqual({ scrive: true });
+  it('bot spento (freno d emergenza): orfano, bot_spento', () => {
+    expect(pulsantePrendeChat({ pulsanteVale: true, autoReplyOn: false }))
+      .toEqual({ prende: false, motivo: 'bot_spento' });
+  });
+});
+
+describe('colonnePresaPulsante — Mario, attiva, nessun fermo, nessun passaggio', () => {
+  const ADESSO = Date.parse('2026-10-05T21:30:00.000Z');
+
+  it('chat di un altro padrone, senza ai_started_at: tutto azzerato, owner mario, partenza 5 minuti indietro', () => {
+    expect(colonnePresaPulsante({ aiOwner: 'marta', aiStartedAt: null }, ADESSO)).toEqual({
+      ai_status: 'active', ai_paused_at: null, handed_off_at: null, handed_off_reason: null,
+      ai_owner: 'mario', ai_started_at: '2026-10-05T21:25:00.000Z',
+    });
   });
 
-  it('bot spento e nessun padrone: orfano, bot_spento', () => {
-    expect(pulsanteScriveFase({
-      pulsanteAttivo: true, aiOwner: null, aiPausedAt: null, handedOffAt: null,
-      adottaOra: false, autoReplyOn: false, adozioneAttiva: true,
-    })).toEqual({ scrive: false, motivo: 'bot_spento' });
+  it('ai_started_at gia valorizzato: non si tocca, la cronologia di prima serve al modello', () => {
+    const c = colonnePresaPulsante({ aiOwner: 'mario', aiStartedAt: '2026-09-20T10:00:00Z' }, ADESSO);
+    expect(c).not.toHaveProperty('ai_started_at');
+    expect(c.ai_owner).toBe('mario');
   });
 
-  it('adozione spenta e nessun padrone: orfano, adozione_spenta', () => {
-    expect(pulsanteScriveFase({
-      pulsanteAttivo: true, aiOwner: null, aiPausedAt: null, handedOffAt: null,
-      adottaOra: false, autoReplyOn: true, adozioneAttiva: false,
-    })).toEqual({ scrive: false, motivo: 'adozione_spenta' });
-  });
-
-  it('fermo manuale, anche su una chat di Mario: orfano, in_pausa', () => {
-    expect(pulsanteScriveFase({ ...base, aiPausedAt: '2026-10-05T21:00:00Z', autoReplyOn: true, adozioneAttiva: true }))
-      .toEqual({ scrive: false, motivo: 'in_pausa' });
-  });
-
-  it('chat passata a una persona: orfano, passata_umano — e vince sul fermo manuale', () => {
-    expect(pulsanteScriveFase({ ...base, handedOffAt: '2026-10-05T21:00:00Z' }))
-      .toEqual({ scrive: false, motivo: 'passata_umano' });
-    expect(pulsanteScriveFase({ ...base, handedOffAt: '2026-10-05T21:00:00Z', aiPausedAt: '2026-10-05T20:00:00Z' }))
-      .toEqual({ scrive: false, motivo: 'passata_umano' });
-  });
-
-  it('la chat e di qualcun altro: orfano, altro_owner', () => {
-    expect(pulsanteScriveFase({ ...base, aiOwner: 'marta', autoReplyOn: true, adozioneAttiva: true }))
-      .toEqual({ scrive: false, motivo: 'altro_owner' });
-  });
-
-  it('adottaOra vince sul resto solo dove serve: chat in pausa che nessuno adotta resta orfana', () => {
-    // `shouldAdoptInbound` non adotta mai una chat in pausa, quindi adottaOra falso: qui
-    // si verifica che la decisione non inventi un permesso che il gate non ha dato.
-    expect(pulsanteScriveFase({
-      pulsanteAttivo: true, aiOwner: null, aiPausedAt: '2026-10-05T21:00:00Z', handedOffAt: null,
-      adottaOra: false, autoReplyOn: true, adozioneAttiva: true,
-    })).toEqual({ scrive: false, motivo: 'in_pausa' });
+  it('chat senza padrone: ai_owner non si scrive, la prende l adozione col suo compare-and-set', () => {
+    const c = colonnePresaPulsante({ aiOwner: null, aiStartedAt: null }, ADESSO);
+    expect(c).not.toHaveProperty('ai_owner');
+    expect(c).toMatchObject({ ai_status: 'active', ai_paused_at: null, handed_off_at: null });
   });
 });
 
@@ -332,19 +300,6 @@ describe('tagliaRigheDalLancio: il taglio sull ancora confronta ISTANTI, non str
   it('una data illeggibile non fa sparire la riga: si torna al confronto di prima', () => {
     const rows = [riga('data-strana', 'illeggibile'), riga('2026-10-05T21:00:00Z', 'dopo')];
     expect(tagliaRigheDalLancio(rows, null, '2026-10-05T20:00:00Z').map((r) => r.body)).toEqual(['illeggibile', 'dopo']);
-  });
-});
-
-describe('pulsanteRiapreChat — si riapre solo se la fase si e mossa davvero (C8)', () => {
-  it('fase mossa su una chat chiusa di Mario: si riapre', () => {
-    expect(pulsanteRiapreChat({ cambiaFase: true, aiOwner: 'mario', aiStatus: 'closed' })).toBe(true);
-  });
-  it('fase ferma (restituito, followup_inviato, post_pitch, scelta_fatta): ai_status non si tocca', () => {
-    expect(pulsanteRiapreChat({ cambiaFase: false, aiOwner: 'mario', aiStatus: 'closed' })).toBe(false);
-  });
-  it('chat non chiusa o non di Mario: niente da riaprire', () => {
-    expect(pulsanteRiapreChat({ cambiaFase: true, aiOwner: 'mario', aiStatus: 'active' })).toBe(false);
-    expect(pulsanteRiapreChat({ cambiaFase: true, aiOwner: null, aiStatus: 'closed' })).toBe(false);
   });
 });
 
@@ -434,10 +389,12 @@ describe('linkSviluppatoreEntraNelLancio — il link "Sviluppatore AI" porta la 
 });
 
 describe('dopo la notte del webinar (PO 25/09)', () => {
-  it('pulsantePassaAMario: da mai-nel-lancio, attesa, posto_bloccato, link_inviato e post_pitch; non dalle altre', async () => {
+  it('pulsantePassaAMario: da ogni fase, chiuso followup_inviato e restituito compresi; non da scelta_fatta (PO 02/10)', async () => {
     const { pulsantePassaAMario } = await import('./lancio-fase');
-    for (const f of [null, '', 'attesa', 'posto_bloccato', 'link_inviato', 'post_pitch']) expect(pulsantePassaAMario(f)).toBe(true);
-    for (const f of ['chiuso', 'followup_inviato', 'scelta_fatta', 'restituito']) expect(pulsantePassaAMario(f)).toBe(false);
+    for (const f of [null, '', 'attesa', 'posto_bloccato', 'link_inviato', 'post_pitch', 'chiuso', 'followup_inviato', 'restituito']) {
+      expect(pulsantePassaAMario(f)).toBe(true);
+    }
+    expect(pulsantePassaAMario('scelta_fatta')).toBe(false);
   });
 
   it('conMarioDopoNotte tiene quello che c era; marioDopoNotte lo rilegge e scarta le forme sporche', async () => {

@@ -14,7 +14,7 @@ import {
   classificaPrimoMessaggio, isMarkerPulsanteWebinar, isMarkerLinkSviluppatore, LANCIO_INGRESSO_LINK_SVILUPPATORE,
 } from '@/lib/primo-messaggio';
 import {
-  LANCIO_SLUG, pulsanteRiportaInPostPitch, pulsanteRiapreChat, pulsanteScriveFase, serveNotaRestituzione,
+  LANCIO_SLUG, pulsanteRiportaInPostPitch, pulsantePrendeChat, colonnePresaPulsante, serveNotaRestituzione,
   linkSviluppatoreEntraNelLancio, pulsantePassaAMario, conMarioDopoNotte, haCongedo,
   faseDopoRevocaCongedo, notaCongedoRevocato,
 } from '@/lib/lancio-fase';
@@ -226,7 +226,7 @@ export async function POST(req: NextRequest) {
     if (toMatchesFenice) {
       const { data: conv } = await supabase
         .from('conversations')
-        .select('ai_owner, ai_status, ai_paused_at, handed_off_at, crm_lead_id, bot_outcome, lancio_slug, lancio_fase, lancio_ingresso, lancio_info')
+        .select('ai_owner, ai_status, ai_paused_at, handed_off_at, ai_started_at, crm_lead_id, bot_outcome, lancio_slug, lancio_fase, lancio_ingresso, lancio_info')
         .eq('id', conversationId)
         .single();
 
@@ -239,23 +239,22 @@ export async function POST(req: NextRequest) {
 
       // Il gate dell'interruttore va valutato PRIMA del conteggio degli outbound: a bot
       // spento (come in produzione) non deve costare nessuna query in piu' al webhook,
-      // che deve restare veloce perche' Twilio ritenta. Sta qui sopra perche' serve anche
-      // alla decisione del pulsante, subito sotto.
+      // che deve restare veloce perche' Twilio ritenta.
       const adozioneAttiva = process.env.INBOUND_ADOPTION_ENABLED === '1';
 
       // Pulsante del webinar (spec lancio §5.4, §6.3): scatta sull'inbound CORRENTE e
-      // vince su chi possiede la chat e su quello che il lead aveva detto prima — anche
-      // su una chat gia' di Mario, anche su una gia' dentro il lancio. Il lead della
-      // lista d'attesa ha la chat aperta da settimane e preme il pulsante la sera del 5:
-      // e' quel messaggio che conta, non il primo. Un inbound SENZA marker invece non
-      // tocca mai `lancio_fase`: le fasi le muove il turno del lancio dentro il drain.
+      // vince su tutto (PO 02/10/2026: "deve sovrastare ogni regola e parlarci il bot").
+      // Il lead della lista d'attesa ha la chat aperta da settimane e preme il pulsante la
+      // sera del 5: e' quel messaggio che conta, non il primo, e non conta chi aveva la
+      // chat in mano. Un inbound SENZA marker invece non tocca mai `lancio_fase`: le fasi
+      // le muove il turno del lancio dentro il drain.
       const markerPulsante = isMarkerPulsanteWebinar(messageBody);
       // L'interruttore `lancio_pulsante_attivo` si legge SOLO quando il marker c'e'
       // davvero: sull'inbound normale — cioe' su tutti — il gate non costa nessuna query
       // in piu', e sulla frase del pulsante ne costa una sola (`app_settings`, la stessa
-      // riga che legge il resto del lancio). Spento, il marker vale come assente: non
-      // arriva a `shouldAdoptInbound`, non arriva a `classificaPrimoMessaggio`, e
-      // `pulsanteScriveFase` lo dice con `pulsante_spento`.
+      // riga che legge il resto del lancio). Spento (e prima della live), il marker vale
+      // come assente: non arriva a `shouldAdoptInbound`, non arriva a
+      // `classificaPrimoMessaggio`, e `pulsantePrendeChat` lo dice con `pulsante_spento`.
       const settingsPulsante = markerPulsante ? await getLancioSettings(supabase) : null;
       const pulsanteAttivo = settingsPulsante?.pulsanteAttivo ?? false;
       // Finita la notte del webinar (dalle 03:00 del giorno dopo, decisione PO 25/09) il
@@ -272,40 +271,18 @@ export async function POST(req: NextRequest) {
       const pulsanteVale = pulsanteAttivo || pulsanteDallaLive || pulsanteDopoNotte;
       const lancioPulsante = markerPulsante && pulsanteVale;
       if (conv && markerPulsante) {
-        // Il gate dell'adozione, valutato qui perche' e' la seconda delle due sole
-        // condizioni che autorizzano a scrivere lo stato del lancio (vedi
-        // `pulsanteScriveFase`). Col pulsante `shouldAdoptInbound` non guarda
-        // `hasOutbound` — la richiesta e' esplicita e fatta adesso — quindi qui il
-        // conteggio degli outbound non serve, e resta dentro il ramo dell'adozione dove
-        // si paga solo quando serve davvero. `hasOutbound: true` e' il valore prudente:
-        // se un domani quella regola cambiasse, di qui si uscirebbe con un evento orfano
-        // e nessuna scrittura, non col contrario.
-        const adottaOra = shouldAdoptInbound({
-          toMatchesFenice,
-          adoptionOn: adozioneAttiva,
-          autoReplyOn,
-          aiOwner: conv.ai_owner,
-          aiPausedAt: conv.ai_paused_at,
-          handedOffAt: conv.handed_off_at,
-          hasOutbound: true,
-          lancioPulsante,
-        });
-        const decisione = pulsanteScriveFase({
-          pulsanteAttivo: pulsanteVale,
-          aiOwner: conv.ai_owner,
-          aiPausedAt: conv.ai_paused_at,
-          handedOffAt: conv.handed_off_at,
-          adottaOra,
-          autoReplyOn,
-          adozioneAttiva,
-        });
+        // Dal 02/10 (PO) il pulsante prende la chat in ogni caso: passata a una persona, in
+        // pausa, di un altro padrone, senza padrone ad adozione spenta, congedata,
+        // restituita. Restano fuori solo il pulsante che non vale e il bot spento (il
+        // freno d'emergenza durante un incidente), vedi `pulsantePrendeChat`.
+        const decisione = pulsantePrendeChat({ pulsanteVale, autoReplyOn });
 
-        if (!decisione.scrive) {
-          // Finestra orfana: scrivere `lancio_slug` qui toglierebbe questa chat da
-          // `adotta-mai-risposti` (che esclude lo slug non nullo) e dalle altre reti di
-          // recupero, senza che nessuno le risponda. Si lascia intatta e si registra il
-          // pulsante: quando l'adozione si accende, il cron lo riclassifica e la porta
-          // lui in `post_pitch`.
+        if (!decisione.prende) {
+          // Scrivere `lancio_slug` qui toglierebbe questa chat da `adotta-mai-risposti`
+          // (che esclude lo slug non nullo) e dalle altre reti di recupero, senza che
+          // nessuno le risponda. Si lascia intatta e si registra il pulsante: vedere le
+          // pressioni anche a interruttore spento e' meta' del motivo per cui esiste la
+          // traccia.
           await supabase.from('event_log').insert({
             type: 'lancio_pulsante',
             payload: {
@@ -314,64 +291,102 @@ export async function POST(req: NextRequest) {
               orfano: true,
               motivo: decisione.motivo,
             } as never,
-            message: `[lancio] ${phone} ha premuto il pulsante del webinar ma la chat non e' governata (${decisione.motivo}): nessuna scrittura sul lancio (conv ${conversationId})`,
+            message: `[lancio] ${phone} ha premuto il pulsante del webinar ma il bot non la prende (${decisione.motivo}): nessuna scrittura sul lancio (conv ${conversationId})`,
             level: 'warn',
           });
         } else {
-          // La fase si calcola PRIMA delle colonne perche' decide anche la riapertura:
-          // l'elenco delle fasi da cui si rientra e' chiuso (vedi `pulsanteRiportaInPostPitch`)
-          // e da `followup_inviato` e `restituito` la fase NON si muove — dopo il follow-up
-          // la chat e' del flusso standard di B5, e un restituito e' tornato al GDO.
-          // Dopo la notte del webinar la destinazione e' Mario standard (`chiuso`), da un
-          // elenco di fasi suo (`pulsantePassaAMario`): la sera resta il dopo-pitch.
-          // Un congedato resta un no anche qui (come la sera, dove il turno del dopo-pitch
-          // lo ri-congeda in silenzio, e come `shouldReopen`): la promessa di non
-          // scrivergli piu' vale finche' non la scioglie una persona.
+          // Lo stato di PRIMA, per l'evento della presa: serve a sapere a chi l'abbiamo
+          // tolta (una persona, un fermo manuale, un congedo, un GDO del pool).
+          const prima = {
+            aiOwner: conv.ai_owner,
+            aiStatus: conv.ai_status,
+            aiPausedAt: conv.ai_paused_at,
+            handedOffAt: conv.handed_off_at,
+            congedoAt: haCongedo(conv.lancio_info)
+              ? String((conv.lancio_info as Record<string, unknown>).congedo_at)
+              : null,
+            lancioFase: conv.lancio_fase,
+          };
+          const eraRestituito = conv.lancio_fase === 'restituito';
+          // Dove va la fase (vedi `pulsanteRiportaInPostPitch` e `pulsantePassaAMario`): la
+          // sera il dopo-pitch, dopo la notte Mario standard. Da qualunque fase tranne
+          // `scelta_fatta` (e `post_pitch` la sera, dove e' gia').
           const cambiaFase = pulsanteDopoNotte
-            ? pulsantePassaAMario(conv.lancio_fase) && !haCongedo(conv.lancio_info)
+            ? pulsantePassaAMario(conv.lancio_fase)
             : pulsanteRiportaInPostPitch(conv.lancio_fase);
-          // Se la chat di Mario era 'closed' (un no di settimane fa, o il congedo del
-          // lancio) si riapre: sta scrivendo adesso, e col pulsante. Mai su una chat
-          // senza padrone, in pausa o passata a una persona: quelle non arrivano qui — e
-          // mai quando la fase resta dov'e' (ruling C8, vedi `pulsanteRiapreChat`).
-          // Le colonne d'ingresso si scrivono solo se mancano: chi e' entrato dalla
-          // lista resta 'lista'.
-          const riapri = pulsanteRiapreChat({
-            cambiaFase, aiOwner: conv.ai_owner, aiStatus: conv.ai_status,
-          });
+          // Una sola scrittura per la presa e per le colonne d'ingresso. Le colonne
+          // d'ingresso si scrivono solo se mancano: chi e' entrato dalla lista resta 'lista'.
+          const presa = colonnePresaPulsante({ aiOwner: conv.ai_owner, aiStartedAt: conv.ai_started_at }, Date.now());
           const colonne = {
+            ...presa,
             ...(conv.lancio_slug ? {} : { lancio_slug: LANCIO_SLUG }),
             ...(conv.lancio_ingresso ? {} : { lancio_ingresso: 'pulsante_webinar' }),
-            ...(riapri ? { ai_status: 'active' } : {}),
           };
-          if (Object.keys(colonne).length > 0) {
-            const { error: erroreColonne } = await supabase
-              .from('conversations').update(colonne).eq('id', conversationId);
-            if (erroreColonne) {
+          const { error: errorePresa } = await supabase
+            .from('conversations').update(colonne).eq('id', conversationId);
+          const fasePresa = cambiaFase && !errorePresa;
+          if (errorePresa) {
+            // La chat e' rimasta di chi l'aveva: NON si muove la fase, o resterebbe una
+            // chat del lancio che nessuno guida. Resta la traccia, a livello errore.
+            await supabase.from('event_log').insert({
+              type: 'lancio_pulsante_presa_fallita',
+              payload: { conversationId, phone, colonne, prima, errore: errorePresa.message } as never,
+              message: `[lancio] conv ${conversationId}: il pulsante NON ha preso la chat — ${errorePresa.message}`,
+              level: 'error',
+            });
+          } else {
+            // La copia in memoria serve subito dopo: e' quella che `shouldAutoReply` e
+            // l'adozione qui sotto leggono.
+            if (conv.ai_owner !== null) conv.ai_owner = 'mario';
+            conv.ai_status = 'active';
+            conv.ai_paused_at = null;
+            conv.handed_off_at = null;
+            if (presa.ai_started_at) conv.ai_started_at = presa.ai_started_at;
+            if (!conv.lancio_slug) conv.lancio_slug = LANCIO_SLUG;
+            if (!conv.lancio_ingresso) conv.lancio_ingresso = 'pulsante_webinar';
+
+            // Il congedo del lancio si scioglie: la promessa di non scrivergli piu' l'ha
+            // superata lui, premendo il pulsante. Prima della fase, perche' il marcatore
+            // della notte si appoggia su `lancio_info` e deve partire da quello senza
+            // congedo. Compare-and-set dentro `revocaCongedo`: se l'ha gia' sciolto un
+            // altro inbound torna la riga attuale, che va bene lo stesso.
+            if (prima.congedoAt) {
+              const revoca = await revocaCongedo(supabase, conversationId);
+              if (revoca.lancioInfo) conv.lancio_info = revoca.lancioInfo as typeof conv.lancio_info;
+            }
+
+            // `impostaFaseLancio` (lib/lancio-db.ts) e' l'unico scrittore di `lancio_fase` e
+            // si scrive da solo l'evento `lancio_fase_cambiata`. Await e non `after()`: e'
+            // un update solo, e la fase deve essere sul posto prima che il drain parta qui
+            // sotto.
+            if (cambiaFase && pulsanteDopoNotte) {
+              // Il marcatore tiene le risposte della sera (se c'erano) e dice al drain di
+              // usare la nota "ha visto la live e ha premuto il pulsante".
+              const info = conMarioDopoNotte(conv.lancio_info, 'pulsante', new Date().toISOString());
+              await impostaFaseLancio(supabase, conversationId, 'chiuso', { lancio_info: info as unknown as Json });
+              conv.lancio_fase = 'chiuso';
+              conv.lancio_info = info as typeof conv.lancio_info;
+            } else if (cambiaFase) {
+              await impostaFaseLancio(supabase, conversationId, 'post_pitch');
+              conv.lancio_fase = 'post_pitch';
+            }
+
+            await supabase.from('event_log').insert({
+              type: 'lancio_pulsante_presa_chat',
+              payload: { conversationId, phone, prima, faseDopo: conv.lancio_fase } as never,
+              message: `[lancio] ${phone} ha premuto il pulsante: il bot prende la chat (prima: owner ${prima.aiOwner ?? 'nessuno'}, stato ${prima.aiStatus ?? '-'}${prima.aiPausedAt ? ', in pausa' : ''}${prima.handedOffAt ? ', passata a una persona' : ''}${prima.congedoAt ? ', congedata' : ''}, fase ${prima.lancioFase ?? '-'}) (conv ${conversationId})`,
+              level: 'info',
+            });
+            if (eraRestituito) {
+              // Dal 7/10 un restituito e' un lead del pool: nel CRM ce l'ha un GDO umano, e
+              // da adesso lo lavora anche il bot. Si vede nei pannelli, a livello warn.
               await supabase.from('event_log').insert({
-                type: 'lancio_pulsante_colonne_non_scritte',
-                payload: { conversationId, phone, colonne, errore: erroreColonne.message } as never,
-                message: `[lancio] conv ${conversationId}: colonne d'ingresso del pulsante NON scritte — ${erroreColonne.message}`,
+                type: 'lancio_pulsante_su_restituito',
+                payload: { conversationId, phone, crmLeadId: conv.crm_lead_id, faseDopo: conv.lancio_fase } as never,
+                message: `[lancio] ${phone} ha premuto il pulsante su una chat gia' restituita al pool: il bot la riprende, ma nel CRM il lead e' di un GDO (conv ${conversationId})`,
                 level: 'warn',
               });
-            } else if (riapri) {
-              // La copia in memoria serve subito dopo: e' quella che `shouldAutoReply` legge.
-              conv.ai_status = 'active';
             }
-          }
-          // `impostaFaseLancio` (lib/lancio-db.ts) e' l'unico scrittore di `lancio_fase` e
-          // si scrive da solo l'evento `lancio_fase_cambiata`. Await e non `after()`: e' un
-          // update solo, e la fase deve essere sul posto prima che il drain parta qui sotto.
-          if (cambiaFase && pulsanteDopoNotte) {
-            // Il marcatore tiene le risposte della sera (se c'erano) e dice al drain di usare
-            // la nota "ha visto la live e ha premuto il pulsante".
-            const info = conMarioDopoNotte(conv.lancio_info, 'pulsante', new Date().toISOString());
-            await impostaFaseLancio(supabase, conversationId, 'chiuso', { lancio_info: info as unknown as Json });
-            conv.lancio_fase = 'chiuso';
-            conv.lancio_info = info as typeof conv.lancio_info;
-          } else if (cambiaFase) {
-            await impostaFaseLancio(supabase, conversationId, 'post_pitch');
-            conv.lancio_fase = 'post_pitch';
           }
           // L'evento si scrive SEMPRE, anche a fase invariata: che quella persona abbia
           // premuto il pulsante si deve vedere nei pannelli comunque.
@@ -379,11 +394,11 @@ export async function POST(req: NextRequest) {
             type: 'lancio_pulsante',
             payload: {
               conversationId,
-              giaDiMario: conv.ai_owner === 'mario',
-              ...(cambiaFase ? {} : { faseInvariata: true }),
+              giaDiMario: prima.aiOwner === 'mario',
+              ...(fasePresa ? {} : { faseInvariata: true }),
               ...(pulsanteDopoNotte ? { dopoNotte: true } : {}),
             } as never,
-            message: `[lancio] ${phone} ha premuto il pulsante del webinar (conv ${conversationId})${cambiaFase ? '' : `, fase ${conv.lancio_fase} invariata`}`,
+            message: `[lancio] ${phone} ha premuto il pulsante del webinar (conv ${conversationId})${fasePresa ? '' : `, fase ${conv.lancio_fase} invariata`}`,
             level: 'info',
           });
         }
@@ -396,7 +411,12 @@ export async function POST(req: NextRequest) {
       // query al webhook.
       // `autoReplyOn` sta qui per la stessa ragione dell'interruttore: a bot spento
       // il conteggio non serve, perche' `shouldAdoptInbound` direbbe no comunque.
-      if (adozioneAttiva && autoReplyOn && conv && conv.ai_owner === null) {
+      // Il pulsante del webinar che vale adotta anche ad adozione spenta (PO 02/10/2026:
+      // il pulsante vince su ogni regola). Passa da qui e non dal blocco del pulsante
+      // perche' una chat senza padrone ha bisogno di tutto quello che fa l'adozione: il
+      // compare-and-set su `ai_owner`, la provenienza e il push del lead al CRM.
+      const adozioneOra = adozioneAttiva || lancioPulsante;
+      if (adozioneOra && autoReplyOn && conv && conv.ai_owner === null) {
         const { count, error: erroreCount } = await supabase
           .from('messages')
           .select('id', { count: 'exact', head: true })
@@ -408,7 +428,7 @@ export async function POST(req: NextRequest) {
         const hasOutbound = erroreCount ? true : (count ?? 0) > 0;
         if (shouldAdoptInbound({
           toMatchesFenice,
-          adoptionOn: adozioneAttiva,
+          adoptionOn: adozioneOra,
           autoReplyOn,
           aiOwner: conv.ai_owner,
           aiPausedAt: conv.ai_paused_at,
@@ -548,6 +568,8 @@ export async function POST(req: NextRequest) {
       // Lead del lancio gia' restituito al pool (B5, ruling C8): non si riapre, il bot
       // tace, e chi lo ha in carico sul CRM viene avvisato con una nota — e' l'unico
       // modo perche' non chiami a vuoto una persona che intanto sta scrivendo qui.
+      // Il pulsante del webinar e' l'unica eccezione (PO 02/10): l'ha gia' tolta da
+      // `restituito` qui sopra, e su quella chat questo ramo non scatta.
       const restituito = !!conv?.lancio_slug && conv.lancio_fase === 'restituito';
       if (conv && restituito) {
         await supabase.from('event_log').insert({
@@ -582,8 +604,8 @@ export async function POST(req: NextRequest) {
       // un ripensamento (non un rifiuto, una protesta o un "grazie") il congedo si scioglie
       // QUI, prima di `shouldReopen`: tolto `congedo_at`, la chat 'closed' si riapre per la
       // strada di sempre e il drain risponde a questo messaggio.
-      // Il pulsante e il link Sviluppatore hanno le loro regole qui sopra (il pulsante su un
-      // congedato resta un no, PO 25/09): non passano di qui.
+      // Il pulsante e il link Sviluppatore hanno le loro regole qui sopra (il pulsante il
+      // congedo lo scioglie da se', PO 02/10): non passano di qui.
       let congedoSciolto = false;
       if (conv && !markerPulsante && !isMarkerLinkSviluppatore(messageBody) && revocaCongedoLancio({
         aiOwner: conv.ai_owner,
