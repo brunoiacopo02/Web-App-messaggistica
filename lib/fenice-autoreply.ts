@@ -741,7 +741,10 @@ export async function drainMarioReplies(
       // o dopo-pitch rimasto a meta' oltre le 03:00. Ha visto la live: la nota lo dice.
       const dopoNotte = lancioStandard ? marioDopoNotte(lancio.lancio_info) : null;
       const daLinkSviluppatore = lancioStandard && !dopoNotte && lancio.lancio_ingresso === LANCIO_INGRESSO_LINK_SVILUPPATORE;
-      const eventoPassato = daLinkSviluppatore
+      // Su TUTTE le chat del lancio, non solo su quelle del link: il link della live si
+      // imposta in anticipo (PO 02/10, la pagina e' attiva solo dopo il 6) e una chat
+      // passata a Mario standard prima della live non deve ricevere una pagina ancora spenta.
+      const eventoPassato = lancioStandard
         ? eventoLancioPassato((await leggiSettingsLancio()).eventoAt, Date.now())
         : true;
       const videoLive = lancioStandard && eventoPassato ? await leggiVideoLive() : null;

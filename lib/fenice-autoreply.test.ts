@@ -2375,8 +2375,11 @@ describe('drainMarioReplies — dopo il follow-up la chat passa a Mario nello ST
     vi.mocked(generateMarioReply).mockReset();
     vi.mocked(eseguiTurnoLancio).mockReset();
     vi.mocked(getLancioSettings).mockClear();
+    // Scenari di DOPO la live: dal 02/10 il link della live vale solo da lancio_evento_at.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-06T10:30:00Z'));
   });
-  afterEach(() => { vi.unstubAllEnvs(); });
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
   it('handed_to_mario: Mario risponde subito, con il link della live nel contesto, e ai_status resta active', async () => {
     vi.mocked(eseguiTurnoLancio).mockResolvedValueOnce('handed_to_mario');
@@ -2396,6 +2399,20 @@ describe('drainMarioReplies — dopo il follow-up la chat passa a Mario nello ST
     // Il quarto stato del turno non arriva MAI a conversations.ai_status.
     expect(calls.finalStatusWrites).toEqual(['active']);
     expect(calls.finalStatusWrites).not.toContain('handed_to_mario');
+  });
+
+  // PO 02/10: il link si imposta in anticipo ma la pagina e' attiva solo dopo la live.
+  it('prima della live il link impostato NON esce: video classici e nessun warn', async () => {
+    vi.setSystemTime(new Date('2026-10-02T10:30:00Z'));
+    vi.mocked(eseguiTurnoLancio).mockResolvedValueOnce('handed_to_mario');
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(rispostaMario('Ciao! Raccontami: lavori al momento?'));
+    const { supabase, calls } = makeDrainSupabase(riga(), [FU, RISPOSTA]);
+
+    await drainMarioReplies(supabase, 7, '+391234567890', () => 0);
+
+    const opts = vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string };
+    expect(opts.contextNote ?? '').not.toContain(LIVE);
+    expect(calls.events.map((e) => e.type)).not.toContain('lancio_video_live_link_missing');
   });
 
   it('senza lancio_video_live_link: Mario risponde coi video classici (nessun video della live, solo il divieto di passare la chat) e resta un warn', async () => {
@@ -2623,8 +2640,11 @@ describe('drainMarioReplies — passata a Mario dopo la notte del webinar (PO 25
     vi.mocked(generateMarioReply).mockReset();
     vi.mocked(eseguiTurnoLancio).mockReset();
     vi.mocked(getLancioSettings).mockClear();
+    // Scenari di DOPO la live: dal 02/10 il link della live vale solo da lancio_evento_at.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-06T10:30:00Z'));
   });
-  afterEach(() => { vi.unstubAllEnvs(); });
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
   it('pulsante premuto il 6 (fase chiuso + marcatore): Mario col contesto della live, senza chiedere se l ha vista', async () => {
     const riga = {
@@ -2679,8 +2699,11 @@ describe('drainMarioReplies — iscritto dopo la live (PO 25/09)', () => {
     vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
     vi.mocked(generateMarioReply).mockReset();
     vi.mocked(eseguiTurnoLancio).mockReset();
+    // Scenari di DOPO la live: dal 02/10 il link della live vale solo da lancio_evento_at.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-06T10:30:00Z'));
   });
-  afterEach(() => { vi.unstubAllEnvs(); });
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
   it('risponde Mario con la nota della registrazione, non quella del follow-up', async () => {
     const riga = {
