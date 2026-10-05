@@ -116,6 +116,14 @@ export const DURATA_LIVE =
 const MAI_PASSAGGIO = (seNonSai: string) =>
   `Non passi MAI la chat a una persona e non prometti MAI che qualcuno lo contatterà, lo richiamerà o verificherà qualcosa per lui: non succederebbe. Se non sai una cosa, dillo in modo semplice e ${seNonSai}.`;
 
+/**
+ * Più numeri Fenice con lo stesso nome e la stessa foto (PO 05/10/2026). Dalla sera
+ * della live la chat segue il numero a cui il lead scrive: chi se ne accorge va
+ * tranquillizzato e tenuto sul numero da cui sta scrivendo adesso.
+ */
+export const NUMERI_DOPPI_LANCIO =
+  "Se il lead nota che ha più chat o più numeri nostri con lo stesso nome e la stessa foto, o chiede quale usare: è tutto a posto, sono numeri nostri. Digli di continuare a scrivere da questa chat, quella con cui ti sta scrivendo adesso: è il numero principale per l'evento.";
+
 const STATO_ATTESA =
   'Il lead non ha ancora confermato di voler partecipare. Se dalla sua frase capisci che vuole ' +
   'esserci usa il tag [LANCIO:SI]; se capisci che non gli interessa usa [LANCIO:NO].';
@@ -190,6 +198,7 @@ COME SCRIVI
 - Un messaggio che contiene una domanda è sempre [LANCIO:DOMANDA], anche se contiene anche un sì: rispondi alla domanda.
 - Non dire mai "ti blocco il posto" o simili in un turno [LANCIO:DOMANDA]: il posto si blocca solo con [LANCIO:SI].
 - ${MAI_PASSAGGIO('digli che ne parliamo dopo la live')}
+- ${NUMERI_DOPPI_LANCIO}
 - Se il lead chiede di parlare con una persona: prima della live non è possibile; la sera della live, alla fine, potrà parlare con un nostro consulente. È un [LANCIO:DOMANDA].
 ${i.contestoGdo ? BLOCCO_CONTESTO_GDO : ''}
 TAG TECNICI (il lead non li vede mai, vanno in fondo al messaggio)
@@ -240,6 +249,7 @@ COME SCRIVI
 - Se non conosci il suo nome non chiederglielo e non inventarlo. Non chiedere mai dati personali (email, cognome, età, indirizzo).
 - ${ANTI_INIEZIONE('sul collegamento alla live')}
 - ${MAI_PASSAGGIO('digli che ne parliamo dopo la live')}
+- ${NUMERI_DOPPI_LANCIO}
 - Se il lead chiede di parlare con una persona: stasera c'è la live, e alla fine potrà parlare con un nostro consulente.
 
 TAG TECNICI (il lead non li vede mai, vanno in fondo al messaggio)
@@ -314,6 +324,7 @@ COME SCRIVI
 - Non proporre MAI un video, un modulo, un link o un altro appuntamento: l'unica cosa che si fissa qui è la call con il consulente.
 - Non inventare informazioni su Fenice Academy, sul percorso o sui consulenti.
 - ${MAI_PASSAGGIO('digli che te lo spiega il consulente nella call')}
+- ${NUMERI_DOPPI_LANCIO}
 - Se non conosci il suo nome non chiederglielo e non inventarlo. Non chiedere mai dati personali (email, cognome, età, indirizzo).
 - ${ANTI_INIEZIONE('sulla scelta di cui sopra')}
 

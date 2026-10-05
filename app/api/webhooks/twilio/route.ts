@@ -176,31 +176,33 @@ export async function POST(req: NextRequest) {
     const { data: cur } = await supabase
       .from('conversations').select('unread_count, wa_number').eq('id', conversationId).single();
 
-    // Il numero della chat si scrive UNA VOLTA e non cambia piu'.
+    // Il numero della chat segue il lead (PO 05/10/2026, sera della live).
     //
-    // Prima qui si riscriveva con qualunque numero a cui il lead avesse
-    // risposto. Il ragionamento non era sbagliato (la finestra 24h vale per
-    // coppia numero/utente), ma l'effetto si': il 18/09/2026 un nostro invio e'
-    // partito per errore da +393520158061 — il numero che su Meta si presenta
-    // come "SerenaMente" — e le tre chat dei lead che hanno risposto ci sono
-    // MIGRATE sopra. Da quel momento quelle persone avevano tre nostri numeri
-    // nella stessa conversazione.
+    // Dal 18/09 al 05/10 la regola era opposta: il numero si scriveva una volta
+    // e non cambiava piu' ("un lead, un numero"), perche' un invio partito per
+    // errore dal 8061 aveva trascinato tre chat su un numero sbagliato. Il prezzo
+    // pero' e' alto: chi scrive di sua volonta' a un altro dei nostri numeri (il
+    // pulsante del webinar sul 3199, o il numero da cui era stato contattato
+    // un'altra volta) riceveva la risposta dal numero vecchio, dove la finestra
+    // delle 24 ore e' chiusa — e il testo libero non arriva. Un lead perso.
     //
-    // La regola e' quella del PO, ed e' piu' forte della finestra: un lead che
-    // riceve un messaggio da un numero deve continuare a sentire quel numero.
-    // Se arriva un inbound su un numero diverso NON si sposta la chat: si
-    // lascia dov'e' e lo si scrive nel registro, perche' vuol dire che qualcosa
-    // ha mandato da dove non doveva ed e' un difetto da vedere, non da
-    // assorbire in silenzio.
+    // Ora: se il lead scrive a uno dei NOSTRI numeri, la chat passa a quel
+    // numero e da li' gli rispondiamo. La finestra e' aperta per definizione,
+    // e il lead parla col numero che ha scelto. Un numero che non e' del bot
+    // (campagne, default) non sposta niente: resta solo nel registro.
     const numeroEntrante = params.To?.startsWith('whatsapp:') ? params.To : null;
     const numeroChat = (cur as { wa_number?: string | null } | null)?.wa_number ?? null;
-    const daScrivere = numeroEntrante && !numeroChat ? { wa_number: numeroEntrante } : {};
-    if (numeroEntrante && numeroChat && numeroEntrante !== numeroChat) {
+    const cambiaNumero = !!numeroEntrante && !!numeroChat && numeroEntrante !== numeroChat;
+    const seguiLead = cambiaNumero && eNumeroDelBot(numeroEntrante);
+    const daScrivere = numeroEntrante && (!numeroChat || seguiLead) ? { wa_number: numeroEntrante } : {};
+    if (cambiaNumero) {
       await supabase.from('event_log').insert({
-        type: 'inbound_su_altro_numero',
+        type: seguiLead ? 'chat_segue_numero_lead' : 'inbound_su_altro_numero',
         payload: { conversationId, numeroChat, numeroEntrante, phone } as never,
-        message: `[inbound] la chat ${conversationId} vive su ${numeroChat} ma il lead ha risposto a ${numeroEntrante}: la chat NON si sposta`,
-        level: 'warn',
+        message: seguiLead
+          ? `[inbound] il lead ha scritto a ${numeroEntrante}: la chat ${conversationId} passa da ${numeroChat} a ${numeroEntrante}`
+          : `[inbound] la chat ${conversationId} vive su ${numeroChat} ma il lead ha scritto a ${numeroEntrante}, che non e' del bot: la chat NON si sposta`,
+        level: seguiLead ? 'info' : 'warn',
       });
     }
 

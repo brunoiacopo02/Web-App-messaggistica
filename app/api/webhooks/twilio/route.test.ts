@@ -337,13 +337,12 @@ describe('nota al CRM ogni ora per chat restituita (C8)', () => {
 });
 
 
-// Il 18/09/2026 un invio e' partito per errore da +393520158061 (su Meta si
-// presenta come "SerenaMente") e le chat dei lead che hanno risposto ci sono
-// MIGRATE sopra: quelle persone si sono ritrovate tre nostri numeri nella
-// stessa conversazione. La regola del PO e' che un lead senta sempre lo stesso
-// numero, e vale piu' della finestra 24h.
-describe('il numero della chat non si sposta', () => {
-  const ALTRO = 'whatsapp:+393520158061';
+// PO 05/10/2026: il numero della chat segue il lead. Chi scrive a uno dei
+// nostri numeri parla con quel numero (finestra 24h aperta li'); un numero che
+// non e' del bot non sposta niente. Fino al 05/10 la chat non si spostava mai.
+describe('il numero della chat segue il lead', () => {
+  const ALTRO_BOT = 'whatsapp:+393522070047';
+  const NON_BOT = 'whatsapp:+393520158061';
 
   it('chat senza numero: lo scrive alla prima risposta', async () => {
     stato.waNumberChat = null;
@@ -352,20 +351,32 @@ describe('il numero della chat non si sposta', () => {
     expect(u?.valori.wa_number).toBe(FENICE);
   });
 
-  it('risposta sullo STESSO numero: nessuna riscrittura, nessun allarme', async () => {
+  it('risposta sullo STESSO numero: nessuna riscrittura, nessun evento', async () => {
     stato.waNumberChat = FENICE;
     await inbound('ciao');
     expect(stato.updates.find((x) => 'wa_number' in x.valori)).toBeUndefined();
     expect(eventi('inbound_su_altro_numero')).toHaveLength(0);
+    expect(eventi('chat_segue_numero_lead')).toHaveLength(0);
   });
 
-  it('risposta su un ALTRO numero: la chat NON si sposta, e resta scritto nel registro', async () => {
+  it('il lead scrive a un ALTRO numero del bot: la chat passa a quel numero', async () => {
+    vi.stubEnv('BOT_NUMERI_SECONDARI', ALTRO_BOT);
+    stato.waNumberChat = ALTRO_BOT;
+    await inbound('Ho seguito la live Web Developer AI e voglio saperne di più', FENICE);
+    const u = stato.updates.find((x) => 'wa_number' in x.valori);
+    expect(u?.valori.wa_number).toBe(FENICE);
+    const ev = eventi('chat_segue_numero_lead');
+    expect(ev).toHaveLength(1);
+    expect(ev[0].payload).toMatchObject({ numeroChat: ALTRO_BOT, numeroEntrante: FENICE });
+  });
+
+  it('il lead scrive a un numero che NON e del bot: la chat non si sposta, resta nel registro', async () => {
     stato.waNumberChat = FENICE;
-    await inbound('ciao', ALTRO);
+    await inbound('ciao', NON_BOT);
     expect(stato.updates.find((x) => 'wa_number' in x.valori)).toBeUndefined();
     const avviso = eventi('inbound_su_altro_numero');
     expect(avviso).toHaveLength(1);
-    expect(avviso[0].payload).toMatchObject({ numeroChat: FENICE, numeroEntrante: ALTRO });
+    expect(avviso[0].payload).toMatchObject({ numeroChat: FENICE, numeroEntrante: NON_BOT });
   });
 });
 

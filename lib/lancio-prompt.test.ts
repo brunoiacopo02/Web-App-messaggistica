@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildLancioSystem, DOMANDA_SCELTA_NOTTE, DOMANDA_SCELTA_GIORNO, DURATA_LIVE } from './lancio-prompt';
+import { buildLancioSystem, DOMANDA_SCELTA_NOTTE, DOMANDA_SCELTA_GIORNO, DURATA_LIVE, NUMERI_DOPPI_LANCIO } from './lancio-prompt';
 
 const base = { fase: 'attesa', nome: 'ANNA BIANCHI', eventoAt: '2026-10-05T21:00:00+02:00' };
 
@@ -250,5 +250,13 @@ describe('buildLancioSystem — attesa con contesto GDO', () => {
   });
   it('le altre fasi non lo ricevono', () => {
     expect(buildLancioSystem({ ...base, fase: 'link_inviato', contestoGdo: true })).not.toContain('[LANCIO:ALTRO]');
+  });
+});
+
+describe('più numeri con la stessa foto (PO 05/10/2026)', () => {
+  it.each(['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch'])('fase %s: resta sul numero da cui scrive', (fase) => {
+    const s = buildLancioSystem({ ...base, fase, modo: 'notte' } as never);
+    expect(s).toContain(NUMERI_DOPPI_LANCIO);
+    expect(NUMERI_DOPPI_LANCIO).toContain("numero principale per l'evento");
   });
 });
