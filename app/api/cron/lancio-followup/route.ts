@@ -15,6 +15,7 @@ import {
   FASI_FOLLOWUP,
   inFinestraFollowup,
   finestraFollowupChiusa,
+  quotaFollowup,
   ancoraLancio,
   decideFollowup,
   lancioFollowupText,
@@ -225,9 +226,10 @@ export async function GET(req: NextRequest) {
       // Il congedo vince sulla fase (C4): chi si e' tirato indietro non riceve niente,
       // anche se la fase e' rimasta indietro perche' il CRM ha rifiutato lo scarto.
       .is('lancio_info->>congedo_at', null)
-      // Pre-filtro economico: chi non ha MAI scritto non e' un bersaglio. La regola vera
-      // (un inbound DOPO l'ancora del lancio) si applica sulle righe, piu' sotto.
-      .not('last_inbound_at', 'is', null)
+      // Pre-filtro economico: chi non ha MAI scritto non e' un bersaglio, a meno che abbia
+      // partecipato al webinar (zoom_minuti, PO 06/10). La regola vera (un inbound DOPO
+      // l'ancora, o la presenza in live) si applica sulle righe, piu' sotto.
+      .or('last_inbound_at.not.is.null,lancio_info->>zoom_minuti.not.is.null')
       // Chat in mano a una persona: un template di marketing sopra sarebbe una seconda voce.
       .is('ai_paused_at', null)
       .is('handed_off_at', null);
@@ -292,7 +294,8 @@ export async function GET(req: NextRequest) {
   // viene saltato (`mai_scritto`, `ancora_ignota`) resta candidato a ogni run, e prendendo
   // i primi 200 per id un centinaio di righe saltate in testa affamerebbe la coda per
   // tutta la finestra.
-  const max = batchMax(process.env.LANCIO_BATCH_MAX);
+  // PO 06/10: spalmato dalle 9 alle 20 (quotaFollowup), mai oltre LANCIO_BATCH_MAX.
+  const max = quotaFollowup(now, coda.length, batchMax(process.env.LANCIO_BATCH_MAX));
   const saltati = contatoreSalti();
   const targets: Candidata[] = [];
   /** Le chat del lotto che ricevono la registrazione al posto del follow-up. */

@@ -20,8 +20,8 @@ describe('inFinestraFollowup — 12:00-14:00 e 17:30-19:30 di Roma, il giorno do
       expect(inFinestraFollowup(t(iso), EVENTO), iso).toBe(true);
     }
   });
-  it('fuori: 11:59, 14:00, 17:29, 19:30, e le ore UTC coperte dallo schedule ma fuori fascia', () => {
-    for (const iso of ['2026-10-06T11:59:00+02:00', '2026-10-06T14:00:00+02:00', '2026-10-06T17:29:00+02:00', '2026-10-06T19:30:00+02:00', '2026-10-06T17:05:00+02:00', '2026-10-06T19:45:00+02:00']) {
+  it('fuori (fascia unica 09:00-20:00 dal 06/10): 08:59, 20:00, 21:00', () => {
+    for (const iso of ['2026-10-06T08:59:00+02:00', '2026-10-06T20:00:00+02:00', '2026-10-06T21:00:00+02:00']) {
       expect(inFinestraFollowup(t(iso), EVENTO), iso).toBe(false);
     }
   });
@@ -30,10 +30,10 @@ describe('inFinestraFollowup — 12:00-14:00 e 17:30-19:30 di Roma, il giorno do
     expect(inFinestraFollowup(t('2026-10-08T12:30:00+02:00'), EVENTO)).toBe(false);
     expect(inFinestraFollowup(t('2026-10-13T12:30:00+02:00'), new Date('2026-10-12T21:00:00+02:00'))).toBe(true);
   });
-  it('la finestra e chiusa solo dopo le 19:30 di dopodomani', () => {
+  it('la finestra e chiusa solo dopo le 20:00 di dopodomani', () => {
     expect(finestraFollowupChiusa(t('2026-10-06T20:00:00+02:00'), EVENTO)).toBe(false);
-    expect(finestraFollowupChiusa(t('2026-10-07T19:29:00+02:00'), EVENTO)).toBe(false);
-    expect(finestraFollowupChiusa(t('2026-10-07T19:30:00+02:00'), EVENTO)).toBe(true);
+    expect(finestraFollowupChiusa(t('2026-10-07T19:59:00+02:00'), EVENTO)).toBe(false);
+    expect(finestraFollowupChiusa(t('2026-10-07T20:00:00+02:00'), EVENTO)).toBe(true);
     expect(finestraFollowupChiusa(t('2026-10-08T09:00:00+02:00'), EVENTO)).toBe(true);
   });
 });
@@ -347,5 +347,24 @@ describe('iscrittoDopoLiveContextNote (PO 25/09)', () => {
     const n = iscrittoDopoLiveContextNote('  ');
     expect(n).toMatch(/non promettergliela/);
     expect(n).not.toMatch(/gli mandi la registrazione/);
+  });
+});
+
+describe('PO 06/10/2026: fascia unica 9-20, spalmata, e partecipanti al webinar', () => {
+  it('la fascia e 09:00-20:00', async () => {
+    const { FASCE_FOLLOWUP } = await import('./lancio-followup');
+    expect(FASCE_FOLLOWUP).toEqual([{ daMin: 540, aMin: 1200 }]);
+  });
+  it('la quota divide la coda sui run che restano, fra 10 e max', async () => {
+    const { quotaFollowup } = await import('./lancio-followup');
+    expect(quotaFollowup(new Date('2026-10-06T09:00:00+02:00'), 2640, 200)).toBe(20);
+    expect(quotaFollowup(new Date('2026-10-06T19:55:00+02:00'), 300, 200)).toBe(200);
+    expect(quotaFollowup(new Date('2026-10-06T12:00:00+02:00'), 5, 200)).toBe(10);
+  });
+  it('partecipanteWebinar: solo minuti numerici positivi', async () => {
+    const { partecipanteWebinar } = await import('./lancio-followup');
+    expect(partecipanteWebinar({ zoom_minuti: 90 })).toBe(true);
+    expect(partecipanteWebinar({ zoom_minuti: 0 })).toBe(false);
+    expect(partecipanteWebinar(null)).toBe(false);
   });
 });

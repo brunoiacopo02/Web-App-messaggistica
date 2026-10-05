@@ -66,6 +66,9 @@ function filtraCandidati(rec: Chiamata): ConvFinta[] {
   const fasi = arg(rec, 'in', 'lancio_fase')?.args[1] as string[] | undefined;
   if (fasi) out = out.filter((c) => c.lancio_fase !== null && fasi.includes(c.lancio_fase));
   if (arg(rec, 'not', 'last_inbound_at')) out = out.filter((c) => Boolean(c.last_inbound_at));
+  // PO 06/10: chi non ha mai scritto passa se ha partecipato al webinar.
+  if (rec.filtri.some((f) => f.m === 'or' && String(f.args[0]).startsWith('last_inbound_at.not.is.null')))
+    out = out.filter((c) => Boolean(c.last_inbound_at) || typeof (c.lancio_info as { zoom_minuti?: unknown } | null)?.zoom_minuti === 'number');
   if (arg(rec, 'is', 'ai_paused_at')) out = out.filter((c) => c.ai_paused_at === null);
   if (arg(rec, 'is', 'handed_off_at')) out = out.filter((c) => c.handed_off_at === null);
   const solo = rec.filtri.find((f) => f.m === 'eq' && f.args[0] === 'id');
@@ -211,7 +214,7 @@ const WELCOME = 'HXwelcome';
 const EVENTO = '2026-10-05T21:00:00+02:00';
 /** 12:10 di Roma del 6/10: dentro la prima fascia. */
 const DENTRO = '2026-10-06T12:10:00+02:00';
-const FUORI = '2026-10-06T16:00:00+02:00';
+const FUORI = '2026-10-06T20:30:00+02:00';
 const CHIUSA = '2026-10-07T20:00:00+02:00';
 const ANCORA = '2026-09-20T10:00:00Z';
 
@@ -407,7 +410,7 @@ describe('GET /api/cron/lancio-followup — perimetro (C4) e decisione', () => {
     expect(f).toContainEqual({ m: 'is', args: ['lancio_info->>congedo_at', null] });
     expect(f).toContainEqual({ m: 'is', args: ['lancio_followup_inviato_at', null] });
     expect(f).toContainEqual({ m: 'in', args: ['lancio_fase', ['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch']] });
-    expect(f).toContainEqual({ m: 'not', args: ['last_inbound_at', 'is', null] });
+    expect(f).toContainEqual({ m: 'or', args: ['last_inbound_at.not.is.null,lancio_info->>zoom_minuti.not.is.null'] });
     expect(f).toContainEqual({ m: 'is', args: ['ai_paused_at', null] });
     expect(f).toContainEqual({ m: 'is', args: ['handed_off_at', null] });
     expect(f).toContainEqual({ m: 'order', args: ['id', { ascending: true }] });
@@ -654,7 +657,9 @@ describe('GET /api/cron/lancio-followup — invio col motore', () => {
   });
 
   it('oltre il 10% di falliti il freno ferma il run e spegne lancio_attivo (C6)', async () => {
-    stato.convs = Array.from({ length: 60 }, (_, i) => conv(i + 1));
+    // Con la quota spalmata (PO 06/10) alle 12:10 un run prende coda/94: servono abbastanza
+    // chat perche' il lotto arrivi ai 25 tentativi su cui il freno decide.
+    stato.convs = Array.from({ length: 2500 }, (_, i) => conv(i + 1));
     for (const c of stato.convs) stato.messaggi.set(c.id, righe(c.id, ['si', '2026-09-20T10:30:00Z']));
     sendTemplate.mockImplementation(async () => {
       throw Object.assign(new Error('giu'), { code: 21211 });
@@ -819,7 +824,7 @@ describe('GET /api/cron/lancio-followup — registrazione promessa', () => {
 
   it('chi ha la promessa ha scritto per forza: passa il pre-filtro last_inbound_at e haInteragito', async () => {
     await richiesta('dry=1');
-    expect(selectConv()?.filtri).toContainEqual({ m: 'not', args: ['last_inbound_at', 'is', null] });
+    expect(selectConv()?.filtri).toContainEqual({ m: 'or', args: ['last_inbound_at.not.is.null,lancio_info->>zoom_minuti.not.is.null'] });
     // Una promessa senza alcun inbound dopo l'ancora (non dovrebbe esistere) non manda nulla.
     chiamate.length = 0;
     stato.messaggi.set(1, righe(1));

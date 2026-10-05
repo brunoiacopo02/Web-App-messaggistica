@@ -22,18 +22,37 @@ import { templateName } from './name';
  */
 export const FASI_FOLLOWUP = ['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch'] as const;
 
-/** Le due fasce di Roma, in minuti del giorno, estremi `[da, a)`: 12:00-14:00 e 17:30-19:30. */
+/**
+ * La fascia di Roma, in minuti del giorno, estremi `[da, a)`. Erano due (12:00-14:00 e
+ * 17:30-19:30); dal 06/10/2026 (PO) una sola, 09:00-20:00, con gli invii spalmati su
+ * tutta la giornata (`quotaFollowup`) per non caricare i numeri tutti in un'ora.
+ */
 export const FASCE_FOLLOWUP: readonly { daMin: number; aMin: number }[] = [
-  { daMin: 12 * 60, aMin: 14 * 60 },
-  { daMin: 17 * 60 + 30, aMin: 19 * 60 + 30 },
+  { daMin: 9 * 60, aMin: 20 * 60 },
 ];
+
+/** Ogni quanti minuti gira il cron (ogni 5 minuti, vercel.json). */
+const PASSO_CRON_MIN = 5;
+/** Sotto questo lotto non si scende: a fine giornata la coda deve chiudersi. */
+const QUOTA_MINIMA = 10;
+
+/**
+ * Quanti follow-up manda QUESTO run: la coda divisa per i run che restano nella fascia di
+ * oggi, cosi' gli invii si spalmano dalle 9 alle 20 invece di partire tutti al primo giro.
+ * Mai oltre `max` (LANCIO_BATCH_MAX), mai sotto QUOTA_MINIMA.
+ */
+export function quotaFollowup(now: Date, coda: number, max: number): number {
+  const m = minutiDelGiorno(now);
+  const fine = FASCE_FOLLOWUP[FASCE_FOLLOWUP.length - 1].aMin;
+  const runRimasti = Math.max(1, Math.floor((fine - m) / PASSO_CRON_MIN));
+  return Math.min(max, Math.max(QUOTA_MINIMA, Math.ceil(coda / runRimasti)));
+}
 
 const minutiDelGiorno = (d: Date) => romeHour(d) * 60 + romeMinute(d);
 
-// Il giorno dopo l'evento e dopodomani (sconfinamento), dentro una delle due fasce. Lo
-// schedule UTC di vercel.json (ogni 5 minuti nelle ore 10-11 e 15-17 UTC del 6 e 7/10)
-// copre 12:00-13:55 e 17:00-19:55 di Roma: il filtro fine sta qui, e i giorni si
-// derivano dall'evento, non da date scritte a mano.
+// Il giorno dopo l'evento e dopodomani (sconfinamento), dentro la fascia. Lo schedule UTC
+// di vercel.json (ogni 5 minuti nelle ore 7-17 UTC del 6 e 7/10) copre 09:00-19:55 di
+// Roma: il filtro fine sta qui, e i giorni si derivano dall'evento, non da date scritte a mano.
 export function inFinestraFollowup(now: Date, eventoAt: Date): boolean {
   const g = giorniLancio(eventoAt);
   const giorno = romeDayKey(now);
@@ -187,12 +206,20 @@ export type CandidataFollowup = {
  * abbiamo promesso. Un congedo marcato (`congedo_at`) invece e' una decisione gia' presa
  * dal turno sul messaggio vero, e resta in testa.
  */
+/** Ha partecipato alla live (minuti dal CSV di Zoom, `lancio_info.zoom_minuti`). */
+export function partecipanteWebinar(info: unknown): boolean {
+  const v = (info as { zoom_minuti?: unknown } | null)?.zoom_minuti;
+  return typeof v === 'number' && v > 0;
+}
+
 export function decideFollowup(c: CandidataFollowup): DecisioneFollowup {
   if (!c.lancio_fase || !(FASI_FOLLOWUP as readonly string[]).includes(c.lancio_fase)) return { kind: 'salta', motivo: 'fase' };
   if (c.lancio_followup_inviato_at) return { kind: 'salta', motivo: 'gia_inviato' };
   if (haCongedo(c.lancio_info)) return { kind: 'salta', motivo: 'congedato' };
   if (!c.ancora) return { kind: 'salta', motivo: 'ancora_ignota' };
-  if (!haInteragito(c.rows, c.ancora)) return { kind: 'salta', motivo: 'mai_scritto' };
+  // Chi ha seguito il webinar riceve il follow-up anche se su WhatsApp non ha mai
+  // scritto (PO 06/10/2026): la presenza in live vale come interazione.
+  if (!haInteragito(c.rows, c.ancora) && !partecipanteWebinar(c.lancio_info)) return { kind: 'salta', motivo: 'mai_scritto' };
   const promessa = registrazionePromessa(c.lancio_info);
   const testo = ultimoTestoInbound(c.rows, c.ancora);
   if (!promessa && testo !== '' && haDettoNo(testo)) return { kind: 'congeda', leadWords: testo };
