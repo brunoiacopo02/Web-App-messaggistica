@@ -1,3 +1,4 @@
+import { RISPOSTE_RISCALDAMENTO } from './lancio-prompt';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('./twilio', () => ({
@@ -617,7 +618,10 @@ describe('turnoPostPitch — il tocco di un pulsante si classifica prima del mod
     },
   );
 
-  it('durante il riscaldamento lo stesso testo NON e un tocco: risponde il modello', async () => {
+  // Con una sola domanda di riscaldamento (PO 05/10/2026) la prima risposta del lead e' gia'
+  // fase di scelta: non esiste piu' un "durante il riscaldamento" in cui il titolo di un
+  // pulsante possa arrivare. Si riaccende se RISPOSTE_RISCALDAMENTO torna a 2.
+  it.skipIf(RISPOSTE_RISCALDAMENTO < 2)('durante il riscaldamento lo stesso testo NON e un tocco: risponde il modello', async () => {
     genera.mockResolvedValueOnce(modello({ visibleReply: 'Ricevuto!' }));
     const { supabase, calls } = makeSupabase();
     await turnoPostPitch(supabase, base({ rows: [LINK, PULSANTE, inb('Domani mattina')], inboundBody: 'Domani mattina' }), ctx());

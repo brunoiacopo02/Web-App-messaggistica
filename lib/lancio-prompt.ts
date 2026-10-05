@@ -66,8 +66,12 @@ export function testoScelta(modo: ModoPostPitch): string {
   return modo === 'notte' ? `${DOMANDA_SCELTA_NOTTE} ${SPINTA_CHIAMATA_NOTTE}` : DOMANDA_SCELTA_GIORNO;
 }
 
-/** Quante risposte di riscaldamento prima della scelta (spec §5.4: "due domande"). */
-export const RISPOSTE_RISCALDAMENTO = 2;
+/**
+ * Quante risposte di riscaldamento prima della scelta. Erano due (spec §5.4); la sera
+ * della live (PO 05/10/2026, 22:25) una sola: i lead rispondono mentre guardano ancora
+ * la live e due domande facevano arrivare le chiamate ai venditori troppo piano.
+ */
+export const RISPOSTE_RISCALDAMENTO = 1;
 
 const QUANDO_DEFAULT = 'lunedì 5 ottobre alle 21:00';
 

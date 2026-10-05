@@ -158,22 +158,21 @@ describe('buildLancioSystem — fase post_pitch (riscaldamento e scelta)', () =>
   const pp = (over: Partial<Parameters<typeof buildLancioSystem>[0]>) =>
     buildLancioSystem({ ...base, fase: 'post_pitch', modo: 'notte', risposteRaccolte: 0, bloccoSlot: null, ...over });
 
-  it('con 0 o 1 risposte fa UNA sola domanda di riscaldamento e non propone ancora la scelta', () => {
+  it('con 0 risposte fa UNA sola domanda di riscaldamento e non propone ancora la scelta', () => {
     const s = pp({ risposteRaccolte: 0 });
-    expect(s).toContain('Risposte di riscaldamento già raccolte: 0 su 2');
+    expect(s).toContain('Risposte di riscaldamento già raccolte: 0 su 1');
     expect(s).toMatch(/Fai UNA sola domanda/);
     expect(s).toMatch(/cosa fa oggi/);
     expect(s).toMatch(/cosa l'ha colpita della live/);
     expect(s).not.toContain('Adesso è il momento della scelta');
-    expect(pp({ risposteRaccolte: 1 })).toContain('1 su 2');
   });
   it('se il lead taglia corto durante il riscaldamento, la domanda esatta ce l ha già sotto gli occhi', () => {
     expect(pp({ risposteRaccolte: 0 })).toContain(DOMANDA_SCELTA_NOTTE);
-    expect(pp({ risposteRaccolte: 1, modo: 'giorno' })).toContain(DOMANDA_SCELTA_GIORNO);
+    expect(pp({ risposteRaccolte: 0, modo: 'giorno' })).toContain(DOMANDA_SCELTA_GIORNO);
     expect(pp({ risposteRaccolte: 0 })).toMatch(/salta il riscaldamento e chiedi esattamente/);
   });
-  it('con 2 risposte pone la domanda della scelta, verbatim dalla spec §5.4', () => {
-    const s = pp({ risposteRaccolte: 2 });
+  it('con 1 risposta (PO 05/10) pone la domanda della scelta, verbatim dalla spec §5.4', () => {
+    const s = pp({ risposteRaccolte: 1 });
     expect(s).toContain('Adesso è il momento della scelta');
     expect(s).toContain(DOMANDA_SCELTA_NOTTE);
     expect(DOMANDA_SCELTA_NOTTE).toBe('Preferisci che ti chiami un nostro consulente adesso, anche se è tardi, oppure fissiamo una call domani?');
