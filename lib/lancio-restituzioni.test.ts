@@ -106,17 +106,17 @@ describe('decideRestituzione', () => {
   });
   // Regola PO 19/09: l'attesa si misura sull'ULTIMO messaggio in qualunque direzione.
   // Chi risponde resta al bot finche' la chat e' viva, poi torna al pool "man mano".
-  it('chi ha risposto e poi e sparito da 24h torna al pool; se la risposta e fresca no', () => {
+  it('chi ha risposto e poi e sparito da 12h torna al pool; se la risposta e fresca no', () => {
     const fu = new Date(NOW - 5 * 24 * H).toISOString();
-    const rispostaVecchia = new Date(NOW - 25 * H).toISOString();
+    const rispostaVecchia = new Date(NOW - 13 * H).toISOString();
     expect(decideRestituzione(c({ lancio_fase: 'followup_inviato', haInteragito: true, lancio_followup_inviato_at: fu, last_inbound_at: rispostaVecchia }), NOW))
       .toEqual({ kind: 'restituisci', motivo: 'silenzio_dopo_followup' });
-    const rispostaFresca = new Date(NOW - 23 * H).toISOString();
+    const rispostaFresca = new Date(NOW - 11 * H).toISOString();
     expect(decideRestituzione(c({ lancio_fase: 'followup_inviato', haInteragito: true, lancio_followup_inviato_at: fu, last_inbound_at: rispostaFresca }), NOW))
       .toEqual({ kind: 'niente', motivo: 'ha_risposto' });
   });
-  it('la soglia e 24 ore, non piu 48', () => {
-    expect(RESTITUZIONE_ATTESA_MS).toBe(24 * H);
+  it('la soglia e 12 ore (PO 06/10/2026; era 24, prima 48)', () => {
+    expect(RESTITUZIONE_ATTESA_MS).toBe(12 * H);
   });
   it('le note al CRM sono esattamente quelle che il CRM riconosce', () => {
     expect(NOTA_RESTITUZIONE).toEqual({

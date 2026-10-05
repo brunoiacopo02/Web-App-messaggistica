@@ -14,12 +14,13 @@ import { haCongedo } from './lancio-fase';
  */
 
 /**
- * Quanto deve stare ferma una chat prima di tornare al pool: 24 ore (era 48), misurate
+ * Quanto deve stare ferma una chat prima di tornare al pool: 12 ore (PO 06/10/2026; era 24,
+ * prima ancora 48), misurate
  * sull'ULTIMO messaggio in qualunque direzione — il follow-up che abbiamo mandato, o la
  * risposta del lead se e' arrivata dopo. Chi e' in conversazione viva resta al bot e
  * torna al pool piu' avanti, man mano che la chat si spegne.
  */
-export const RESTITUZIONE_ATTESA_MS = 24 * 3600_000;
+export const RESTITUZIONE_ATTESA_MS = 12 * 3600_000;
 
 export type MotivoRestituzione = 'mai_risposto' | 'silenzio_dopo_followup' | 'followup_non_inviato';
 

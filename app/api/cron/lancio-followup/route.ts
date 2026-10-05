@@ -69,6 +69,12 @@ type Candidata = {
 };
 type RigaMessaggio = RigaLancio & { conversation_id: number };
 
+/** Minuti passati nella live (CSV di Zoom), 0 se non risulta fra i partecipanti. */
+function minutiZoom(c: Candidata): number {
+  const v = (c.lancio_info as { zoom_minuti?: unknown } | null)?.zoom_minuti;
+  return typeof v === 'number' && Number.isFinite(v) ? v : 0;
+}
+
 /** Quante candidate si valutano per giro: una sola query `messages` per blocco. */
 const BLOCCO_VALUTAZIONE = 200;
 const MAX_RIGHE_BLOCCO = BLOCCO_VALUTAZIONE * 40;
@@ -276,6 +282,10 @@ export async function GET(req: NextRequest) {
       .order('id', { ascending: true })
       .range(da, a),
   );
+  // PO 06/10/2026: prima chi ha partecipato al webinar, dal piu' presente al meno
+  // (`lancio_info.zoom_minuti`, scritto dal CSV dei partecipanti di Zoom), poi tutti gli
+  // altri nell'ordine di sempre. Si ordina la coda gia' letta: il filtro non cambia.
+  coda.sort((a, b) => minutiZoom(b) - minutiZoom(a) || a.id - b.id);
 
   // ───────────── valutazione a blocchi: una query `messages` per blocco ─────────────
   // Si legge TUTTA la coda e si valuta a blocchi finche' i BERSAGLI non sono `max`: chi
