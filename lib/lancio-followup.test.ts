@@ -255,6 +255,17 @@ describe('testi', () => {
     expect(lancioStandardContextNote(null)).toBeNull();
     expect(lancioStandardContextNote('  ')).toBeNull();
   });
+  // PO 06/10/2026: "prima prende l'appuntamento e poi vede il video". La riga "se lo
+  // chiede, mandaglielo subito, anche prima di fissare la call" faceva mandare il video
+  // a chiunque rispondesse al follow-up (che il video lo promette) e poi "scrivimi FATTO
+  // quando l'hai visto": 37 lead caldi su 92 parcheggiati il primo giorno, nessuna call.
+  it('la nota tiene l ordine del flusso: prima l appuntamento, poi il video, anche se lo chiede', () => {
+    const nota = lancioStandardContextNote('https://lp.feniceacademy.it/vsl-offerta') ?? '';
+    expect(nota).not.toContain('anche prima di fissare la call');
+    expect(nota).toContain('prima parlate e fissate l\'appuntamento con il consulente, POI mandi il video');
+    expect(nota).toMatch(/NON si manda prima che la call sia fissata, nemmeno se te lo chiede/);
+    expect(nota).toMatch(/FATTO/);
+  });
 });
 
 describe('linkSviluppatoreContextNote — chi scrive dal link "professione dello Sviluppatore AI"', () => {

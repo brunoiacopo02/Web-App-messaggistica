@@ -321,7 +321,11 @@ export function lancioStandardContextNote(videoLiveLink: string | null): string 
     'CONTESTO LANCIO WEB DEVELOPER AI: questo lead era iscritto alla live del percorso Web Developer AI e ha risposto al nostro messaggio del giorno dopo.',
     `Il video di preparazione da mandargli e' UNO SOLO ed e' la registrazione della live: ${link}`,
     "Usa questo link al posto dei quattro link conferenza-* del blocco sul video, in ogni punto in cui manderesti il video. Non chiedere se lavora o ha famiglia per scegliere il video: il video e' questo.",
-    'Nel messaggio gli abbiamo scritto che gli mandiamo il video riassuntivo della live: se lo chiede, mandaglielo subito, anche prima di fissare la call.',
+    // PO 06/10/2026: prima l'appuntamento, poi il video. La riga di prima ("mandaglielo
+    // subito, anche prima di fissare la call") faceva partire il video a chiunque
+    // rispondesse al follow-up e poi "scrivimi FATTO": il lead restava parcheggiato.
+    "ORDINE OBBLIGATORIO: prima parlate e fissate l'appuntamento con il consulente, POI mandi il video, come nel flusso standard. Il video NON si manda prima che la call sia fissata, nemmeno se te lo chiede: il messaggio del giorno dopo gli ha promesso il video riassuntivo, quindi digli che glielo mandi appena fissiamo la call (\"te lo mando appena fissiamo la call col consulente, cosi' lo guardi come preparazione\") e porta subito la conversazione su giorno e ora.",
+    "Prima dell'appuntamento non chiedergli quando riesce a vederlo e non dirgli di scriverti FATTO: il video non deve guardarlo prima di fissare, la live l'ha gia' vista.",
   ].join('\n');
 }
 
