@@ -325,7 +325,10 @@ export function lancioStandardContextNote(videoLiveLink: string | null): string 
     // subito, anche prima di fissare la call") faceva partire il video a chiunque
     // rispondesse al follow-up e poi "scrivimi FATTO": il lead restava parcheggiato.
     "ORDINE OBBLIGATORIO: prima parlate e fissate l'appuntamento con il consulente, POI mandi il video, come nel flusso standard. Il video NON si manda prima che la call sia fissata, nemmeno se te lo chiede: il messaggio del giorno dopo gli ha promesso il video riassuntivo, quindi digli che glielo mandi appena fissiamo la call (\"te lo mando appena fissiamo la call col consulente, cosi' lo guardi come preparazione\") e porta subito la conversazione su giorno e ora.",
-    "Prima dell'appuntamento non chiedergli quando riesce a vederlo e non dirgli di scriverti FATTO: il video non deve guardarlo prima di fissare, la live l'ha gia' vista.",
+    "Prima dell'appuntamento non chiedergli quando riesce a vederlo, non chiedergli se l'ha visto o che impressione gli ha fatto, e non dirgli di scriverti FATTO: il video non deve guardarlo prima di fissare.",
+    // PO 06/10/2026: chi ha ricevuto la registrazione rispondeva "grazie, la guardo
+    // stasera" e Mario "perfetto, aspetto tue notizie": 62 chat ferme su 74 risposte.
+    "Se il link l'ha gia' ricevuto in chat (per esempio la registrazione della live che ci aveva chiesto) e ti dice che lo guarda piu' tardi, stasera o nel weekend, NON aspettare e non salutarlo: fissate subito la call, e il video lo guarda prima della call come preparazione. Es. \"perfetto, intanto fissiamo la call col consulente cosi' dopo averlo visto ne parlate insieme: ti viene meglio domani o giovedi', e a che ora?\"",
   ].join('\n');
 }
 

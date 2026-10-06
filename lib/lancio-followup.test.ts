@@ -266,6 +266,11 @@ describe('testi', () => {
     expect(nota).toMatch(/NON si manda prima che la call sia fissata, nemmeno se te lo chiede/);
     expect(nota).toMatch(/FATTO/);
   });
+  it('chi ha gia il link e dice che lo guarda dopo: si fissa subito, non si aspetta', () => {
+    const nota = lancioStandardContextNote('https://lp.feniceacademy.it/vsl-offerta') ?? '';
+    expect(nota).toMatch(/NON aspettare e non salutarlo: fissate subito la call/);
+    expect(nota).not.toContain("la live l'ha gia' vista");
+  });
 });
 
 describe('linkSviluppatoreContextNote — chi scrive dal link "professione dello Sviluppatore AI"', () => {
