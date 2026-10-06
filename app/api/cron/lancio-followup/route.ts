@@ -4,7 +4,7 @@ import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { getTemplateBody } from '@/lib/twilio';
 import { renderBodyTemplate } from '@/lib/campaigns';
 import { templateName } from '@/lib/name';
-import { getLancioSettings } from '@/lib/lancio-settings';
+import { getLancioSettings, isAttivo } from '@/lib/lancio-settings';
 import { fineNotteLancio } from '@/lib/lancio-scelta';
 import { marcaCongedo, leggiIngressoLancioAt } from '@/lib/lancio-db';
 import { congedoLancio } from '@/lib/lancio-effetti';
@@ -21,6 +21,7 @@ import {
   ancoraLancio,
   decideFollowup,
   lancioFollowupText,
+  lancioFollowupV4Text,
   lancioRegistrazioneText,
   NOTA_CONGEDO_FOLLOWUP,
   type MotivoSalto,
@@ -202,7 +203,20 @@ export async function GET(req: NextRequest) {
 
   // Config PRIMA della finestra, come nel blast Zoom: un template o un mittente che
   // mancano devono suonare al run fuori fascia del 6 mattina, non a follow-up iniziato.
-  const sid = process.env.LANCIO_FOLLOWUP_TEMPLATE_SID;
+  // PO 06/10/2026: il template del follow-up e la pausa vivono anche in `app_settings`,
+  // cosi' si cambiano senza deploy e senza Vercel. Il v3 diceva "come richiesto durante
+  // la live di ieri": falso dal secondo giorno e per chi alla live non c'era. Il SID in
+  // `lancio_followup_template_sid` vince sull'env; `lancio_followup_pausa` ferma i
+  // follow-up GENERICI (le registrazioni promesse partono lo stesso: il loro testo regge).
+  const { data: righeFollowup } = await supabase
+    .from('app_settings')
+    .select('key, value')
+    .in('key', ['lancio_followup_template_sid', 'lancio_followup_pausa']);
+  const impostazioniFollowup = new Map(((righeFollowup ?? []) as { key: string; value: unknown }[]).map((r) => [r.key, r.value]));
+  const sidImpostato = impostazioniFollowup.get('lancio_followup_template_sid');
+  const sidDaImpostazioni = typeof sidImpostato === 'string' && sidImpostato.trim() !== '' ? sidImpostato.trim() : null;
+  const pausaFollowup = isAttivo(impostazioniFollowup.get('lancio_followup_pausa'));
+  const sid = sidDaImpostazioni ?? process.env.LANCIO_FOLLOWUP_TEMPLATE_SID;
   const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
   const welcomeSid = process.env.LANCIO_WELCOME_TEMPLATE_SID || null;
   const missing = [
@@ -311,7 +325,11 @@ export async function GET(req: NextRequest) {
   // e' la quota dei follow-up GENERICI (tetto giornaliero spalmato). Le registrazioni
   // promesse stanno solo sotto il primo: con i 1.000 del giorno gia' spesi partono lo stesso.
   const maxLotto = batchMax(process.env.LANCIO_BATCH_MAX);
-  const max = quotaFollowup(now, coda.length, maxLotto, inviatiOggi ?? LIMITE_FOLLOWUP_GIORNO);
+  const max = pausaFollowup ? 0 : quotaFollowup(now, coda.length, maxLotto, inviatiOggi ?? LIMITE_FOLLOWUP_GIORNO);
+  if (pausaFollowup) {
+    await logEvento(supabase, 'lancio_followup_in_pausa', { sid },
+      '[lancio] follow-up generici IN PAUSA (app_settings.lancio_followup_pausa): partono solo le registrazioni promesse', 'warn');
+  }
   let followupNelLotto = 0;
   let codaFinita = false;
   const saltati = contatoreSalti();
@@ -562,7 +580,12 @@ export async function GET(req: NextRequest) {
       // il testo del template a codice (`lancioFollowupText`), che e' lo stesso approvato.
       costruisci: (conv) => {
         const vars = { '1': templateName(conv.nome) };
-        return { vars, body: bodyRaw ? renderBodyTemplate(bodyRaw, vars) : lancioFollowupText(conv.nome) };
+        return {
+          vars,
+          body: bodyRaw
+            ? renderBodyTemplate(bodyRaw, vars)
+            : sidDaImpostazioni ? lancioFollowupV4Text(conv.nome) : lancioFollowupText(conv.nome),
+        };
       },
       giaSpedito: giaSpediti.has(c.id),
       // Mentre il template e' in volo il turno puo' aver portato la chat avanti (una

@@ -270,6 +270,20 @@ export function lancioFollowupText(name: string | null | undefined): string {
 }
 
 /**
+ * Corpo di `fenice_lancio_followup_v4` (scripts/create-lancio-followup-v4-template.mjs,
+ * PO 06/10/2026) con {{1}} risolto: il ripiego quando Twilio non restituisce il body.
+ * Identico al template: se cambia uno, cambia l'altro. Vale tutti i giorni del
+ * follow-up ("lunedì sera") e mette la call prima della registrazione.
+ */
+export function lancioFollowupV4Text(name: string | null | undefined): string {
+  return (
+    `Ciao ${templateName(name)}, lunedì sera abbiamo presentato in diretta il percorso Web Developer AI. ` +
+    'Fissiamo una call con un consulente per vedere il tuo caso? Prima della call ti mando anche la registrazione da guardare. ' +
+    'Rispondi a questo messaggio.'
+  );
+}
+
+/**
  * Corpo del template `LANCIO_REGISTRAZIONE_TEMPLATE_SID` (`fenice_lancio_registrazione_v1`,
  * scripts/create-lancio-registrazione-template.mjs) con {{1}} e {{2}} risolti: e' il
  * ripiego quando Twilio non restituisce il body, come `lancioFollowupText`. Identico al

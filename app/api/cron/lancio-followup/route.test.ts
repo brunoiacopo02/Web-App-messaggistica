@@ -892,6 +892,24 @@ describe('GET /api/cron/lancio-followup — registrazione promessa', () => {
     expect(sendTemplate).toHaveBeenCalledWith(expect.objectContaining({ to: tel(1), contentSid: REG }));
   });
 
+  // PO 06/10/2026: dal secondo giorno il v3 ("come richiesto durante la live di ieri")
+  // diceva il falso. Template e pausa si governano da app_settings, senza deploy.
+  it('il SID in app_settings vince sull env, e il corpo di ripiego e quello del v4', async () => {
+    stato.settings.lancio_followup_template_sid = 'HXv4';
+    await richiesta();
+    expect(sendTemplate).toHaveBeenCalledWith(expect.objectContaining({ to: tel(2), contentSid: 'HXv4' }));
+    expect(sendTemplate).not.toHaveBeenCalledWith(expect.objectContaining({ contentSid: SID }));
+  });
+
+  it('in pausa i follow-up generici non partono, le registrazioni promesse si', async () => {
+    stato.settings.lancio_followup_pausa = true;
+    const res = await (await richiesta()).json();
+    expect(res).toMatchObject({ sent: 1, registrazione: { inviati: 1 } });
+    expect(sendTemplate).toHaveBeenCalledTimes(1);
+    expect(sendTemplate).toHaveBeenCalledWith(expect.objectContaining({ to: tel(1), contentSid: REG }));
+    expect(eventi().find((e) => e.type === 'lancio_followup_in_pausa')?.level).toBe('warn');
+  });
+
   it('la seconda idempotenza guarda entrambi i SID: una registrazione gia spedita si ripara, non si rimanda', async () => {
     stato.spediti = [{ conversation_id: 1 }];
     const res = await (await richiesta()).json();
