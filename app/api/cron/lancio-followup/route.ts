@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { inizioGiornataRoma } from '@/lib/bot2-tetto';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
-import { getTemplateBody } from '@/lib/twilio';
+import { getTemplateApproval, getTemplateBody } from '@/lib/twilio';
 import { renderBodyTemplate } from '@/lib/campaigns';
 import { templateName } from '@/lib/name';
 import { getLancioSettings, isAttivo } from '@/lib/lancio-settings';
@@ -215,7 +215,20 @@ export async function GET(req: NextRequest) {
   const impostazioniFollowup = new Map(((righeFollowup ?? []) as { key: string; value: unknown }[]).map((r) => [r.key, r.value]));
   const sidImpostato = impostazioniFollowup.get('lancio_followup_template_sid');
   const sidDaImpostazioni = typeof sidImpostato === 'string' && sidImpostato.trim() !== '' ? sidImpostato.trim() : null;
-  const pausaFollowup = isAttivo(impostazioniFollowup.get('lancio_followup_pausa'));
+  const pausaManuale = isAttivo(impostazioniFollowup.get('lancio_followup_pausa'));
+  // Il SID impostato a mano si usa solo quando Meta lo ha approvato come UTILITY: fino ad
+  // allora i follow-up generici aspettano da soli, a ogni run, senza che nessuno debba
+  // stare sveglio a girare l'interruttore. Uno stato illeggibile vale "non ancora".
+  let templateNonPronto: string | null = null;
+  if (sidDaImpostazioni) {
+    try {
+      const a = await getTemplateApproval(sidDaImpostazioni);
+      if (a.status !== 'approved' || a.category !== 'UTILITY') templateNonPronto = `${a.status ?? '?'}/${a.category ?? '?'}`;
+    } catch (e) {
+      templateNonPronto = `illeggibile: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+  const pausaFollowup = pausaManuale || templateNonPronto !== null;
   const sid = sidDaImpostazioni ?? process.env.LANCIO_FOLLOWUP_TEMPLATE_SID;
   const from = process.env.TWILIO_WHATSAPP_NUMBER_FENICE;
   const welcomeSid = process.env.LANCIO_WELCOME_TEMPLATE_SID || null;
@@ -326,9 +339,12 @@ export async function GET(req: NextRequest) {
   // promesse stanno solo sotto il primo: con i 1.000 del giorno gia' spesi partono lo stesso.
   const maxLotto = batchMax(process.env.LANCIO_BATCH_MAX);
   const max = pausaFollowup ? 0 : quotaFollowup(now, coda.length, maxLotto, inviatiOggi ?? LIMITE_FOLLOWUP_GIORNO);
-  if (pausaFollowup) {
+  if (pausaManuale) {
     await logEvento(supabase, 'lancio_followup_in_pausa', { sid },
       '[lancio] follow-up generici IN PAUSA (app_settings.lancio_followup_pausa): partono solo le registrazioni promesse', 'warn');
+  } else if (templateNonPronto) {
+    await logEvento(supabase, 'lancio_followup_template_in_attesa', { sid, stato: templateNonPronto },
+      `[lancio] follow-up generici in attesa: il template ${sid} non e' ancora approvato UTILITY (${templateNonPronto}). Partono da soli appena Meta lo approva`, 'warn');
   }
   let followupNelLotto = 0;
   let codaFinita = false;

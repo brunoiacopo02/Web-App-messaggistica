@@ -179,6 +179,26 @@ export async function getTemplateCategory(contentSid: string, from?: string | nu
   return cat;
 }
 
+/**
+ * Stato e categoria dell'approvazione WhatsApp di un template, letti sull'account del
+ * mittente (storico se `from` manca). SENZA cache, a differenza di `getTemplateCategory`:
+ * serve proprio a vedere il passaggio da pending ad approved mentre il cron gira (follow-up
+ * v4 del lancio, PO 06/10/2026). Lancia se lo stato non si legge: chi chiama aspetta.
+ */
+export async function getTemplateApproval(
+  contentSid: string,
+  from?: string | null,
+): Promise<{ status: string | null; category: string | null }> {
+  const cred = credenzialiPerMittente(from);
+  if (!cred) throw new Error('credenziali Twilio assenti');
+  const res = await fetch(`https://content.twilio.com/v1/Content/${contentSid}/ApprovalRequests`, {
+    headers: { Authorization: 'Basic ' + Buffer.from(`${cred.sid}:${cred.token}`).toString('base64') },
+  });
+  if (!res.ok) throw new Error(`approvazione del template ${contentSid} non leggibile (HTTP ${res.status})`);
+  const data = (await res.json()) as { whatsapp?: { status?: string; category?: string } };
+  return { status: data?.whatsapp?.status ?? null, category: data?.whatsapp?.category ?? null };
+}
+
 /** Lancia se il template non è spedibile con la policy corrente. Fail-closed: se la
  * categoria non è verificabile non si spedisce, perché è esattamente la condizione in
  * cui l'incidente si ripete. */

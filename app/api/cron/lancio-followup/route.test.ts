@@ -188,7 +188,9 @@ vi.mock('@/lib/twilio', () => ({
     sid === 'HXregistrazione'
       ? 'Ciao {{1}}, come ci avevi chiesto ecco la registrazione della live Web Developer AI: {{2}} - se dopo averla vista vuoi parlarne con un consulente, rispondi a questo messaggio.'
       : 'Ciao {{1}}, ieri sera alla live...',
+  getTemplateApproval: (sid: string) => getTemplateApproval(sid),
 }));
+const getTemplateApproval = vi.fn(async (_sid: string): Promise<{ status: string | null; category: string | null }> => ({ status: 'approved', category: 'UTILITY' }));
 
 // `impostaFaseLancio` ha i suoi test (B1): qui interessa CHE venga chiamata, con quale
 // fase e con quale timbro. La fase però la sposta davvero nella fixture, `soloDaFasi`
@@ -899,6 +901,32 @@ describe('GET /api/cron/lancio-followup — registrazione promessa', () => {
     await richiesta();
     expect(sendTemplate).toHaveBeenCalledWith(expect.objectContaining({ to: tel(2), contentSid: 'HXv4' }));
     expect(sendTemplate).not.toHaveBeenCalledWith(expect.objectContaining({ contentSid: SID }));
+  });
+
+  // PO 06/10/2026 sera: il passaggio al v4 non deve dipendere da una sessione aperta.
+  // Il cron chiede a Twilio lo stato del template impostato: finche' Meta non lo approva
+  // come UTILITY i follow-up generici aspettano; approvato, partono da soli.
+  it('template impostato ma non ancora approvato: i generici aspettano, le registrazioni no', async () => {
+    stato.settings.lancio_followup_template_sid = 'HXv4';
+    getTemplateApproval.mockResolvedValueOnce({ status: 'pending', category: 'UTILITY' });
+    const res = await (await richiesta()).json();
+    expect(res).toMatchObject({ sent: 1, registrazione: { inviati: 1 } });
+    expect(sendTemplate).not.toHaveBeenCalledWith(expect.objectContaining({ contentSid: 'HXv4' }));
+    expect(eventi().find((e) => e.type === 'lancio_followup_template_in_attesa')?.level).toBe('warn');
+  });
+
+  it('template approvato ma MARKETING: i generici aspettano (il presidio UTILITY li bloccherebbe uno per uno)', async () => {
+    stato.settings.lancio_followup_template_sid = 'HXv4';
+    getTemplateApproval.mockResolvedValueOnce({ status: 'approved', category: 'MARKETING' });
+    await richiesta();
+    expect(sendTemplate).not.toHaveBeenCalledWith(expect.objectContaining({ contentSid: 'HXv4' }));
+  });
+
+  it('stato del template illeggibile: si aspetta, non si manda alla cieca', async () => {
+    stato.settings.lancio_followup_template_sid = 'HXv4';
+    getTemplateApproval.mockRejectedValueOnce(new Error('HTTP 500'));
+    await richiesta();
+    expect(sendTemplate).not.toHaveBeenCalledWith(expect.objectContaining({ contentSid: 'HXv4' }));
   });
 
   it('in pausa i follow-up generici non partono, le registrazioni promesse si', async () => {
