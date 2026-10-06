@@ -87,7 +87,7 @@ export function fuoriFinestraCron(now: Date, eventoAt: Date): boolean {
   return restituzioniAttive(now, eventoAt) && !dentroFinestraCron(now);
 }
 
-export type MotivoNiente = 'senza_crm' | 'esito_presente' | 'fase' | 'ancora_ignota' | 'incoerente' | 'attesa_24h' | 'ha_risposto';
+export type MotivoNiente = 'senza_crm' | 'esito_presente' | 'fase' | 'ancora_ignota' | 'incoerente' | 'attesa_24h' | 'ha_risposto' | 'attesa_followup';
 export type DecisioneRestituzione =
   | { kind: 'restituisci'; motivo: MotivoRestituzione }
   | { kind: 'ritenta_scarto' }
@@ -105,6 +105,11 @@ export type CandidataRestituzione = {
   ancora: string | null;
   /** `haInteragito(rows, ancora)` calcolato dal cron sulle righe `messages`. */
   haInteragito: boolean;
+  /**
+   * Il follow-up e' ancora in corso (PO 06/10/2026: 1.000 al giorno per piu' giorni). Chi
+   * lo deve ancora ricevere non torna al pool prima di averlo avuto.
+   */
+  followupInCorso?: boolean;
 };
 
 export function decideRestituzione(c: CandidataRestituzione, nowMs: number): DecisioneRestituzione {
@@ -118,6 +123,12 @@ export function decideRestituzione(c: CandidataRestituzione, nowMs: number): Dec
 
   const timbro = c.lancio_followup_inviato_at;
   if (FASI_PRIMA_DEL_FOLLOWUP.includes(c.lancio_fase)) {
+    // Bersagli del follow-up ancora in attesa del proprio turno (chi ha scritto, o ha
+    // partecipato alla live): restano al bot finche' il follow-up non e' finito.
+    const partecipante = typeof (c.lancio_info as { zoom_minuti?: unknown } | null)?.zoom_minuti === 'number';
+    if (c.followupInCorso && !c.lancio_followup_inviato_at && (c.haInteragito || partecipante)) {
+      return { kind: 'niente', motivo: 'attesa_followup' };
+    }
     if (!c.haInteragito) return { kind: 'restituisci', motivo: 'mai_risposto' };
     // Ha interagito e il follow-up non e' mai partito (cap per tutta la finestra, SID
     // mancante, freno, lancio spento): torna al pool lo stesso, con la sua nota (R2).

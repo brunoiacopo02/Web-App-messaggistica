@@ -9,7 +9,7 @@ import { logCronQueryError } from '@/lib/cron-query-error';
 import { fetchAllRows } from '@/lib/supabase/paginate';
 import { runPool } from '@/lib/run-pool';
 import { batchMax, LANCIO_BLAST_CONCURRENCY } from '@/lib/lancio-zoom-blast';
-import { ancoraLancio, haInteragito } from '@/lib/lancio-followup';
+import { ancoraLancio, haInteragito, finestraFollowupChiusa } from '@/lib/lancio-followup';
 import {
   restituzioniAttive, fuoriFinestraCron, decideRestituzione, esitoRestituzioneDalCrm, NOTA_RESTITUZIONE,
   FASI_RESTITUIBILI, RESTITUZIONI_MAX_DEFAULT,
@@ -55,7 +55,7 @@ const GIORNI_STORICO = 30;
 export const NOTA_SCARTO_RITENTATO = 'Lancio Web Dev AI: aveva detto di no e il congedo era gia\' uscito; esito ritentato dal cron.';
 
 const contatoreNiente = (): Record<MotivoNiente, number> =>
-  ({ senza_crm: 0, esito_presente: 0, fase: 0, ancora_ignota: 0, incoerente: 0, attesa_24h: 0, ha_risposto: 0 });
+  ({ senza_crm: 0, esito_presente: 0, fase: 0, ancora_ignota: 0, incoerente: 0, attesa_24h: 0, ha_risposto: 0, attesa_followup: 0 });
 
 export async function GET(req: NextRequest) {
   if (!autorizzatoCron(req)) return new NextResponse('unauthorized', { status: 401 });
@@ -178,6 +178,7 @@ export async function GET(req: NextRequest) {
       const decisione = decideRestituzione({
         lancio_fase: c.lancio_fase, lancio_followup_inviato_at: c.lancio_followup_inviato_at, last_inbound_at: c.last_inbound_at,
         crm_lead_id: c.crm_lead_id, bot_outcome: c.bot_outcome, lancio_info: c.lancio_info, ancora, haInteragito: haInteragito(rows, ancora),
+        followupInCorso: !finestraFollowupChiusa(now, evento),
       }, now.getTime());
       if (decisione.kind === 'niente') { niente[decisione.motivo]++; continue; }
       if (decisione.kind === 'ritenta_scarto') { scartiDaRitentare.push({ c, rows }); continue; }

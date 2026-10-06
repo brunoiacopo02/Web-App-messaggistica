@@ -216,7 +216,8 @@ describe('GET /api/cron/lancio-restituzioni — decisioni e CRM', () => {
     const ev = eventi().find((e) => e.type === 'lancio_restituito');
     expect(ev?.payload).toMatchObject({ conversationId: 1, crmLeadId: 'crm-1', motivo: 'mai_risposto', status: 200 });
   });
-  it('R2: ha interagito ma niente follow-up → "Lancio: follow-up non inviato"', async () => {
+  it('R2: ha interagito ma niente follow-up → "Lancio: follow-up non inviato" (a follow-up finito)', async () => {
+    vi.setSystemTime(new Date('2026-10-10T10:00:00+02:00'));
     stato.convs = [conv(1, { lancio_fase: 'link_inviato', last_inbound_at: '2026-09-21T10:00:00Z' })];
     stato.messaggi.set(1, [welcome(1), inb(1, 'si', '2026-09-21T10:00:00Z')]);
     await richiesta();
@@ -248,7 +249,15 @@ describe('GET /api/cron/lancio-restituzioni — decisioni e CRM', () => {
     expect(sendOutcome).toHaveBeenCalledWith(expect.anything(), 1, { outcome: 'NON_RISPOSTO', note: 'Lancio: silenzio dopo il follow-up' });
   });
 
-  it('entrata col pulsante, rimasta in post_pitch e senza follow-up: "follow-up non inviato"', async () => {
+  it('PO 06/10: a follow-up in corso chi lo aspetta non torna al pool', async () => {
+    vi.setSystemTime(new Date('2026-10-07T10:00:00+02:00'));
+    stato.convs = [conv(1, { lancio_fase: 'link_inviato', last_inbound_at: '2026-09-21T10:00:00Z' })];
+    stato.messaggi.set(1, [welcome(1), inb(1, 'si', '2026-09-21T10:00:00Z')]);
+    await richiesta();
+    expect(sendOutcome).not.toHaveBeenCalled();
+  });
+  it('entrata col pulsante, rimasta in post_pitch e senza follow-up: "follow-up non inviato" (a follow-up finito)', async () => {
+    vi.setSystemTime(new Date('2026-10-10T10:00:00+02:00'));
     stato.convs = [conv(1, { lancio_benvenuto_at: null, lancio_fase: 'post_pitch', last_inbound_at: '2026-10-05T19:40:00Z' })];
     stato.messaggi.set(1, [inb(1, 'Ho visto la live Web Developer AI e voglio saperne di piu', '2026-10-05T19:40:00Z')]);
     leggiIngressoLancioAt.mockResolvedValue('2026-10-05T19:40:05Z');

@@ -28,8 +28,17 @@ export const FASI_FOLLOWUP = ['attesa', 'posto_bloccato', 'link_inviato', 'post_
  * tutta la giornata (`quotaFollowup`) per non caricare i numeri tutti in un'ora.
  */
 export const FASCE_FOLLOWUP: readonly { daMin: number; aMin: number }[] = [
-  { daMin: 9 * 60, aMin: 20 * 60 },
+  { daMin: 9 * 60, aMin: 18 * 60 + 30 },
 ];
+
+/**
+ * PO 06/10/2026: al massimo 1.000 follow-up al giorno, dalle 9 alle 18:30, per quattro
+ * giorni (dal giorno dopo l'evento): cosi' le risposte si gestiscono con calma. Si conta
+ * su `lancio_followup_inviato_at` di oggi, quindi anche gli invii fatti prima del tetto.
+ */
+export const LIMITE_FOLLOWUP_GIORNO = 1000;
+/** Quanti giorni dura il follow-up, a partire dal giorno dopo l'evento. */
+export const GIORNI_FOLLOWUP = 4;
 
 /** Ogni quanti minuti gira il cron (ogni 5 minuti, vercel.json). */
 const PASSO_CRON_MIN = 5;
@@ -41,32 +50,41 @@ const QUOTA_MINIMA = 10;
  * oggi, cosi' gli invii si spalmano dalle 9 alle 20 invece di partire tutti al primo giro.
  * Mai oltre `max` (LANCIO_BATCH_MAX), mai sotto QUOTA_MINIMA.
  */
-export function quotaFollowup(now: Date, coda: number, max: number): number {
+export function quotaFollowup(now: Date, coda: number, max: number, inviatiOggi = 0): number {
   const m = minutiDelGiorno(now);
   const fine = FASCE_FOLLOWUP[FASCE_FOLLOWUP.length - 1].aMin;
   const runRimasti = Math.max(1, Math.floor((fine - m) / PASSO_CRON_MIN));
-  return Math.min(max, Math.max(QUOTA_MINIMA, Math.ceil(coda / runRimasti)));
+  const restaOggi = Math.max(0, LIMITE_FOLLOWUP_GIORNO - inviatiOggi);
+  if (restaOggi === 0) return 0;
+  const daMandare = Math.min(coda, restaOggi);
+  return Math.min(max, restaOggi, Math.max(QUOTA_MINIMA, Math.ceil(daMandare / runRimasti)));
+}
+
+/** I giorni del follow-up ('YYYY-MM-DD' di Roma): dal giorno dopo l'evento, GIORNI_FOLLOWUP giorni. */
+export function giorniFollowup(eventoAt: Date): string[] {
+  const primo = giorniLancio(eventoAt).giornoDopo;
+  const base = new Date(`${primo}T12:00:00Z`).getTime();
+  return Array.from({ length: GIORNI_FOLLOWUP }, (_, i) => new Date(base + i * 86_400_000).toISOString().slice(0, 10));
 }
 
 const minutiDelGiorno = (d: Date) => romeHour(d) * 60 + romeMinute(d);
 
-// Il giorno dopo l'evento e dopodomani (sconfinamento), dentro la fascia. Lo schedule UTC
-// di vercel.json (ogni 5 minuti nelle ore 7-17 UTC del 6 e 7/10) copre 09:00-19:55 di
-// Roma: il filtro fine sta qui, e i giorni si derivano dall'evento, non da date scritte a mano.
+// I giorni del follow-up (giorniFollowup), dentro la fascia. Lo schedule UTC di vercel.json
+// (ogni 5 minuti nelle ore 7-16 UTC dal 6 al 9/10) copre 09:00-18:55 di Roma: il filtro
+// fine sta qui, e i giorni si derivano dall'evento, non da date scritte a mano.
 export function inFinestraFollowup(now: Date, eventoAt: Date): boolean {
-  const g = giorniLancio(eventoAt);
   const giorno = romeDayKey(now);
-  if (giorno !== g.giornoDopo && giorno !== g.dopodomani) return false;
+  if (!giorniFollowup(eventoAt).includes(giorno)) return false;
   const m = minutiDelGiorno(now);
   return FASCE_FOLLOWUP.some((f) => m >= f.daMin && m < f.aMin);
 }
 
 /** Dopo la fine dell'ultima fascia di dopodomani: i residui sono definitivi. */
 export function finestraFollowupChiusa(now: Date, eventoAt: Date): boolean {
-  const g = giorniLancio(eventoAt);
+  const ultimo = giorniFollowup(eventoAt)[GIORNI_FOLLOWUP - 1];
   const giorno = romeDayKey(now);
-  if (giorno > g.dopodomani) return true;
-  if (giorno < g.dopodomani) return false;
+  if (giorno > ultimo) return true;
+  if (giorno < ultimo) return false;
   return minutiDelGiorno(now) >= FASCE_FOLLOWUP[FASCE_FOLLOWUP.length - 1].aMin;
 }
 

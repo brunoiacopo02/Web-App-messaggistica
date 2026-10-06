@@ -14,27 +14,27 @@ const WELCOME = 'HX_WELCOME';
 const out = (body: string, created_at: string, template_sid: string | null = null): RigaLancio => ({ direction: 'out', body, template_sid, created_at });
 const inb = (body: string, created_at: string): RigaLancio => ({ direction: 'in', body, template_sid: null, created_at });
 
-describe('inFinestraFollowup — 12:00-14:00 e 17:30-19:30 di Roma, il giorno dopo e dopodomani', () => {
-  it('dentro: 12:00, 13:59, 17:30, 19:29 del 6 e del 7', () => {
-    for (const iso of ['2026-10-06T12:00:00+02:00', '2026-10-06T13:59:00+02:00', '2026-10-06T17:30:00+02:00', '2026-10-06T19:29:00+02:00', '2026-10-07T12:05:00+02:00', '2026-10-07T18:00:00+02:00']) {
+describe('inFinestraFollowup — 09:00-18:30 di Roma, dal giorno dopo per 4 giorni (PO 06/10)', () => {
+  it('dentro: 09:00, 13:59, 18:29 dal 6 al 9', () => {
+    for (const iso of ['2026-10-06T09:00:00+02:00', '2026-10-06T13:59:00+02:00', '2026-10-06T18:29:00+02:00', '2026-10-07T12:05:00+02:00', '2026-10-08T18:00:00+02:00', '2026-10-09T09:30:00+02:00']) {
       expect(inFinestraFollowup(t(iso), EVENTO), iso).toBe(true);
     }
   });
-  it('fuori (fascia unica 09:00-20:00 dal 06/10): 08:59, 20:00, 21:00', () => {
-    for (const iso of ['2026-10-06T08:59:00+02:00', '2026-10-06T20:00:00+02:00', '2026-10-06T21:00:00+02:00']) {
+  it('fuori: 08:59, 18:30, 21:00', () => {
+    for (const iso of ['2026-10-06T08:59:00+02:00', '2026-10-06T18:30:00+02:00', '2026-10-06T21:00:00+02:00']) {
       expect(inFinestraFollowup(t(iso), EVENTO), iso).toBe(false);
     }
   });
-  it('vale il 6 e il 7, non il 5 ne l 8, e segue l evento se si sposta', () => {
+  it('vale dal 6 al 9, non il 5 ne il 10, e segue l evento se si sposta', () => {
     expect(inFinestraFollowup(t('2026-10-05T12:30:00+02:00'), EVENTO)).toBe(false);
-    expect(inFinestraFollowup(t('2026-10-08T12:30:00+02:00'), EVENTO)).toBe(false);
+    expect(inFinestraFollowup(t('2026-10-10T12:30:00+02:00'), EVENTO)).toBe(false);
     expect(inFinestraFollowup(t('2026-10-13T12:30:00+02:00'), new Date('2026-10-12T21:00:00+02:00'))).toBe(true);
   });
-  it('la finestra e chiusa solo dopo le 20:00 di dopodomani', () => {
-    expect(finestraFollowupChiusa(t('2026-10-06T20:00:00+02:00'), EVENTO)).toBe(false);
-    expect(finestraFollowupChiusa(t('2026-10-07T19:59:00+02:00'), EVENTO)).toBe(false);
-    expect(finestraFollowupChiusa(t('2026-10-07T20:00:00+02:00'), EVENTO)).toBe(true);
-    expect(finestraFollowupChiusa(t('2026-10-08T09:00:00+02:00'), EVENTO)).toBe(true);
+  it('la finestra e chiusa solo dopo le 18:30 dell ultimo giorno (il 9)', () => {
+    expect(finestraFollowupChiusa(t('2026-10-07T20:00:00+02:00'), EVENTO)).toBe(false);
+    expect(finestraFollowupChiusa(t('2026-10-09T18:29:00+02:00'), EVENTO)).toBe(false);
+    expect(finestraFollowupChiusa(t('2026-10-09T18:30:00+02:00'), EVENTO)).toBe(true);
+    expect(finestraFollowupChiusa(t('2026-10-10T09:00:00+02:00'), EVENTO)).toBe(true);
   });
 });
 
@@ -351,15 +351,25 @@ describe('iscrittoDopoLiveContextNote (PO 25/09)', () => {
 });
 
 describe('PO 06/10/2026: fascia unica 9-20, spalmata, e partecipanti al webinar', () => {
-  it('la fascia e 09:00-20:00', async () => {
+  it('la fascia e 09:00-18:30', async () => {
     const { FASCE_FOLLOWUP } = await import('./lancio-followup');
-    expect(FASCE_FOLLOWUP).toEqual([{ daMin: 540, aMin: 1200 }]);
+    expect(FASCE_FOLLOWUP).toEqual([{ daMin: 540, aMin: 1110 }]);
   });
-  it('la quota divide la coda sui run che restano, fra 10 e max', async () => {
+  it('la quota spalma i 1.000 del giorno sui run che restano, fra 10 e max', async () => {
     const { quotaFollowup } = await import('./lancio-followup');
-    expect(quotaFollowup(new Date('2026-10-06T09:00:00+02:00'), 2640, 200)).toBe(20);
-    expect(quotaFollowup(new Date('2026-10-06T19:55:00+02:00'), 300, 200)).toBe(200);
-    expect(quotaFollowup(new Date('2026-10-06T12:00:00+02:00'), 5, 200)).toBe(10);
+    // 09:00: 114 run fino alle 18:30, 1.000 da mandare -> 9 -> minimo 10
+    expect(quotaFollowup(new Date('2026-10-06T09:00:00+02:00'), 3000, 200, 0)).toBe(10);
+    // 11:00, gia' 650 inviati oggi: 350 su 90 run -> 4 -> minimo 10
+    expect(quotaFollowup(new Date('2026-10-06T11:00:00+02:00'), 3000, 200, 650)).toBe(10);
+    // 18:20: due run, 300 da mandare -> 150
+    expect(quotaFollowup(new Date('2026-10-06T18:20:00+02:00'), 3000, 200, 700)).toBe(150);
+    // tetto raggiunto: zero; quasi raggiunto: non lo sfora
+    expect(quotaFollowup(new Date('2026-10-06T12:00:00+02:00'), 3000, 200, 1000)).toBe(0);
+    expect(quotaFollowup(new Date('2026-10-06T12:00:00+02:00'), 3000, 200, 995)).toBe(5);
+  });
+  it('i giorni del follow-up sono 4, dal giorno dopo l evento', async () => {
+    const { giorniFollowup } = await import('./lancio-followup');
+    expect(giorniFollowup(EVENTO)).toEqual(['2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09']);
   });
   it('partecipanteWebinar: solo minuti numerici positivi', async () => {
     const { partecipanteWebinar } = await import('./lancio-followup');

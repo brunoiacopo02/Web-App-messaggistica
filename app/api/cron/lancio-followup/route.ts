@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { inizioGiornataRoma } from '@/lib/bot2-tetto';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { getTemplateBody } from '@/lib/twilio';
 import { renderBodyTemplate } from '@/lib/campaigns';
@@ -16,6 +17,7 @@ import {
   inFinestraFollowup,
   finestraFollowupChiusa,
   quotaFollowup,
+  LIMITE_FOLLOWUP_GIORNO,
   ancoraLancio,
   decideFollowup,
   lancioFollowupText,
@@ -294,8 +296,13 @@ export async function GET(req: NextRequest) {
   // viene saltato (`mai_scritto`, `ancora_ignota`) resta candidato a ogni run, e prendendo
   // i primi 200 per id un centinaio di righe saltate in testa affamerebbe la coda per
   // tutta la finestra.
-  // PO 06/10: spalmato dalle 9 alle 20 (quotaFollowup), mai oltre LANCIO_BATCH_MAX.
-  const max = quotaFollowup(now, coda.length, batchMax(process.env.LANCIO_BATCH_MAX));
+  // PO 06/10: spalmato dalle 9 alle 18:30, al massimo LIMITE_FOLLOWUP_GIORNO al giorno
+  // (quotaFollowup), mai oltre LANCIO_BATCH_MAX per run.
+  const { count: inviatiOggi } = await supabase
+    .from('conversations')
+    .select('id', { count: 'exact', head: true })
+    .gte('lancio_followup_inviato_at', inizioGiornataRoma(now));
+  const max = quotaFollowup(now, coda.length, batchMax(process.env.LANCIO_BATCH_MAX), inviatiOggi ?? LIMITE_FOLLOWUP_GIORNO);
   const saltati = contatoreSalti();
   const targets: Candidata[] = [];
   /** Le chat del lotto che ricevono la registrazione al posto del follow-up. */

@@ -112,6 +112,10 @@ function esegui(rec: Chiamata): { data: unknown; error: unknown; count?: number 
     const righe = filtraCandidati(rec);
     // `maybeSingle()` è la rilettura di `lancio_info` prima del merge del marcatore.
     if (rec.singola) return { data: righe[0] ?? null, error: null };
+    // Conteggio dei follow-up di oggi (tetto giornaliero, PO 06/10): i timbrati del test.
+    if (rec.opzioni?.head && rec.filtri.some((f) => f.m === 'gte' && f.args[0] === 'lancio_followup_inviato_at')) {
+      return { data: null, error: null, count: stato.timbrate.size };
+    }
     if (rec.opzioni?.head) return { data: null, error: null, count: righe.length };
     const range = (rec.filtri.find((f) => f.m === 'range')?.args as number[] | undefined) ?? [0, 999];
     return { data: righe.slice(range[0], range[1] + 1), error: null };
@@ -215,7 +219,7 @@ const EVENTO = '2026-10-05T21:00:00+02:00';
 /** 12:10 di Roma del 6/10: dentro la prima fascia. */
 const DENTRO = '2026-10-06T12:10:00+02:00';
 const FUORI = '2026-10-06T20:30:00+02:00';
-const CHIUSA = '2026-10-07T20:00:00+02:00';
+const CHIUSA = '2026-10-09T19:00:00+02:00';
 const ANCORA = '2026-09-20T10:00:00Z';
 
 const richiesta = (extra = '', secret: string | null = SEGRETO) =>
@@ -659,6 +663,8 @@ describe('GET /api/cron/lancio-followup — invio col motore', () => {
   it('oltre il 10% di falliti il freno ferma il run e spegne lancio_attivo (C6)', async () => {
     // Con la quota spalmata (PO 06/10) alle 12:10 un run prende coda/94: servono abbastanza
     // chat perche' il lotto arrivi ai 25 tentativi su cui il freno decide.
+    // 18:00: sei run alla chiusura delle 18:30, il lotto supera i 25 tentativi del freno.
+    vi.setSystemTime(new Date('2026-10-06T18:00:00+02:00'));
     stato.convs = Array.from({ length: 2500 }, (_, i) => conv(i + 1));
     for (const c of stato.convs) stato.messaggi.set(c.id, righe(c.id, ['si', '2026-09-20T10:30:00Z']));
     sendTemplate.mockImplementation(async () => {
