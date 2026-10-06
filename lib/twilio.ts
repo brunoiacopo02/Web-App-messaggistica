@@ -1,4 +1,5 @@
 import { credenzialiPerMittente } from './twilio-account';
+import { sidSbloccati } from './template-sbloccati';
 import { templatePerMittente, traduciTemplate } from './template-account';
 import twilio, { validateRequest } from 'twilio';
 
@@ -216,16 +217,7 @@ export async function assertTemplateSendable(
   sidOriginale?: string,
 ): Promise<void> {
   if (process.env.UTILITY_ONLY !== '1') return;
-  const sbloccati = (process.env.UTILITY_ONLY_ALLOW ?? '').split(',').map((s) => s.trim());
-  // I due template a pulsanti della sera del webinar ("Chiamami subito / Fissiamo domani"
-  // e la versione diurna) sono MARKETING su tutti gli account, ma partono SOLO dentro la
-  // finestra di 24 ore, come risposta al lead che ha appena premuto il pulsante della live:
-  // non sono aperture. Senza questa riga il presidio li bloccava e il lead riceveva la
-  // domanda come testo, senza pulsanti (PO 30/09: la scelta e' il cuore della serata).
-  for (const k of ['LANCIO_SCELTA_NOTTE_TEMPLATE_SID', 'LANCIO_SCELTA_GIORNO_TEMPLATE_SID']) {
-    const v = (process.env[k] ?? '').trim();
-    if (v) sbloccati.push(v);
-  }
+  const sbloccati = sidSbloccati();
   if (sbloccati.includes(contentSid)) return;
   if (sidOriginale && sbloccati.includes(sidOriginale)) return;
   const cat = await getTemplateCategory(contentSid, from);

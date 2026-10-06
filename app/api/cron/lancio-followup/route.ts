@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { inizioGiornataRoma } from '@/lib/bot2-tetto';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { getTemplateApproval, getTemplateBody } from '@/lib/twilio';
+import { sidSbloccati } from '@/lib/template-sbloccati';
 import { renderBodyTemplate } from '@/lib/campaigns';
 import { templateName } from '@/lib/name';
 import { getLancioSettings, isAttivo } from '@/lib/lancio-settings';
@@ -223,7 +224,11 @@ export async function GET(req: NextRequest) {
   if (sidDaImpostazioni) {
     try {
       const a = await getTemplateApproval(sidDaImpostazioni);
-      if (a.status !== 'approved' || a.category !== 'UTILITY') templateNonPronto = `${a.status ?? '?'}/${a.category ?? '?'}`;
+      // PO 06/10/2026: Meta ha approvato il v4 come MARKETING e Bruno lo manda lo stesso.
+      // Un SID sbloccato (`sidSbloccati`, la stessa lista del presidio in
+      // `assertTemplateSendable`) parte anche se non e' UTILITY; approvato deve esserlo comunque.
+      const sbloccato = sidSbloccati().includes(sidDaImpostazioni);
+      if (a.status !== 'approved' || (a.category !== 'UTILITY' && !sbloccato)) templateNonPronto = `${a.status ?? '?'}/${a.category ?? '?'}`;
     } catch (e) {
       templateNonPronto = `illeggibile: ${e instanceof Error ? e.message : String(e)}`;
     }

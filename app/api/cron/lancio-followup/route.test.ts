@@ -922,6 +922,32 @@ describe('GET /api/cron/lancio-followup — registrazione promessa', () => {
     expect(sendTemplate).not.toHaveBeenCalledWith(expect.objectContaining({ contentSid: 'HXv4' }));
   });
 
+  // PO 06/10/2026 sera: Meta ha approvato il v4 come MARKETING su tutti e tre gli account e
+  // Bruno lo manda lo stesso. Lo sblocco e' quello del presidio: UTILITY_ONLY_ALLOW.
+  it('approvato MARKETING ma sbloccato in UTILITY_ONLY_ALLOW: i generici partono', async () => {
+    vi.stubEnv('UTILITY_ONLY_ALLOW', 'HXaltro, HXv4');
+    stato.settings.lancio_followup_template_sid = 'HXv4';
+    getTemplateApproval.mockResolvedValueOnce({ status: 'approved', category: 'MARKETING' });
+    await richiesta();
+    expect(sendTemplate).toHaveBeenCalledWith(expect.objectContaining({ to: tel(2), contentSid: 'HXv4' }));
+  });
+
+  it('approvato MARKETING e sbloccato in LANCIO_FOLLOWUP_MARKETING_SID: i generici partono', async () => {
+    vi.stubEnv('LANCIO_FOLLOWUP_MARKETING_SID', 'HXv4');
+    stato.settings.lancio_followup_template_sid = 'HXv4';
+    getTemplateApproval.mockResolvedValueOnce({ status: 'approved', category: 'MARKETING' });
+    await richiesta();
+    expect(sendTemplate).toHaveBeenCalledWith(expect.objectContaining({ to: tel(2), contentSid: 'HXv4' }));
+  });
+
+  it('sbloccato ma non ancora approvato: si aspetta lo stesso', async () => {
+    vi.stubEnv('UTILITY_ONLY_ALLOW', 'HXv4');
+    stato.settings.lancio_followup_template_sid = 'HXv4';
+    getTemplateApproval.mockResolvedValueOnce({ status: 'pending', category: 'MARKETING' });
+    await richiesta();
+    expect(sendTemplate).not.toHaveBeenCalledWith(expect.objectContaining({ contentSid: 'HXv4' }));
+  });
+
   it('stato del template illeggibile: si aspetta, non si manda alla cieca', async () => {
     stato.settings.lancio_followup_template_sid = 'HXv4';
     getTemplateApproval.mockRejectedValueOnce(new Error('HTTP 500'));
