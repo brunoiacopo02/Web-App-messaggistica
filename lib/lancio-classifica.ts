@@ -85,6 +85,8 @@ const REGISTRAZIONE = new RegExp(
     '\\b(vedere|vederl[ao]|guardare|guardarl[ao]|rivedere|rivederl[ao]|disponibile|sara|verra|viene) (anche )?registrat[ao]\\b',
     '\\breplay\\b', '\\bdifferita\\b', '\\brivederl[ao]\\b',
     "\\brivedere (la |il |l')?(live|webinar|diretta|evento|video)\\b",
+    // il giorno dopo: "vorrei vedere la lezione di ieri", "posso guardare la live di ieri?".
+    "\\b(vedere|guardare|riguardare) (la |il |l')?(lezione|live|diretta|webinar|evento|video) di ieri\\b",
     // non posso / non riesco / non potrò esserci, partecipare, collegarmi, seguirla, venire...
     '\\bnon (ci )?(posso|potro|riesco|riusciro|ce la faccio|ce la faro) (a )?(esserci|essere presente|partecipar(e|ci|vi)|collegarmi|connettermi|seguir(e|la|lo)|venire|presenziare)\\b',
     '\\bnon (ci )?(posso|potro) essere\\b', '\\bnon ci saro\\b',

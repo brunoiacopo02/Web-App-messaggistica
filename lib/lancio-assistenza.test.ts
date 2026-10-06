@@ -226,13 +226,48 @@ describe('turnoAssistenza — nella finestra', () => {
 describe('turnoAssistenza — dopo mezzanotte', () => {
   it('alle 00:10 del 6: nessun modello, nessuna bolla, silenzio DEFINITIVO tracciato (il 6 risponde il follow-up)', async () => {
     const { supabase, calls } = makeSupabase();
-    const stato = await turnoAssistenza(supabase, base({ rows: [LINK, inb('come rivedo la live?', '2026-10-06T00:10:00+02:00')], inboundBody: 'come rivedo la live?' }), { settings: SETTINGS, now: new Date('2026-10-06T00:10:00+02:00') });
+    const stato = await turnoAssistenza(supabase, base({ rows: [LINK, inb('a che ora inizia domani?', '2026-10-06T00:10:00+02:00')], inboundBody: 'a che ora inizia domani?' }), { settings: SETTINGS, now: new Date('2026-10-06T00:10:00+02:00') });
     expect(stato).toBe('active');
     expect(genera).not.toHaveBeenCalled();
     expect(sendFreeText).not.toHaveBeenCalled();
     expect(calls.events.find((e) => e.type === 'lancio_silenzio').payload.motivo).toBe('assistenza_finita');
     expect(tipiEventi(calls)).toContain('fenice_ai_reply');
     expect(impostaFaseLancio).not.toHaveBeenCalled();
+    expect(marcaRegistrazionePromessa).not.toHaveBeenCalled();
+  });
+
+  // PO 06/10/2026: chi il giorno dopo chiede la registrazione restava muto fino al suo
+  // turno di follow-up (coda di migliaia, tetto di 1.000 al giorno). Ora si marca la
+  // promessa, e il cron gli manda la registrazione al primo giro, davanti a tutti.
+  it('il 6 chiede la registrazione: marcatore della promessa ed evento, nessuna bolla e nessun modello', async () => {
+    const { supabase, calls } = makeSupabase();
+    const rows = [LINK, inb('Buongiorno', '2026-10-06T08:30:00+02:00'), inb('è possibile avere la registrazione di ieri?', '2026-10-06T08:31:00+02:00')];
+    const stato = await turnoAssistenza(supabase, base({ rows, inboundBody: 'Buongiorno' }), { settings: SETTINGS, now: new Date('2026-10-06T08:32:00+02:00') });
+    expect(stato).toBe('active');
+    expect(genera).not.toHaveBeenCalled();
+    expect(sendFreeText).not.toHaveBeenCalled();
+    expect(marcaRegistrazionePromessa).toHaveBeenCalledWith(supabase, 42);
+    expect(tipiEventi(calls)).toContain('lancio_registrazione_chiesta_dopo_live');
+    expect(calls.events.find((e) => e.type === 'lancio_silenzio').payload.motivo).toBe('assistenza_finita');
+  });
+
+  it.each([
+    'Salve ieri sera ho avuto un imprevisto. È possibile rivedere la diretta di ieri sera?',
+    'Buongiorno appena possibile vorrei vedere la lezione di ieri',
+    'Ciao, è possibile avere un replay della live di ieri sera?',
+    'Ho avuto probblemi di connesione mi  puo mandare il link per rivederlo?, grazie...',
+    'Ciao, c\'è un modo per rivedere la live di ieri?',
+  ])('dopo la live vale come richiesta di registrazione: %s', async (testo) => {
+    const { supabase } = makeSupabase();
+    await turnoAssistenza(supabase, base({ rows: [LINK, inb(testo, '2026-10-06T09:00:00+02:00')], inboundBody: testo }), { settings: SETTINGS, now: new Date('2026-10-06T09:00:00+02:00') });
+    expect(marcaRegistrazionePromessa).toHaveBeenCalledTimes(1);
+  });
+
+  it('promessa gia marcata: non si riscrive', async () => {
+    const { supabase, calls } = makeSupabase();
+    await turnoAssistenza(supabase, base({ rows: [LINK, inb('mi mandi la registrazione?', '2026-10-06T09:00:00+02:00')], inboundBody: 'x', lancioInfo: { registrazione_promessa_at: '2026-10-05T22:00:00Z' } }), { settings: SETTINGS, now: new Date('2026-10-06T09:00:00+02:00') });
+    expect(marcaRegistrazionePromessa).not.toHaveBeenCalled();
+    expect(tipiEventi(calls)).not.toContain('lancio_registrazione_chiesta_dopo_live');
   });
 
   it('alle 23:59:59 si risponde ancora, alle 00:00:00 no: il confine è la mezzanotte di Roma', async () => {

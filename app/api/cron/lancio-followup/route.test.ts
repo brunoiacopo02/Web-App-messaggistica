@@ -869,6 +869,29 @@ describe('GET /api/cron/lancio-followup — registrazione promessa', () => {
     expect(tipiEvento()).not.toContain('lancio_registrazione_senza_link');
   });
 
+  // PO 06/10/2026: il 6 alle 13 c'erano 345 promesse della registrazione ancora senza
+  // link, perche' i 1.000 posti del giorno se li erano presi i follow-up generici
+  // (prima i partecipanti di Zoom, poi per id). La registrazione e' una risposta dovuta:
+  // passa davanti a tutti e non conta contro il tetto.
+  it('la registrazione promessa passa davanti a tutti, anche ai partecipanti del webinar', async () => {
+    vi.stubEnv('LANCIO_BATCH_MAX', '1');
+    stato.convs = [conv(2, { lancio_info: { zoom_minuti: 120 } }), conv(5, { lancio_info: { ...PROMESSA } })];
+    stato.messaggi.set(2, righe(2, ['ok', '2026-10-02T08:59:00Z']));
+    stato.messaggi.set(5, righe(5, ['non potro esserci', '2026-10-02T08:59:00Z']));
+    const res = await (await richiesta()).json();
+    expect(res).toMatchObject({ sent: 1, registrazione: { inviati: 1 } });
+    expect(sendTemplate).toHaveBeenCalledTimes(1);
+    expect(sendTemplate).toHaveBeenCalledWith(expect.objectContaining({ to: tel(5), contentSid: REG }));
+  });
+
+  it('tetto giornaliero pieno: le registrazioni partono lo stesso, i follow-up generici no', async () => {
+    for (let k = 0; k < 1000; k++) stato.timbrate.add(100_000 + k);
+    const res = await (await richiesta()).json();
+    expect(res).toMatchObject({ sent: 1, registrazione: { inviati: 1 } });
+    expect(sendTemplate).toHaveBeenCalledTimes(1);
+    expect(sendTemplate).toHaveBeenCalledWith(expect.objectContaining({ to: tel(1), contentSid: REG }));
+  });
+
   it('la seconda idempotenza guarda entrambi i SID: una registrazione gia spedita si ripara, non si rimanda', async () => {
     stato.spediti = [{ conversation_id: 1 }];
     const res = await (await richiesta()).json();

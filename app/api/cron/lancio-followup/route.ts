@@ -11,7 +11,7 @@ import { congedoLancio } from '@/lib/lancio-effetti';
 import { logCronQueryError } from '@/lib/cron-query-error';
 import { mittenteDiConversazione } from '@/lib/mittente';
 import { batchMax, LANCIO_BLAST_CONCURRENCY } from '@/lib/lancio-zoom-blast';
-import type { RigaLancio } from '@/lib/lancio-fase';
+import { registrazionePromessa, type RigaLancio } from '@/lib/lancio-fase';
 import {
   FASI_FOLLOWUP,
   inFinestraFollowup,
@@ -289,7 +289,12 @@ export async function GET(req: NextRequest) {
   // PO 06/10/2026: prima chi ha partecipato al webinar, dal piu' presente al meno
   // (`lancio_info.zoom_minuti`, scritto dal CSV dei partecipanti di Zoom), poi tutti gli
   // altri nell'ordine di sempre. Si ordina la coda gia' letta: il filtro non cambia.
-  coda.sort((a, b) => minutiZoom(b) - minutiZoom(a) || a.id - b.id);
+  // PO 06/10/2026 (pomeriggio): davanti a tutti chi aspetta la registrazione promessa. Il
+  // 6 alle 13 erano 345 senza link: i posti del giorno se li erano presi i follow-up
+  // generici. La registrazione e' una risposta dovuta, non marketing.
+  coda.sort((a, b) =>
+    Number(registrazionePromessa(b.lancio_info)) - Number(registrazionePromessa(a.lancio_info))
+    || minutiZoom(b) - minutiZoom(a) || a.id - b.id);
 
   // ───────────── valutazione a blocchi: una query `messages` per blocco ─────────────
   // Si legge TUTTA la coda e si valuta a blocchi finche' i BERSAGLI non sono `max`: chi
@@ -302,7 +307,13 @@ export async function GET(req: NextRequest) {
     .from('conversations')
     .select('id', { count: 'exact', head: true })
     .gte('lancio_followup_inviato_at', inizioGiornataRoma(now));
-  const max = quotaFollowup(now, coda.length, batchMax(process.env.LANCIO_BATCH_MAX), inviatiOggi ?? LIMITE_FOLLOWUP_GIORNO);
+  // Due tetti: `maxLotto` e' quello del run (LANCIO_BATCH_MAX) e vale per tutti; `max`
+  // e' la quota dei follow-up GENERICI (tetto giornaliero spalmato). Le registrazioni
+  // promesse stanno solo sotto il primo: con i 1.000 del giorno gia' spesi partono lo stesso.
+  const maxLotto = batchMax(process.env.LANCIO_BATCH_MAX);
+  const max = quotaFollowup(now, coda.length, maxLotto, inviatiOggi ?? LIMITE_FOLLOWUP_GIORNO);
+  let followupNelLotto = 0;
+  let codaFinita = false;
   const saltati = contatoreSalti();
   const targets: Candidata[] = [];
   /** Le chat del lotto che ricevono la registrazione al posto del follow-up. */
@@ -312,7 +323,11 @@ export async function GET(req: NextRequest) {
   let lettureIntake = 0;
   let ancoreIgnoteMarcate = 0;
   let blocchiTroncati = 0;
-  for (let i = 0; i < coda.length && targets.length < max; i += BLOCCO_VALUTAZIONE) {
+  for (let i = 0; i < coda.length && targets.length < maxLotto && !codaFinita; i += BLOCCO_VALUTAZIONE) {
+    // La coda e' ordinata con le promesse in testa: alla prima chat senza promessa, a quota
+    // dei generici esaurita, non c'e' piu' niente da mandare in questo run. Senza questo
+    // taglio, a tetto pieno ogni run rileggerebbe la cronologia di tutta la coda per nulla.
+    if (followupNelLotto >= max && !registrazionePromessa(coda[i]?.lancio_info)) break;
     if (Date.now() - t0 > TEMPO_MASSIMO_MS) break;
     const blocco = coda.slice(i, i + BLOCCO_VALUTAZIONE);
     const { data, error } = await supabase
@@ -354,6 +369,10 @@ export async function GET(req: NextRequest) {
       perConv.set(r.conversation_id, lista);
     }
     for (const c of blocco) {
+      if (followupNelLotto >= max && !registrazionePromessa(c.lancio_info)) {
+        codaFinita = true;
+        break;
+      }
       valutati++;
       const rows = perConv.get(c.id) ?? [];
       // L'ancora del lancio: colonna, poi benvenuto in cronologia, poi — solo per le chat
@@ -396,9 +415,11 @@ export async function GET(req: NextRequest) {
           continue;
         }
         registrazioni.add(c.id);
+      } else {
+        followupNelLotto++;
       }
       targets.push(c);
-      if (targets.length >= max) break;
+      if (targets.length >= maxLotto) break;
     }
   }
 

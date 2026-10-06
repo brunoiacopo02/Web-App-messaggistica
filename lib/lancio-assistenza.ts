@@ -2,7 +2,7 @@ import type { getSupabaseAdmin } from './supabase/admin';
 import type { LancioSettings } from './lancio-settings';
 import type { TurnoLancioInput } from './lancio-turno';
 import { generateLancioReply } from './lancio-reply';
-import { congedoEsplicito } from './lancio-classifica';
+import { classificaLancio, congedoEsplicito } from './lancio-classifica';
 import {
   congedoInPiedi, inboundDelLotto, paroleDelCongedo, registrazionePromessa,
   TESTO_REGISTRAZIONE_PROMESSA_STASERA, ultimoTestoDelLotto,
@@ -61,6 +61,16 @@ export async function turnoAssistenza(
   }
 
   if (!puoRispondere(ctx.now, eventoAtDa(ctx.settings), 'link_inviato')) {
+    // Il giorno dopo chiede la registrazione (PO 06/10/2026): fino a qui restava muto
+    // fino al suo turno di follow-up, in una coda di migliaia a 1.000 al giorno. Si marca
+    // la promessa e basta: la manda il cron del follow-up, che le registrazioni le serve
+    // per prime e fuori dal tetto. Niente bolla qui, il template arriva entro 5 minuti
+    // (dentro la fascia del follow-up).
+    if (!registrazionePromessa(i.lancioInfo) && inboundDelLotto(i.rows).some((m) => classificaLancio(m.body) === 'registrazione')) {
+      await marcaRegistrazionePromessa(supabase, c.conversationId);
+      await eventoLancio(supabase, c, 'lancio_registrazione_chiesta_dopo_live', { testo: ultimoTestoDelLotto(inboundDelLotto(i.rows)).slice(0, 300) },
+        `[lancio] conv ${c.conversationId}: ha chiesto la registrazione dopo la live, la manda il cron del follow-up`);
+    }
     return silenzioLancio(supabase, c, 'assistenza_finita', true);
   }
 
