@@ -263,7 +263,8 @@ export async function GET(req: NextRequest) {
       // Pre-filtro economico: chi non ha MAI scritto non e' un bersaglio, a meno che abbia
       // partecipato al webinar (zoom_minuti, PO 06/10). La regola vera (un inbound DOPO
       // l'ancora, o la presenza in live) si applica sulle righe, piu' sotto.
-      .or('last_inbound_at.not.is.null,lancio_info->>zoom_minuti.not.is.null')
+      // I ridati dal pool "mai contattati" (lib/lancio-vergini.ts) sono bersaglio comunque.
+      .or('last_inbound_at.not.is.null,lancio_info->>zoom_minuti.not.is.null,lancio_info->pool_vergini->>ripreso_at.not.is.null')
       // Chat in mano a una persona: un template di marketing sopra sarebbe una seconda voce.
       .is('ai_paused_at', null)
       .is('handed_off_at', null);

@@ -231,16 +231,26 @@ export function partecipanteWebinar(info: unknown): boolean {
   return typeof v === 'number' && v > 0;
 }
 
+/**
+ * Ridato al bot dal TL dal pool "mai contattati" (lib/lancio-vergini.ts, PO 07/10/2026):
+ * la scelta del TL vale come interazione, il follow-up parte anche a chi non ha mai scritto.
+ */
+export function ripresoDalPool(info: unknown): boolean {
+  const pv = (info as { pool_vergini?: { ripreso_at?: unknown } } | null)?.pool_vergini;
+  return typeof pv?.ripreso_at === 'string';
+}
+
 export function decideFollowup(c: CandidataFollowup): DecisioneFollowup {
   if (!c.lancio_fase || !(FASI_FOLLOWUP as readonly string[]).includes(c.lancio_fase)) return { kind: 'salta', motivo: 'fase' };
   if (c.lancio_followup_inviato_at) return { kind: 'salta', motivo: 'gia_inviato' };
   if (haCongedo(c.lancio_info)) return { kind: 'salta', motivo: 'congedato' };
-  if (!c.ancora) return { kind: 'salta', motivo: 'ancora_ignota' };
+  const ripreso = ripresoDalPool(c.lancio_info);
+  if (!c.ancora && !ripreso) return { kind: 'salta', motivo: 'ancora_ignota' };
   // Chi ha seguito il webinar riceve il follow-up anche se su WhatsApp non ha mai
   // scritto (PO 06/10/2026): la presenza in live vale come interazione.
-  if (!haInteragito(c.rows, c.ancora) && !partecipanteWebinar(c.lancio_info)) return { kind: 'salta', motivo: 'mai_scritto' };
+  if (!ripreso && !haInteragito(c.rows, c.ancora) && !partecipanteWebinar(c.lancio_info)) return { kind: 'salta', motivo: 'mai_scritto' };
   const promessa = registrazionePromessa(c.lancio_info);
-  const testo = ultimoTestoInbound(c.rows, c.ancora);
+  const testo = c.ancora ? ultimoTestoInbound(c.rows, c.ancora) : '';
   if (!promessa && testo !== '' && haDettoNo(testo)) return { kind: 'congeda', leadWords: testo };
   // `post_pitch`: il follow-up e' l'ultima rete per chi si e' fermato dopo il pulsante,
   // ma NON si interrompe chi sta ancora scegliendo. Il discrimine e' l'ultimo inbound:
@@ -249,7 +259,7 @@ export function decideFollowup(c: CandidataFollowup): DecisioneFollowup {
   // poi il lead ha scritto di giorno, e li' il flusso della scelta e' vivo — una bolla di
   // marketing sopra una conversazione in corso e' il danno peggiore dei due.
   if (c.lancio_fase === 'post_pitch') {
-    const ultimo = ultimoInboundMs(c.rows, c.ancora);
+    const ultimo = c.ancora ? ultimoInboundMs(c.rows, c.ancora) : null;
     if (ultimo === null || ultimo >= c.fineNotte) return { kind: 'salta', motivo: 'in_scelta' };
   }
   return { kind: 'invia', tipo: promessa ? 'registrazione' : 'followup' };

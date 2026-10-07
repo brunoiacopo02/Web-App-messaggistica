@@ -1,5 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import { ripresaVergine, parseRiprendi, HANDOFF_VERGINI } from './lancio-vergini';
+import { decideFollowup } from './lancio-followup';
+
+describe('follow-up ai ridati dal pool', () => {
+  const base = { lancio_fase: 'attesa', lancio_followup_inviato_at: null, rows: [], fineNotte: 0 };
+  it('chi non ha mai scritto riceve il follow-up se il TL lo ha ridato al bot', () => {
+    expect(decideFollowup({ ...base, ancora: null, lancio_info: { pool_vergini: { fase_prima: 'attesa', ripreso_at: 'x' } } }))
+      .toEqual({ kind: 'invia', tipo: 'followup' });
+  });
+  it('senza ripresa resta escluso come prima', () => {
+    expect(decideFollowup({ ...base, ancora: '2026-10-01T00:00:00Z', lancio_info: {} }))
+      .toEqual({ kind: 'salta', motivo: 'mai_scritto' });
+  });
+});
 
 const adesso = new Date('2026-10-08T07:00:00Z');
 

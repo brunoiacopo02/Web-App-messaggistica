@@ -416,7 +416,7 @@ describe('GET /api/cron/lancio-followup — perimetro (C4) e decisione', () => {
     expect(f).toContainEqual({ m: 'is', args: ['lancio_info->>congedo_at', null] });
     expect(f).toContainEqual({ m: 'is', args: ['lancio_followup_inviato_at', null] });
     expect(f).toContainEqual({ m: 'in', args: ['lancio_fase', ['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch']] });
-    expect(f).toContainEqual({ m: 'or', args: ['last_inbound_at.not.is.null,lancio_info->>zoom_minuti.not.is.null'] });
+    expect(f).toContainEqual({ m: 'or', args: ['last_inbound_at.not.is.null,lancio_info->>zoom_minuti.not.is.null,lancio_info->pool_vergini->>ripreso_at.not.is.null'] });
     expect(f).toContainEqual({ m: 'is', args: ['ai_paused_at', null] });
     expect(f).toContainEqual({ m: 'is', args: ['handed_off_at', null] });
     expect(f).toContainEqual({ m: 'order', args: ['id', { ascending: true }] });
@@ -832,7 +832,7 @@ describe('GET /api/cron/lancio-followup — registrazione promessa', () => {
 
   it('chi ha la promessa ha scritto per forza: passa il pre-filtro last_inbound_at e haInteragito', async () => {
     await richiesta('dry=1');
-    expect(selectConv()?.filtri).toContainEqual({ m: 'or', args: ['last_inbound_at.not.is.null,lancio_info->>zoom_minuti.not.is.null'] });
+    expect(selectConv()?.filtri).toContainEqual({ m: 'or', args: ['last_inbound_at.not.is.null,lancio_info->>zoom_minuti.not.is.null,lancio_info->pool_vergini->>ripreso_at.not.is.null'] });
     // Una promessa senza alcun inbound dopo l'ancora (non dovrebbe esistere) non manda nulla.
     chiamate.length = 0;
     stato.messaggi.set(1, righe(1));
