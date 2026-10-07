@@ -887,7 +887,7 @@ describe('GET /api/cron/lancio-followup — registrazione promessa', () => {
   });
 
   it('tetto giornaliero pieno: le registrazioni partono lo stesso, i follow-up generici no', async () => {
-    for (let k = 0; k < 1000; k++) stato.timbrate.add(100_000 + k);
+    for (let k = 0; k < 2000; k++) stato.timbrate.add(100_000 + k);
     const res = await (await richiesta()).json();
     expect(res).toMatchObject({ sent: 1, registrazione: { inviati: 1 } });
     expect(sendTemplate).toHaveBeenCalledTimes(1);

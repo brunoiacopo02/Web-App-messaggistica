@@ -33,10 +33,11 @@ export const FASCE_FOLLOWUP: readonly { daMin: number; aMin: number }[] = [
 
 /**
  * PO 06/10/2026: al massimo 1.000 follow-up al giorno, dalle 9 alle 18:30, per quattro
- * giorni (dal giorno dopo l'evento): cosi' le risposte si gestiscono con calma. Si conta
+ * giorni (dal giorno dopo l'evento): cosi' le risposte si gestiscono con calma.
+ * PO 07/10/2026: alzato a 2.000, per finire la coda (~3.700) entro l'8/10. Si conta
  * su `lancio_followup_inviato_at` di oggi, quindi anche gli invii fatti prima del tetto.
  */
-export const LIMITE_FOLLOWUP_GIORNO = 1000;
+export const LIMITE_FOLLOWUP_GIORNO = 2000;
 /** Quanti giorni dura il follow-up, a partire dal giorno dopo l'evento. */
 export const GIORNI_FOLLOWUP = 4;
 

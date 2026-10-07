@@ -371,17 +371,19 @@ describe('PO 06/10/2026: fascia unica 9-20, spalmata, e partecipanti al webinar'
     const { FASCE_FOLLOWUP } = await import('./lancio-followup');
     expect(FASCE_FOLLOWUP).toEqual([{ daMin: 540, aMin: 1110 }]);
   });
-  it('la quota spalma i 1.000 del giorno sui run che restano, fra 10 e max', async () => {
+  it('la quota spalma i 2.000 del giorno sui run che restano, fra 10 e max', async () => {
     const { quotaFollowup } = await import('./lancio-followup');
-    // 09:00: 114 run fino alle 18:30, 1.000 da mandare -> 9 -> minimo 10
-    expect(quotaFollowup(new Date('2026-10-06T09:00:00+02:00'), 3000, 200, 0)).toBe(10);
-    // 11:00, gia' 650 inviati oggi: 350 su 90 run -> 4 -> minimo 10
-    expect(quotaFollowup(new Date('2026-10-06T11:00:00+02:00'), 3000, 200, 650)).toBe(10);
-    // 18:20: due run, 300 da mandare -> 150
-    expect(quotaFollowup(new Date('2026-10-06T18:20:00+02:00'), 3000, 200, 700)).toBe(150);
+    // 09:00: 114 run fino alle 18:30, 2.000 da mandare -> 18
+    expect(quotaFollowup(new Date('2026-10-06T09:00:00+02:00'), 3000, 200, 0)).toBe(18);
+    // 11:00, gia' 650 inviati oggi: 1.350 su 90 run -> 15
+    expect(quotaFollowup(new Date('2026-10-06T11:00:00+02:00'), 3000, 200, 650)).toBe(15);
+    // 11:00, coda quasi vuota: 300 su 90 run -> 4 -> minimo 10
+    expect(quotaFollowup(new Date('2026-10-06T11:00:00+02:00'), 300, 200, 650)).toBe(10);
+    // 18:20: due run, 1.300 da mandare -> fermo al lotto massimo
+    expect(quotaFollowup(new Date('2026-10-06T18:20:00+02:00'), 3000, 200, 700)).toBe(200);
     // tetto raggiunto: zero; quasi raggiunto: non lo sfora
-    expect(quotaFollowup(new Date('2026-10-06T12:00:00+02:00'), 3000, 200, 1000)).toBe(0);
-    expect(quotaFollowup(new Date('2026-10-06T12:00:00+02:00'), 3000, 200, 995)).toBe(5);
+    expect(quotaFollowup(new Date('2026-10-06T12:00:00+02:00'), 3000, 200, 2000)).toBe(0);
+    expect(quotaFollowup(new Date('2026-10-06T12:00:00+02:00'), 3000, 200, 1995)).toBe(5);
   });
   it('i giorni del follow-up sono 4, dal giorno dopo l evento', async () => {
     const { giorniFollowup } = await import('./lancio-followup');
