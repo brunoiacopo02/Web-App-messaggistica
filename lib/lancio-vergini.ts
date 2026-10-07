@@ -10,6 +10,8 @@
  *
  * La fase di prima sta in `lancio_info.pool_vergini.fase_prima`.
  */
+import { signPayload } from './bot-hmac';
+
 export const HANDOFF_VERGINI = 'lancio_pool_vergini';
 
 /** Fasi da cui il blocco può essere partito: sono quelle che il follow-up lavora. */
@@ -51,6 +53,33 @@ export function ripresaVergine(conv: ConvVergine, adesso: Date): RipresaUpdate |
     lancio_fase: prima,
     lancio_info: { ...info, pool_vergini: { ...pv, ripreso_at: adesso.toISOString() } },
   };
+}
+
+const DEFAULT_CRM_VERGINE_URL = 'https://crm-sales-fenice.vercel.app/api/bot/lancio/vergine-scrive';
+
+/**
+ * Un lead del pool ha scritto: chi scrive lo gestisce il bot (PO 07/10). Il CRM lo passa
+ * al bot se è ancora nel pool, e risponde `preso:false` se il TL lo ha già dato a un GDO.
+ * Rete giù o risposta strana = non preso: meglio una chat che aspetta il GDO che due
+ * persone sullo stesso lead.
+ */
+export async function reclamaVergine(crmLeadId: string): Promise<{ preso: boolean; motivo?: string }> {
+  const secret = process.env.BOT_WEBHOOK_SECRET;
+  if (!secret) return { preso: false, motivo: 'not_configured' };
+  const rawBody = JSON.stringify({ leadId: crmLeadId });
+  try {
+    const res = await fetch(process.env.CRM_VERGINE_URL || DEFAULT_CRM_VERGINE_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-bot-signature': signPayload(rawBody, secret) },
+      body: rawBody,
+      signal: AbortSignal.timeout(5000),
+    });
+    const body = (await res.json().catch(() => null)) as { preso?: boolean; motivo?: string } | null;
+    if (!res.ok || !body) return { preso: false, motivo: `http_${res.status}` };
+    return { preso: body.preso === true, motivo: body.motivo };
+  } catch (e) {
+    return { preso: false, motivo: e instanceof Error ? e.message : 'network_error' };
+  }
 }
 
 /** Il corpo della richiesta del CRM: `{ leadIds: string[] }`, al massimo 500. */

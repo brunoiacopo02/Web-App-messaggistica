@@ -18,6 +18,7 @@ import {
   linkSviluppatoreEntraNelLancio, pulsantePassaAMario, conMarioDopoNotte, haCongedo,
   faseDopoRevocaCongedo, notaCongedoRevocato,
 } from '@/lib/lancio-fase';
+import { HANDOFF_VERGINI, reclamaVergine, ripresaVergine } from '@/lib/lancio-vergini';
 import { dallaLiveDelLancio, dopoLaNotteDelLancio } from '@/lib/lancio-scelta';
 import { adessoLancio } from '@/lib/lancio-orologio';
 import type { Json } from '@/lib/supabase/types';
@@ -228,7 +229,7 @@ export async function POST(req: NextRequest) {
     if (toMatchesFenice) {
       const { data: conv } = await supabase
         .from('conversations')
-        .select('ai_owner, ai_status, ai_paused_at, handed_off_at, ai_started_at, crm_lead_id, bot_outcome, lancio_slug, lancio_fase, lancio_ingresso, lancio_info')
+        .select('ai_owner, ai_status, ai_paused_at, handed_off_at, handed_off_reason, ai_started_at, crm_lead_id, bot_outcome, lancio_slug, lancio_fase, lancio_ingresso, lancio_info')
         .eq('id', conversationId)
         .single();
 
@@ -250,6 +251,37 @@ export async function POST(req: NextRequest) {
       // sera del 5: e' quel messaggio che conta, non il primo, e non conta chi aveva la
       // chat in mano. Un inbound SENZA marker invece non tocca mai `lancio_fase`: le fasi
       // le muove il turno del lancio dentro il drain.
+      // Pool "mai contattati dal bot" (PO 07/10/2026, lib/lancio-vergini.ts): la chat e'
+      // ferma perche' il lead sta nel pool del CRM, ma chi scrive lo gestisce il bot. Il
+      // CRM lo passa al bot se nessuno l'ha ancora preso; se e' gia' di un GDO la chat
+      // resta ferma. Sta PRIMA del pulsante: se il pulsante c'e', vince comunque lui.
+      if (conv && conv.handed_off_reason === HANDOFF_VERGINI && conv.crm_lead_id && autoReplyOn) {
+        const reclamo = await reclamaVergine(conv.crm_lead_id);
+        const ripresa = reclamo.preso
+          ? ripresaVergine({ id: conversationId, handed_off_reason: conv.handed_off_reason, lancio_info: conv.lancio_info as Record<string, unknown> | null }, new Date())
+          : null;
+        if (ripresa) {
+          const { data: riprese } = await supabase.from('conversations')
+            .update(ripresa as never).eq('id', conversationId).eq('handed_off_reason', HANDOFF_VERGINI).select('id');
+          if ((riprese ?? []).length > 0) {
+            conv.ai_status = ripresa.ai_status;
+            conv.ai_paused_at = null;
+            conv.handed_off_at = null;
+            conv.handed_off_reason = null;
+            conv.lancio_fase = ripresa.lancio_fase as typeof conv.lancio_fase;
+            conv.lancio_info = ripresa.lancio_info as typeof conv.lancio_info;
+          }
+        }
+        await supabase.from('event_log').insert({
+          type: reclamo.preso ? 'lancio_vergine_scrive' : 'lancio_vergine_scrive_non_preso',
+          payload: { conversationId, crmLeadId: conv.crm_lead_id, motivo: reclamo.motivo ?? null } as never,
+          message: reclamo.preso
+            ? `[lancio] lead del pool "mai contattati" ha scritto: passa al bot (conv ${conversationId})`
+            : `[lancio] lead del pool "mai contattati" ha scritto ma il CRM non lo passa al bot (${reclamo.motivo ?? '?'}): la chat resta ferma (conv ${conversationId})`,
+          level: reclamo.preso ? 'info' : 'warn',
+        });
+      }
+
       const markerPulsante = isMarkerPulsanteWebinar(messageBody);
       // L'interruttore `lancio_pulsante_attivo` si legge SOLO quando il marker c'e'
       // davvero: sull'inbound normale — cioe' su tutti — il gate non costa nessuna query
