@@ -238,32 +238,50 @@ describe('pulsante del webinar — interruttore lancio_pulsante_attivo', () => {
   });
 });
 
-describe('lead restituito al pool che riscrive (C8)', () => {
+// PO 07/10/2026: chi scrive al bot lo gestisce il bot, in qualunque pool sia. Sostituisce
+// il ruling C8 (restituito = il bot tace e avvisa il GDO).
+describe('chat del lancio ferma: chi scrive lo gestisce il bot (PO 07/10/2026)', () => {
   beforeEach(() => {
-    stato.conv = {
-      ai_owner: 'mario', ai_status: 'closed', ai_paused_at: null, handed_off_at: null,
-      crm_lead_id: 'L9', bot_outcome: 'NON_RISPOSTO',
-      lancio_slug: 'webdev-2026-10', lancio_fase: 'restituito', lancio_ingresso: 'lista', lancio_info: null,
-    };
     vi.mocked(sendCrmNota).mockClear();
     vi.mocked(drainMarioReplies).mockClear();
   });
 
-  it('non si riapre, il bot non risponde, si scrive l evento e la nota al CRM', async () => {
-    const res = await inbound('ci sono ancora?');
-    expect(res.status).toBe(200);
-    expect(stato.updates.some((u) => u.valori.ai_status === 'active')).toBe(false);
-    expect(eventi('lancio_inbound_dopo_restituzione')).toHaveLength(1);
-    expect(sendCrmNota).toHaveBeenCalledTimes(1);
-    expect(String(vi.mocked(sendCrmNota).mock.calls[0][2])).toContain('dopo il ritorno nel pool');
-    expect(drainMarioReplies).not.toHaveBeenCalled();
+  it('restituita al pool: il bot la riprende come Mario standard e risponde', async () => {
+    stato.conv = {
+      ai_owner: 'mario', ai_status: 'closed', ai_paused_at: null, handed_off_at: null, handed_off_reason: null,
+      crm_lead_id: 'L9', bot_outcome: 'NON_RISPOSTO',
+      lancio_slug: 'webdev-2026-10', lancio_fase: 'restituito', lancio_ingresso: 'lista', lancio_info: null,
+    };
+    await inbound('ci sono ancora?');
+    expect(stato.updates.some((u) => u.valori.ai_status === 'active' && u.valori.ai_paused_at === null)).toBe(true);
+    expect(stato.updates.find((u) => 'lancio_fase' in u.valori)?.valori.lancio_fase).toBe('chiuso');
+    expect(eventi('lancio_lead_scrive_ripreso')).toHaveLength(1);
+    expect(eventi('lancio_inbound_dopo_restituzione')).toHaveLength(0);
+    expect(sendCrmNota).not.toHaveBeenCalled();
+    expect(drainMarioReplies).toHaveBeenCalledTimes(1);
   });
 
-  it('senza crm_lead_id: evento si, nota no', async () => {
-    stato.conv.crm_lead_id = null;
-    await inbound('ci sono ancora?');
-    expect(eventi('lancio_inbound_dopo_restituzione')).toHaveLength(1);
-    expect(sendCrmNota).not.toHaveBeenCalled();
+  it('nel pool "mai contattati": toglie il fermo e risponde', async () => {
+    stato.conv = {
+      ai_owner: 'mario', ai_status: 'handed_off', ai_paused_at: '2026-10-07T16:00:00Z', handed_off_at: '2026-10-07T16:00:00Z',
+      handed_off_reason: 'lancio_pool_vergini', crm_lead_id: 'L9', bot_outcome: null,
+      lancio_slug: 'webdev-2026-10', lancio_fase: 'chiuso', lancio_ingresso: 'lista', lancio_info: { pool_vergini: { fase_prima: 'attesa' } },
+    };
+    await inbound('Ciao');
+    const presa = stato.updates.find((u) => u.valori.handed_off_reason === null);
+    expect(presa?.valori).toMatchObject({ ai_status: 'active', ai_paused_at: null, handed_off_at: null });
+    expect(drainMarioReplies).toHaveBeenCalledTimes(1);
+  });
+
+  it('una chat ferma a mano dal pannello (motivo diverso) resta ferma', async () => {
+    stato.conv = {
+      ai_owner: 'mario', ai_status: 'handed_off', ai_paused_at: '2026-10-07T16:00:00Z', handed_off_at: '2026-10-07T16:00:00Z',
+      handed_off_reason: 'operatore', crm_lead_id: 'L9', bot_outcome: null,
+      lancio_slug: 'webdev-2026-10', lancio_fase: 'chiuso', lancio_ingresso: 'lista', lancio_info: null,
+    };
+    await inbound('Ciao');
+    expect(eventi('lancio_lead_scrive_ripreso')).toHaveLength(0);
+    expect(stato.updates.some((u) => u.valori.ai_status === 'active')).toBe(false);
   });
 });
 
@@ -299,43 +317,6 @@ describe('pulsante del webinar su una chat restituita (PO 02/10/2026)', () => {
     expect(drainMarioReplies).toHaveBeenCalledTimes(1);
   });
 });
-
-describe('nota al CRM ogni ora per chat restituita (C8)', () => {
-  beforeEach(() => {
-    stato.conv = {
-      ai_owner: 'mario', ai_status: 'closed', ai_paused_at: null, handed_off_at: null,
-      crm_lead_id: 'L9', bot_outcome: 'NON_RISPOSTO',
-      lancio_slug: 'webdev-2026-10', lancio_fase: 'restituito', lancio_ingresso: 'lista', lancio_info: null,
-    };
-    vi.mocked(sendCrmNota).mockClear();
-  });
-
-  it('prima nota: si scrive il marcatore accanto alle chiavi gia presenti', async () => {
-    stato.conv.lancio_info = { congedo_at: '2026-10-08T09:00:00.000Z' };
-    await inbound('ci sono ancora?');
-    expect(sendCrmNota).toHaveBeenCalledTimes(1);
-    const marcatore = stato.updates.find((u) => 'lancio_info' in u.valori)?.valori.lancio_info as Riga;
-    expect(marcatore.congedo_at).toBe('2026-10-08T09:00:00.000Z');
-    expect(typeof marcatore.restituito_nota_at).toBe('string');
-  });
-
-  it('secondo messaggio entro l ora: evento si, nota no', async () => {
-    stato.conv.lancio_info = { restituito_nota_at: new Date(Date.now() - 30 * 60_000).toISOString() };
-    await inbound('allora?');
-    expect(eventi('lancio_inbound_dopo_restituzione')).toHaveLength(1);
-    expect(eventi('lancio_inbound_dopo_restituzione')[0].payload).toMatchObject({ notaSoppressa: true });
-    expect(sendCrmNota).not.toHaveBeenCalled();
-    expect(stato.updates.find((u) => 'lancio_info' in u.valori)).toBeUndefined();
-  });
-
-  it('passata l ora: si torna ad avvisare, con le parole nuove', async () => {
-    stato.conv.lancio_info = { restituito_nota_at: new Date(Date.now() - 61 * 60_000).toISOString() };
-    await inbound('mi richiamate?');
-    expect(sendCrmNota).toHaveBeenCalledTimes(1);
-    expect(String(vi.mocked(sendCrmNota).mock.calls[0][2])).toContain('mi richiamate?');
-  });
-});
-
 
 // PO 05/10/2026: il numero della chat segue il lead. Chi scrive a uno dei
 // nostri numeri parla con quel numero (finestra 24h aperta li'); un numero che

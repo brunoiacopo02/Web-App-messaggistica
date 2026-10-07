@@ -18,7 +18,7 @@ import {
   linkSviluppatoreEntraNelLancio, pulsantePassaAMario, conMarioDopoNotte, haCongedo,
   faseDopoRevocaCongedo, notaCongedoRevocato,
 } from '@/lib/lancio-fase';
-import { HANDOFF_VERGINI, reclamaVergine, ripresaVergine } from '@/lib/lancio-vergini';
+import { chatLancioFerma, reclamaVergine } from '@/lib/lancio-vergini';
 import { dallaLiveDelLancio, dopoLaNotteDelLancio } from '@/lib/lancio-scelta';
 import { adessoLancio } from '@/lib/lancio-orologio';
 import type { Json } from '@/lib/supabase/types';
@@ -245,42 +245,56 @@ export async function POST(req: NextRequest) {
       // che deve restare veloce perche' Twilio ritenta.
       const adozioneAttiva = process.env.INBOUND_ADOPTION_ENABLED === '1';
 
+      // Chi scrive al bot lo gestisce il bot, in qualunque pool sia (PO 07/10/2026). Vale
+      // per le chat del lancio ferme: pool "mai contattati" (lib/lancio-vergini.ts),
+      // restituite al pool dei GDO, fermate perche' nel CRM non erano piu' del bot. Il CRM
+      // passa il lead al bot se e' ancora da lavorare (appuntamenti, chiusi e test umani
+      // restano dove sono); la chat la riprende il bot in ogni caso, come Mario standard
+      // (fase `chiuso`). Sta PRIMA del pulsante, che poi decide la sua fase come sempre.
+      // Col pulsante del webinar la chat la prende il blocco del pulsante qui sotto, con la
+      // sua fase: qui si fa solo il passaggio del lead nel CRM.
+      if (conv && autoReplyOn && conv.crm_lead_id && chatLancioFerma(conv) && isMarkerPulsanteWebinar(messageBody)) {
+        const reclamo = await reclamaVergine(conv.crm_lead_id);
+        await supabase.from('event_log').insert({
+          type: 'lancio_lead_scrive_ripreso',
+          payload: { conversationId, crmLeadId: conv.crm_lead_id, crm: reclamo.preso ? 'al_bot' : (reclamo.motivo ?? null), pulsante: true } as never,
+          message: `[lancio] lead con la chat ferma ha premuto il pulsante: CRM ${reclamo.preso ? 'passato al bot' : reclamo.motivo ?? '?'} (conv ${conversationId})`,
+          level: 'info',
+        });
+      } else if (conv && autoReplyOn && conv.crm_lead_id && chatLancioFerma(conv)) {
+        const reclamo = await reclamaVergine(conv.crm_lead_id);
+        const adesso = new Date().toISOString();
+        const infoPrima = (conv.lancio_info ?? {}) as Record<string, unknown>;
+        const lancioInfo = { ...infoPrima, ripreso_da_inbound: { at: adesso, da: conv.handed_off_reason ?? conv.lancio_fase, crm: reclamo.preso ? 'al_bot' : (reclamo.motivo ?? 'invariato') } };
+        const { error: errorePresa } = await supabase.from('conversations').update({
+          ai_status: 'active', ai_paused_at: null, handed_off_at: null, handed_off_reason: null,
+          ...(conv.ai_owner ? {} : { ai_owner: 'mario' }),
+          lancio_info: lancioInfo as unknown as Json,
+        }).eq('id', conversationId);
+        if (!errorePresa) {
+          if (conv.lancio_fase !== 'chiuso') await impostaFaseLancio(supabase, conversationId, 'chiuso');
+          conv.ai_status = 'active';
+          conv.ai_paused_at = null;
+          conv.handed_off_at = null;
+          conv.handed_off_reason = null;
+          if (!conv.ai_owner) conv.ai_owner = 'mario';
+          conv.lancio_fase = 'chiuso';
+          conv.lancio_info = lancioInfo as typeof conv.lancio_info;
+        }
+        await supabase.from('event_log').insert({
+          type: 'lancio_lead_scrive_ripreso',
+          payload: { conversationId, crmLeadId: conv.crm_lead_id, crm: reclamo.preso ? 'al_bot' : (reclamo.motivo ?? null), errore: errorePresa?.message ?? null } as never,
+          message: `[lancio] lead con la chat ferma ha scritto: il bot la riprende (CRM: ${reclamo.preso ? 'passato al bot' : reclamo.motivo ?? '?'}) (conv ${conversationId})`,
+          level: errorePresa ? 'error' : 'info',
+        });
+      }
+
       // Pulsante del webinar (spec lancio §5.4, §6.3): scatta sull'inbound CORRENTE e
       // vince su tutto (PO 02/10/2026: "deve sovrastare ogni regola e parlarci il bot").
       // Il lead della lista d'attesa ha la chat aperta da settimane e preme il pulsante la
       // sera del 5: e' quel messaggio che conta, non il primo, e non conta chi aveva la
       // chat in mano. Un inbound SENZA marker invece non tocca mai `lancio_fase`: le fasi
       // le muove il turno del lancio dentro il drain.
-      // Pool "mai contattati dal bot" (PO 07/10/2026, lib/lancio-vergini.ts): la chat e'
-      // ferma perche' il lead sta nel pool del CRM, ma chi scrive lo gestisce il bot. Il
-      // CRM lo passa al bot se nessuno l'ha ancora preso; se e' gia' di un GDO la chat
-      // resta ferma. Sta PRIMA del pulsante: se il pulsante c'e', vince comunque lui.
-      if (conv && conv.handed_off_reason === HANDOFF_VERGINI && conv.crm_lead_id && autoReplyOn) {
-        const reclamo = await reclamaVergine(conv.crm_lead_id);
-        const ripresa = reclamo.preso
-          ? ripresaVergine({ id: conversationId, handed_off_reason: conv.handed_off_reason, lancio_info: conv.lancio_info as Record<string, unknown> | null }, new Date())
-          : null;
-        if (ripresa) {
-          const { data: riprese } = await supabase.from('conversations')
-            .update(ripresa as never).eq('id', conversationId).eq('handed_off_reason', HANDOFF_VERGINI).select('id');
-          if ((riprese ?? []).length > 0) {
-            conv.ai_status = ripresa.ai_status;
-            conv.ai_paused_at = null;
-            conv.handed_off_at = null;
-            conv.handed_off_reason = null;
-            conv.lancio_fase = ripresa.lancio_fase as typeof conv.lancio_fase;
-            conv.lancio_info = ripresa.lancio_info as typeof conv.lancio_info;
-          }
-        }
-        await supabase.from('event_log').insert({
-          type: reclamo.preso ? 'lancio_vergine_scrive' : 'lancio_vergine_scrive_non_preso',
-          payload: { conversationId, crmLeadId: conv.crm_lead_id, motivo: reclamo.motivo ?? null } as never,
-          message: reclamo.preso
-            ? `[lancio] lead del pool "mai contattati" ha scritto: passa al bot (conv ${conversationId})`
-            : `[lancio] lead del pool "mai contattati" ha scritto ma il CRM non lo passa al bot (${reclamo.motivo ?? '?'}): la chat resta ferma (conv ${conversationId})`,
-          level: reclamo.preso ? 'info' : 'warn',
-        });
-      }
 
       const markerPulsante = isMarkerPulsanteWebinar(messageBody);
       // L'interruttore `lancio_pulsante_attivo` si legge SOLO quando il marker c'e'

@@ -15,6 +15,7 @@ import { contaBenvenutiUltimaOra } from './lancio-db';
 import { mittenteDiConversazione, numeroPrimario } from './mittente';
 import { mittenteBenvenutoLancio } from './lancio-mittente';
 import { scegliMittenteNuovo, sidAperturaMario } from './scelta-mittente';
+import { HANDOFF_VERGINI, HANDOFF_CRM_NON_DEL_BOT } from './lancio-vergini';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -419,6 +420,26 @@ export async function enrollGdoLeadAsPostino(
       // volta per lead, non a ogni appuntamento. Ripeterlo suonerebbe come un disco.
     })
     .eq('id', conversationId);
+
+  // Le chat del lancio ferme per il pool (PO 07/10/2026, lib/lancio-vergini.ts) le ha
+  // fissate un GDO: da qui il bot fa da postino come per ogni lead GDO (video alla prima
+  // risposta, solleciti), quindi il fermo del pool cade. Un fermo messo a mano dal
+  // pannello invece resta: il filtro sul motivo lo lascia stare.
+  try {
+    await supabase
+      .from('conversations')
+      .update({ ai_paused_at: null, handed_off_at: null, handed_off_reason: null })
+      .eq('id', conversationId)
+      .in('handed_off_reason', [HANDOFF_VERGINI, HANDOFF_CRM_NON_DEL_BOT]);
+  } catch (e) {
+    // Best-effort: l'agenda e' gia' partita, non deve fallire per questo.
+    await supabase.from('event_log').insert({
+      type: 'gdo_agenda_sblocco_pool_fallito',
+      payload: { conversationId, error: e instanceof Error ? e.message : String(e) } as never,
+      message: `[gdo] conv ${conversationId}: fermo del pool non tolto dopo l'agenda`,
+      level: 'warn',
+    });
+  }
 
   await supabase.from('event_log').insert({
     type: res.ok ? 'gdo_agenda_sent' : 'send_error',

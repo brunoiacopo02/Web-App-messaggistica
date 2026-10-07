@@ -456,7 +456,9 @@ describe('enrollGdoLeadAsPostino — arruolamento in modalità postino', () => {
 
     await enrollGdoLeadAsPostino(supabase, PAYLOAD);
 
-    expect(calls.updates).toHaveLength(1);
+    // Il secondo update toglie l'eventuale fermo del pool del lancio (PO 07/10/2026).
+    expect(calls.updates).toHaveLength(2);
+    expect(calls.updates[1]).toEqual({ ai_paused_at: null, handed_off_at: null, handed_off_reason: null });
     expect(calls.updates[0]).toMatchObject({
       ai_owner: 'mario',
       ai_status: 'active',

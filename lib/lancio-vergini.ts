@@ -14,6 +14,27 @@ import { signPayload } from './bot-hmac';
 
 export const HANDOFF_VERGINI = 'lancio_pool_vergini';
 
+/** Chat fermate perché nel CRM il lead non era più del bot (07/10/2026). */
+export const HANDOFF_CRM_NON_DEL_BOT = 'crm_non_del_bot';
+/** Gruppo di prova "solo umani" del 106 e del 119. */
+const HANDOFF_TEST_UMANI = 'gdo_umani_lancio';
+
+/**
+ * Chat del lancio ferma che il bot riprende se il lead scrive (PO 07/10/2026: chi scrive
+ * al bot lo gestisce il bot, in qualunque pool sia): pool "mai contattati", restituita
+ * al pool dei GDO, fermata perché nel CRM non era più del bot, test umani.
+ */
+export function chatLancioFerma(c: {
+  lancio_slug: string | null;
+  lancio_fase: string | null;
+  handed_off_reason?: string | null;
+}): boolean {
+  if (!c.lancio_slug) return false;
+  const motivo = c.handed_off_reason ?? null;
+  if (motivo === HANDOFF_VERGINI || motivo === HANDOFF_CRM_NON_DEL_BOT || motivo === HANDOFF_TEST_UMANI) return true;
+  return c.lancio_fase === 'restituito';
+}
+
 /** Fasi da cui il blocco può essere partito: sono quelle che il follow-up lavora. */
 const FASI_RIPRISTINABILI = new Set(['attesa', 'posto_bloccato', 'link_inviato', 'post_pitch']);
 
