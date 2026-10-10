@@ -19,6 +19,7 @@ import {
   faseDopoRevocaCongedo, notaCongedoRevocato,
 } from '@/lib/lancio-fase';
 import { chatLancioFerma, reclamaVergine } from '@/lib/lancio-vergini';
+import { chatStudenteFerma } from '@/lib/studenti-offerta';
 import { dallaLiveDelLancio, dopoLaNotteDelLancio } from '@/lib/lancio-scelta';
 import { adessoLancio } from '@/lib/lancio-orologio';
 import type { Json } from '@/lib/supabase/types';
@@ -285,6 +286,29 @@ export async function POST(req: NextRequest) {
           type: 'lancio_lead_scrive_ripreso',
           payload: { conversationId, crmLeadId: conv.crm_lead_id, crm: reclamo.preso ? 'al_bot' : (reclamo.motivo ?? null), errore: errorePresa?.message ?? null } as never,
           message: `[lancio] lead con la chat ferma ha scritto: il bot la riprende (CRM: ${reclamo.preso ? 'passato al bot' : reclamo.motivo ?? '?'}) (conv ${conversationId})`,
+          level: errorePresa ? 'error' : 'info',
+        });
+      }
+
+      // Studente della lista 135 con la chat ferma (lib/studenti-offerta.ts, PO 10/10/2026):
+      // a chi non scrive non si scrive, chi scrive lo riprende Mario con la nota studenti
+      // (il segno `studente_offerta` resta in `lancio_info`).
+      if (conv && autoReplyOn && chatStudenteFerma(conv)) {
+        const { error: errorePresa } = await supabase.from('conversations').update({
+          ai_status: 'active', ai_paused_at: null, handed_off_at: null, handed_off_reason: null,
+          ...(conv.ai_owner ? {} : { ai_owner: 'mario' }),
+        }).eq('id', conversationId);
+        if (!errorePresa) {
+          conv.ai_status = 'active';
+          conv.ai_paused_at = null;
+          conv.handed_off_at = null;
+          conv.handed_off_reason = null;
+          if (!conv.ai_owner) conv.ai_owner = 'mario';
+        }
+        await supabase.from('event_log').insert({
+          type: 'studente_lista135_ripreso',
+          payload: { conversationId, crmLeadId: conv.crm_lead_id, errore: errorePresa?.message ?? null } as never,
+          message: `[studenti] lo studente ha scritto: Mario riprende la chat con la nota offerta studenti (conv ${conversationId})`,
           level: errorePresa ? 'error' : 'info',
         });
       }

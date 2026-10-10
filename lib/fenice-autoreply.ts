@@ -25,6 +25,7 @@ import {
   iscrittoDopoLiveContextNote,
 } from './lancio-followup';
 import { LANCIO_INGRESSO_LINK_SVILUPPATORE } from './primo-messaggio';
+import { eStudenteOfferta, STUDENTI_CONTEXT_NOTE } from './studenti-offerta';
 import { getLancioSettings, type LancioSettings } from './lancio-settings';
 import { alertUnaVolta } from './alert-una-volta';
 import type { LancioInfo } from './lancio-crm';
@@ -839,6 +840,11 @@ export async function drainMarioReplies(
       const notaLancioCompleta = lancioStandard && esitoInPiedi !== 'APPUNTAMENTO'
         ? [notaLancio ?? notaPrimo, NOTA_LANCIO_NIENTE_PASSAGGIO].filter(Boolean).join('\n\n')
         : notaLancio;
+      // Studente della lista 135 (lib/studenti-offerta.ts): sa che e' gia' nostro e gli
+      // propone la call per l'offerta studenti. Solo fuori dal lancio e dal postino.
+      const notaStudente = !postino && !lancio.lancio_slug && eStudenteOfferta(lancio.lancio_info)
+        ? [STUDENTI_CONTEXT_NOTE, notaPrimo].filter(Boolean).join('\n\n')
+        : null;
       const result = await generateMarioReply(history, {
         personaName: PERSONA_NAME[persona],
         giorniPieni,
@@ -862,6 +868,8 @@ export async function drainMarioReplies(
             }
           : notaLancioCompleta
             ? { contextNote: notaLancioCompleta }
+            : notaStudente
+            ? { contextNote: notaStudente }
             : notaPrimo
               ? { contextNote: notaPrimo }
               : {}),
