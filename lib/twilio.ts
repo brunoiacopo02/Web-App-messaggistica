@@ -14,6 +14,7 @@ type SendFreeTextInput = {
   to: string;
   body: string;
   from?: string;
+  mediaUrl?: string[];
 };
 
 type SendOptions = {
@@ -137,6 +138,7 @@ export async function sendFreeText(
       from: mittente,
       to: `whatsapp:${input.to}`,
       body: input.body,
+      ...(input.mediaUrl?.length ? { mediaUrl: input.mediaUrl } : {}),
       statusCallback: statusCallbackUrl(),
     });
     return { sid: msg.sid, status: msg.status };
