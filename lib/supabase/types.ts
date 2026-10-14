@@ -118,6 +118,8 @@ export type Database = {
           lancio_info: Json | null
           lancio_benvenuto_at: string | null
           lead_id: number
+          professione: string | null
+          scheda_inviata_at: string | null
           unread_count: number
           wa_number: string | null
         }
@@ -167,6 +169,8 @@ export type Database = {
           lancio_info?: Json | null
           lancio_benvenuto_at?: string | null
           lead_id: number
+          professione?: string | null
+          scheda_inviata_at?: string | null
           unread_count?: number
           wa_number?: string | null
         }
@@ -216,6 +220,8 @@ export type Database = {
           lancio_info?: Json | null
           lancio_benvenuto_at?: string | null
           lead_id?: number
+          professione?: string | null
+          scheda_inviata_at?: string | null
           unread_count?: number
           wa_number?: string | null
         }
