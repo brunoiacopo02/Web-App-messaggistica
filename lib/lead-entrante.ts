@@ -1,6 +1,7 @@
 import type { getSupabaseAdmin } from './supabase/admin';
 import { signPayload } from './bot-hmac';
 import type { ProvenienzaLeadEntrante } from './primo-messaggio';
+import type { SlugProfessione } from './professioni';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -20,6 +21,8 @@ export type PushLeadEntranteArgs = {
   primoMessaggio: string | null;
   /** ISO 8601 con offset esplicito: il `created_at` del primo inbound. */
   scrittoIl: string;
+  /** Corso scelto dal lead nel funnel Professioni: nel body solo se valorizzato. */
+  professione?: SlugProfessione | null;
 };
 
 export type PushLeadEntranteResult = { ok: boolean; leadId?: string; motivo?: string };
@@ -31,6 +34,7 @@ type LeadEntranteBody = {
   primoMessaggio: string | null;
   scrittoIl: string;
   conversationId: number;
+  professione?: string;
 };
 
 type LeadEntranteResponseBody = { ok?: boolean; leadId?: string; creato?: boolean; motivo?: string };
@@ -71,6 +75,7 @@ export async function pushLeadEntrante(
     primoMessaggio: args.primoMessaggio,
     scrittoIl: args.scrittoIl,
     conversationId: args.conversationId,
+    ...(args.professione ? { professione: args.professione } : {}),
   };
   const rawBody = JSON.stringify(body);
 

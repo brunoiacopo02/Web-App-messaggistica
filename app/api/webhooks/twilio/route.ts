@@ -27,6 +27,7 @@ import { impostaFaseLancio, marcaNotaRestituzione, revocaCongedo } from '@/lib/l
 import { notaInboundDopoRestituzione } from '@/lib/lancio-restituzioni';
 import { getLancioSettings } from '@/lib/lancio-settings';
 import { pushLeadEntrante } from '@/lib/lead-entrante';
+import { segnaProfessione } from '@/lib/professione-chat';
 import { eNumeroDelBot } from '@/lib/mittente';
 
 export const runtime = 'nodejs';
@@ -230,7 +231,7 @@ export async function POST(req: NextRequest) {
     if (toMatchesFenice) {
       const { data: conv } = await supabase
         .from('conversations')
-        .select('ai_owner, ai_status, ai_paused_at, handed_off_at, handed_off_reason, ai_started_at, crm_lead_id, bot_outcome, lancio_slug, lancio_fase, lancio_ingresso, lancio_info')
+        .select('ai_owner, ai_status, ai_paused_at, handed_off_at, handed_off_reason, ai_started_at, crm_lead_id, bot_outcome, lancio_slug, lancio_fase, lancio_ingresso, lancio_info, professione')
         .eq('id', conversationId)
         .single();
 
@@ -585,9 +586,17 @@ export async function POST(req: NextRequest) {
               provenienza,
               primoMessaggio: primoMessaggioTesto,
               scrittoIl: primoRigaInbound?.created_at ?? now,
+              professione: esito.tipo === 'professioni' ? esito.professione : null,
             }));
           }
         }
+      }
+
+      // Funnel Professioni (PO 14/10/2026): la frase "scheda del corso" segna il corso sulla
+      // chat, adottata adesso o gia' aperta. Serve alla nota di Mario e all'invio del PDF.
+      if (conv && !markerPulsante) {
+        const slug = await segnaProfessione(supabase, conversationId, messageBody);
+        if (slug) conv.professione = slug;
       }
 
       // Link "professione dello Sviluppatore AI" (PO 24/09/2026): chi ci scrive da li'

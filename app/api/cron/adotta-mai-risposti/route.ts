@@ -13,6 +13,7 @@ import { templateName } from '@/lib/name';
 import { inSendWindow } from '@/lib/sequence';
 import { assertTemplateSendable } from '@/lib/twilio';
 import { pushLeadEntrante } from '@/lib/lead-entrante';
+import { segnaProfessione } from '@/lib/professione-chat';
 import { mittenteDiConversazione, numeriDelBot } from '@/lib/mittente';
 
 export const runtime = 'nodejs';
@@ -241,6 +242,7 @@ export async function POST(req: NextRequest) {
       // Qui, prima del riaggancio: non c'e' nessun Twilio da non far aspettare, e il
       // CRM ha bisogno del leadId per poter accettare l'esito quando arriva. Il loro
       // lock e' per numero, non globale: fino a 35 push ravvicinati in un run vanno bene.
+      if (esito.tipo === 'professioni') await segnaProfessione(admin, c.id, primoRiga?.body);
       await pushLeadEntrante(admin, {
         conversationId: c.id,
         telefono: l.phone,
@@ -248,6 +250,7 @@ export async function POST(req: NextRequest) {
         provenienza,
         primoMessaggio: primoRiga?.body ?? null,
         scrittoIl: primoRiga?.created_at ?? now,
+        professione: esito.tipo === 'professioni' ? esito.professione : null,
       });
 
       // Chi e' arrivato dal pulsante del webinar si ferma qui: ha la fase, ha il lead sul

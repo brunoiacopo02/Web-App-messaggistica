@@ -171,3 +171,19 @@ describe('pushLeadEntrante', () => {
     expect(calls.events.find((e) => e.type === 'lead_entrante_push').payload.provenienza).toBe('Lancio Web Dev AI');
   });
 });
+
+describe('pushLeadEntrante professione', () => {
+  it('manda professione solo se valorizzata', async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_u: string, init: { body: string }) => {
+      bodies.push(init.body);
+      return { ok: true, status: 200, text: async () => '{"ok":true,"leadId":"L"}' };
+    }));
+    const { supabase } = makeSupabase();
+    const base: PushLeadEntranteArgs = { conversationId: 1, telefono: '+393331112222', nome: null, provenienza: 'PROFESSIONI', primoMessaggio: 'x', scrittoIl: '2026-10-14T10:00:00+02:00' };
+    await pushLeadEntrante(supabase, { ...base, professione: 'video_editor' });
+    await pushLeadEntrante(supabase, base);
+    expect(JSON.parse(bodies[0]).professione).toBe('video_editor');
+    expect('professione' in JSON.parse(bodies[1])).toBe(false);
+  });
+});
