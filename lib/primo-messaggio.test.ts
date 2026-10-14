@@ -158,3 +158,28 @@ Sono Luca`)).toBe(true);
     expect(vaRiagganciato({ tipo: 'lancio_link', provenienza: PROVENIENZA_LANCIO_WEBDEV })).toBe(true);
   });
 });
+
+describe('funnel Professioni', () => {
+  const link = 'Ciao, sono interessato alla professione di Video Editor e vorrei ricevere la scheda del corso';
+  it('frase del link → professioni con lo slug', () => {
+    expect(classificaPrimoMessaggio({ primoInbound: link, inboundCorrente: link }))
+      .toEqual({ tipo: 'professioni', provenienza: 'PROFESSIONI', professione: 'video_editor' });
+  });
+  it('vale anche se la frase arriva dopo un "ciao"', () => {
+    expect(classificaPrimoMessaggio({ primoInbound: 'ciao', inboundCorrente: link }).tipo).toBe('professioni');
+  });
+  it('senza corso riconosciuto → professione null', () => {
+    expect(classificaPrimoMessaggio({ primoInbound: 'mi mandi la scheda del corso?', inboundCorrente: 'mi mandi la scheda del corso?' }))
+      .toEqual({ tipo: 'professioni', provenienza: 'PROFESSIONI', professione: null });
+  });
+  it('il link del lancio resta lancio', () => {
+    const l = 'Ciao, ho visto la professione dello Sviluppatore AI e vorrei più informazioni';
+    expect(classificaPrimoMessaggio({ primoInbound: l, inboundCorrente: l }).tipo).toBe('lancio_link');
+  });
+  it('il pulsante del webinar vince sulle professioni', () => {
+    expect(classificaPrimoMessaggio({ primoInbound: link, inboundCorrente: 'Ho seguito la live Web Developer AI' }).tipo).toBe('lancio_pulsante');
+  });
+  it('il riaggancio di Marta vale come per INBOUND', () => {
+    expect(vaRiagganciato({ tipo: 'professioni', provenienza: 'PROFESSIONI', professione: null })).toBe(true);
+  });
+});

@@ -1,4 +1,5 @@
 import { funnelDaPrimoMessaggio } from './persona';
+import { isMarkerProfessioni, riconosciProfessione, PROVENIENZA_PROFESSIONI, type SlugProfessione } from './professioni';
 
 /**
  * Chi ci scrive per primo sul numero Fenice arriva da tre porte, e le tre non devono
@@ -13,6 +14,8 @@ import { funnelDaPrimoMessaggio } from './persona';
  *  - il link "professione dello Sviluppatore AI" (PO 24/09/2026) → la chat entra nel
  *    lancio gia' in fase `chiuso`, cioe' Mario standard col video della live, e sul CRM
  *    nasce nel bucket del lancio (stessa provenienza del pulsante);
+ *  - il funnel Professioni (PO 14/10/2026): la landing manda "scheda del corso" con il
+ *    nome della professione → PROFESSIONI, Mario standard col corso scelto (lib/professioni.ts);
  *  - tutto il resto → INBOUND, Mario standard.
  *
  * La provenienza Telegram si legge dal PRIMO inbound della conversazione (chi riscrive
@@ -43,13 +46,14 @@ export const MARKER_LINK_SVILUPPATORE = /professione dello sviluppatore ai/i;
 /** `conversations.lancio_ingresso` di chi entra dal link (accanto a 'lista' e 'pulsante_webinar'). */
 export const LANCIO_INGRESSO_LINK_SVILUPPATORE = 'link_sviluppatore' as const;
 
-export type ProvenienzaLeadEntrante = 'TELEGRAM' | 'INBOUND' | typeof PROVENIENZA_LANCIO_WEBDEV;
+export type ProvenienzaLeadEntrante = 'TELEGRAM' | 'INBOUND' | typeof PROVENIENZA_LANCIO_WEBDEV | typeof PROVENIENZA_PROFESSIONI;
 
 export type EsitoPrimoMessaggio =
   | { tipo: 'telegram'; provenienza: 'TELEGRAM' }
   | { tipo: 'inbound'; provenienza: 'INBOUND' }
   | { tipo: 'lancio_pulsante'; provenienza: typeof PROVENIENZA_LANCIO_WEBDEV }
-  | { tipo: 'lancio_link'; provenienza: typeof PROVENIENZA_LANCIO_WEBDEV };
+  | { tipo: 'lancio_link'; provenienza: typeof PROVENIENZA_LANCIO_WEBDEV }
+  | { tipo: 'professioni'; provenienza: typeof PROVENIENZA_PROFESSIONI; professione: SlugProfessione | null };
 
 export function isMarkerPulsanteWebinar(body: string | null | undefined): boolean {
   return MARKER_PULSANTE_WEBINAR.test(body ?? '');
@@ -89,6 +93,13 @@ export function classificaPrimoMessaggio(input: {
   // come Telegram: chi manda "ciao" e poi incolla la frase e' arrivato comunque da li'.
   if (isMarkerLinkSviluppatore(input.inboundCorrente) || isMarkerLinkSviluppatore(input.primoInbound)) {
     return { tipo: 'lancio_link', provenienza: PROVENIENZA_LANCIO_WEBDEV };
+  }
+  // Funnel Professioni (PO 14/10/2026): primo O corrente, come il link. Il corso si legge
+  // dal messaggio che contiene la frase; senza corso riconosciuto Mario chiede quale.
+  const frase = isMarkerProfessioni(input.inboundCorrente) ? input.inboundCorrente
+    : isMarkerProfessioni(input.primoInbound) ? input.primoInbound : null;
+  if (frase) {
+    return { tipo: 'professioni', provenienza: PROVENIENZA_PROFESSIONI, professione: riconosciProfessione(frase) };
   }
   // OR e non solo il primo: un Telegram scritto ORA (dopo un primo messaggio diverso)
   // deve restare TELEGRAM tanto quanto un Telegram scritto all'apertura — altrimenti
