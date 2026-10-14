@@ -52,12 +52,11 @@ Docente: Michela Menichelli (16 anni di esperienza, ha lavorato per RAI, Mediase
 Cosa si impara: linguaggio del montaggio, riprese, Adobe Premiere Pro, CapCut, color correction, audio, esportazione, AI per video (Kling AI, Runway ML, Luma AI), come trovare clienti e fare il primo lavoro.
 Sbocchi: video editor freelance, content creator, montatore per agenzie.
 
-WEB DEVELOPER
-Il web developer crea e gestisce siti e applicazioni web dalla A alla Z. Unisce competenze frontend e backend.
-Docente: Leonardo Zanarella (web developer nel settore bancario).
-Durata: 9 mesi di teoria, 4 settimane di progetti pratici, 2 mesi di stage. Totale 632 ore.
-Cosa si impara: HTML, CSS, JavaScript, jQuery, PHP, SQL, MySQL, Git, GitHub, API, intelligenza artificiale applicata al web.
-Sbocchi: frontend developer, backend developer, full stack developer junior, database administrator junior.
+SVILUPPATORE WEB AI
+Lo Sviluppatore Web AI progetta, realizza e pubblica siti e applicazioni web, dall'interfaccia fino al server e al database. Usa l'intelligenza artificiale ogni giorno per scrivere codice, risolvere errori e velocizzare lo sviluppo, ma verifica ogni risultato e resta responsabile della qualità del codice.
+Docente: Vincenzo Filangeri (sviluppatore full stack da 5 anni, progetti per aziende ed e-commerce tra cui PepsiCo e Calzedonia, laurea in Ingegneria Informatica e magistrale in intelligenza artificiale, formazione internazionale al MIT di Boston).
+Cosa si impara: setup e fondamenti dell'AI, VS Code, GitHub e Copilot, prompt e contesto, HTML, CSS, Flexbox e Grid, responsive design, JavaScript con l'AI, DOM, API REST, Node.js ed Express, database SQL, un progetto full stack completo, Git, pubblicazione con Vercel e dominio personalizzato, uso sicuro dell'AI (privacy, segreti, licenze).
+Sbocchi: sviluppatore web junior, frontend o full stack developer junior, freelance che realizza siti e applicazioni per aziende e professionisti.
 
 PROJECT MANAGER
 Il PM pianifica, coordina e controlla tutte le fasi di un progetto, dall'ideazione alla consegna.

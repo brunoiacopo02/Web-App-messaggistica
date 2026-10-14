@@ -872,3 +872,12 @@ describe('fuori finestra non si fissa', () => {
     expect(p).toContain('anche se è il lead a proportelo');
   });
 });
+
+describe('scheda Sviluppatore Web AI', () => {
+  it("la scheda del web developer e' quella Sviluppatore Web AI", () => {
+    const p = buildMarioSystem('Mario');
+    expect(p).toContain('SVILUPPATORE WEB AI');
+    expect(p).toContain('Vincenzo Filangeri');
+    expect(p).not.toContain('Zanarella');
+  });
+});
