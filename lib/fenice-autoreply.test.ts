@@ -28,6 +28,7 @@ import { eseguiTurnoLancio } from './lancio-turno';
 import { getLancioSettings } from './lancio-settings';
 import { TESTO_POSTO_BLOCCATO } from './lancio-fase';
 import { NOTA_PRIMO_CONTATTO } from './primo-contatto-note';
+import { sendFreeText } from './twilio';
 
 describe('shouldAutoReply', () => {
   const ok = { toMatchesFenice: true, autoReplyOn: true, aiOwner: 'mario', aiStatus: 'active' };
@@ -335,6 +336,8 @@ type ClaimedRow = {
   ai_owner?: string | null;
   ai_paused_at?: string | null;
   leads?: { first_name?: string | null } | null;
+  professione?: string | null;
+  scheda_inviata_at?: string | null;
 };
 type FakeMsgRow = { direction: string; body: string; template_sid: string | null; created_at: string };
 
@@ -2723,5 +2726,96 @@ describe('drainMarioReplies — iscritto dopo la live (PO 25/09)', () => {
     expect(nota).toMatch(/la live era gia' finita/);
     expect(nota).toContain(LIVE);
     expect(nota).not.toMatch(/ha risposto al nostro messaggio del giorno dopo/);
+  });
+});
+
+describe('drainMarioReplies — funnel Professioni: la scheda del corso (Task 7)', () => {
+  const VIDEO = 'https://corso.feniceacademy.it/conferenza-bx';
+  const BASE = 'https://bot.example.test';
+  const PDF = `${BASE}/schede/copywriter.pdf`;
+  const INGRESSO: FakeMsgRow = {
+    direction: 'in', body: 'Ciao, vorrei la scheda del corso di Copywriter', template_sid: null, created_at: '2026-10-14T10:00:00Z',
+  };
+  const riga = (professione: string | null): ClaimedRow => ({
+    id: 70, ai_started_at: null, crm_lead_id: 'crm70', bot_outcome: null, professione, scheda_inviata_at: null,
+  });
+  const conMedia = () => vi.mocked(sendFreeText).mock.calls
+    .map((c) => c[0] as { body: string; mediaUrl?: string[] })
+    .filter((a) => a.mediaUrl && a.mediaUrl.length > 0);
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', BASE);
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(sendFreeText).mockClear();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('(a) appuntamento col video su chat col corso: la scheda parte dopo, una volta', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: `Perfetto, allora ci siamo\nNoemi ti chiama prima della call\n${VIDEO}`,
+      appointmentFixed: true, passToHuman: false, videoWatched: false,
+    });
+    const { supabase, calls } = makeDrainSupabase(riga('copywriter'), [INGRESSO]);
+
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+
+    const media = conMedia();
+    expect(media).toHaveLength(1);
+    expect(media[0].mediaUrl).toEqual([PDF]);
+    // La scheda e' l'ultima bolla: esce dopo il blocco di conferma col video.
+    const ultima = vi.mocked(sendFreeText).mock.calls.at(-1)![0] as { mediaUrl?: string[] };
+    expect(ultima.mediaUrl).toEqual([PDF]);
+    expect(calls.events.find((e) => e.type === 'scheda_inviata')?.payload).toMatchObject({ slug: 'copywriter', momento: 'post_appuntamento' });
+  }, 20_000);
+
+  it('(b) stessa risposta su chat senza professione: nessuna scheda', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: `Perfetto, allora ci siamo\nNoemi ti chiama prima della call\n${VIDEO}`,
+      appointmentFixed: true, passToHuman: false, videoWatched: false,
+    });
+    const { supabase, calls } = makeDrainSupabase(riga(null), [INGRESSO]);
+
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+
+    expect(conMedia()).toHaveLength(0);
+    expect(calls.events.some((e) => e.type === 'scheda_inviata')).toBe(false);
+    const nota = (vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string }).contextNote ?? '';
+    expect(nota).not.toContain('FUNNEL PROFESSIONI');
+  }, 20_000);
+
+  it('(c) Mario chiede la scheda col tag prima dell\'appuntamento: PDF inviato, tag non nel testo', async () => {
+    // Il mock sta al posto di generateMarioReply: restituisce quello che il parser vero
+    // (lib/mario.ts, Task 5) produce da "...[SCHEDA:copywriter]" — tag tolto, slug a parte.
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Te la mando subito, intanto ti dico i prezzi\nTi va una call domani?',
+      appointmentFixed: false, passToHuman: false, videoWatched: false, schedaRichiesta: 'copywriter',
+    });
+    const { supabase, calls } = makeDrainSupabase(riga('copywriter'), [INGRESSO]);
+
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+
+    const media = conMedia();
+    expect(media).toHaveLength(1);
+    expect(media[0].mediaUrl).toEqual([PDF]);
+    const testi = vi.mocked(sendFreeText).mock.calls.map((c) => (c[0] as { body: string }).body).join('\n');
+    expect(testi).not.toContain('[SCHEDA');
+    expect(calls.events.find((e) => e.type === 'scheda_inviata')?.payload).toMatchObject({ momento: 'pre_appuntamento' });
+    const nota = (vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string }).contextNote ?? '';
+    expect(nota).toContain('FUNNEL PROFESSIONI');
+    expect(nota).toContain('[SCHEDA:copywriter]');
+    expect(nota).toContain(NOTA_PRIMO_CONTATTO);
+  }, 20_000);
+
+  it('slug non valido dal modello: si logga, niente invio', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Eccola', appointmentFixed: false, passToHuman: false, videoWatched: false, schedaNonValida: 'boh',
+    });
+    const { supabase, calls } = makeDrainSupabase(riga('copywriter'), [INGRESSO]);
+
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+
+    expect(conMedia()).toHaveLength(0);
+    expect(calls.events.some((e) => e.type === 'scheda_slug_non_valido')).toBe(true);
   });
 });
