@@ -3,6 +3,7 @@ import {
   TOUCH_OFFSETS_DAYS, SEQUENCE_END_DAYS, NUDGE1_MIN_H, NUDGE1_MAX_H, TRACKB_GIVEUP_H,
   inSendWindow, inOpeningWindow, anyDelivered, allOutboundDeadNoDelivery, countSequenceTouches,
   firstOutboundAtMs, lastOutboundAtMs, decideTrackA, decideTrackB, pickNudgeText,
+  pickNudgeTextScheda, usaNudgeScheda,
   type MsgLite,
   toRomeIso,
 } from './sequence';
@@ -400,5 +401,19 @@ describe('toRomeIso', () => {
     // 2026-01-15T10:00:00Z = 11:00 a Roma (CET)
     const iso = toRomeIso(Date.parse('2026-01-15T10:00:00Z'));
     expect(iso).toBe('2026-01-15T11:00:00+01:00');
+  });
+});
+
+describe('nudge scheda', () => {
+  it('testo col nome e il corso, forma neutra (non si indovina il genere)', () => {
+    expect(pickNudgeTextScheda('Anna', 'copywriter'))
+      .toBe("Anna, hai dato un'occhiata alla scheda di Copywriter? Ci vogliono due minuti. Così fissiamo la call e ne parliamo con calma");
+    expect(pickNudgeTextScheda(null, 'video_editor'))
+      .toBe("Hai dato un'occhiata alla scheda di Video Editor? Ci vogliono due minuti. Così fissiamo la call e ne parliamo con calma");
+  });
+  it('solo con scheda inviata e senza appuntamento', () => {
+    expect(usaNudgeScheda({ scheda_inviata_at: 'x', bot_outcome: null, professione: 'copywriter' })).toBe('copywriter');
+    expect(usaNudgeScheda({ scheda_inviata_at: 'x', bot_outcome: 'APPUNTAMENTO', professione: 'copywriter' })).toBeNull();
+    expect(usaNudgeScheda({ scheda_inviata_at: null, bot_outcome: null, professione: 'copywriter' })).toBeNull();
   });
 });

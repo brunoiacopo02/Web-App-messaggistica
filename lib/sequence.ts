@@ -1,4 +1,5 @@
 import { firstNameOf } from './name';
+import { isSlugProfessione, nomeProfessione, type SlugProfessione } from './professioni';
 
 const H = 3600_000;
 const D = 24 * H;
@@ -220,4 +221,17 @@ export function pickNudgeText(conversationId: number, firstName: string | null, 
   const clean = firstNameOf(firstName);
   const name = clean ? ` ${clean}` : '';
   return NUDGE_VARIANTS[conversationId % 3](name, personaName);
+}
+
+/** Funnel Professioni (spec §4): chi ha avuto la scheda e non ha fissato riceve questo. */
+export function pickNudgeTextScheda(firstName: string | null, slug: SlugProfessione): string {
+  const clean = firstNameOf(firstName);
+  const domanda = `dato un'occhiata alla scheda di ${nomeProfessione(slug)}? Ci vogliono due minuti. Così fissiamo la call e ne parliamo con calma`;
+  return clean ? `${clean}, hai ${domanda}` : `Hai ${domanda}`;
+}
+
+/** Il sollecito dedicato parte solo a chi ha ricevuto la scheda e non ha un appuntamento. */
+export function usaNudgeScheda(c: { scheda_inviata_at: string | null; bot_outcome: string | null; professione: string | null }): SlugProfessione | null {
+  if (!c.scheda_inviata_at || c.bot_outcome === 'APPUNTAMENTO') return null;
+  return isSlugProfessione(c.professione) ? c.professione : null;
 }

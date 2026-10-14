@@ -4,6 +4,8 @@ import {
   decideTrackA,
   decideTrackB,
   pickNudgeText,
+  pickNudgeTextScheda,
+  usaNudgeScheda,
   firstOutboundAtMs,
   lastOutboundAtMs,
   toRomeIso,
@@ -185,7 +187,7 @@ export async function GET(req: NextRequest) {
   for (let fromRow = 0; ; fromRow += 1000) {
     const { data, error } = await supabase
       .from('conversations')
-      .select('id, ai_status, ai_started_at, crm_lead_id, crm_funnel, bot_outcome, bot_followups_sent, wa_number, leads(phone_e164, first_name)')
+      .select('id, ai_status, ai_started_at, crm_lead_id, crm_funnel, bot_outcome, bot_followups_sent, wa_number, professione, scheda_inviata_at, leads(phone_e164, first_name)')
       .not('crm_lead_id', 'is', null)
       .in('ai_status', ['active'])
       // Lead dei GDO (modalità postino): hanno già l'appuntamento, la sequenza di
@@ -429,7 +431,8 @@ export async function GET(req: NextRequest) {
         skipped++;
         continue;
       }
-      const body = pickNudgeText(c.id, firstName, PERSONA_NAME[persona]);
+      const slugScheda = usaNudgeScheda(c as { scheda_inviata_at: string | null; bot_outcome: string | null; professione: string | null });
+      const body = slugScheda ? pickNudgeTextScheda(firstName, slugScheda) : pickNudgeText(c.id, firstName, PERSONA_NAME[persona]);
       sent++;
       const res = await sendFreeText({ to: phone, body, from });
       await supabase.from('messages').insert({
