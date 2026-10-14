@@ -4,6 +4,7 @@ import { romeNowContext } from './rome-time';
 import { bookingSlotsContext, computeBookingDays } from './booking-slots';
 import { sanitizeOutbound } from './outbound-sanitize';
 import { isoWithOffset } from './bot-contract';
+import { isSlugProfessione, type SlugProfessione } from './professioni';
 
 export const MARIO_MODEL = 'claude-sonnet-5';
 
@@ -32,6 +33,12 @@ export type MarioResult = {
    *  `letti` a zero su tutte le risposte significa che il prefisso non e' stabile.
    *  Lo riempie solo `generateMarioReply`. */
   cache?: { letti: number; scritti: number };
+  /** Scheda del corso che Mario chiede di inviare al lead (tag `[SCHEDA:<slug>]`). Solo
+   *  slug del catalogo: un valore inventato va in `schedaNonValida`, non qui. */
+  schedaRichiesta?: SlugProfessione;
+  /** Argomento del tag `[SCHEDA:...]` che non è uno slug del catalogo: il testo è pulito,
+   *  nessuna scheda viene inviata, ma il caso resta visibile nei log. */
+  schedaNonValida?: string;
 };
 
 const ESITO_RE = /\[ESITO:(APPUNTAMENTO|RICHIAMO|SCARTO|INTERROTTO)\|([^\]]*)\]/i;
@@ -39,6 +46,8 @@ const ESITO_RE = /\[ESITO:(APPUNTAMENTO|RICHIAMO|SCARTO|INTERROTTO)\|([^\]]*)\]/
  *  messaggio). Con la regex non globale la seconda restava nel testo visibile, e il
  *  lead si vedeva arrivare una bolla col tag tecnico e dentro il proprio numero. */
 const NOTA_RE = /\[NOTA\|([^\]]*)\]/gi;
+/** Come NOTA_RE: globale, così un secondo tag nello stesso messaggio non finisce in chat. */
+const SCHEDA_RE = /\[SCHEDA:([^\]]*)\]/gi;
 
 /** Rileva tag speciali, li rimuove dal testo visibile e ritorna flag + esito strutturato. */
 export function parseMarioReply(raw: string): MarioResult {
@@ -75,6 +84,10 @@ export function parseMarioReply(raw: string): MarioResult {
   const noteRaccolte = [...raw.matchAll(NOTA_RE)].map((m) => (m[1] ?? '').trim()).filter(Boolean);
   const notaCrm = noteRaccolte.length > 0 ? noteRaccolte.join('; ') : undefined;
 
+  const schedaArg = [...raw.matchAll(SCHEDA_RE)].map((m) => (m[1] ?? '').trim().toLowerCase())[0];
+  const schedaRichiesta = schedaArg && isSlugProfessione(schedaArg) ? schedaArg : undefined;
+  const schedaNonValida = schedaArg && !schedaRichiesta ? schedaArg : undefined;
+
   const visibleReply = sanitizeOutbound(
     raw
       .replace(ESITO_RE, '')
@@ -82,6 +95,7 @@ export function parseMarioReply(raw: string): MarioResult {
       .replace(/\[PASSAGGIO_UMANO\]/g, '')
       .replace(/\[VIDEO_VISTO\]/g, '')
       .replace(NOTA_RE, '')
+      .replace(SCHEDA_RE, '')
       .trim(),
   );
 
@@ -95,6 +109,8 @@ export function parseMarioReply(raw: string): MarioResult {
     discardReason,
     note,
     notaCrm,
+    schedaRichiesta,
+    schedaNonValida,
   };
 }
 

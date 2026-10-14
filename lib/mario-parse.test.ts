@@ -81,3 +81,20 @@ describe('[ESITO:RICHIAMO] — data solo se il lead l\'ha detta', () => {
     expect(r.appointmentFixed).toBe(true);
   });
 });
+
+describe('[SCHEDA]', () => {
+  it('slug valido: tolto dal testo e restituito', () => {
+    const r = parseMarioReply('Ecco qua\n[SCHEDA:video_editor]');
+    expect(r.schedaRichiesta).toBe('video_editor');
+    expect(r.visibleReply).toBe('Ecco qua');
+  });
+  it('slug inventato: tolto dal testo, segnalato, niente scheda', () => {
+    const r = parseMarioReply('Te la mando [SCHEDA:pizzaiolo]');
+    expect(r.schedaRichiesta).toBeUndefined();
+    expect(r.schedaNonValida).toBe('pizzaiolo');
+    expect(r.visibleReply).toBe('Te la mando');
+  });
+  it('senza tag nessun campo', () => {
+    expect(parseMarioReply('ciao').schedaRichiesta).toBeUndefined();
+  });
+});
