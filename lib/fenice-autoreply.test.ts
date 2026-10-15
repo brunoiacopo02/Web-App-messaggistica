@@ -338,6 +338,7 @@ type ClaimedRow = {
   leads?: { first_name?: string | null } | null;
   professione?: string | null;
   scheda_inviata_at?: string | null;
+  crm_funnel?: string | null;
 };
 type FakeMsgRow = { direction: string; body: string; template_sid: string | null; created_at: string };
 
@@ -2829,6 +2830,46 @@ ${VIDEO}`,
       expect(calls.events.some((e) => e.type === 'scheda_inviata')).toBe(false);
     }
   }, 30_000);
+
+  it('(e) chat nel funnel PROFESSIONI senza corso riconosciuto: Mario riceve la nota che chiede quale corso', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Certo! Quale corso ti interessa?', appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+    const { supabase } = makeDrainSupabase({ ...riga(null), crm_funnel: 'PROFESSIONI' }, [INGRESSO]);
+
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+
+    const nota = (vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string }).contextNote ?? '';
+    expect(nota).toContain('FUNNEL PROFESSIONI');
+    expect(nota).toContain('Non sappiamo ancora quale corso');
+    expect(nota).toContain('[SCHEDA:<slug>]');
+    expect(nota).toContain(NOTA_PRIMO_CONTATTO);
+  }, 20_000);
+
+  it('(f) scheda chiesta col tag su chat senza corso: inviata, e il corso si salva sulla chat', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Eccola, intanto ti dico i prezzi\nTi va una call domani?',
+      appointmentFixed: false, passToHuman: false, videoWatched: false, schedaRichiesta: 'copywriter',
+    });
+    const { supabase, calls } = makeDrainSupabase({ ...riga(null), crm_funnel: 'PROFESSIONI' }, [INGRESSO]);
+
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+
+    expect(conMedia()).toHaveLength(1);
+    expect(calls.convUpdates.some((u) => u.professione === 'copywriter')).toBe(true);
+  }, 20_000);
+
+  it('(g) chat con il corso gia segnato: il tag non riscrive professione', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Eccola', appointmentFixed: false, passToHuman: false, videoWatched: false, schedaRichiesta: 'copywriter',
+    });
+    const { supabase, calls } = makeDrainSupabase(riga('copywriter'), [INGRESSO]);
+
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+
+    expect(conMedia()).toHaveLength(1);
+    expect(calls.convUpdates.some((u) => 'professione' in u)).toBe(false);
+  }, 20_000);
 
   it('slug non valido dal modello: si logga, niente invio', async () => {
     vi.mocked(generateMarioReply).mockResolvedValueOnce({

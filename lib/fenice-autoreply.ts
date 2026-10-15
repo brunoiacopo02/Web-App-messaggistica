@@ -31,7 +31,7 @@ import { alertUnaVolta } from './alert-una-volta';
 import type { LancioInfo } from './lancio-crm';
 import { mittenteDiConversazione } from './mittente';
 import { professioniContextNote, schedaDaInviare } from './professioni-nota';
-import { isSlugProfessione } from './professioni';
+import { isSlugProfessione, PROVENIENZA_PROFESSIONI } from './professioni';
 import { inviaScheda } from './scheda-invio';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
@@ -409,7 +409,7 @@ export async function drainMarioReplies(
     // conversazione c'e' gia' un appuntamento in piedi, e lo declasserebbe.
     // `wa_number` e' il numero con cui questa chat e' nata: ogni bolla del turno — le
     // risposte di Mario, il video del GDO, i turni del lancio — deve partire da li'.
-    .select('id, ai_started_at, crm_lead_id, bot_outcome, bot_scheduled_at, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, gdo_appuntamento_at, lancio_slug, lancio_fase, lancio_ingresso, lancio_info, wa_number, professione, scheda_inviata_at, leads(first_name)')
+    .select('id, ai_started_at, crm_lead_id, bot_outcome, bot_scheduled_at, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, gdo_appuntamento_at, lancio_slug, lancio_fase, lancio_ingresso, lancio_info, wa_number, professione, scheda_inviata_at, crm_funnel, leads(first_name)')
     .single();
   // PGRST116 = nessuna riga: e' il caso NORMALE (conversazione non claimabile, o
   // lucchetto di un altro drain) e non va segnalato. Qualunque altro errore invece qui
@@ -434,8 +434,12 @@ export async function drainMarioReplies(
   const dataInPiedi = (claimed as { bot_scheduled_at?: string | null }).bot_scheduled_at ?? null;
   // Funnel Professioni: il corso scelto e se la scheda e' gia' partita. `let` perche' un
   // giro successivo dello stesso drain non deve riprovare l'invio (inviaScheda e' comunque
-  // idempotente sulla colonna).
-  const professione = (claimed as { professione?: string | null }).professione ?? null;
+  // idempotente sulla colonna) e perche' il corso scelto da Mario col tag, su una chat
+  // entrata senza corso riconosciuto, vale da li' in avanti.
+  let professione = (claimed as { professione?: string | null }).professione ?? null;
+  // Il funnel deciso all'adozione: una chat PROFESSIONI senza corso riconosciuto riceve la
+  // nota lo stesso (spec §2), e Mario chiede quale corso.
+  const funnelProfessioni = (claimed as { crm_funnel?: string | null }).crm_funnel === PROVENIENZA_PROFESSIONI;
   let schedaInviataAt = (claimed as { scheda_inviata_at?: string | null }).scheda_inviata_at ?? null;
 
   // Il mittente e' quello della chat (vedi lib/mittente.ts). Si risolve DOPO il claim
@@ -854,8 +858,9 @@ export async function drainMarioReplies(
         ? [STUDENTI_CONTEXT_NOTE, notaPrimo].filter(Boolean).join('\n\n')
         : null;
       // Funnel Professioni (PO 14/10/2026): fuori dal lancio e dal postino, la chat col corso
-      // segnato riceve la sua nota (si somma alla dichiarazione IA del primo contatto).
-      const notaProfessioni = !postino && !lancio.lancio_slug && professione !== null
+      // segnato, o nel funnel PROFESSIONI anche senza corso, riceve la sua nota (si somma
+      // alla dichiarazione IA del primo contatto).
+      const notaProfessioni = !postino && !lancio.lancio_slug && (professione !== null || funnelProfessioni)
         ? [professioniContextNote(isSlugProfessione(professione) ? professione : null), notaPrimo].filter(Boolean).join('\n\n')
         : null;
       const result = await generateMarioReply(history, {
@@ -1037,7 +1042,24 @@ export async function drainMarioReplies(
       }) : null;
       if (scheda) {
         const esitoScheda = await inviaScheda(supabase, { conversationId, phone, from, ...scheda });
-        if (esitoScheda === 'inviata') schedaInviataAt = new Date().toISOString();
+        if (esitoScheda === 'inviata') {
+          schedaInviataAt = new Date().toISOString();
+          // Chat entrata senza corso riconosciuto: lo slug del tag e' il corso scelto. Si
+          // salva, cosi' il video dopo l'appuntamento e il sollecito dedicato lo conoscono.
+          if (professione === null) {
+            professione = scheda.slug;
+            const { error: erroreCorso } = await supabase.from('conversations')
+              .update({ professione: scheda.slug }).eq('id', conversationId);
+            if (erroreCorso) {
+              await supabase.from('event_log').insert({
+                type: 'professione_non_scritta',
+                payload: { conversationId, slug: scheda.slug, errore: erroreCorso.message } as never,
+                message: `[professioni] conv ${conversationId}: corso ${scheda.slug} dal tag NON scritto — ${erroreCorso.message}`,
+                level: 'warn',
+              });
+            }
+          }
+        }
       }
 
       if (videoInsiemeAllaRisposta) {
