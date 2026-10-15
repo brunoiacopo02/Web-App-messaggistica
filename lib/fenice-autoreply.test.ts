@@ -2880,10 +2880,10 @@ ${VIDEO}`,
   }, 20_000);
 
   // Seconda prova di conv 3292: Mario non mette il tag e risponde "non abbiamo un pdf".
-  // La richiesta dopo la frase del link e' insistenza: il PDF parte lo stesso.
-  it('(l) conv 3292: il lead chiede il pdf e Mario non mette il tag → il PDF parte lo stesso', async () => {
+  // Il PO (15/10) vuole "certo che te la mando, prima voglio capire meglio": il PDF non parte da solo.
+  it('(l) conv 3292: il lead chiede il pdf → la nota dice "certo, prima capisco meglio", nessun PDF senza tag', async () => {
     vi.mocked(generateMarioReply).mockResolvedValueOnce({
-      visibleReply: 'Eccola, intanto ti dico i prezzi\nTi va una call domani?',
+      visibleReply: "Certo che te la mando! Prima pero' dimmi, come mai ti interessa il copywriting?",
       appointmentFixed: false, passToHuman: false, videoWatched: false,
     });
     const { supabase, calls } = makeDrainSupabase({ ...riga('copywriter'), ...CONV_3292 }, [
@@ -2895,12 +2895,11 @@ ${VIDEO}`,
 
     await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
 
-    const media = conMedia();
-    expect(media).toHaveLength(1);
-    expect(media[0].mediaUrl).toEqual([PDF]);
-    expect(calls.events.find((e) => e.type === 'scheda_inviata')?.payload).toMatchObject({ slug: 'copywriter', momento: 'pre_appuntamento' });
+    expect(conMedia()).toHaveLength(0);
+    expect(calls.events.some((e) => e.type === 'scheda_inviata')).toBe(false);
     const nota = (vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string }).contextNote ?? '';
     expect(nota).toContain('HA APPENA CHIESTO LA SCHEDA');
+    expect(nota).toContain('prima vuoi capire meglio');
   }, 20_000);
 
   it('(m) solo la frase del link: niente PDF senza tag (prima le domande)', async () => {

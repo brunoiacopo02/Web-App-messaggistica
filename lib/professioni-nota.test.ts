@@ -109,7 +109,7 @@ describe('chiedeLaScheda', () => {
 });
 
 describe('professioniContextNote con la richiesta appena fatta', () => {
-  it('dice di mandarla adesso col tag e vieta di dire che non esiste', () => {
+  it('dice "certo che te la mando, prima voglio capire meglio" e vieta di dire che non esiste', () => {
     const n = professioniContextNote('copywriter', { appenaChiesta: true });
     expect(n).toContain('HA APPENA CHIESTO LA SCHEDA');
     expect(n).toContain('[SCHEDA:copywriter]');

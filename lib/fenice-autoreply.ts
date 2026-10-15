@@ -878,13 +878,14 @@ export async function drainMarioReplies(
       // PROFESSIONI anche senza corso, riceve la sua nota (si somma alla dichiarazione IA del
       // primo contatto). Fuori dal lancio in corso e dalla call GDO ancora da fare
       // (`professioniVince`): su lancio chiuso o agenda passata la nota del funnel vince.
-      // Il lead chiede la scheda dopo la frase del link (conv 3292, seconda prova): e'
-      // l'insistenza della spec §3. La nota glielo dice e il PDF parte anche senza tag.
+      // Il lead chiede la scheda dopo la frase del link (conv 3292, seconda prova): Mario
+      // diceva "non abbiamo un pdf". La nota gli dice come rispondere (PO 15/10/2026):
+      // certo che te la mando, ma prima voglio capire meglio. Il quando resta a Mario.
       const idxTurno = nextUnansweredInboundIndex(rows);
-      const insisteScheda = vinceProfessioni && !schedaInviataAt && isSlugProfessione(professione) && idxTurno >= 0
+      const chiedeScheda =vinceProfessioni && !schedaInviataAt && isSlugProfessione(professione) && idxTurno >= 0
         && chiedeLaScheda(rows.slice(idxTurno).filter((m) => m.direction === 'in').map((m) => m.body ?? ''));
       const notaProfessioni = vinceProfessioni
-        ? [professioniContextNote(isSlugProfessione(professione) ? professione : null, { appenaChiesta: insisteScheda }), notaPrimo].filter(Boolean).join('\n\n')
+        ? [professioniContextNote(isSlugProfessione(professione) ? professione : null, { appenaChiesta: chiedeScheda }), notaPrimo].filter(Boolean).join('\n\n')
         : null;
       const result = await generateMarioReply(history, {
         personaName: PERSONA_NAME[persona],
@@ -1060,7 +1061,7 @@ export async function drainMarioReplies(
       const scheda = vinceProfessioni ? schedaDaInviare({
         professione,
         schedaInviataAt,
-        schedaRichiesta: result.schedaRichiesta ?? (insisteScheda && isSlugProfessione(professione) ? professione : undefined),
+        schedaRichiesta: result.schedaRichiesta,
         appuntamentoConVideoOra: result.appointmentFixed && !videoGiaInviato && parts.some((p) => containsVideoLink(p, linkExtra)),
       }) : null;
       if (scheda) {
