@@ -30,7 +30,7 @@ import { getLancioSettings, type LancioSettings } from './lancio-settings';
 import { alertUnaVolta } from './alert-una-volta';
 import type { LancioInfo } from './lancio-crm';
 import { mittenteDiConversazione } from './mittente';
-import { professioniContextNote, professioniVince, schedaDaInviare } from './professioni-nota';
+import { chiedeLaScheda, professioniContextNote, professioniVince, schedaDaInviare } from './professioni-nota';
 import { isSlugProfessione, PROVENIENZA_PROFESSIONI } from './professioni';
 import { inviaScheda } from './scheda-invio';
 
@@ -878,8 +878,13 @@ export async function drainMarioReplies(
       // PROFESSIONI anche senza corso, riceve la sua nota (si somma alla dichiarazione IA del
       // primo contatto). Fuori dal lancio in corso e dalla call GDO ancora da fare
       // (`professioniVince`): su lancio chiuso o agenda passata la nota del funnel vince.
+      // Il lead chiede la scheda dopo la frase del link (conv 3292, seconda prova): e'
+      // l'insistenza della spec §3. La nota glielo dice e il PDF parte anche senza tag.
+      const idxTurno = nextUnansweredInboundIndex(rows);
+      const insisteScheda = vinceProfessioni && !schedaInviataAt && isSlugProfessione(professione) && idxTurno >= 0
+        && chiedeLaScheda(rows.slice(idxTurno).filter((m) => m.direction === 'in').map((m) => m.body ?? ''));
       const notaProfessioni = vinceProfessioni
-        ? [professioniContextNote(isSlugProfessione(professione) ? professione : null), notaPrimo].filter(Boolean).join('\n\n')
+        ? [professioniContextNote(isSlugProfessione(professione) ? professione : null, { appenaChiesta: insisteScheda }), notaPrimo].filter(Boolean).join('\n\n')
         : null;
       const result = await generateMarioReply(history, {
         personaName: PERSONA_NAME[persona],
@@ -1055,7 +1060,7 @@ export async function drainMarioReplies(
       const scheda = vinceProfessioni ? schedaDaInviare({
         professione,
         schedaInviataAt,
-        schedaRichiesta: result.schedaRichiesta,
+        schedaRichiesta: result.schedaRichiesta ?? (insisteScheda && isSlugProfessione(professione) ? professione : undefined),
         appuntamentoConVideoOra: result.appointmentFixed && !videoGiaInviato && parts.some((p) => containsVideoLink(p, linkExtra)),
       }) : null;
       if (scheda) {

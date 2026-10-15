@@ -1,4 +1,4 @@
-import { PROFESSIONI, PROVENIENZA_PROFESSIONI, isSlugProfessione, nomeProfessione, type SlugProfessione } from './professioni';
+import { PROFESSIONI, PROVENIENZA_PROFESSIONI, isMarkerProfessioni, isSlugProfessione, nomeProfessione, type SlugProfessione } from './professioni';
 import { lancioInCorso } from './lancio-fase';
 import { oraAppuntamento } from './gdo-context-note';
 
@@ -6,7 +6,7 @@ import { oraAppuntamento } from './gdo-context-note';
  * Nota di contesto per chi arriva dal funnel Professioni (spec §2). Sta nella parte
  * variabile del prompt: il manuale di Mario resta identico e la cache non si rompe.
  */
-export function professioniContextNote(slug: SlugProfessione | null): string {
+export function professioniContextNote(slug: SlugProfessione | null, opts?: { appenaChiesta?: boolean }): string {
   const corso = slug
     ? `Il corso che ha scelto e' ${nomeProfessione(slug)}.`
     : `Non sappiamo ancora quale corso: chiediglielo (falso bivio se e' indeciso). Slug possibili: ${PROFESSIONI.map((p) => p.slug).join(', ')}.`;
@@ -19,6 +19,10 @@ export function professioniContextNote(slug: SlugProfessione | null): string {
     `SE INSISTE per averla prima di fissare (es. "mi avevate detto che me la mandavate"): mandala insieme al pitch, prezzi compresi, e nello stesso messaggio proponi comunque la call. Per mandarla scrivi in fondo al messaggio il tag ${tag}.`,
     `SE RIMANDA LA CALL PER GUARDARE PRIMA LA SCHEDA: mandala col tag ${tag} e prendi un impegno sul quando: deve averla vista entro domani, ci vogliono due minuti. Il quando lo dice lui (regola "PRIMA GUARDO IL CORSO").`,
     `Il tag ${tag} lo usi al massimo una volta: se la scheda e' gia' partita non rimandarla.`,
+    "LA SCHEDA ESISTE SEMPRE: non dire mai che non c'e' o che non abbiamo una scheda, una brochure o un pdf da mandare.",
+    ...(opts?.appenaChiesta
+      ? [`IL LEAD HA APPENA CHIESTO LA SCHEDA (o il pdf, la brochure) dopo la richiesta del link: e' l'insistenza qui sopra. Mandala IN QUESTO messaggio col tag ${tag}, insieme al pitch coi prezzi, e proponi comunque la call.`]
+      : []),
   ].join('\n');
 }
 
@@ -77,4 +81,15 @@ export function professioniVince(i: {
   const call = oraAppuntamento(i.botScheduledAt, i.gdoAppuntamentoAt);
   if (call && call.getTime() >= agenda) return call.getTime() <= i.now;
   return agenda + FINESTRA_CALL_GDO_SENZA_ORA_MS <= i.now;
+}
+
+// Conv 3292 (PO 15/10/2026, seconda prova): "me lo mandi ora?" + "il pdf intendo" e Mario,
+// coerente con il "non abbiamo una brochure" di un turno prima, rispondeva che il pdf non
+// c'era. Una richiesta della scheda dopo la frase del link e' l'insistenza della spec §3:
+// il PDF parte anche se il modello non mette il tag.
+const RICHIESTA_SCHEDA = /\b(scheda|pdf|brou?chure|depliant|programma)\b/i;
+
+/** I messaggi del lead in questo turno chiedono la scheda? La frase del link non conta. */
+export function chiedeLaScheda(testi: readonly string[]): boolean {
+  return testi.some((t) => !isMarkerProfessioni(t) && RICHIESTA_SCHEDA.test(t));
 }

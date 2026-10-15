@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { professioniContextNote, professioniVince, schedaDaInviare } from './professioni-nota';
+import { chiedeLaScheda, professioniContextNote, professioniVince, schedaDaInviare } from './professioni-nota';
 
 describe('professioniContextNote', () => {
   it('nomina il corso, la regola della scheda dopo l\'appuntamento e il tag', () => {
@@ -86,5 +86,35 @@ describe('professioniVince (PO 15/10/2026, conv 3292)', () => {
   it('niente corso e funnel non PROFESSIONI: perde', () => {
     expect(professioniVince({ ...base, professione: null, crmFunnel: 'Lancio Web Dev AI' })).toBe(false);
     expect(professioniVince({ ...base, professione: null })).toBe(false);
+  });
+});
+
+// Conv 3292 (15/10/2026, seconda prova): "me lo mandi ora?" + "il pdf intendo" e Mario
+// rispondeva "non abbiamo un pdf". La richiesta dopo la frase del link vale come insistenza.
+describe('chiedeLaScheda', () => {
+  it('pdf, brochure (anche scritta male), scheda, programma: si', () => {
+    expect(chiedeLaScheda(['me lo mandi ora?', 'il pdf intendo'])).toBe(true);
+    expect(chiedeLaScheda(['mandami la brouchure è un test'])).toBe(true);
+    expect(chiedeLaScheda(['mi mandi la brochure?'])).toBe(true);
+    expect(chiedeLaScheda(['e la scheda?'])).toBe(true);
+    expect(chiedeLaScheda(['mi giri il programma del corso?'])).toBe(true);
+  });
+  it("la frase del link da sola non conta: e' la prima richiesta, non l'insistenza", () => {
+    expect(chiedeLaScheda(['Ciao, sono interessato alla professione di Copywriter e vorrei ricevere la scheda del corso'])).toBe(false);
+  });
+  it('messaggi qualsiasi: no', () => {
+    expect(chiedeLaScheda(['lavoro in un negozio', 'si domani va bene'])).toBe(false);
+    expect(chiedeLaScheda([])).toBe(false);
+  });
+});
+
+describe('professioniContextNote con la richiesta appena fatta', () => {
+  it('dice di mandarla adesso col tag e vieta di dire che non esiste', () => {
+    const n = professioniContextNote('copywriter', { appenaChiesta: true });
+    expect(n).toContain('HA APPENA CHIESTO LA SCHEDA');
+    expect(n).toContain('[SCHEDA:copywriter]');
+  });
+  it("la regola 'la scheda esiste' c'e' sempre", () => {
+    expect(professioniContextNote('copywriter')).toMatch(/non dire mai che non (c'e'|abbiamo)/i);
   });
 });

@@ -2879,6 +2879,44 @@ ${VIDEO}`,
     expect(calls.events.find((e) => e.type === 'scheda_inviata')?.payload).toMatchObject({ slug: 'copywriter', momento: 'pre_appuntamento' });
   }, 20_000);
 
+  // Seconda prova di conv 3292: Mario non mette il tag e risponde "non abbiamo un pdf".
+  // La richiesta dopo la frase del link e' insistenza: il PDF parte lo stesso.
+  it('(l) conv 3292: il lead chiede il pdf e Mario non mette il tag → il PDF parte lo stesso', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Eccola, intanto ti dico i prezzi\nTi va una call domani?',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+    const { supabase, calls } = makeDrainSupabase({ ...riga('copywriter'), ...CONV_3292 }, [
+      INGRESSO,
+      { direction: 'out', body: 'Dimmi, tu attualmente lavori?', template_sid: null, created_at: '2026-10-14T10:00:30Z' },
+      { direction: 'in', body: 'me lo mandi ora?', template_sid: null, created_at: '2026-10-14T10:01:00Z' },
+      { direction: 'in', body: 'il pdf intendo', template_sid: null, created_at: '2026-10-14T10:01:05Z' },
+    ]);
+
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+
+    const media = conMedia();
+    expect(media).toHaveLength(1);
+    expect(media[0].mediaUrl).toEqual([PDF]);
+    expect(calls.events.find((e) => e.type === 'scheda_inviata')?.payload).toMatchObject({ slug: 'copywriter', momento: 'pre_appuntamento' });
+    const nota = (vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string }).contextNote ?? '';
+    expect(nota).toContain('HA APPENA CHIESTO LA SCHEDA');
+  }, 20_000);
+
+  it('(m) solo la frase del link: niente PDF senza tag (prima le domande)', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Te la mando volentieri, prima qualche domanda', appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+    const { supabase, calls } = makeDrainSupabase({ ...riga('copywriter'), ...CONV_3292 }, [INGRESSO]);
+
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+
+    expect(conMedia()).toHaveLength(0);
+    expect(calls.events.some((e) => e.type === 'scheda_inviata')).toBe(false);
+    const nota = (vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string }).contextNote ?? '';
+    expect(nota).not.toContain('HA APPENA CHIESTO LA SCHEDA');
+  }, 20_000);
+
   it('(j) agenda GDO passata con video mai uscito: il funnel non rimanda il video del GDO', async () => {
     vi.mocked(generateMarioReply).mockResolvedValueOnce({
       visibleReply: 'Te la mando volentieri, prima qualche domanda', appointmentFixed: false, passToHuman: false, videoWatched: false,
