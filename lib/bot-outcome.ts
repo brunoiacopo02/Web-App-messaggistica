@@ -517,6 +517,11 @@ export type SendOutcomeOpts = {
   /** Lead di proprietà di un GDO: al CRM va solo una NOTA, mai un esito. Non tocca
    * lo stato del lead, non tocca l'appuntamento, non chiude la conversazione. */
   noteOnly?: boolean;
+  /** Lead ancora di un GDO al CRM su cui il funnel Professioni ha fissato una call (conv
+   * 3292): il CRM accetta APPUNTAMENTO solo se il bot aveva il lead (BOT_PUSHED). Sul 403
+   * l'appuntamento va al GDO come NOTA e la chat resta aperta, invece di chiudersi in
+   * silenzio. Vale solo per APPUNTAMENTO. */
+  notaSeRifiutato?: boolean;
 };
 
 /** Cosa si e' deciso di fare con un esito che al CRM non puo' partire. */
@@ -1098,6 +1103,20 @@ export async function sendOutcome(
       return { sent: true, status: res.status, corpo };
     }
     const text = await res.text().catch(() => '');
+    if (res.status === 403 && opts.notaSeRifiutato === true && args.outcome === 'APPUNTAMENTO' && action.kind === 'normal' && !interim) {
+      // Il lead e' di un GDO e il CRM non prende l'appuntamento dal bot: la call fissata in
+      // chat arriva comunque a chi ha il lead, come nota. Niente bot_outcome, niente
+      // chiusura: il bot resta il canale di quella chat.
+      await supabase.from('event_log').insert({
+        type: 'bot_appuntamento_rifiutato_mandato_come_nota',
+        payload: { conversationId, crmLeadId, date: args.date ?? null, status: res.status, body: text } as never,
+        message: `[professioni] CRM ha rifiutato (403) l'APPUNTAMENTO per lead ${crmLeadId}: mandato come nota al GDO, chat aperta`,
+        level: 'warn',
+      });
+      const dataNota = row?.bot_scheduled_at ?? row?.gdo_appuntamento_at ?? null;
+      const nota = await sendCrmNoteOnly(supabase, conversationId, crmLeadId, args, dataNota, secret);
+      return { ...nota, keepOpen: true };
+    }
     if (res.status === 403) {
       // Il CRM rifiuta l'esito (lead non più assegnato al bot, es. già richiamato
       // nel pool umano): ritentare non può che ridare 403, quindi registra l'esito

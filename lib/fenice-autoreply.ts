@@ -1138,10 +1138,17 @@ export async function drainMarioReplies(
         // sempre 'active'. Il ramo 'booked' di canSendOutcome resta comunque la rete
         // a costo zero descritta nel suo commento.
         const canSend = canSendOutcome({ crmLeadId, aiStatus: 'active' });
+        // Il funnel ha vinto su una chat con un'agenda GDO (conv 3292): al CRM il lead e'
+        // ancora del GDO, e /api/bot/outcome accetta da noi solo NOTA, CONTATTO_UMANO e
+        // APPUNTAMENTO (questo solo se il bot aveva il lead). Gli altri esiti restano note,
+        // come sul postino, senza chiudere; l'appuntamento rifiutato torna indietro come nota.
+        // CONTATTO_UMANO non passa di qui: e' il ramo `passaAPersona`, gia' pieno.
+        const exPostino = agendaGdo && !postino;
+        const soloNota = postino || (exPostino && result.outcome !== 'APPUNTAMENTO');
         if (canSend) {
           // Sui lead del GDO niente report: al CRM va solo la nota, e il report
           // popolerebbe campi di un lead che non è nostro.
-          const report = postino ? undefined : await generateBotReport(history);
+          const report = soloNota ? undefined : await generateBotReport(history);
           const sent = await sendOutcome(supabase, conversationId, {
             outcome: result.outcome,
             date: result.scheduledAt,
@@ -1157,7 +1164,7 @@ export async function drainMarioReplies(
             // dei giorni ruota, e una call promessa alle 19:45 veniva scartata dopo
             // essere già stata confermata al lead in chat.
             bookingDays: result.bookingDays,
-          }, postino ? { noteOnly: true } : {});
+          }, soloNota ? { noteOnly: true } : exPostino ? { notaSeRifiutato: true } : {});
           // Esito CRM: chiudiamo se il callback è andato a buon fine; altrimenti
           // restiamo 'active' (ritentabile). In ogni caso usciamo: i rami legacy
           // (booked/handed_off) non valgono per i lead CRM.
@@ -1170,12 +1177,12 @@ export async function drainMarioReplies(
           // `keepOpen`: il CRM è stato informato con una nota (RICHIAMO senza una data
           // utilizzabile) ma la conversazione NON è esitata — il bot deve poter ancora
           // chiedere al lead quando gli va bene, invece di sparire.
-          if (!postino && !sent.keepOpen && (sent.sent || sent.error === 'note_duplicate')) {
+          if (!soloNota && !sent.keepOpen && (sent.sent || sent.error === 'note_duplicate')) {
             finalStatus = 'closed';
           }
           break;
         }
-        if (!postino) {
+        if (!soloNota) {
           // Lead adottato: il CRM non lo conosce, quindi `crm_lead_id` e' nullo e
           // l'esito non ha dove andare. Senza questo ramo non veniva scritto NIENTE —
           // `bot_outcome`, `bot_outcome_at` e `bot_scheduled_at` li tocca solo

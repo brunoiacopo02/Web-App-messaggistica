@@ -2890,6 +2890,66 @@ ${VIDEO}`,
     expect(calls.events.some((e) => e.type === 'gdo_video_sent')).toBe(false);
   }, 20_000);
 
+  // Il lead di 3292 e' ancora di un GDO al CRM: /api/bot/outcome accetta solo NOTA,
+  // CONTATTO_UMANO e APPUNTAMENTO, il resto e' 403 e chiuderebbe la chat in silenzio.
+  it('(k) funnel che vince su agenda passata: uno scarto resta una NOTA e non chiude la chat', async () => {
+    vi.mocked(sendOutcome).mockClear();
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Va bene, nessun problema', appointmentFixed: false, passToHuman: false, videoWatched: false,
+      outcome: 'DA_SCARTARE', discardReason: 'non gli interessa',
+    });
+    const { supabase, calls } = makeDrainSupabase({ ...riga('copywriter'), ...CONV_3292 }, [INGRESSO]);
+
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+
+    expect(sendOutcome).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendOutcome).mock.calls[0][3]).toEqual({ noteOnly: true });
+    expect(calls.finalStatusWrites).toEqual(['active']);
+  }, 20_000);
+
+  it('(l) funnel che vince su agenda passata: APPUNTAMENTO parte pieno, con la nota di riserva sul 403', async () => {
+    vi.mocked(sendOutcome).mockClear();
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto', appointmentFixed: true, passToHuman: false, videoWatched: false,
+      outcome: 'APPUNTAMENTO', scheduledAt: '2026-10-16T15:00:00+02:00',
+    });
+    const { supabase } = makeDrainSupabase({ ...riga('copywriter'), ...CONV_3292 }, [INGRESSO]);
+
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+
+    expect(sendOutcome).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'APPUNTAMENTO' });
+    expect(vi.mocked(sendOutcome).mock.calls[0][3]).toEqual({ notaSeRifiutato: true });
+  }, 20_000);
+
+  it('(l2) funnel che vince su agenda passata: il passaggio a una persona parte come CONTATTO_UMANO pieno', async () => {
+    vi.mocked(sendOutcome).mockClear();
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Ti faccio chiamare da una collega', appointmentFixed: false, passToHuman: true, videoWatched: false,
+    });
+    const { supabase } = makeDrainSupabase({ ...riga('copywriter'), ...CONV_3292 }, [INGRESSO]);
+
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+
+    expect(sendOutcome).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'CONTATTO_UMANO' });
+    expect(vi.mocked(sendOutcome).mock.calls[0][3]).toBeUndefined();
+  }, 20_000);
+
+  it('(m) funnel senza agenda GDO: gli esiti partono come sempre, senza opzioni', async () => {
+    vi.mocked(sendOutcome).mockClear();
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Va bene', appointmentFixed: false, passToHuman: false, videoWatched: false,
+      outcome: 'DA_SCARTARE', discardReason: 'non gli interessa',
+    });
+    const { supabase, calls } = makeDrainSupabase(riga('copywriter'), [INGRESSO]);
+
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+
+    expect(vi.mocked(sendOutcome).mock.calls[0][3]).toEqual({});
+    expect(calls.finalStatusWrites).toEqual(['closed']);
+  }, 20_000);
+
   it('(e) chat nel funnel PROFESSIONI senza corso riconosciuto: Mario riceve la nota che chiede quale corso', async () => {
     vi.mocked(generateMarioReply).mockResolvedValueOnce({
       visibleReply: 'Certo! Quale corso ti interessa?', appointmentFixed: false, passToHuman: false, videoWatched: false,

@@ -791,6 +791,53 @@ describe('sendOutcome — canale solo-NOTA per i lead dei GDO (noteOnly)', () =>
   });
 });
 
+describe('sendOutcome — notaSeRifiutato: APPUNTAMENTO su un lead ancora di un GDO', () => {
+  // Funnel Professioni su un vecchio lead GDO (conv 3292): il CRM accetta APPUNTAMENTO
+  // solo se il bot aveva il lead (BOT_PUSHED). Sul 403 l'appuntamento non si perde e la
+  // chat non si chiude: va al GDO come nota.
+  const CONV = { crm_lead_id: 'gdo1', bot_outcome: null, bot_scheduled_at: null };
+  const risposte = (...status: number[]) => {
+    const f = vi.fn();
+    for (const s of status) f.mockResolvedValueOnce({ ok: s < 300, status: s, text: async () => 'forbidden', json: async () => ({}) });
+    vi.stubGlobal('fetch', f);
+    return f;
+  };
+
+  it("403 sull'APPUNTAMENTO: rimandato come NOTA, chat aperta, evento scritto", async () => {
+    const f = risposte(403, 200);
+    const { supabase, calls } = makeSupabase(CONV);
+    const res = await sendOutcome(supabase, 7, { outcome: 'APPUNTAMENTO', date: giornoUtile() }, { notaSeRifiutato: true });
+
+    expect(f).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(f.mock.calls[0][1].body).outcome).toBe('APPUNTAMENTO');
+    expect(JSON.parse(f.mock.calls[1][1].body).outcome).toBe('NOTA');
+    expect(res.sent).toBe(true);
+    expect(res.keepOpen).toBe(true);
+    for (const u of calls.updates) expect(u).not.toHaveProperty('ai_status');
+    expect(calls.events.some((e) => e.type === 'bot_appuntamento_rifiutato_mandato_come_nota')).toBe(true);
+  });
+
+  it('APPUNTAMENTO accettato: esito pieno come sempre', async () => {
+    const f = risposte(200);
+    const { supabase, calls } = makeSupabase(CONV);
+    const res = await sendOutcome(supabase, 7, { outcome: 'APPUNTAMENTO', date: giornoUtile() }, { notaSeRifiutato: true });
+
+    expect(f).toHaveBeenCalledTimes(1);
+    expect(res.sent).toBe(true);
+    expect(res.keepOpen).toBeUndefined();
+    expect(calls.updates.some((u) => u.bot_outcome === 'APPUNTAMENTO')).toBe(true);
+  });
+
+  it("senza l'opzione il 403 chiude come prima", async () => {
+    risposte(403);
+    const { supabase, calls } = makeSupabase(CONV);
+    const res = await sendOutcome(supabase, 7, { outcome: 'APPUNTAMENTO', date: giornoUtile() });
+
+    expect(res.sent).toBe(false);
+    expect(calls.updates.some((u) => u.ai_status === 'closed')).toBe(true);
+  });
+});
+
 describe('sendOutcome — cancel_requested_at', () => {
   const fissato = { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE };
   const marcature = (calls: ReturnType<typeof makeSupabase>['calls']) =>

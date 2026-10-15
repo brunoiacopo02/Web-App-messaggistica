@@ -77,6 +77,12 @@ describe('professioniVince (PO 15/10/2026, conv 3292)', () => {
   it('agenda senza ora della call oltre la finestra di 7 giorni: vince', () => {
     expect(professioniVince({ ...base, gdoAgendaAt: '2026-10-08T11:59:00Z' })).toBe(true);
   });
+  it("ora della call precedente all'agenda: si ignora e vale la finestra dall'agenda", () => {
+    // Call di un giro precedente (12/10) rimasta sulla riga, agenda nuova del 14/10: la
+    // call nuova puo' essere ancora da fare.
+    expect(professioniVince({ ...base, gdoAgendaAt: '2026-10-14T09:00:00Z', gdoAppuntamentoAt: '2026-10-12T15:00:00Z' })).toBe(false);
+    expect(professioniVince({ ...base, gdoAgendaAt: '2026-10-01T09:00:00Z', botScheduledAt: '2026-09-20T15:00:00Z' })).toBe(true);
+  });
   it('niente corso e funnel non PROFESSIONI: perde', () => {
     expect(professioniVince({ ...base, professione: null, crmFunnel: 'Lancio Web Dev AI' })).toBe(false);
     expect(professioniVince({ ...base, professione: null })).toBe(false);

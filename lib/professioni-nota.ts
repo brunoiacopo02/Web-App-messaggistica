@@ -48,10 +48,14 @@ export const FINESTRA_CALL_GDO_SENZA_ORA_MS = 7 * 24 * 60 * 60 * 1000;
  *
  * Vince quando ha scelto un corso (o e' entrata nel funnel PROFESSIONI) E:
  * - il lancio non e' in corso: niente `lancio_slug`, o fase terminale (LANCIO_FASI_TERMINALI:
- *   'chiuso', 'restituito'). Una fase attiva o nulla con lo slug resta del lancio;
+ *   'chiuso', 'restituito'). Una fase attiva o nulla con lo slug resta del lancio.
+ *   'restituito' conta come lancio finito, ma in pratica qui non arriva: quelle chat il
+ *   webhook non le riapre mai (app/api/webhooks/twilio/route.ts, ramo `restituito`),
+ *   il lead e' tornato al GDO e il bot non gli risponde piu';
  * - non c'e' una call GDO ancora da fare: niente agenda, oppure l'ora della call (la piu'
  *   recente fra `bot_scheduled_at` e `gdo_appuntamento_at`, come `oraAppuntamento`) e' passata;
- *   senza ora, l'agenda e' piu' vecchia di FINESTRA_CALL_GDO_SENZA_ORA_MS.
+ *   senza ora, o con un'ora precedente all'agenda, l'agenda e' piu' vecchia di
+ *   FINESTRA_CALL_GDO_SENZA_ORA_MS. Un'agenda illeggibile resta protetta.
  */
 export function professioniVince(i: {
   professione: string | null;
@@ -66,8 +70,11 @@ export function professioniVince(i: {
   if (i.professione === null && i.crmFunnel !== PROVENIENZA_PROFESSIONI) return false;
   if (lancioInCorso({ lancio_slug: i.lancioSlug, lancio_fase: i.lancioFase })) return false;
   if (i.gdoAgendaAt === null) return true;
-  const call = oraAppuntamento(i.botScheduledAt, i.gdoAppuntamentoAt);
-  if (call) return call.getTime() <= i.now;
   const agenda = Date.parse(i.gdoAgendaAt);
-  return !Number.isNaN(agenda) && agenda + FINESTRA_CALL_GDO_SENZA_ORA_MS <= i.now;
+  if (Number.isNaN(agenda)) return false;
+  // Una call precedente all'agenda e' di un giro vecchio rimasto sulla riga: non dice
+  // niente della call fissata con questa agenda, quindi vale la finestra dall'agenda.
+  const call = oraAppuntamento(i.botScheduledAt, i.gdoAppuntamentoAt);
+  if (call && call.getTime() >= agenda) return call.getTime() <= i.now;
+  return agenda + FINESTRA_CALL_GDO_SENZA_ORA_MS <= i.now;
 }
