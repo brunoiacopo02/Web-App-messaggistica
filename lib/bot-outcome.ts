@@ -5,6 +5,7 @@ import {
   buildAppuntamentoNonFissabileNote,
   buildContattoUmanoNote,
   buildLockedNote,
+  buildAppuntamentoRifiutatoNote,
   buildRichiamoSenzaDataNote,
   checkDataAppuntamento,
   checkDataRichiamo,
@@ -282,8 +283,10 @@ async function sendCrmNoteOnly(
   args: SendOutcomeArgs,
   existingDate: string | null,
   secret: string,
+  /** Testo gia' pronto al posto di `buildLockedNote` (fallback dell'APPUNTAMENTO rifiutato). */
+  testo?: string,
 ): Promise<{ sent: boolean; status?: number; error?: string }> {
-  const note = buildLockedNote(args, existingDate);
+  const note = testo ?? buildLockedNote(args, existingDate);
   if (isRichiestaDisdetta(args.outcome)) await marcaDisdetta(supabase, conversationId, crmLeadId, args.outcome);
   const fp = noteFingerprint(note);
   if (await notaGiaInviata(supabase, 'bot_note_sent', conversationId, fp)) {
@@ -1114,7 +1117,7 @@ export async function sendOutcome(
         level: 'warn',
       });
       const dataNota = row?.bot_scheduled_at ?? row?.gdo_appuntamento_at ?? null;
-      const nota = await sendCrmNoteOnly(supabase, conversationId, crmLeadId, args, dataNota, secret);
+      const nota = await sendCrmNoteOnly(supabase, conversationId, crmLeadId, args, dataNota, secret, buildAppuntamentoRifiutatoNote(args));
       return { ...nota, keepOpen: true };
     }
     if (res.status === 403) {

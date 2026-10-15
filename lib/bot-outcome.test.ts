@@ -806,11 +806,17 @@ describe('sendOutcome — notaSeRifiutato: APPUNTAMENTO su un lead ancora di un 
   it("403 sull'APPUNTAMENTO: rimandato come NOTA, chat aperta, evento scritto", async () => {
     const f = risposte(403, 200);
     const { supabase, calls } = makeSupabase(CONV);
-    const res = await sendOutcome(supabase, 7, { outcome: 'APPUNTAMENTO', date: giornoUtile() }, { notaSeRifiutato: true });
+    const data = giornoUtile();
+    const res = await sendOutcome(supabase, 7, { outcome: 'APPUNTAMENTO', date: data }, { notaSeRifiutato: true });
 
     expect(f).toHaveBeenCalledTimes(2);
     expect(JSON.parse(f.mock.calls[0][1].body).outcome).toBe('APPUNTAMENTO');
-    expect(JSON.parse(f.mock.calls[1][1].body).outcome).toBe('NOTA');
+    const nota = JSON.parse(f.mock.calls[1][1].body);
+    expect(nota.outcome).toBe('NOTA');
+    // Senza data in agenda sulla riga, la nota "RICONFERMA" non diceva QUANDO: il GDO
+    // deve leggere che il bot ha fissato una call e per quando.
+    expect(nota.note).toContain(`il bot ha fissato una call per ${formatRomeDateTime(data)}`);
+    expect(nota.note).not.toContain('RICONFERMA');
     expect(res.sent).toBe(true);
     expect(res.keepOpen).toBe(true);
     for (const u of calls.updates) expect(u).not.toHaveProperty('ai_status');

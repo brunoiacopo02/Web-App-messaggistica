@@ -117,6 +117,23 @@ export function buildLockedNote(args: OutcomeArgs, existingDate: string | null):
 }
 
 /**
+ * La nota per il GDO quando il CRM rifiuta (403) l'APPUNTAMENTO che il bot ha fissato su un
+ * lead ancora suo (funnel Professioni su un vecchio lead GDO, `notaSeRifiutato`). La nota
+ * "RICONFERMA" di `buildLockedNote` qui non va: senza data in agenda sulla riga non diceva
+ * quando, e la data appena fissata si perdeva.
+ */
+export function buildAppuntamentoRifiutatoNote(args: OutcomeArgs): string {
+  const parole = paroleDelLead(args.leadWords);
+  const citazione = parole ? ` Parole del lead: "${parole}".` : '';
+  const extra = args.note && args.note.trim() ? ` ${args.note.trim()}` : '';
+  const quando = args.date && !Number.isNaN(Date.parse(args.date))
+    ? `per ${formatRomeDateTime(args.date)}`
+    : '(data non letta dalla chat)';
+  const base = `CALL FISSATA DAL BOT — il bot ha fissato una call ${quando} in chat. Il lead è vostro, quindi non è entrata come appuntamento: da mettere in agenda voi.`;
+  return `${base}${extra}${citazione}`.trim();
+}
+
+/**
  * Decide cosa fare con un esito in arrivo dato l'esito corrente della conversazione.
  * Se la conversazione è già APPUNTAMENTO l'esito è terminale: 'locked' (nota, niente
  * declassamento). Altrimenti 'normal' (comportamento standard).
