@@ -30,7 +30,7 @@ import { getLancioSettings, type LancioSettings } from './lancio-settings';
 import { alertUnaVolta } from './alert-una-volta';
 import type { LancioInfo } from './lancio-crm';
 import { mittenteDiConversazione } from './mittente';
-import { professioniContextNote, schedaDaInviare } from './professioni-nota';
+import { professioniContextNote, professioniVince, schedaDaInviare } from './professioni-nota';
 import { isSlugProfessione, PROVENIENZA_PROFESSIONI } from './professioni';
 import { inviaScheda } from './scheda-invio';
 
@@ -529,7 +529,9 @@ export async function drainMarioReplies(
   };
   const gdoAgendaAt = gdo.gdo_agenda_at ?? null;
   const gdoVideoUrl = gdo.gdo_video_url ?? null;
-  const postino = gdoAgendaAt !== null;
+  // La chat ha ricevuto un'agenda GDO. Se il turno e' davvero del postino lo decide il giro
+  // (`postino` nel ciclo qui sotto): il funnel Professioni vince su un'agenda gia' passata.
+  const agendaGdo = gdoAgendaAt !== null;
   let gdoVideoSentAt = gdo.gdo_video_sent_at ?? null;
   let gdoVideoWatchedAt = gdo.gdo_video_watched_at ?? null;
   // Non incrementato qui: il contatore dei solleciti lo muove solo il cron dedicato.
@@ -746,7 +748,20 @@ export async function drainMarioReplies(
       // finirebbe a log come link inventato, e il blocco di conferma direbbe "link video
       // assente" (niente passaggio FATTO) proprio nel turno in cui il video esce.
       // Sui quattro video classici non cambia nulla: sono gia' nella whitelist.
-      const lancioStandard = lancioStandardDrain(lancio);
+      // Funnel Professioni (PO 15/10/2026, conv 3292): chi scrive la frase delle Professioni
+      // su una chat col lancio finito e senza una call GDO ancora da fare e' del funnel. Il
+      // turno e' quello del funnel: niente contesto GDO (nota, video, Noemi, esiti solo nota)
+      // e niente note del lancio chiuso. Si decide qui, a ogni giro, perche' il turno del
+      // lancio qui sopra puo' aver appena chiuso la fase.
+      const vinceProfessioni = professioniVince({
+        professione,
+        crmFunnel: funnelProfessioni ? PROVENIENZA_PROFESSIONI : null,
+        lancioSlug: lancio.lancio_slug, lancioFase: lancio.lancio_fase,
+        gdoAgendaAt, botScheduledAt, gdoAppuntamentoAt,
+        now: Date.now(),
+      });
+      const postino = agendaGdo && !vinceProfessioni;
+      const lancioStandard = !vinceProfessioni && lancioStandardDrain(lancio);
       // Chi e' entrato dal link "professione dello Sviluppatore AI" (PO 24/09/2026): prima
       // della live non c'e' nessuna registrazione da mandare, e nessun avviso da scrivere
       // perche' manca — i video restano i classici e Mario non nomina la live.
@@ -789,7 +804,7 @@ export async function drainMarioReplies(
         gdoVideoSentAt = sentAt;
       };
 
-      const videoDaMandare = shouldSendGdoVideo({ gdoAgendaAt, gdoVideoUrl, gdoVideoSentAt });
+      const videoDaMandare = postino && shouldSendGdoVideo({ gdoAgendaAt, gdoVideoUrl, gdoVideoSentAt });
       // Il video può essere l'UNICA risposta solo se il lead non ha chiesto niente. Se
       // ha fatto una domanda o un'obiezione, il modello risponde e il video esce
       // insieme: prima il video partiva al posto della risposta, l'ultimo messaggio
@@ -822,7 +837,9 @@ export async function drainMarioReplies(
       const martaSids = martaSidsFromEnv();
       // I lead dei GDO ricevono l'agenda firmata Marta: la conversazione prosegue con
       // quel nome, altrimenti il lead si vedrebbe rispondere da qualcun altro.
-      const persona = postino
+      // Su `agendaGdo`, non su `postino`: chi ha ricevuto l'agenda firmata Marta continua a
+      // parlare con Marta anche quando il turno e' del funnel Professioni.
+      const persona = agendaGdo
         ? 'marta'
         : martaSids.size > 0
           ? personaForConversation(rows, martaSids)
@@ -857,10 +874,11 @@ export async function drainMarioReplies(
       const notaStudente = !postino && !lancio.lancio_slug && eStudenteOfferta(lancio.lancio_info)
         ? [STUDENTI_CONTEXT_NOTE, notaPrimo].filter(Boolean).join('\n\n')
         : null;
-      // Funnel Professioni (PO 14/10/2026): fuori dal lancio e dal postino, la chat col corso
-      // segnato, o nel funnel PROFESSIONI anche senza corso, riceve la sua nota (si somma
-      // alla dichiarazione IA del primo contatto).
-      const notaProfessioni = !postino && !lancio.lancio_slug && (professione !== null || funnelProfessioni)
+      // Funnel Professioni (PO 14/10/2026): la chat col corso segnato, o nel funnel
+      // PROFESSIONI anche senza corso, riceve la sua nota (si somma alla dichiarazione IA del
+      // primo contatto). Fuori dal lancio in corso e dalla call GDO ancora da fare
+      // (`professioniVince`): su lancio chiuso o agenda passata la nota del funnel vince.
+      const notaProfessioni = vinceProfessioni
         ? [professioniContextNote(isSlugProfessione(professione) ? professione : null), notaPrimo].filter(Boolean).join('\n\n')
         : null;
       const result = await generateMarioReply(history, {
@@ -1033,8 +1051,8 @@ export async function drainMarioReplies(
           level: 'warn',
         });
       }
-      // Stessa condizione della nota: nel postino e nel lancio la scheda non parte mai.
-      const scheda = !postino && !lancio.lancio_slug ? schedaDaInviare({
+      // Stessa condizione della nota: nel postino e nel lancio in corso la scheda non parte mai.
+      const scheda = vinceProfessioni ? schedaDaInviare({
         professione,
         schedaInviataAt,
         schedaRichiesta: result.schedaRichiesta,

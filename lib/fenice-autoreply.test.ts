@@ -28,6 +28,7 @@ import { eseguiTurnoLancio } from './lancio-turno';
 import { getLancioSettings } from './lancio-settings';
 import { TESTO_POSTO_BLOCCATO } from './lancio-fase';
 import { NOTA_PRIMO_CONTATTO } from './primo-contatto-note';
+import { NOTA_LANCIO_NIENTE_PASSAGGIO } from './lancio-followup';
 import { sendFreeText } from './twilio';
 
 describe('shouldAutoReply', () => {
@@ -2811,7 +2812,15 @@ describe('drainMarioReplies — funnel Professioni: la scheda del corso (Task 7)
   it('(d) chat del lancio o postino con professione: nessuna scheda, anche con appuntamento+video o tag', async () => {
     const varianti: Array<[string, Partial<ClaimedRow>]> = [
       ['lancio', { lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa' }],
-      ['postino', { gdo_agenda_at: '2026-10-20T14:00:00Z', gdo_video_url: VIDEO }],
+      // Agenda mandata ieri, call GDO fra due giorni: la chat resta del GDO. Date relative
+      // a oggi, o il caso smette di essere "call ancora da fare" col passare dei giorni.
+      ['postino', {
+        gdo_agenda_at: new Date(Date.now() - 86_400_000).toISOString(),
+        gdo_appuntamento_at: new Date(Date.now() + 2 * 86_400_000).toISOString(),
+        gdo_video_url: VIDEO,
+      }],
+      // Agenda appena mandata, ora della call non scritta sulla riga: stessa protezione.
+      ['postino senza ora', { gdo_agenda_at: new Date(Date.now() - 3_600_000).toISOString(), gdo_video_url: VIDEO }],
     ];
     for (const [, extra] of varianti) {
       vi.mocked(sendFreeText).mockClear();
@@ -2830,6 +2839,56 @@ ${VIDEO}`,
       expect(calls.events.some((e) => e.type === 'scheda_inviata')).toBe(false);
     }
   }, 30_000);
+
+  // Conv 3292 (15/10/2026): vecchio lead del lancio (chiuso) con un'agenda GDO di settembre,
+  // scrive la frase delle Professioni e poi "mandami la brochure". Mario rispondeva "non
+  // abbiamo una brochure": la nota era spenta da postino e lancio. Il funnel vince.
+  const CONV_3292: Partial<ClaimedRow> = {
+    lancio_slug: 'webdev-2026-10', lancio_fase: 'chiuso', crm_funnel: 'Lancio Web Dev AI',
+    gdo_agenda_at: '2026-09-17T12:37:38Z', gdo_video_url: VIDEO, gdo_video_sent_at: '2026-09-17T14:38:02Z',
+  };
+
+  it('(h) lancio chiuso + agenda GDO passata (conv 3292): nota del funnel, niente note di lancio o GDO', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Te la mando volentieri, prima qualche domanda', appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+    const { supabase } = makeDrainSupabase({ ...riga('copywriter'), ...CONV_3292 }, [INGRESSO]);
+
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+
+    const nota = (vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string }).contextNote ?? '';
+    expect(nota).toContain('FUNNEL PROFESSIONI');
+    expect(nota).toContain('[SCHEDA:copywriter]');
+    expect(nota).not.toContain(NOTA_LANCIO_NIENTE_PASSAGGIO);
+  }, 20_000);
+
+  it('(i) lancio chiuso + agenda GDO passata (conv 3292): il tag [SCHEDA:copywriter] manda il PDF', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Eccola, intanto ti dico i prezzi\nTi va una call domani?',
+      appointmentFixed: false, passToHuman: false, videoWatched: false, schedaRichiesta: 'copywriter',
+    });
+    const { supabase, calls } = makeDrainSupabase({ ...riga('copywriter'), ...CONV_3292 }, [
+      INGRESSO, { direction: 'in', body: 'mandami la brochure', template_sid: null, created_at: '2026-10-14T10:01:00Z' },
+    ]);
+
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+
+    const media = conMedia();
+    expect(media).toHaveLength(1);
+    expect(media[0].mediaUrl).toEqual([PDF]);
+    expect(calls.events.find((e) => e.type === 'scheda_inviata')?.payload).toMatchObject({ slug: 'copywriter', momento: 'pre_appuntamento' });
+  }, 20_000);
+
+  it('(j) agenda GDO passata con video mai uscito: il funnel non rimanda il video del GDO', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Te la mando volentieri, prima qualche domanda', appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+    const { supabase, calls } = makeDrainSupabase({ ...riga('copywriter'), ...CONV_3292, gdo_video_sent_at: null }, [INGRESSO]);
+
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+
+    expect(calls.events.some((e) => e.type === 'gdo_video_sent')).toBe(false);
+  }, 20_000);
 
   it('(e) chat nel funnel PROFESSIONI senza corso riconosciuto: Mario riceve la nota che chiede quale corso', async () => {
     vi.mocked(generateMarioReply).mockResolvedValueOnce({

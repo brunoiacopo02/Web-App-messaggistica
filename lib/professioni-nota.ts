@@ -1,4 +1,6 @@
-import { PROFESSIONI, isSlugProfessione, nomeProfessione, type SlugProfessione } from './professioni';
+import { PROFESSIONI, PROVENIENZA_PROFESSIONI, isSlugProfessione, nomeProfessione, type SlugProfessione } from './professioni';
+import { lancioInCorso } from './lancio-fase';
+import { oraAppuntamento } from './gdo-context-note';
 
 /**
  * Nota di contesto per chi arriva dal funnel Professioni (spec §2). Sta nella parte
@@ -30,4 +32,42 @@ export function schedaDaInviare(i: {
   if (i.appuntamentoConVideoOra && isSlugProfessione(i.professione)) return { slug: i.professione, momento: 'post_appuntamento' };
   if (i.schedaRichiesta) return { slug: i.schedaRichiesta, momento: 'pre_appuntamento' };
   return null;
+}
+
+/**
+ * Senza l'ora della call sulla riga (3 chat postino su 4), la call GDO si considera ancora
+ * da fare per 7 giorni dall'agenda: sulle 663 chat che hanno entrambe le date, la call cade
+ * al massimo 6,9 giorni dopo l'agenda (p99 3,6 giorni, dati del 15/10/2026).
+ */
+export const FINESTRA_CALL_GDO_SENZA_ORA_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * La chat e' del funnel Professioni anche se e' stata del lancio o di un GDO? (PO 15/10/2026,
+ * conv 3292: un vecchio lead del lancio con un'agenda GDO di settembre scrive la frase delle
+ * Professioni e chiede la brochure; la nota era spenta e Mario rispondeva che non c'e'.)
+ *
+ * Vince quando ha scelto un corso (o e' entrata nel funnel PROFESSIONI) E:
+ * - il lancio non e' in corso: niente `lancio_slug`, o fase terminale (LANCIO_FASI_TERMINALI:
+ *   'chiuso', 'restituito'). Una fase attiva o nulla con lo slug resta del lancio;
+ * - non c'e' una call GDO ancora da fare: niente agenda, oppure l'ora della call (la piu'
+ *   recente fra `bot_scheduled_at` e `gdo_appuntamento_at`, come `oraAppuntamento`) e' passata;
+ *   senza ora, l'agenda e' piu' vecchia di FINESTRA_CALL_GDO_SENZA_ORA_MS.
+ */
+export function professioniVince(i: {
+  professione: string | null;
+  crmFunnel: string | null;
+  lancioSlug: string | null | undefined;
+  lancioFase: string | null | undefined;
+  gdoAgendaAt: string | null;
+  botScheduledAt: string | null;
+  gdoAppuntamentoAt: string | null;
+  now: number;
+}): boolean {
+  if (i.professione === null && i.crmFunnel !== PROVENIENZA_PROFESSIONI) return false;
+  if (lancioInCorso({ lancio_slug: i.lancioSlug, lancio_fase: i.lancioFase })) return false;
+  if (i.gdoAgendaAt === null) return true;
+  const call = oraAppuntamento(i.botScheduledAt, i.gdoAppuntamentoAt);
+  if (call) return call.getTime() <= i.now;
+  const agenda = Date.parse(i.gdoAgendaAt);
+  return !Number.isNaN(agenda) && agenda + FINESTRA_CALL_GDO_SENZA_ORA_MS <= i.now;
 }
