@@ -2807,6 +2807,29 @@ describe('drainMarioReplies — funnel Professioni: la scheda del corso (Task 7)
     expect(nota).toContain(NOTA_PRIMO_CONTATTO);
   }, 20_000);
 
+  it('(d) chat del lancio o postino con professione: nessuna scheda, anche con appuntamento+video o tag', async () => {
+    const varianti: Array<[string, Partial<ClaimedRow>]> = [
+      ['lancio', { lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa' }],
+      ['postino', { gdo_agenda_at: '2026-10-20T14:00:00Z', gdo_video_url: VIDEO }],
+    ];
+    for (const [, extra] of varianti) {
+      vi.mocked(sendFreeText).mockClear();
+      vi.mocked(generateMarioReply).mockReset();
+      vi.mocked(generateMarioReply).mockResolvedValueOnce({
+        visibleReply: `Perfetto, allora ci siamo
+Noemi ti chiama prima della call
+${VIDEO}`,
+        appointmentFixed: true, passToHuman: false, videoWatched: false, schedaRichiesta: 'copywriter',
+      });
+      const { supabase, calls } = makeDrainSupabase({ ...riga('copywriter'), ...extra }, [INGRESSO]);
+
+      await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+
+      expect(conMedia()).toHaveLength(0);
+      expect(calls.events.some((e) => e.type === 'scheda_inviata')).toBe(false);
+    }
+  }, 30_000);
+
   it('slug non valido dal modello: si logga, niente invio', async () => {
     vi.mocked(generateMarioReply).mockResolvedValueOnce({
       visibleReply: 'Eccola', appointmentFixed: false, passToHuman: false, videoWatched: false, schedaNonValida: 'boh',

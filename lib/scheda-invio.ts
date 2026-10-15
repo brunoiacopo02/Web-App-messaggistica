@@ -11,7 +11,8 @@ export function testoScheda(slug: SlugProfessione): string {
 /**
  * Manda la scheda PDF del corso, una volta sola per chat (spec §3). Il lucchetto e' un
  * compare-and-set su `scheda_inviata_at`: due drain in volo non la mandano due volte. Se
- * Twilio fallisce il lucchetto si rilascia (la prossima occasione ci riprova) e si logga;
+ * Twilio fallisce il lucchetto si rilascia e si logga; l'invio dopo l'appuntamento non viene
+ * ritentato (la scheda resta mandabile solo se Mario la richiede di nuovo col tag);
  * nessun ripiego su un altro numero.
  */
 export async function inviaScheda(

@@ -1028,12 +1028,13 @@ export async function drainMarioReplies(
           level: 'warn',
         });
       }
-      const scheda = schedaDaInviare({
+      // Stessa condizione della nota: nel postino e nel lancio la scheda non parte mai.
+      const scheda = !postino && !lancio.lancio_slug ? schedaDaInviare({
         professione,
         schedaInviataAt,
         schedaRichiesta: result.schedaRichiesta,
         appuntamentoConVideoOra: result.appointmentFixed && !videoGiaInviato && parts.some((p) => containsVideoLink(p, linkExtra)),
-      });
+      }) : null;
       if (scheda) {
         const esitoScheda = await inviaScheda(supabase, { conversationId, phone, from, ...scheda });
         if (esitoScheda === 'inviata') schedaInviataAt = new Date().toISOString();
