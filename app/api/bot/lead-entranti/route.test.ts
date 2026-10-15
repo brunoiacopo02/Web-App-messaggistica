@@ -10,11 +10,14 @@ const righe = {
   primoInbound: 'ciao' as string | null,
   /** Gli outbound PARTITI, per `botHaRisposto`: id delle conversazioni che li hanno. */
   outboundPartiti: [] as number[],
+  /** Le colonne chieste a `conversations`: una colonna fuori dalla select arriva vuota. */
+  selectConversazioni: '' as string,
 };
 
 function query(table: string) {
   const q: Record<string, unknown> = {};
   for (const m of ['select', 'eq', 'is', 'not', 'order', 'gte', 'lte', 'in']) q[m] = () => q;
+  q.select = (cols: string) => { if (table === 'conversations') righe.selectConversazioni = cols; return q; };
   q.limit = () => Promise.resolve({
     data: [{ body: righe.primoInbound, created_at: '2026-09-01T10:00:00Z' }],
   });
@@ -118,6 +121,26 @@ describe('/api/bot/lead-entranti — il campo appuntamento', () => {
 
     expect(body.totale).toBe(2);
     expect(body.totaleCompleto).toBe(3);
+  });
+});
+
+describe('/api/bot/lead-entranti — funnel Professioni', () => {
+  // La lista e' la rete del push perso: deve portare il corso come lo porta il push.
+  it('il corso scelto esce in professione, come nel push', async () => {
+    righe.conversazioni = [conversazione({ crm_funnel: 'PROFESSIONI', professione: 'copywriter' })];
+
+    const body = await chiedi();
+
+    expect(righe.selectConversazioni).toMatch(/\bprofessione\b/);
+    expect(body.lead[0]).toMatchObject({ provenienza: 'PROFESSIONI', professione: 'copywriter' });
+  });
+
+  it('senza corso il campo non esce proprio', async () => {
+    righe.conversazioni = [conversazione({ crm_funnel: 'PROFESSIONI', professione: null })];
+
+    const body = await chiedi();
+
+    expect(body.lead[0]).not.toHaveProperty('professione');
   });
 });
 

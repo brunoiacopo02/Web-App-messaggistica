@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
     convs = await fetchAllRows<any>((from, to) => {
       const q = admin
         .from('conversations')
-        .select('id, crm_funnel, ai_status, bot_outcome, bot_scheduled_at, ai_started_at, last_message_at, leads(phone_e164, first_name, last_name)')
+        .select('id, crm_funnel, professione, ai_status, bot_outcome, bot_scheduled_at, ai_started_at, last_message_at, leads(phone_e164, first_name, last_name)')
         .eq('ai_owner', 'mario')
         .is('crm_lead_id', null)
         .is('handed_off_at', null)
@@ -150,6 +150,9 @@ export async function POST(req: NextRequest) {
       // `inviaContattoUmano`), e nel documento mandato a loro questo campo significa
       // "ha gia' una call in agenda".
       appuntamento: (c.bot_outcome === 'APPUNTAMENTO' ? (c.bot_scheduled_at ?? null) : null) as string | null,
+      // Funnel Professioni: il corso scelto, come nel push (lib/lead-entrante.ts) e solo
+      // quando c'e'. Questa lista e' la rete del push perso: senza, il corso si perderebbe.
+      ...(c.professione ? { professione: c.professione as string } : {}),
     });
   }
 
