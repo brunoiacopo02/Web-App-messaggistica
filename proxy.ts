@@ -44,6 +44,7 @@ export async function proxy(request: NextRequest) {
   return response;
 }
 
+// .pdf escluso: le schede dei corsi (public/schede) le scarica Twilio, senza sessione.
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|pdf)$).*)'],
 };
