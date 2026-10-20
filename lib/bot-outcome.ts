@@ -10,6 +10,7 @@ import {
   checkDataAppuntamento,
   checkDataRichiamo,
   isRichiestaDisdetta,
+  isRifissaggioDopoCallPassata,
   resolveOutcomeAction,
 } from './bot-outcome-rules';
 import { bookingBlackout } from './booking-blackout';
@@ -745,9 +746,17 @@ export async function sendOutcome(
   // più finisce anch'esso in una nota: senza la marcatura i promemoria continuerebbero
   // a spingere la vecchia data addosso a chi ha appena chiesto di cambiarla.
   const holdsAppointment = (row?.bot_outcome ?? null) === 'APPUNTAMENTO';
+  // Un appuntamento nuovo dopo una call già passata non è uno spostamento: è un
+  // fissaggio vero (vedi `isRifissaggioDopoCallPassata`) e i promemoria devono partire.
+  const rifissaDopoCallPassata = !interim && isRifissaggioDopoCallPassata(
+    (row?.bot_outcome ?? null) as BotOutcome | null,
+    args,
+    row?.bot_scheduled_at ?? null,
+    Date.now(),
+  );
   const chiedeSpostamento =
     isRichiestaDisdetta(args.outcome) ||
-    (args.outcome === 'APPUNTAMENTO' && !!args.date && !sameInstant(args.date, row?.bot_scheduled_at ?? null));
+    (args.outcome === 'APPUNTAMENTO' && !rifissaDopoCallPassata && !!args.date && !sameInstant(args.date, row?.bot_scheduled_at ?? null));
   if (holdsAppointment && !interim && chiedeSpostamento) {
     await marcaDisdetta(supabase, conversationId, crmLeadId, args.outcome);
   }
@@ -974,8 +983,9 @@ export async function sendOutcome(
     // Se una call c'è già, questa non è un fissaggio mancato ma uno SPOSTAMENTO non
     // registrato, e la nota deve dirlo: la versione "in agenda non c'è niente" ha
     // fatto cancellare appuntamenti vivi a chi la leggeva.
+    // Una call già passata non "resta in agenda": qui è un fissaggio nuovo non riuscito.
     const inAgenda =
-      (row?.bot_outcome ?? null) === 'APPUNTAMENTO'
+      (row?.bot_outcome ?? null) === 'APPUNTAMENTO' && !rifissaDopoCallPassata
         ? row?.bot_scheduled_at ?? null
         : null;
     const note = buildAppuntamentoNonFissabileNote({
@@ -1084,10 +1094,12 @@ export async function sendOutcome(
           bot_scheduled_at: periodo ? null : (args.date ?? null),
           bot_report: (args.report ?? null) as never,
           ai_status: 'closed',
+          // La disdetta segnata sulla call vecchia spegnerebbe i promemoria della nuova.
+          ...(rifissaDopoCallPassata ? { cancel_requested_at: null } : {}),
         }).eq('id', conversationId);
         await supabase.from('event_log').insert({
           type: 'bot_outcome_sent',
-          payload: { conversationId, crmLeadId, outcome: args.outcome } as never,
+          payload: { conversationId, crmLeadId, outcome: args.outcome, ...(rifissaDopoCallPassata ? { rifissaDopoCallPassata: true, appuntamentoPrecedente: row?.bot_scheduled_at ?? null } : {}) } as never,
           message: `[bot-fissatore] esito ${args.outcome} inviato per lead ${crmLeadId}`,
           level: 'info',
         });

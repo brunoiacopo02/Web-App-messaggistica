@@ -11,6 +11,7 @@ import {
   RICHIAMO_ORIZZONTE_MS,
   checkDataAppuntamento,
   buildAppuntamentoNonFissabileNote,
+  isRifissaggioDopoCallPassata,
 } from './bot-outcome-rules';
 import { formatRomeDateTime } from './rome-time';
 import { crmDedupKey } from './note-dedup';
@@ -543,6 +544,35 @@ describe('resolveOutcomeAction — il bot non sposta gli appuntamenti', () => {
 
   it('su un lead non ancora fissato resta un fissaggio normale', () => {
     expect(resolveOutcomeAction(null, { outcome: 'APPUNTAMENTO', date: fra3giorni() }, null).kind).toBe('normal');
+  });
+});
+
+// Francesco, 20/10/2026: call del 25/09 scartata dalle Conferme, il 18/10 il bot gli fissa
+// martedì 20 alle 15 ma la call esce come "SPOSTAMENTO CHIESTO" e in agenda non entra.
+describe('resolveOutcomeAction — nuovo appuntamento dopo una call già passata', () => {
+  const ORA = Date.parse('2026-10-18T13:33:46Z');
+  const VECCHIA = '2026-09-25T18:00:00+00:00';
+  const NUOVA = '2026-10-20T15:00:00+02:00';
+
+  it('è un fissaggio normale, non una nota', () => {
+    expect(resolveOutcomeAction('APPUNTAMENTO', { outcome: 'APPUNTAMENTO', date: NUOVA }, VECCHIA, ORA).kind).toBe('normal');
+    expect(isRifissaggioDopoCallPassata('APPUNTAMENTO', { outcome: 'APPUNTAMENTO', date: NUOVA }, VECCHIA, ORA)).toBe(true);
+  });
+
+  it('se la call in agenda è ancora nel futuro resta uno spostamento (nota)', () => {
+    const futura = '2026-10-19T16:00:00+00:00';
+    expect(resolveOutcomeAction('APPUNTAMENTO', { outcome: 'APPUNTAMENTO', date: NUOVA }, futura, ORA).kind).toBe('locked');
+  });
+
+  it('gli altri esiti su una call passata restano note', () => {
+    for (const o of ['DA_SCARTARE', 'RICHIAMO', 'NON_RISPOSTO', 'INTERROTTO'] as const) {
+      expect(resolveOutcomeAction('APPUNTAMENTO', { outcome: o, date: NUOVA }, VECCHIA, ORA).kind).toBe('locked');
+    }
+  });
+
+  it('la stessa data passata o nessuna data non sbloccano niente', () => {
+    expect(resolveOutcomeAction('APPUNTAMENTO', { outcome: 'APPUNTAMENTO', date: VECCHIA }, VECCHIA, ORA).kind).toBe('locked');
+    expect(resolveOutcomeAction('APPUNTAMENTO', { outcome: 'APPUNTAMENTO' }, VECCHIA, ORA).kind).toBe('locked');
   });
 });
 

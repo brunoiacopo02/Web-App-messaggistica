@@ -134,15 +134,47 @@ export function buildAppuntamentoRifiutatoNote(args: OutcomeArgs): string {
 }
 
 /**
+ * Il lead aveva un appuntamento, quella call è già passata, e adesso in chat ne ha
+ * fissato uno NUOVO con una data diversa. Non è uno spostamento: la call vecchia non
+ * esiste più (svolta, saltata o scartata dalle Conferme), quindi non c'è un'agenda di
+ * qualcun altro da scavalcare.
+ *
+ * Caso vero, 20/10/2026 (Francesco, 3280187804): call del 25/09 scartata dalle Conferme
+ * ("posticipa senza data"); il 18/10 il lead riscrive, il bot gli fissa martedì 20 alle
+ * 15:00 e gli dice "ci siamo" — ma con l'esito ancora APPUNTAMENTO al 25/09 la call
+ * nuova usciva come NOTA "SPOSTAMENTO CHIESTO ... in agenda resta venerdì 25 settembre",
+ * nessuno la metteva in agenda, e alle 15:03 il lead scriveva "che devo fare?".
+ *
+ * Solo per APPUNTAMENTO: una disdetta o un richiamo su una call passata restano note,
+ * come prima. Il CRM accetta già la data nuova su un lead APPOINTMENT (aggiorna
+ * `appointmentDate`, riapre lo scarto delle Conferme e le avvisa).
+ */
+export function isRifissaggioDopoCallPassata(
+  current: BotOutcome | null,
+  args: Pick<OutcomeArgs, 'outcome' | 'date'>,
+  existingDate: string | null,
+  nowMs: number,
+): boolean {
+  if (current !== 'APPUNTAMENTO' || args.outcome !== 'APPUNTAMENTO') return false;
+  if (!args.date || !existingDate) return false;
+  const vecchia = Date.parse(existingDate);
+  if (Number.isNaN(vecchia) || vecchia >= nowMs) return false;
+  return !sameInstant(args.date, existingDate);
+}
+
+/**
  * Decide cosa fare con un esito in arrivo dato l'esito corrente della conversazione.
  * Se la conversazione è già APPUNTAMENTO l'esito è terminale: 'locked' (nota, niente
- * declassamento). Altrimenti 'normal' (comportamento standard).
+ * declassamento). Altrimenti 'normal' (comportamento standard). Unica eccezione: il
+ * nuovo appuntamento dopo una call già passata (`isRifissaggioDopoCallPassata`).
  */
 export function resolveOutcomeAction(
   current: BotOutcome | null,
   args: OutcomeArgs,
   existingDate: string | null,
+  nowMs: number = Date.now(),
 ): OutcomeAction {
+  if (isRifissaggioDopoCallPassata(current, args, existingDate, nowMs)) return { kind: 'normal' };
   if (current === 'APPUNTAMENTO') {
     // Giorno e ora di una call gia' fissata non li muove il bot, nemmeno quando il lead
     // gli detta la data nuova: fra il 28/08 e il 04/09 il bot ha spostato 28

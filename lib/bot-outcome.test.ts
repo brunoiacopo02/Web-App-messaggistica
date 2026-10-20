@@ -971,8 +971,11 @@ describe('sendOutcome — APPUNTAMENTO in un giorno o a un\'ora impossibili', ()
   // Su un lead gia' fissato la guardia non serve piu': il bot non sposta niente, quindi
   // le 02:00 non entrano in agenda per la strada piu' corta, cioe' nessuna scrittura.
   // Al CRM arriva la richiesta con l'ora che ha detto il lead, e decidono loro.
+  // Una call ancora da fare: su una già passata il fissaggio nuovo è legittimo (vedi sotto).
+  const IN_AGENDA_FUTURA = new Date(Date.now() + 5 * 24 * 3600_000).toISOString();
+
   it('le 02:00 su un lead già fissato restano una richiesta, non un appuntamento', async () => {
-    const giaFissato = { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE };
+    const giaFissato = { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: IN_AGENDA_FUTURA };
     const { supabase, calls } = makeSupabase(giaFissato);
     await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: giornoUtile(2) });
 
@@ -985,12 +988,12 @@ describe('sendOutcome — APPUNTAMENTO in un giorno o a un\'ora impossibili', ()
   // Caso reale: lead con la call di mercoledì, lunedì chiede venerdì. Il bot non sposta
   // niente: alle Conferme arriva la richiesta, con la data che resta viva in agenda.
   it('lo spostamento chiesto dice QUALE call resta in agenda e che la spostano loro', async () => {
-    const giaFissato = { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATE };
+    const giaFissato = { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: IN_AGENDA_FUTURA };
     const { supabase } = makeSupabase(giaFissato);
     await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: giornoUtile(2) });
 
     const note = bodyInviato().note as string;
-    expect(note).toContain(formatRomeDateTime(DATE));
+    expect(note).toContain(formatRomeDateTime(IN_AGENDA_FUTURA));
     expect(note).not.toContain("in agenda non c'è niente");
     expect(note).toContain('finché non lo spostate voi');
   });
@@ -1068,6 +1071,35 @@ describe('sendOutcome — una call gia\' fissata non la sposta il bot', () => {
     const { supabase } = makeSupabase(fissato);
     await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: domani });
     expect(bodyInviato().outcome).toBe('NOTA');
+  });
+});
+
+// La call in agenda è già passata (svolta, saltata o scartata): il nuovo appuntamento
+// fissato in chat è un fissaggio vero e va al CRM come APPUNTAMENTO (Francesco, 20/10).
+describe('sendOutcome — nuovo appuntamento dopo una call già passata', () => {
+  const passata = new Date(Date.now() - 20 * 24 * 3600_000).toISOString();
+  const scaduto = { crm_lead_id: 'crm1', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: passata };
+  const bodyInviato = () => JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string);
+  const nuovaData = () => conOra(computeBookingDays(new Date()).day2.date, 13);
+
+  it('parte come APPUNTAMENTO con la data nuova', async () => {
+    const { supabase } = makeSupabase(scaduto);
+    const data = nuovaData();
+    const res = await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: data });
+    const body = bodyInviato();
+    expect(body.outcome).toBe('APPUNTAMENTO');
+    expect(body.date).toBe(data);
+    expect(res.sent).toBe(true);
+  });
+
+  it('salva la data nuova e riaccende i promemoria', async () => {
+    const { supabase, calls } = makeSupabase(scaduto);
+    const data = nuovaData();
+    await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: data });
+    const agg = calls.updates.find((u: any) => 'bot_scheduled_at' in u);
+    expect(agg.bot_scheduled_at).toBe(data);
+    expect(agg.cancel_requested_at).toBeNull();
+    expect(calls.updates.some((u: any) => typeof u.cancel_requested_at === 'string')).toBe(false);
   });
 });
 
