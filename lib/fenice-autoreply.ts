@@ -5,7 +5,7 @@ import { gdoContextNote, serveNoemi, type GdoNoteInput } from './gdo-context-not
 import { avanzaRiscaldamento, notaRiscaldamento } from './gdo-warmup';
 import { gdoVideoText } from './gdo-agenda';
 import { decideGdoRecap, gdoRecapText } from './gdo-recap';
-import { claimRecap } from './gdo-recap-send';
+import { claimRecap, rilasciaRecap } from './gdo-recap-send';
 import { sendFreeText } from './twilio';
 import { marioDelayMs } from './mario-latency';
 import { splitMarioMessages } from './mario-split';
@@ -412,7 +412,7 @@ export async function drainMarioReplies(
     // conversazione c'e' gia' un appuntamento in piedi, e lo declasserebbe.
     // `wa_number` e' il numero con cui questa chat e' nata: ogni bolla del turno — le
     // risposte di Mario, il video del GDO, i turni del lancio — deve partire da li'.
-    .select('id, ai_started_at, crm_lead_id, bot_outcome, bot_scheduled_at, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, gdo_appuntamento_at, ai_paused_at, cancel_requested_at, gdo_recap_for_at, gdo_warmup_step, lancio_slug, lancio_fase, lancio_ingresso, lancio_info, wa_number, professione, scheda_inviata_at, crm_funnel, leads(first_name)')
+    .select('id, ai_started_at, crm_lead_id, bot_outcome, bot_scheduled_at, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, gdo_appuntamento_at, ai_paused_at, cancel_requested_at, gdo_recap_for_at, gdo_recap_sent_at, gdo_warmup_step, lancio_slug, lancio_fase, lancio_ingresso, lancio_info, wa_number, professione, scheda_inviata_at, crm_funnel, leads(first_name)')
     .single();
   // PGRST116 = nessuna riga: e' il caso NORMALE (conversazione non claimabile, o
   // lucchetto di un altro drain) e non va segnalato. Qualunque altro errore invece qui
@@ -527,6 +527,7 @@ export async function drainMarioReplies(
     ai_paused_at?: string | null;
     cancel_requested_at?: string | null;
     gdo_recap_for_at?: string | null;
+    gdo_recap_sent_at?: string | null;
     gdo_warmup_step?: number | null;
     leads?: { first_name?: string | null } | null;
   };
@@ -550,6 +551,8 @@ export async function drainMarioReplies(
   // Il recap GDO gia' uscito per questa call (vedi lib/gdo-recap.ts). `let`: dopo la
   // presa vale anche per i giri successivi dello stesso drain.
   let gdoRecapForAt = gdo.gdo_recap_for_at ?? null;
+  // Quando e' uscito: serve solo a rilasciare la presa se l'invio del recap fallisce.
+  let gdoRecapSentAt = gdo.gdo_recap_sent_at ?? null;
   // Passo del riscaldamento (lib/gdo-warmup.ts). `let`: avanza in memoria fra un giro e
   // l'altro dello stesso drain, come il recap.
   let gdoWarmupStep = gdo.gdo_warmup_step ?? null;
@@ -818,28 +821,69 @@ export async function drainMarioReplies(
 
       /**
        * La bolla del video: il recap se tocca a lui e la presa riesce (per questa call
-       * potrebbe essere gia' uscito), altrimenti il video di sempre. Il recap nomina
-       * Noemi: `claimRecap` segna il promemoria a DB, qui lo si segue in memoria.
+       * potrebbe essere gia' uscito), altrimenti il video di sempre. Con il recap torna
+       * anche la presa: Noemi, `gdo_recap_sent` e la memoria del drain si segnano solo
+       * dopo che la bolla e' partita (`recapPartito`); se l'invio lancia, la presa si
+       * rilascia (`recapNonPartito`) e il prossimo turno riprova.
        */
-      const bollaVideoGdo = async (): Promise<string> => {
-        if (recapTipo === 'completo' && gdoAppuntamentoAt && await claimRecap(supabase, conversationId, gdoAppuntamentoAt, true)) {
-          gdoRecapForAt = gdoAppuntamentoAt;
-          gdoNoemiRemindedAt ??= new Date().toISOString();
-          await supabase.from('event_log').insert({
-            type: 'gdo_recap_sent',
-            payload: { conversationId, tipo: recapTipo, occasione: 'turno-video' } as never,
-            message: `[gdo] conv ${conversationId}: recap con data, Noemi e video al posto della bolla del video`,
-            level: 'info',
-          });
-          return gdoRecapText({ nome: gdo.leads?.first_name ?? null, call: new Date(gdoAppuntamentoAt), videoLink: gdoVideoUrl });
+      type PresaRecapDrain = { at: string; prima: { forAt: string | null; sentAt: string | null } };
+      const bollaVideoGdo = async (): Promise<{ body: string; presa: PresaRecapDrain | null }> => {
+        if (recapTipo === 'completo' && gdoAppuntamentoAt) {
+          const prima = { forAt: gdoRecapForAt, sentAt: gdoRecapSentAt };
+          if (await claimRecap(supabase, conversationId, gdoAppuntamentoAt, false)) {
+            return {
+              body: gdoRecapText({ nome: gdo.leads?.first_name ?? null, call: new Date(gdoAppuntamentoAt), videoLink: gdoVideoUrl }),
+              presa: { at: gdoAppuntamentoAt, prima },
+            };
+          }
         }
-        return gdoVideoText(gdo.leads?.first_name ?? null, gdoVideoUrl as string);
+        return { body: gdoVideoText(gdo.leads?.first_name ?? null, gdoVideoUrl as string), presa: null };
+      };
+
+      /** Il recap e' partito: il promemoria di Noemi e' detto, a DB e in memoria. */
+      const recapPartito = async (presa: PresaRecapDrain): Promise<void> => {
+        const ora = new Date().toISOString();
+        gdoRecapForAt = presa.at;
+        gdoRecapSentAt = ora;
+        if (!gdoNoemiRemindedAt) {
+          gdoNoemiRemindedAt = ora;
+          await supabase.from('conversations')
+            .update({ gdo_noemi_reminded_at: ora })
+            .eq('id', conversationId)
+            .is('gdo_noemi_reminded_at', null);
+        }
+        await supabase.from('event_log').insert({
+          type: 'gdo_recap_sent',
+          payload: { conversationId, tipo: recapTipo, occasione: 'turno-video' } as never,
+          message: `[gdo] conv ${conversationId}: recap con data, Noemi e video al posto della bolla del video`,
+          level: 'info',
+        });
+      };
+
+      /** Il recap non e' partito: la presa torna com'era. L'errore dell'invio prosegue. */
+      const recapNonPartito = async (presa: PresaRecapDrain): Promise<void> => {
+        const erroreRilascio = await rilasciaRecap(supabase, conversationId, presa.at, presa.prima, false);
+        if (erroreRilascio) {
+          await supabase.from('event_log').insert({
+            type: 'gdo_recap_errore',
+            payload: { conversationId, occasione: 'turno-video', error: erroreRilascio } as never,
+            message: `[gdo] conv ${conversationId}: recap non partito e ${erroreRilascio}`,
+            level: 'error',
+          });
+        }
       };
 
       /** Manda il video del GDO (o il recap) come bolla a sé e ne registra l'invio. */
       const inviaVideoGdo = async (): Promise<void> => {
-        const body = await bollaVideoGdo();
-        const sent = await sendFreeText({ to: phone, body, from });
+        const { body, presa } = await bollaVideoGdo();
+        let sent: Awaited<ReturnType<typeof sendFreeText>>;
+        try {
+          sent = await sendFreeText({ to: phone, body, from });
+        } catch (err) {
+          if (presa) await recapNonPartito(presa);
+          throw err;
+        }
+        if (presa) await recapPartito(presa);
         await supabase.from('messages').insert({
           conversation_id: conversationId, direction: 'out', body,
           twilio_sid: sent.sid, twilio_status: sent.status,
@@ -1073,8 +1117,14 @@ export async function drainMarioReplies(
 
       // Il video esce in coda alla risposta, come ultima bolla: prima si risponde a
       // quello che il lead ha chiesto, poi gli si dà il video.
+      // La presa del recap in coda (se c'e'): si chiude dopo l'invio della sua bolla.
+      let presaRecap: PresaRecapDrain | null = null;
+      let bollaRecap: string | null = null;
       if (videoInsiemeAllaRisposta) {
-        parts = [...parts, await bollaVideoGdo()];
+        const bolla = await bollaVideoGdo();
+        presaRecap = bolla.presa;
+        bollaRecap = bolla.presa ? bolla.body : null;
+        parts = [...parts, bolla.body];
       }
 
       // Link Fenice che il modello si è inventato (es. `conferenza-zx`): il lead lo
@@ -1109,14 +1159,24 @@ export async function drainMarioReplies(
           });
         }
       }
-      for (let i = 0; i < parts.length; i++) {
-        if (i > 0) await sleep(Math.min(3000, 800 + parts[i].length * 25));
-        const sent = await sendFreeText({ to: phone, body: parts[i], from });
-        await supabase.from('messages').insert({
-          conversation_id: conversationId, direction: 'out', body: parts[i],
-          twilio_sid: sent.sid, twilio_status: sent.status,
-          sender: 'bot',
-        });
+      let recapUscito = false;
+      try {
+        for (let i = 0; i < parts.length; i++) {
+          if (i > 0) await sleep(Math.min(3000, 800 + parts[i].length * 25));
+          const sent = await sendFreeText({ to: phone, body: parts[i], from });
+          if (presaRecap && !recapUscito && parts[i] === bollaRecap) {
+            recapUscito = true;
+            await recapPartito(presaRecap);
+          }
+          await supabase.from('messages').insert({
+            conversation_id: conversationId, direction: 'out', body: parts[i],
+            twilio_sid: sent.sid, twilio_status: sent.status,
+            sender: 'bot',
+          });
+        }
+      } catch (err) {
+        if (presaRecap && !recapUscito) await recapNonPartito(presaRecap);
+        throw err;
       }
       if (parts.length > 0) {
         await supabase.from('conversations')

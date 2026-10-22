@@ -331,6 +331,7 @@ type ClaimedRow = {
   gdo_noemi_reminded_at?: string | null;
   gdo_appuntamento_at?: string | null;
   gdo_recap_for_at?: string | null;
+  gdo_recap_sent_at?: string | null;
   gdo_warmup_step?: number | null;
   cancel_requested_at?: string | null;
   lancio_slug?: string | null;
@@ -3114,6 +3115,38 @@ describe('drainMarioReplies — recap GDO al posto della bolla del video', () =>
     expect(calls.messageInserts.map((m: any) => m.body)).toEqual([gdoVideoText('Luca', VIDEO)]);
     expect(calls.events.some((e: any) => e.type === 'gdo_recap_sent')).toBe(false);
     expect(calls.convUpdates.some((u: any) => 'gdo_recap_for_at' in u)).toBe(false);
+  });
+
+  it('il recap da solo non parte (Twilio giù): presa rilasciata, niente Noemi né gdo_recap_sent', async () => {
+    vi.mocked(sendFreeText).mockRejectedValueOnce(new Error('twilio giù'));
+    const PRIMA = { gdo_recap_for_at: '2026-10-20T15:00:00.000Z', gdo_recap_sent_at: '2026-10-19T09:00:00.000Z' };
+    const { supabase, calls } = makeDrainSupabase(postino(PRIMA), [AGENDA, OK]);
+
+    await drainMarioReplies(supabase, 91, '+391234567890', () => 0);
+
+    expect(calls.messageInserts).toHaveLength(0);
+    expect(calls.events.some((e: any) => e.type === 'gdo_recap_sent')).toBe(false);
+    expect(calls.convUpdates.some((u: any) => u.gdo_noemi_reminded_at)).toBe(false);
+    // La presa torna ai valori di prima: il prossimo turno riprova.
+    expect(calls.convUpdates).toContainEqual(PRIMA);
+  });
+
+  it('il recap in coda alla risposta non parte: presa rilasciata, niente Noemi né gdo_recap_sent', async () => {
+    vi.mocked(sendFreeText)
+      .mockResolvedValueOnce({ sid: 'SM_fake', status: 'queued' } as never)
+      .mockRejectedValueOnce(new Error('twilio giù'));
+    const { supabase, calls } = makeDrainSupabase(postino(), [AGENDA, DOMANDA]);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Te lo spiega il tutor in call 🙂',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 91, '+391234567890', () => 0);
+
+    expect(calls.messageInserts.map((m: any) => m.body)).toEqual(['Te lo spiega il tutor in call 🙂']);
+    expect(calls.events.some((e: any) => e.type === 'gdo_recap_sent')).toBe(false);
+    expect(calls.convUpdates.some((u: any) => u.gdo_noemi_reminded_at)).toBe(false);
+    expect(calls.convUpdates).toContainEqual({ gdo_recap_for_at: null, gdo_recap_sent_at: null });
   });
 
   it('senza la data della call la bolla è il video di sempre', async () => {

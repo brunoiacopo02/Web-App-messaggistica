@@ -66,7 +66,7 @@ async function logErrore(supabase: Supa, conversationId: number, occasione: stri
  * prossimo giro può riprovare. Torna il messaggio d'errore se il rilascio stesso fallisce.
  * Il promemoria di Noemi si azzera solo se porta ancora il timestamp scritto dal nostro claim.
  */
-async function rilasciaRecap(
+export async function rilasciaRecap(
   supabase: Supa,
   conversationId: number,
   appuntamentoAt: string,
@@ -75,12 +75,15 @@ async function rilasciaRecap(
 ): Promise<string | null> {
   const at = new Date(appuntamentoAt).toISOString();
   // Il claim ha scritto lo stesso `now` in recap_sent_at e nel promemoria: lo si legge prima di ripristinare.
-  const { data: riga } = await supabase
-    .from('conversations')
-    .select('gdo_recap_sent_at')
-    .eq('id', conversationId)
-    .single();
-  const scrittoDalClaim: string | null = riga?.gdo_recap_sent_at ?? null;
+  let scrittoDalClaim: string | null = null;
+  if (noemiImpostataDaQui) {
+    const { data: riga } = await supabase
+      .from('conversations')
+      .select('gdo_recap_sent_at')
+      .eq('id', conversationId)
+      .single();
+    scrittoDalClaim = riga?.gdo_recap_sent_at ?? null;
+  }
   const { error } = await supabase
     .from('conversations')
     .update({ gdo_recap_for_at: prima.forAt, gdo_recap_sent_at: prima.sentAt })
