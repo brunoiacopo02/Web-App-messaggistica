@@ -129,7 +129,7 @@ export function gdoVideoText(name: string | null | undefined, link: string): str
   const nome = firstNameOf(name);
   const saluto = nome ? `Ciao ${nome}, ` : 'Ciao, ';
   return (
-    `${saluto}ecco il video da vedere prima del tuo appuntamento 👉 ${link}\n` +
-    `Sono 20 minuti e servono per arrivare preparato alla call. Quando l'hai visto scrivimi FATTO qui, così lo segno`
+    `${saluto}*prima della videochiamata guarda questo video*, dura 20 minuti 👉 ${link}\n` +
+    `Così arrivi preparato alla call. Quando l'hai visto scrivimi FATTO qui, così lo segno`
   );
 }

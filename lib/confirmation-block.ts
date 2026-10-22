@@ -4,13 +4,11 @@ import { KNOWN_LINKS } from './outbound-sanitize';
  * Deve restare identica a quella in lib/mario-prompt.ts. */
 export const STEP4_TEXT = 'poi scrivimi FATTO qui quando l\'hai visto, così lo segno';
 
-/** Testo del pitch del video (passaggio 3). Nel prompt (lib/mario-prompt.ts) le stesse
- * parole sono su tre righe distinte, cioè tre bolle separate quando il modello le genera
- * da sole. Qui sono un'unica stringa perché, quando il pitch manca del tutto, va anteposto
- * dentro la stessa bolla del link (una sola bolla in più, non tre): la formattazione
- * cambia per necessità strutturale, il contenuto resta identico. */
+/** Testo del pitch del video (passaggio 3), identico alla riga "Poi:" del prompt
+ * (lib/mario-prompt.ts). Quando il pitch manca del tutto va anteposto dentro la stessa
+ * bolla del link, così non si aggiunge una bolla in più. */
 export const VIDEO_PITCH_TEXT =
-  'Qui dentro ci sono le professioni, i pacchetti e le quote di investimento. Sono 20 minuti e servono perché in call partiamo dal tuo caso invece che dalle basi. Quando riesci a vederlo, stasera o domani?';
+  'Dentro ci sono le professioni, i percorsi e i prezzi, così in call partiamo dal tuo caso. Quando riesci a vederlo, stasera o domani?';
 
 const VIDEO_LINKS = (KNOWN_LINKS as readonly string[]).filter((l) => l.includes('conferenza-'));
 

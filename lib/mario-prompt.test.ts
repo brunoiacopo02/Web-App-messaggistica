@@ -143,8 +143,11 @@ describe('conferme: anticipo e micro-impegni', () => {
     expect(p).toContain("scrivimi FATTO qui quando l'hai visto, così lo segno");
   });
 
-  it('non minaccia il lead sulla chiamata di Noemi', () => {
-    expect(p).toContain('Se ti scappa la chiamata non è un problema');
+  // Decisione PO 22/10/2026: con lead dall'italiano di base la chiamata di Noemi va detta
+  // chiara, anche a costo di essere duri. Resta la via d'uscita del richiamo.
+  it('dice chiaro che senza la risposta a Noemi la videochiamata non è confermata', () => {
+    expect(p).toContain('se non rispondi la videochiamata non è confermata');
+    expect(p).toContain('Se ti scappa la chiamata, richiamala subito su quel numero');
   });
 
   it('dice quanto dura davvero la preselezione', () => {
@@ -181,7 +184,7 @@ describe('C1: i passaggi 2, 3 e 4 della conferma post-appuntamento escono sempre
     // prevalgono): il modello si fermerebbe comunque ad aspettare tra un passaggio e l'altro.
     expect(p).not.toContain('Dopo che ha confermato giorno e ora');
     expect(p).not.toContain('Quando risponde quando lo guarderà');
-    expect(p).toContain('2. "Noemi è la collega della preselezione');
+    expect(p).toContain('2. "*Ti chiama Noemi, una nostra collega, [QUANDO]*');
     expect(p).toContain('4. "poi scrivimi FATTO qui quando l\'hai visto, così lo segno"');
   });
 
@@ -256,8 +259,8 @@ describe('fix conferme: Noemi chiama da un cellulare (non un numero fisso)', () 
   const p = buildMarioSystem('Marta');
 
   it('il passaggio 2 precisa che Noemi chiama da un cellulare e invita a richiamare su quel numero', () => {
-    expect(p).toContain('ti chiama da un cellulare:');
-    expect(p).toContain('richiamala pure su quel numero');
+    expect(p).toContain('da un numero di cellulare');
+    expect(p).toContain('richiamala subito su quel numero');
     expect(p).not.toContain('richiamala pure allo stesso numero');
   });
 });
@@ -415,7 +418,7 @@ describe('bolle WhatsApp: i blocchi di copy lunghi restano sotto ~25 parole a ri
 
   it('CONFERMA POST-APPUNTAMENTO, passaggio 2 (Noemi/preselezione)', () => {
     const block = extractQuoted(
-      /2\. "(Noemi è la collega della preselezione[\s\S]*?)"\n/,
+      /2\. "(\*Ti chiama Noemi[\s\S]*?)"\n/,
       'CONFERMA passaggio 2'
     );
     const counts = wordsPerLine(block);
@@ -423,7 +426,7 @@ describe('bolle WhatsApp: i blocchi di copy lunghi restano sotto ~25 parole a ri
   });
 
   it('CONFERMA POST-APPUNTAMENTO, passaggio 3 (link video + invito a vederlo)', () => {
-    const block = extractQuoted(/conferenza-ex\nPoi: "([\s\S]*?)"\n/, 'CONFERMA passaggio 3');
+    const block = extractQuoted(/<il link giusto>"\nPoi: "([\s\S]*?)"\n/, 'CONFERMA passaggio 3');
     const counts = wordsPerLine(block);
     expect(counts.every((n) => n <= MAX_WORDS)).toBe(true);
   });

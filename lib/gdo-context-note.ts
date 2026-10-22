@@ -17,12 +17,12 @@ export const NOTA_VIDEO =
 
 export const NOTA_NOEMI =
   'PROMEMORIA NOEMI: il lead non ha ancora sentito da te della chiamata di preselezione. ' +
-  'Diglielo adesso, con parole tue e questa sostanza: gliene avrà già parlato il collega e ' +
-  'tu glielo ripeti così non gli scappa; Noemi è la collega della preselezione e lo chiama ' +
-  'da un cellulare; sono 5-10 minuti, perché serve tempo per capire bene ' +
-  "la sua situazione; è il passaggio che conferma l'appuntamento, quindi tenga il telefono " +
-  'a portata; se la chiamata gli scappa non è un problema, può richiamare su quel numero. ' +
-  'Non farne un esame e non metterlo in soggezione.';
+  'Diglielo adesso in frasi corte e semplici, con questa sostanza: gliene avrà già parlato il ' +
+  'collega e tu glielo ripeti così non gli scappa; lo chiama Noemi, una collega, da un numero di ' +
+  'cellulare; sono 5-10 minuti e serve a confermare la videochiamata; deve rispondere, perché se ' +
+  'non risponde la videochiamata non è confermata; se la chiamata gli scappa, la richiami subito ' +
+  'su quel numero. Metti tra asterischi, *così*, quando lo chiama. Chiaro e diretto, ma senza ' +
+  'fargli un esame.';
 
 /**
  * Variante di GDO_CONTEXT_NOTE per il turno in cui il video sta uscendo INSIEME alla
@@ -72,12 +72,26 @@ export function oraAppuntamento(
   return ts.length ? new Date(Math.max(...ts)) : null;
 }
 
-/** La riga su quando chiama Noemi, vuota se non sappiamo quando è la call. */
+/** "giovedì 23": il giorno italiano col numero, come lo deve leggere il lead. */
+function giornoRoma(d: Date): string {
+  return new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', weekday: 'long', day: 'numeric' }).format(d);
+}
+
+/** La riga su quando chiama Noemi, vuota se non sappiamo quando è la call. Il giorno è
+ *  scritto per intero col numero: "il giorno prima" da solo, a chi legge di fretta, non dice
+ *  niente. */
 export function quandoChiamaNoemi(quando: Date | null): string {
   if (!quando) return '';
-  return romeHour(quando) < NOEMI_SOGLIA_STESSO_GIORNO
-    ? ' Digli QUANDO lo chiama: il pomeriggio del giorno prima della call, non la mattina stessa, quindi tenga il telefono a portata già dal pomeriggio precedente.'
-    : ' Digli QUANDO lo chiama: lo stesso giorno della call, qualche ora prima. Dagli la finestra, mai un orario al minuto.';
+  const call = `${giornoRoma(quando)} alle ${formatOra(quando)}`;
+  if (romeHour(quando) < NOEMI_SOGLIA_STESSO_GIORNO) {
+    const prima = giornoRoma(new Date(quando.getTime() - 24 * 3600_000));
+    return ` Digli QUANDO lo chiama: la call è ${call}, quindi Noemi chiama il pomeriggio del giorno prima, cioè ${prima} nel pomeriggio, non la mattina della call. Scrivilo così, col giorno e il numero, e digli di tenere il telefono a portata già da ${prima} pomeriggio.`;
+  }
+  return ` Digli QUANDO lo chiama: la call è ${call}, quindi Noemi chiama lo stesso giorno, ${giornoRoma(quando)}, qualche ora prima. Scrivilo col giorno e il numero, dagli la finestra e mai un orario al minuto.`;
+}
+
+function formatOra(d: Date): string {
+  return new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', hour: '2-digit', minute: '2-digit' }).format(d);
 }
 
 /**

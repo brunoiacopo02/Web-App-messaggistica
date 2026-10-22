@@ -54,15 +54,24 @@ describe('contenuto del promemoria Noemi', () => {
   });
 
   it('dice che è il passaggio che conferma l\'appuntamento', () => {
-    expect(NOTA_NOEMI).toContain("conferma l'appuntamento");
+    expect(NOTA_NOEMI).toContain('serve a confermare la videochiamata');
   });
 
   it('ammette che il collega gliene ha già parlato', () => {
     expect(NOTA_NOEMI).toContain('collega');
   });
 
-  it('non minaccia il lead', () => {
-    expect(NOTA_NOEMI).toContain('non è un problema');
+  it('dice chiaro che deve rispondere, e come rimediare se la chiamata gli scappa', () => {
+    expect(NOTA_NOEMI).toContain('se non risponde la videochiamata non è confermata');
+    expect(NOTA_NOEMI).toContain('la richiami subito');
+  });
+
+  it('scrive il giorno della chiamata di Noemi per intero, col numero', () => {
+    const mattina = gdoContextNote(base({ videoAppenaConfermato: true, gdoAppuntamentoAt: '2026-10-23T10:00:00+02:00' }));
+    expect(mattina).toContain('la call è venerdì 23 alle 10:00');
+    expect(mattina).toContain('giovedì 22 nel pomeriggio');
+    const sera = gdoContextNote(base({ videoAppenaConfermato: true, gdoAppuntamentoAt: '2026-10-23T18:00:00+02:00' }));
+    expect(sera).toContain('lo stesso giorno, venerdì 23');
   });
 
   it('compare nella nota solo quando serve', () => {
