@@ -1,7 +1,8 @@
 import type { getSupabaseAdmin } from './supabase/admin';
 import { generateMarioReply, type MarioTurn } from './mario';
 import { datePiene, tettoGiornaliero } from './booking-capienza';
-import { gdoContextNote } from './gdo-context-note';
+import { gdoContextNote, serveNoemi, type GdoNoteInput } from './gdo-context-note';
+import { avanzaRiscaldamento, notaRiscaldamento } from './gdo-warmup';
 import { gdoVideoText } from './gdo-agenda';
 import { decideGdoRecap, gdoRecapText } from './gdo-recap';
 import { claimRecap } from './gdo-recap-send';
@@ -549,6 +550,9 @@ export async function drainMarioReplies(
   // Il recap GDO gia' uscito per questa call (vedi lib/gdo-recap.ts). `let`: dopo la
   // presa vale anche per i giri successivi dello stesso drain.
   let gdoRecapForAt = gdo.gdo_recap_for_at ?? null;
+  // Passo del riscaldamento (lib/gdo-warmup.ts). `let`: avanza in memoria fra un giro e
+  // l'altro dello stesso drain, come il recap.
+  let gdoWarmupStep = gdo.gdo_warmup_step ?? null;
   let gdoVideoMissingLogged = false;
 
   // Carica i messaggi della conversazione dall'arruolamento in poi (in ordine).
@@ -936,6 +940,32 @@ export async function drainMarioReplies(
       const notaProfessioni = vinceProfessioni
         ? [professioniContextNote(isSlugProfessione(professione) ? professione : null, { appenaChiesta: chiedeScheda }), notaPrimo].filter(Boolean).join('\n\n')
         : null;
+      // Postino: i promemoria del turno e, dopo il recap, la domanda di riscaldamento.
+      // La nota tace nel turno del recap e in quello di Noemi: una cosa alla volta.
+      const noteGdo: GdoNoteInput | null = postino
+        ? {
+            gdoVideoSentAt: gdoVideoSentAt,
+            gdoVideoWatchedAt: gdoVideoWatchedAt,
+            gdoNoemiRemindedAt: gdoNoemiRemindedAt,
+            followupsSent: gdoFollowupsSent,
+            videoAppenaConfermato: false,
+            videoInUscita: videoInsiemeAllaRisposta,
+            recapInUscita: recapTipo === 'completo',
+            botScheduledAt: botScheduledAt,
+            gdoAppuntamentoAt: gdoAppuntamentoAt,
+          }
+        : null;
+      const notaWarmup = noteGdo
+        ? notaRiscaldamento({
+            enabled: process.env.GDO_WARMUP_ENABLED === '1',
+            step: gdoWarmupStep,
+            recapForAt: gdoRecapForAt,
+            recapInQuestoTurno: recapTipo === 'completo',
+            appuntamentoAt: gdoAppuntamentoAt,
+            serveNoemi: serveNoemi(noteGdo),
+            nowMs: Date.now(),
+          })
+        : null;
       const result = await generateMarioReply(history, {
         personaName: PERSONA_NAME[persona],
         giorniPieni,
@@ -944,20 +974,8 @@ export async function drainMarioReplies(
         // farli arrivare come un messaggio programmato addosso. Sui lead adottati la
         // nota e' un'altra, la dichiarazione IA: un postino ha sempre ricevuto l'agenda,
         // quindi i due casi non si incontrano mai.
-        ...(postino
-          ? {
-              contextNote: gdoContextNote({
-                gdoVideoSentAt: gdoVideoSentAt,
-                gdoVideoWatchedAt: gdoVideoWatchedAt,
-                gdoNoemiRemindedAt: gdoNoemiRemindedAt,
-                followupsSent: gdoFollowupsSent,
-                videoAppenaConfermato: false,
-                videoInUscita: videoInsiemeAllaRisposta,
-                recapInUscita: recapTipo === 'completo',
-                botScheduledAt: botScheduledAt,
-                gdoAppuntamentoAt: gdoAppuntamentoAt,
-              }),
-            }
+        ...(noteGdo
+          ? { contextNote: gdoContextNote({ ...noteGdo, notaRiscaldamento: notaWarmup }) }
           : notaLancioCompleta
             ? { contextNote: notaLancioCompleta }
             : notaStudente
@@ -980,6 +998,9 @@ export async function drainMarioReplies(
       // Noemi, e la nota in più che gli passiamo lo distoglierebbe dal resto del
       // turno — il primo giro li ha già letti puliti.
       let visibleReply = result.visibleReply;
+      // Il passo del riscaldamento si legge dal testo che parte davvero: se la
+      // rigenerazione di Noemi sostituisce il testo, vale il suo tag.
+      let tagRiscaldamento = result.riscaldamento;
       // Il lancio non passa MAI un lead ai GDO (PO 25/09/2026): senza appuntamento il
       // [PASSAGGIO_UMANO] si ignora e la riga del modello, che prometterebbe un contatto,
       // cede il posto alla proposta della call col consulente.
@@ -1026,11 +1047,15 @@ export async function drainMarioReplies(
               recapInUscita: recapTipo === 'completo',
               botScheduledAt: botScheduledAt,
               gdoAppuntamentoAt: gdoAppuntamentoAt,
+              notaRiscaldamento: notaWarmup,
             }),
           });
           // Fail-safe: una rigenerazione vuota non vale meno di zero, vale come un
           // fallimento — si manda comunque la prima risposta, il lead non resta muto.
-          if (retry.visibleReply?.trim()) visibleReply = retry.visibleReply;
+          if (retry.visibleReply?.trim()) {
+            visibleReply = retry.visibleReply;
+            tagRiscaldamento = retry.riscaldamento;
+          }
         } catch (err) {
           const m = err instanceof Error ? err.message : 'errore';
           await supabase.from('event_log').insert({
@@ -1187,6 +1212,39 @@ export async function drainMarioReplies(
             message: `[bot-fissatore] conv ${conversationId}: eccezione inviando la nota col secondo recapito del lead — ${m}`,
             level: 'error',
           });
+        }
+      }
+
+      // Riscaldamento: il passo avanza solo se in questo turno il modello aveva la nota e
+      // ha rimesso il tag atteso. La risposta del lead e' gia' partita come [NOTA|...] qui
+      // sopra; qui si segna solo a che punto siamo. Un errore non si propaga: il messaggio
+      // al lead e' gia' uscito, e un giro ripetuto glielo rimanderebbe.
+      if (postino && notaWarmup) {
+        const passo = avanzaRiscaldamento(gdoWarmupStep, tagRiscaldamento);
+        if (passo.step !== gdoWarmupStep) {
+          const { error: erroreWarmup } = await supabase.from('conversations')
+            .update({
+              gdo_warmup_step: passo.step,
+              ...(passo.chiuso ? { gdo_warmup_closed_at: new Date().toISOString() } : {}),
+            })
+            .eq('id', conversationId);
+          if (erroreWarmup) {
+            await supabase.from('event_log').insert({
+              type: 'gdo_warmup_step_non_scritto',
+              payload: { conversationId, da: gdoWarmupStep, a: passo.step, errore: erroreWarmup.message } as never,
+              message: `[gdo] conv ${conversationId}: passo del riscaldamento ${passo.step} NON scritto — ${erroreWarmup.message}`,
+              level: 'warn',
+            });
+          } else {
+            await supabase.from('event_log').insert({
+              type: 'gdo_warmup_step',
+              payload: { conversationId, da: gdoWarmupStep, a: passo.step } as never,
+              message: `[gdo] conv ${conversationId}: riscaldamento dal passo ${gdoWarmupStep ?? 0} al ${passo.step}${passo.chiuso ? ' (chiuso)' : ''}`,
+              level: 'info',
+            });
+          }
+          // Anche se la scrittura fallisce: nello stesso drain non si rifà la domanda.
+          gdoWarmupStep = passo.step;
         }
       }
 

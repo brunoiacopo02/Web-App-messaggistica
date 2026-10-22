@@ -39,6 +39,9 @@ export type MarioResult = {
   /** Argomento del tag `[SCHEDA:...]` che non è uno slug del catalogo: il testo è pulito,
    *  nessuna scheda viene inviata, ma il caso resta visibile nei log. */
   schedaNonValida?: string;
+  /** Passo del riscaldamento GDO appena fatto (tag `[RISCALDAMENTO:n]`, vedi
+   *  lib/gdo-warmup.ts). 0 = lasciato perdere, 3 = chiuso con la nota al CRM. */
+  riscaldamento?: 0 | 1 | 2 | 3;
 };
 
 const ESITO_RE = /\[ESITO:(APPUNTAMENTO|RICHIAMO|SCARTO|INTERROTTO)\|([^\]]*)\]/i;
@@ -48,6 +51,8 @@ const ESITO_RE = /\[ESITO:(APPUNTAMENTO|RICHIAMO|SCARTO|INTERROTTO)\|([^\]]*)\]/
 const NOTA_RE = /\[NOTA\|([^\]]*)\]/gi;
 /** Come NOTA_RE: globale, così un secondo tag nello stesso messaggio non finisce in chat. */
 const SCHEDA_RE = /\[SCHEDA:([^\]]*)\]/gi;
+/** Globale anche questo: se il modello ne mette due vale l'ultimo, e nessuno resta in chat. */
+const RISCALDAMENTO_RE = /\[RISCALDAMENTO:([0-3])\]/gi;
 
 /** Rileva tag speciali, li rimuove dal testo visibile e ritorna flag + esito strutturato. */
 export function parseMarioReply(raw: string): MarioResult {
@@ -88,6 +93,9 @@ export function parseMarioReply(raw: string): MarioResult {
   const schedaRichiesta = schedaArg && isSlugProfessione(schedaArg) ? schedaArg : undefined;
   const schedaNonValida = schedaArg && !schedaRichiesta ? schedaArg : undefined;
 
+  const passiRiscaldamento = [...raw.matchAll(RISCALDAMENTO_RE)].map((m) => Number(m[1]) as 0 | 1 | 2 | 3);
+  const riscaldamento = passiRiscaldamento.length > 0 ? passiRiscaldamento[passiRiscaldamento.length - 1] : undefined;
+
   const visibleReply = sanitizeOutbound(
     raw
       .replace(ESITO_RE, '')
@@ -96,6 +104,7 @@ export function parseMarioReply(raw: string): MarioResult {
       .replace(/\[VIDEO_VISTO\]/g, '')
       .replace(NOTA_RE, '')
       .replace(SCHEDA_RE, '')
+      .replace(RISCALDAMENTO_RE, '')
       .trim(),
   );
 
@@ -111,6 +120,7 @@ export function parseMarioReply(raw: string): MarioResult {
     notaCrm,
     schedaRichiesta,
     schedaNonValida,
+    riscaldamento,
   };
 }
 

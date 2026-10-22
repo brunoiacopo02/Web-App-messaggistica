@@ -53,6 +53,8 @@ export interface GdoNoteInput {
   gdoAppuntamentoAt?: string | null;
   /** In questo turno esce il recap GDO, che spiega già Noemi. */
   recapInUscita?: boolean;
+  /** Nota del passo di riscaldamento da fare in questo turno (lib/gdo-warmup.ts). */
+  notaRiscaldamento?: string | null;
 }
 
 /**
@@ -105,5 +107,7 @@ export function gdoContextNote(i: GdoNoteInput): string {
   if (serveNoemi(i)) {
     parti.push(NOTA_NOEMI + quandoChiamaNoemi(oraAppuntamento(i.botScheduledAt, i.gdoAppuntamentoAt)));
   }
+  // Il riscaldamento va in coda: prima il contesto e i promemoria, poi la domanda del passo.
+  if (i.notaRiscaldamento) parti.push(i.notaRiscaldamento);
   return parti.join('\n\n');
 }

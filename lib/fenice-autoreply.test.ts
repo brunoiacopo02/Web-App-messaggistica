@@ -330,6 +330,8 @@ type ClaimedRow = {
   gdo_video_followups_sent?: number | null;
   gdo_noemi_reminded_at?: string | null;
   gdo_appuntamento_at?: string | null;
+  gdo_recap_for_at?: string | null;
+  gdo_warmup_step?: number | null;
   lancio_slug?: string | null;
   lancio_fase?: string | null;
   lancio_info?: unknown;
@@ -3120,5 +3122,86 @@ describe('drainMarioReplies — recap GDO al posto della bolla del video', () =>
 
     expect(calls.messageInserts.map((m: any) => m.body)).toEqual([gdoVideoText('Luca', VIDEO)]);
     expect(calls.events.some((e: any) => e.type === 'gdo_recap_sent')).toBe(false);
+  });
+});
+
+describe('drainMarioReplies — riscaldamento del lead GDO dopo il recap', () => {
+  const VIDEO = 'https://corso.feniceacademy.it/conferenza-bx';
+  const fra = (ms: number) => new Date(Date.now() + ms).toISOString();
+  const CALL = fra(2 * 24 * 3600_000);
+  const RECAP: FakeMsgRow = { direction: 'out', body: 'Luca, ti riassumo tutto...', template_sid: null, created_at: fra(-30 * 60_000) };
+  const RISPOSTA: FakeMsgRow = { direction: 'in', body: 'perfetto grazie', template_sid: null, created_at: fra(-60_000) };
+
+  // Recap gia' uscito (video mandato, Noemi spiegata): il turno e' quello delle domande.
+  const postino = (over: Partial<ClaimedRow> = {}): ClaimedRow => ({
+    id: 92, ai_started_at: null, crm_lead_id: 'gdo3', bot_outcome: null,
+    gdo_agenda_at: fra(-60 * 60_000), gdo_video_url: VIDEO, gdo_video_sent_at: fra(-30 * 60_000),
+    gdo_noemi_reminded_at: fra(-30 * 60_000), gdo_appuntamento_at: CALL, gdo_recap_for_at: CALL,
+    gdo_warmup_step: null, leads: { first_name: 'Luca' },
+    ...over,
+  });
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.stubEnv('GDO_WARMUP_ENABLED', '1');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(inviaNotaAlCrm).mockClear();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('passo null: la nota chiede la prima domanda e il tag 1 porta il passo a 1', async () => {
+    const { supabase, calls } = makeDrainSupabase(postino(), [RECAP, RISPOSTA]);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Per preparare bene la videochiamata ti faccio 2 domande veloci: cosa vuoi ottenere?',
+      appointmentFixed: false, passToHuman: false, videoWatched: false, riscaldamento: 1,
+    });
+
+    await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+    expect(vi.mocked(generateMarioReply).mock.calls[0][1]?.contextNote).toContain('RISCALDAMENTO, PASSO 1');
+    expect(calls.convUpdates.some((u: any) => u.gdo_warmup_step === 1 && !('gdo_warmup_closed_at' in u))).toBe(true);
+    expect(calls.events.find((e: any) => e.type === 'gdo_warmup_step')?.payload)
+      .toEqual({ conversationId: 92, da: null, a: 1 });
+  });
+
+  it('passo 2 e tag 3: riscaldamento chiuso con la data, la nota va al CRM', async () => {
+    vi.stubEnv('BOT_WEBHOOK_SECRET', 'segreto');
+    const { supabase, calls } = makeDrainSupabase(postino({ gdo_warmup_step: 2 }), [RECAP, RISPOSTA]);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Grazie! Ci vediamo alla videochiamata.',
+      appointmentFixed: false, passToHuman: false, videoWatched: false, riscaldamento: 3,
+      notaCrm: 'Riscaldamento prima della call: obiettivo "x"; prezzo e chi decide "y"',
+    });
+
+    await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+    expect(vi.mocked(generateMarioReply).mock.calls[0][1]?.contextNote).toContain('RISCALDAMENTO, CHIUSURA');
+    expect(calls.convUpdates.some((u: any) => u.gdo_warmup_step === 3 && u.gdo_warmup_closed_at)).toBe(true);
+    expect(vi.mocked(inviaNotaAlCrm)).toHaveBeenCalled();
+  });
+
+  it('senza il tag atteso il passo resta dov\'era', async () => {
+    const { supabase, calls } = makeDrainSupabase(postino(), [RECAP, RISPOSTA]);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Ciao!', appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+    expect(calls.convUpdates.some((u: any) => 'gdo_warmup_step' in u)).toBe(false);
+    expect(calls.events.some((e: any) => e.type === 'gdo_warmup_step')).toBe(false);
+  });
+
+  it('con l\'interruttore spento la nota non c\'e e il passo non si muove', async () => {
+    vi.stubEnv('GDO_WARMUP_ENABLED', '');
+    const { supabase, calls } = makeDrainSupabase(postino(), [RECAP, RISPOSTA]);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Ciao!', appointmentFixed: false, passToHuman: false, videoWatched: false, riscaldamento: 1,
+    });
+
+    await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+    expect(vi.mocked(generateMarioReply).mock.calls[0][1]?.contextNote).not.toContain('RISCALDAMENTO');
+    expect(calls.convUpdates.some((u: any) => 'gdo_warmup_step' in u)).toBe(false);
   });
 });
