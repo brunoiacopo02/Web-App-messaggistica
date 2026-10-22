@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
+import { inviaRecapDopoData } from '@/lib/gdo-recap-send';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { verifySignature } from '@/lib/bot-hmac';
 import { parseAppointmentSetPayload } from '@/lib/bot-contract';
@@ -66,7 +67,15 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    return NextResponse.json(await runAppointmentSet(supabase, parsed.value));
+    const res = await runAppointmentSet(supabase, parsed.value);
+    // La data è nota (o cambiata): se il video è già uscito, il recap parte dopo la
+    // risposta al CRM. inviaRecapDopoData non lancia mai: non può sporcare la risposta.
+    if (res.conversationId && (res.esito === 'registrato' || res.esito === 'spostato')) {
+      const conversationId = res.conversationId;
+      const occasione = res.esito;
+      after(() => inviaRecapDopoData(supabase, conversationId, occasione));
+    }
+    return NextResponse.json(res);
   } catch (e) {
     const error = e instanceof Error ? e.message : 'errore';
     await supabase.from('event_log').insert({
