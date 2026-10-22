@@ -85,3 +85,15 @@ export function romeMinute(date: Date): number {
 export function romeDaysBetween(from: Date, to: Date): number {
   return Math.round((Date.parse(romeDayKey(to)) - Date.parse(romeDayKey(from))) / 86_400_000);
 }
+
+/** "venerdì 23": il giorno italiano col numero, come lo deve leggere il lead. */
+export function giornoRoma(d: Date): string {
+  return new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', weekday: 'long', day: 'numeric' }).format(d);
+}
+
+/** "10:00": l'ora italiana, come la deve leggere il lead. */
+export function oraRoma(d: Date): string {
+  return new Intl.DateTimeFormat('it-IT', {
+    timeZone: 'Europe/Rome', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).format(d);
+}

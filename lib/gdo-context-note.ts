@@ -1,5 +1,5 @@
 import { GDO_CONTEXT_NOTE } from './mario';
-import { romeHour } from './rome-time';
+import { giornoRoma, oraRoma, romeHour } from './rome-time';
 
 /**
  * Promemoria che il bot deve portarsi dentro la conversazione con un lead GDO.
@@ -72,26 +72,17 @@ export function oraAppuntamento(
   return ts.length ? new Date(Math.max(...ts)) : null;
 }
 
-/** "giovedì 23": il giorno italiano col numero, come lo deve leggere il lead. */
-function giornoRoma(d: Date): string {
-  return new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', weekday: 'long', day: 'numeric' }).format(d);
-}
-
 /** La riga su quando chiama Noemi, vuota se non sappiamo quando è la call. Il giorno è
  *  scritto per intero col numero: "il giorno prima" da solo, a chi legge di fretta, non dice
  *  niente. */
 export function quandoChiamaNoemi(quando: Date | null): string {
   if (!quando) return '';
-  const call = `${giornoRoma(quando)} alle ${formatOra(quando)}`;
+  const call = `${giornoRoma(quando)} alle ${oraRoma(quando)}`;
   if (romeHour(quando) < NOEMI_SOGLIA_STESSO_GIORNO) {
     const prima = giornoRoma(new Date(quando.getTime() - 24 * 3600_000));
     return ` Digli QUANDO lo chiama: la call è ${call}, quindi Noemi chiama il pomeriggio del giorno prima, cioè ${prima} nel pomeriggio, non la mattina della call. Scrivilo così, col giorno e il numero, e digli di tenere il telefono a portata già da ${prima} pomeriggio.`;
   }
   return ` Digli QUANDO lo chiama: la call è ${call}, quindi Noemi chiama lo stesso giorno, ${giornoRoma(quando)}, qualche ora prima. Scrivilo col giorno e il numero, dagli la finestra e mai un orario al minuto.`;
-}
-
-function formatOra(d: Date): string {
-  return new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', hour: '2-digit', minute: '2-digit' }).format(d);
 }
 
 /**
