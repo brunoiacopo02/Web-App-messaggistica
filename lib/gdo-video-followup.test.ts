@@ -355,3 +355,25 @@ describe('videoTemplateEnvForLink — il link dell\'offerta è dinamico, il temp
     expect(videoTemplateEnvForLink(offerta, null)).toBeUndefined();
   });
 });
+
+describe('decideGdoVideoFollowup — slot mattina e promemoria del giorno prima', () => {
+  const mattina = (over: Partial<GdoFollowupInput> = {}) => base({
+    slot: 'mattina', giorniDaAgenda: 1, followupsSent: 1,
+    gdoVideoSentAt: '2026-08-01T19:30:00Z',
+    nowMs: Date.parse('2026-08-02T08:00:00Z'),
+    appointmentAt: '2026-08-03T08:00:00Z',
+    ...over,
+  });
+
+  it('con il promemoria acceso e la data nota lo slot mattina tace', () => {
+    expect(decideGdoVideoFollowup(mattina({ promemoriaGdoAttivo: true }))).toBe('none');
+  });
+
+  it('con il promemoria spento resta il sollecito di oggi', () => {
+    expect(decideGdoVideoFollowup(mattina({ promemoriaGdoAttivo: false }))).toBe('sollecito-template');
+  });
+
+  it('senza data della call il promemoria non può partire: il sollecito resta', () => {
+    expect(decideGdoVideoFollowup(mattina({ promemoriaGdoAttivo: true, appointmentAt: null }))).toBe('sollecito-template');
+  });
+});

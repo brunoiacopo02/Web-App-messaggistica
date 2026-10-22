@@ -34,6 +34,9 @@ export interface GdoFollowupInput {
   romeHourAgenda: number;
   /** Il lead ha scritto qualcosa DOPO che gli è arrivato il video. */
   haRispostoDopoVideo: boolean;
+  /** Promemoria del giorno prima dei lead GDO acceso (lib/precall-reminders.ts):
+   *  con la data della call nota prende il posto dello slot mattina. Default spento. */
+  promemoriaGdoAttivo?: boolean;
 }
 
 export function decideGdoVideoFollowup(i: GdoFollowupInput): GdoFollowupAction {
@@ -49,6 +52,10 @@ export function decideGdoVideoFollowup(i: GdoFollowupInput): GdoFollowupAction {
   const hasValidAppointment = !Number.isNaN(appointmentTime);
 
   if (hasValidAppointment && appointmentTime <= i.nowMs) return 'none';
+
+  // Con la data nota il promemoria del giorno prima fa anche da sollecito (chiede del
+  // video): il lead non riceve due messaggi programmati per la stessa cosa.
+  if (i.slot === 'mattina' && i.promemoriaGdoAttivo && hasValidAppointment) return 'none';
 
   if (!hasValidAppointment && i.slot === 'sera' && i.romeHourAgenda >= ORA_AGENDA_TARDI) {
     // Senza la data vera, un'agenda arrivata a sera è probabilmente una call a

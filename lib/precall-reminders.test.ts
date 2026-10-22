@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { reminderTargets, dueReminder, slotLabel, pickReminder24Template } from './precall-reminders';
+import {
+  reminderTargets, dueReminder, slotLabel, pickReminder24Template,
+  decideGdoReminder24, gdoReminderVars, gdoReminderText, type GdoReminder24Input,
+} from './precall-reminders';
 
 const at = (iso: string) => new Date(iso).getTime();
 
@@ -96,5 +99,103 @@ describe('pickReminder24Template: a chi ha gia visto il video non si richiede de
 
   it('il template standard resta quello di default anche con entrambi i segnali assenti', () => {
     expect(pick({ hasVideoWatchedEvent: false, inboundAfterVideoMs: null })).toBe('HXdefault');
+  });
+});
+
+describe('decideGdoReminder24: il promemoria del giorno prima ai lead GDO', () => {
+  const H = 3600_000;
+  // Giovedì 22 ottobre 2026, 14:00 a Roma (CEST): la call è venerdì 23 alle 10:00, fra 20h.
+  const NOW = at('2026-10-22T12:00:00Z');
+  const base = (over: Partial<GdoReminder24Input> = {}): GdoReminder24Input => ({
+    enabled: true,
+    gdoAgendaAt: new Date(NOW - 30 * H).toISOString(),
+    botOutcome: null,
+    appuntamentoAt: new Date(NOW + 20 * H).toISOString(),
+    videoSentAt: new Date(NOW - 29 * H).toISOString(),
+    recapSentAt: null,
+    lastInboundAtMs: NOW - 3 * 24 * H,
+    aiPausedAt: null,
+    cancelRequestedAt: null,
+    giaInviato: false,
+    nowMs: NOW,
+    ...over,
+  });
+
+  it('finestra chiusa: parte il template', () => {
+    expect(decideGdoReminder24(base())).toBe('template');
+  });
+
+  it('finestra aperta da 10 ore: parte in testo libero', () => {
+    expect(decideGdoReminder24(base({ lastInboundAtMs: NOW - 10 * H }))).toBe('testo');
+  });
+
+  it('conversazione viva (ultimo messaggio 2 ore fa): niente', () => {
+    expect(decideGdoReminder24(base({ lastInboundAtMs: NOW - 2 * H }))).toBeNull();
+  });
+
+  it('interruttore spento: niente', () => {
+    expect(decideGdoReminder24(base({ enabled: false }))).toBeNull();
+  });
+
+  it('appuntamento fissato dal bot: ha già i suoi promemoria', () => {
+    expect(decideGdoReminder24(base({ botOutcome: 'APPUNTAMENTO' }))).toBeNull();
+  });
+
+  it('video non ancora mandato: niente', () => {
+    expect(decideGdoReminder24(base({ videoSentAt: null }))).toBeNull();
+  });
+
+  it('agenda arrivata 8 ore fa: la copre il recap', () => {
+    expect(decideGdoReminder24(base({ gdoAgendaAt: new Date(NOW - 8 * H).toISOString() }))).toBeNull();
+  });
+
+  it('recap uscito 5 ore fa: niente', () => {
+    expect(decideGdoReminder24(base({ recapSentAt: new Date(NOW - 5 * H).toISOString() }))).toBeNull();
+  });
+
+  it('già inviato per questa call: niente', () => {
+    expect(decideGdoReminder24(base({ giaInviato: true }))).toBeNull();
+  });
+
+  it('chat in pausa o disdetta chiesta: niente', () => {
+    expect(decideGdoReminder24(base({ aiPausedAt: new Date(NOW - H).toISOString() }))).toBeNull();
+    expect(decideGdoReminder24(base({ cancelRequestedAt: new Date(NOW - H).toISOString() }))).toBeNull();
+  });
+
+  it('call fra 10 minuti: niente', () => {
+    expect(decideGdoReminder24(base({ appuntamentoAt: new Date(NOW + 10 * 60_000).toISOString() }))).toBeNull();
+  });
+
+  it('prima di r24At (call fra 40 ore): niente', () => {
+    expect(decideGdoReminder24(base({ appuntamentoAt: new Date(NOW + 40 * H).toISOString() }))).toBeNull();
+  });
+
+  it('call alle 10 e adesso le 08:40 dello stesso giorno: il pomeriggio di Noemi è già passato', () => {
+    const now = at('2026-10-23T06:40:00Z'); // venerdì 23, 08:40 a Roma
+    expect(decideGdoReminder24(base({
+      nowMs: now,
+      appuntamentoAt: '2026-10-23T08:00:00Z',
+      gdoAgendaAt: new Date(now - 40 * H).toISOString(),
+    }))).toBeNull();
+  });
+});
+
+describe('gdoReminderVars e gdoReminderText', () => {
+  it('call venerdì alle 10, adesso giovedì alle 10: Noemi chiama oggi pomeriggio', () => {
+    const v = gdoReminderVars({ nome: 'mario rossi', call: new Date('2026-10-23T08:00:00Z'), nowMs: at('2026-10-22T08:00:00Z') });
+    expect(v['1']).toBe('Mario');
+    expect(v['2']).toBe('venerdì 23 ottobre alle 10:00');
+    expect(v['3']).toBe('oggi pomeriggio');
+  });
+
+  it('call venerdì alle 18, adesso giovedì alle 18: domani, qualche ora prima', () => {
+    const v = gdoReminderVars({ nome: null, call: new Date('2026-10-23T16:00:00Z'), nowMs: at('2026-10-22T16:00:00Z') });
+    expect(v['3']).toBe('domani, qualche ora prima');
+  });
+
+  it('il testo libero è il template con le variabili al loro posto', () => {
+    expect(gdoReminderText({ '1': 'Mario', '2': 'venerdì 23 ottobre alle 10:00', '3': 'oggi pomeriggio' })).toBe(
+      "Ciao Mario, ti ricordo la tua videochiamata con Fenice Academy: venerdì 23 ottobre alle 10:00. Prima ti chiama Noemi, una collega, oggi pomeriggio da un numero di cellulare: rispondi, serve a confermare la videochiamata. Se non l'hai ancora fatto, guarda il video che ti ho mandato qui.",
+    );
   });
 });

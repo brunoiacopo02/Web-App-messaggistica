@@ -76,6 +76,10 @@ export async function GET(req: NextRequest) {
   // che il primario ci sia, cioe' che la configurazione regga.
   const primario = numeroPrimario();
   const solleciteSid = process.env.SOLLECITO_VIDEO_GDO_SID;
+  // Lo stesso interruttore del promemoria T-24h GDO in precall-reminders: acceso solo
+  // col template configurato, altrimenti lo slot mattina resterebbe scoperto.
+  const promemoriaGdoAttivo =
+    process.env.GDO_PRECALL_24H_ENABLED === '1' && !!process.env.GDO_REMINDER_24H_TEMPLATE_SID;
   const supabase = getSupabaseAdmin();
   if (!primario) {
     await supabase.from('event_log').insert({
@@ -182,6 +186,7 @@ export async function GET(req: NextRequest) {
         giorniDaAgenda: romeDaysBetween(agendaAt, now),
         romeHourAgenda: romeHour(agendaAt),
         haRispostoDopoVideo,
+        promemoriaGdoAttivo,
       });
 
       if (action === 'none') { report.push({ id: c.id, action: 'none' }); continue; }

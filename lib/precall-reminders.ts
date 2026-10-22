@@ -1,4 +1,6 @@
-import { romeOffset } from './rome-time';
+import { formatRomeDateTime, giornoRoma, romeDaysBetween, romeHour, romeOffset } from './rome-time';
+import { SOGLIA_STESSO_GIORNO } from './gdo-recap';
+import { templateName } from './name';
 
 const H = 3600_000;
 
@@ -91,4 +93,98 @@ export function pickReminder24Template(input: {
   const giaVisto = input.hasVideoWatchedEvent || input.inboundAfterVideoMs !== null;
   if (giaVisto && input.novideoSid) return input.novideoSid;
   return input.defaultSid;
+}
+
+// ── Promemoria del giorno prima per i lead GDO ──────────────────────────────────
+//
+// Il lead fissato al telefono da un GDO non riceveva il "ti ricordo domani" del bot:
+// quello parte solo per bot_outcome = 'APPUNTAMENTO'. Qui solo il T-24h (il T-3h resta
+// del bot), con dentro la chiamata di Noemi. Decisione e testi, senza I/O.
+
+/** Agenda più giovane di così: la call è vicina e l'ha già coperta il recap. */
+const GDO_AGENDA_MIN_MS = 12 * H;
+/** Recap uscito da meno di così: il promemoria ripeterebbe le stesse cose. */
+const GDO_RECAP_RECENTE_MS = 12 * H;
+/** Il lead ha scritto da meno di così: si sta parlando, il promemoria lo porta la chat. */
+const GDO_CONVERSAZIONE_VIVA_MS = 6 * H;
+/** Finestra di 24h di WhatsApp: dentro si scrive libero, fuori solo template. */
+const GDO_FINESTRA_MS = 24 * H;
+/** Sotto questo anticipo il promemoria non serve più. */
+const GDO_ANTICIPO_MIN_MS = 1 * H;
+
+export interface GdoReminder24Input {
+  enabled: boolean;
+  gdoAgendaAt: string | null;
+  botOutcome: string | null;
+  appuntamentoAt: string | null;
+  videoSentAt: string | null;
+  recapSentAt: string | null;
+  lastInboundAtMs: number | null;
+  aiPausedAt: string | null;
+  cancelRequestedAt: string | null;
+  /** Già partito per QUESTA data della call (uno spostamento lo riapre). */
+  giaInviato: boolean;
+  nowMs: number;
+}
+
+/** Un istante del giorno in cui chiama Noemi: il giorno prima se la call è
+ * prima delle 15, altrimenti lo stesso giorno qualche ora prima (come `quandoNoemi`). */
+function giornoNoemi(call: Date): { giorno: Date; pomeriggio: boolean } {
+  const pomeriggio = romeHour(call) < SOGLIA_STESSO_GIORNO;
+  return { giorno: pomeriggio ? new Date(call.getTime() - 24 * H) : call, pomeriggio };
+}
+
+/** Il promemoria T-24h di un lead GDO: in template, in testo libero, o niente. */
+export function decideGdoReminder24(i: GdoReminder24Input): 'template' | 'testo' | null {
+  if (!i.enabled || !i.gdoAgendaAt || i.botOutcome === 'APPUNTAMENTO') return null;
+  if (i.aiPausedAt || i.cancelRequestedAt || i.giaInviato) return null;
+  // Il promemoria chiede del video: senza video uscito non ha senso.
+  if (!i.videoSentAt || !i.appuntamentoAt) return null;
+
+  const callMs = Date.parse(i.appuntamentoAt);
+  if (Number.isNaN(callMs) || callMs - i.nowMs < GDO_ANTICIPO_MIN_MS) return null;
+  if (i.nowMs < reminderTargets(callMs).r24At) return null;
+
+  const agendaMs = Date.parse(i.gdoAgendaAt);
+  if (Number.isNaN(agendaMs) || i.nowMs - agendaMs < GDO_AGENDA_MIN_MS) return null;
+
+  const recapMs = i.recapSentAt ? Date.parse(i.recapSentAt) : NaN;
+  if (!Number.isNaN(recapMs) && i.nowMs - recapMs < GDO_RECAP_RECENTE_MS) return null;
+
+  // Cron in ritardo su una call del mattino: il pomeriggio di Noemi è già passato e
+  // "oggi pomeriggio" sarebbe falso. Meglio niente.
+  const noemi = giornoNoemi(new Date(callMs));
+  if (noemi.pomeriggio && romeDaysBetween(new Date(i.nowMs), noemi.giorno) < 0) return null;
+
+  const daUltimoInbound = i.lastInboundAtMs === null ? null : i.nowMs - i.lastInboundAtMs;
+  if (daUltimoInbound !== null && daUltimoInbound < GDO_CONVERSAZIONE_VIVA_MS) return null;
+  return daUltimoInbound !== null && daUltimoInbound < GDO_FINESTRA_MS ? 'testo' : 'template';
+}
+
+/** Quando chiama Noemi, detto rispetto a oggi: "oggi pomeriggio", "domani, qualche ora prima"… */
+function noemiRelativo(call: Date, nowMs: number): string {
+  const noemi = giornoNoemi(call);
+  const suffisso = noemi.pomeriggio ? ' pomeriggio' : ', qualche ora prima';
+  const giorni = romeDaysBetween(new Date(nowMs), noemi.giorno);
+  if (giorni === 0) return `oggi${suffisso}`;
+  if (giorni === 1) return `domani${suffisso}`;
+  return `${giornoRoma(noemi.giorno)} pomeriggio`;
+}
+
+export type GdoReminderVars = { '1': string; '2': string; '3': string };
+
+/** Variabili del template `fenice_reminder_24h_gdo_v1`. */
+export function gdoReminderVars(i: { nome: string | null; call: Date; nowMs: number }): GdoReminderVars {
+  return {
+    '1': templateName(i.nome),
+    '2': formatRomeDateTime(i.call.toISOString()),
+    '3': noemiRelativo(i.call, i.nowMs),
+  };
+}
+
+/** Lo stesso testo del template, per la finestra aperta (testo libero). */
+export function gdoReminderText(v: GdoReminderVars): string {
+  return `Ciao ${v['1']}, ti ricordo la tua videochiamata con Fenice Academy: ${v['2']}. ` +
+    `Prima ti chiama Noemi, una collega, ${v['3']} da un numero di cellulare: rispondi, ` +
+    "serve a confermare la videochiamata. Se non l'hai ancora fatto, guarda il video che ti ho mandato qui.";
 }

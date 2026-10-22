@@ -8,7 +8,7 @@ import { giornoRoma, oraRoma, romeHour, sameInstant } from './rome-time';
  */
 
 /** Come in `gdo-context-note`: sotto le 15 Noemi non c'è ancora, si chiama il giorno prima. */
-const SOGLIA_STESSO_GIORNO = 15;
+export const SOGLIA_STESSO_GIORNO = 15;
 /** Sotto questo anticipo il recap non serve più: la call è troppo vicina. */
 const ANTICIPO_MIN_MS = 60 * 60_000;
 /** Finestra di 24h di WhatsApp dall'ultimo messaggio del lead. */
