@@ -51,7 +51,7 @@ function makeSupabase(riga: Record<string, any>) {
 
 describe('claimRecap', () => {
   it('la prima volta prende il recap, la seconda no anche con la stessa data in un altro fuso', async () => {
-    const { supabase, riga } = makeSupabase({ id: 7, gdo_recap_for_at: null, gdo_noemi_reminded_at: null });
+    const { supabase, riga } = makeSupabase({ id: 7, gdo_appuntamento_at: '2026-10-23T15:00:00.000Z', gdo_recap_for_at: null, gdo_noemi_reminded_at: null });
 
     expect(await claimRecap(supabase, 7, '2026-10-23T17:00:00+02:00', false)).toBe(true);
     expect(riga.gdo_recap_for_at).toBe('2026-10-23T15:00:00.000Z');
@@ -61,23 +61,30 @@ describe('claimRecap', () => {
   });
 
   it('una call spostata a un altro orario si riassume di nuovo', async () => {
-    const { supabase } = makeSupabase({ id: 7, gdo_recap_for_at: '2026-10-23T15:00:00.000Z' });
+    const { supabase } = makeSupabase({ id: 7, gdo_appuntamento_at: '2026-10-24T15:00:00.000Z', gdo_recap_for_at: '2026-10-23T15:00:00.000Z' });
     expect(await claimRecap(supabase, 7, '2026-10-24T15:00:00Z', false)).toBe(true);
   });
 
+  it('la data è cambiata nel frattempo: il recap con la data vecchia non si prende', async () => {
+    const { supabase, riga } = makeSupabase({ id: 7, gdo_appuntamento_at: '2026-10-24T15:00:00.000Z', gdo_recap_for_at: null, gdo_noemi_reminded_at: null });
+    expect(await claimRecap(supabase, 7, '2026-10-23T15:00:00Z', true)).toBe(false);
+    expect(riga.gdo_recap_for_at).toBeNull();
+    expect(riga.gdo_noemi_reminded_at).toBeNull();
+  });
+
   it('con Noemi segna anche il promemoria, ma solo se non era già segnato', async () => {
-    const fresca = makeSupabase({ id: 7, gdo_recap_for_at: null, gdo_noemi_reminded_at: null });
+    const fresca = makeSupabase({ id: 7, gdo_appuntamento_at: '2026-10-23T15:00:00.000Z', gdo_recap_for_at: null, gdo_noemi_reminded_at: null });
     expect(await claimRecap(fresca.supabase, 7, '2026-10-23T15:00:00Z', true)).toBe(true);
     expect(fresca.riga.gdo_noemi_reminded_at).toBeTruthy();
 
     const PRIMA = '2026-10-20T10:00:00.000Z';
-    const gia = makeSupabase({ id: 7, gdo_recap_for_at: null, gdo_noemi_reminded_at: PRIMA });
+    const gia = makeSupabase({ id: 7, gdo_appuntamento_at: '2026-10-23T15:00:00.000Z', gdo_recap_for_at: null, gdo_noemi_reminded_at: PRIMA });
     expect(await claimRecap(gia.supabase, 7, '2026-10-23T15:00:00Z', true)).toBe(true);
     expect(gia.riga.gdo_noemi_reminded_at).toBe(PRIMA);
   });
 
   it('senza Noemi il promemoria non si tocca', async () => {
-    const { supabase, riga } = makeSupabase({ id: 7, gdo_recap_for_at: null, gdo_noemi_reminded_at: null });
+    const { supabase, riga } = makeSupabase({ id: 7, gdo_appuntamento_at: '2026-10-23T15:00:00.000Z', gdo_recap_for_at: null, gdo_noemi_reminded_at: null });
     await claimRecap(supabase, 7, '2026-10-23T15:00:00Z', false);
     expect(riga.gdo_noemi_reminded_at).toBeNull();
   });
@@ -90,6 +97,7 @@ describe('claimRecap', () => {
  */
 function makeDb(conv: Record<string, any>, opts: { messagesError?: boolean } = {}) {
   const inseriti: Record<string, any[]> = { messages: [], event_log: [] };
+  const letture = { n: 0 };
   const supabase: any = {
     from(table: string) {
       if (table !== 'conversations') {
@@ -101,9 +109,13 @@ function makeDb(conv: Record<string, any>, opts: { messagesError?: boolean } = {
       }
       const nuovoQ = (payload: any | null) => {
         const filtri: Array<(r: Record<string, any>) => boolean> = [];
+        // `.eq` su una colonna timestamptz: Postgres confronta gli istanti, non il testo.
+        const uguale = (col: string, a: any, b: any) => col.endsWith('_at') && typeof a === 'string' && typeof b === 'string'
+          ? Date.parse(a) === Date.parse(b)
+          : a === b;
         const q: any = {
           select: () => q,
-          eq: (col: string, val: any) => { filtri.push((r) => r[col] === val); return q; },
+          eq: (col: string, val: any) => { filtri.push((r) => uguale(col, r[col], val)); return q; },
           is: (col: string, val: null) => { filtri.push((r) => r[col] === val); return q; },
           or: (expr: string) => {
             const clausole = expr.split(',').map((c) => {
@@ -124,10 +136,10 @@ function makeDb(conv: Record<string, any>, opts: { messagesError?: boolean } = {
         };
         return q;
       };
-      return { select: () => nuovoQ(null), update: (p: any) => nuovoQ(p) };
+      return { select: () => { letture.n++; return nuovoQ(null); }, update: (p: any) => nuovoQ(p) };
     },
   };
-  return { supabase, inseriti };
+  return { supabase, inseriti, letture };
 }
 
 describe('inviaRecapDopoData', () => {
@@ -167,12 +179,20 @@ describe('inviaRecapDopoData', () => {
     expect(conv.gdo_recap_for_at).toBe(CALL);
   });
 
-  it('interruttore spento → nessun invio, null', async () => {
+  it('interruttore spento → nessun invio, null, e nemmeno una lettura dal DB', async () => {
     vi.stubEnv('GDO_RECAP_ENABLED', '0');
-    const { supabase, inseriti } = makeDb(baseConv());
+    const { supabase, inseriti, letture } = makeDb(baseConv());
     expect(await inviaRecapDopoData(supabase, 7, 'registrato', NOW)).toBeNull();
     expect(sendFreeTextMock).not.toHaveBeenCalled();
     expect(inseriti.messages).toHaveLength(0);
+    expect(letture.n).toBe(0);
+  });
+
+  it('la call scritta dal CRM in un altro fuso: il recap esce lo stesso', async () => {
+    const conv = { ...baseConv(), gdo_appuntamento_at: '2026-10-23T17:00:00+02:00' };
+    const { supabase } = makeDb(conv);
+    expect(await inviaRecapDopoData(supabase, 7, 'registrato', NOW)).toBe('senza-video');
+    expect(sendFreeTextMock).toHaveBeenCalledTimes(1);
   });
 
   it('sendFreeText che lancia → nessuna eccezione, gdo_recap_errore, presa rilasciata, niente gdo_recap_sent', async () => {

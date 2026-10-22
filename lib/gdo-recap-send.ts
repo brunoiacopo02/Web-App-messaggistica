@@ -16,7 +16,7 @@ type Supa = {
  * Segna il recap per la call di `appuntamentoAt` solo se per quella stessa call non è
  * già uscito. Con `conNoemi` segna anche il promemoria di Noemi, se mancava: il recap
  * la nomina, e il bot non deve rispiegarla al turno dopo. Torna `true` se ha preso il
- * recap (una riga aggiornata).
+ * recap (una riga aggiornata). Non prende niente se la call ha ormai un'altra data.
  */
 export async function claimRecap(
   supabase: Supa,
@@ -32,6 +32,9 @@ export async function claimRecap(
     .from('conversations')
     .update({ gdo_recap_for_at: at, gdo_recap_sent_at: now })
     .eq('id', conversationId)
+    // La data per cui si manda deve essere ancora quella della call: se il CRM l'ha
+    // spostata nel frattempo, il recap con la data vecchia non si prende.
+    .eq('gdo_appuntamento_at', at)
     .or(`gdo_recap_for_at.is.null,gdo_recap_for_at.neq.${at}`)
     .select('id');
   if (error) {
@@ -110,6 +113,8 @@ export async function inviaRecapDopoData(
   let inviato = false;
   let tipoInviato: RecapTipo | null = null;
   let claimed: { at: string; prima: { forAt: string | null; sentAt: string | null }; noemi: boolean } | null = null;
+  // Interruttore spento: nessun costo, nemmeno la lettura della conversazione.
+  if (process.env.GDO_RECAP_ENABLED !== '1') return null;
   try {
     const { data: conv, error } = await supabase
       .from('conversations')
