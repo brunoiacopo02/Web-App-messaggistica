@@ -72,9 +72,10 @@ Quando parte:
 4. **Finestra 24h chiusa**: niente recap in testo libero. Restano il template video di oggi e il
    promemoria del giorno prima (C).
 
-**Perimetro**: recap e promemoria (C) valgono solo per le chat con `gdo_agenda_at` valorizzato e
-`bot_outcome` diverso da `APPUNTAMENTO`. Il CRM chiama `appointment-set` anche per i lead del bot
-e per gli spostamenti di Conferme, venditori e Mario vocale: quei lead restano fuori.
+**Perimetro**: recap e promemoria (C) riguardano solo le chat con `gdo_agenda_at` valorizzato e
+`bot_outcome` diverso da `APPUNTAMENTO`: i lead fissati dal bot restano fuori, anche quando il CRM
+chiama `appointment-set` per loro. Sui lead GDO, invece, il recap breve dello spostamento (caso 3)
+parte chiunque abbia spostato la call: Conferme, venditore o Mario vocale.
 *(scelta di chi scrive)*
 
 Un recap per data: se `gdo_recap_for_at` è già uguale a `gdo_appuntamento_at`, non si riparte.
@@ -136,8 +137,14 @@ il riscaldamento si apre al turno dopo. Col recap partito, Noemi è già stata s
 - Non parte se in chat è già uscito un recap per quella data **nelle ultime 12 ore**, se il
   lead ha scritto nelle ultime 6 ore (la conversazione è viva), con `ai_paused_at`, con
   `cancel_requested_at`, o se la call è già passata.
-- **Sostituisce lo slot "mattina"** di `gdo-video-followups`: con C acceso e `gdo_appuntamento_at`
-  noto, lo slot mattina non parte. Chi non ha mai risposto riceve agenda, video (template della
+- Un promemoria per data della call: la presa è la colonna `conversations.gdo_reminder24_for_at`,
+  scritta con un update condizionale **prima** dell'invio (solo se vuota o con un'altra data) e
+  rimessa com'era se l'invio non parte. Uno spostamento della call la riapre. L'evento
+  `gdo_reminder24_sent` in `event_log` resta solo come diagnostica.
+- **Sostituisce lo slot "mattina"** di `gdo-video-followups`: con C acceso, `gdo_appuntamento_at`
+  noto, il video già uscito e il promemoria ancora in grado di partire (pomeriggio di Noemi non
+  passato, agenda di almeno 12 ore prima che scada: `gdoReminder24Raggiungibile`), lo slot
+  mattina non parte. Chi non ha mai risposto riceve agenda, video (template della
   sera) e promemoria: 3 messaggi, come oggi (agenda, video, sollecito della mattina). Il
   promemoria fa anche da sollecito, perché chiede del video. *(scelta di chi scrive)*
 
@@ -181,6 +188,8 @@ quante NOTA di riscaldamento, quante con `⚠️`, e quanti scarti Conferme ne s
   all'altro per friendly_name. Verifica dello stato: `GET https://content.twilio.com/v1/Content/{sid}/ApprovalRequests`
   (o rilanciare lo script). Meta decide la categoria: se torna MARKETING il template va rifatto
   con un nome nuovo (`_v2`), non si ricategorizza.
+- **Migration:** `20261022000001_gdo_recap_riscaldamento.sql` e `20261022000002_gdo_reminder24_for_at.sql`
+  (colonna `gdo_reminder24_for_at`, applicata al DB del bot il 22/10/2026).
 - **Interruttori:** tutti spenti, nessuna env toccata.
 
 ### Come accendere
