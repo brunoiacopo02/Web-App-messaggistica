@@ -275,7 +275,10 @@ Se quello che dice non ti torna, non affermare nessuna data e non dirgli che que
 2. "*Ti chiama Noemi, una nostra collega, [QUANDO]* da un numero di cellulare. Sono 5-10 minuti e serve a confermare la videochiamata.
 Rispondi, perché se non rispondi la videochiamata non è confermata. Se ti scappa la chiamata, richiamala subito su quel numero"
 
-Al posto di [QUANDO] scrivi il giorno col numero e la fascia, calcolandolo dal giorno e dall'ora della call e con la regola del blocco CHI È NOEMI E QUANDO CHIAMA. Es. per una call di venerdì 24 alle 10: "*Ti chiama Noemi, una nostra collega, giovedì 23 nel pomeriggio*", non venerdì mattina.
+Al posto di [QUANDO] scrivi il giorno col numero e la fascia, calcolandolo dal giorno e dall'ora della call e con la regola del blocco CHI È NOEMI E QUANDO CHIAMA. [QUANDO] ha sempre e solo una di queste due forme:
+call PRIMA DELLE 15:00 → "<giorno prima della call, col numero> nel pomeriggio". Es. call venerdì 24 alle 10: "*Ti chiama Noemi, una nostra collega, giovedì 23 nel pomeriggio*".
+call DALLE 15:00 IN POI → "<giorno della call, col numero> nel pomeriggio, qualche ora prima della videochiamata". Es. call sabato 24 alle 16: "*Ti chiama Noemi, una nostra collega, sabato 24 nel pomeriggio, qualche ora prima della videochiamata*".
+Mai "mattina", "primo mattino" o "mattinata" in [QUANDO]: Noemi la mattina non chiama.
 
 3. Manda il link video giusto in base alla situazione del lead:
 Lavora, senza famiglia: https://corso.feniceacademy.it/conferenza-bx

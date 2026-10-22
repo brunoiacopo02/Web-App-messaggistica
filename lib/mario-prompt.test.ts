@@ -145,6 +145,13 @@ describe('conferme: anticipo e micro-impegni', () => {
 
   // Decisione PO 22/10/2026: con lead dall'italiano di base la chiamata di Noemi va detta
   // chiara, anche a costo di essere duri. Resta la via d'uscita del richiamo.
+  // Visto in produzione il 22/10: per una call delle 16 il modello scriveva "ti chiama
+  // sabato nel primo mattino". Noemi attacca alle 13.
+  it('[QUANDO] ha solo due forme, sempre di pomeriggio, mai la mattina', () => {
+    expect(p).toContain('nel pomeriggio, qualche ora prima della videochiamata');
+    expect(p).toContain('Mai "mattina", "primo mattino" o "mattinata" in [QUANDO]');
+  });
+
   it('dice chiaro che senza la risposta a Noemi la videochiamata non è confermata', () => {
     expect(p).toContain('se non rispondi la videochiamata non è confermata');
     expect(p).toContain('Se ti scappa la chiamata, richiamala subito su quel numero');
