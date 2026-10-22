@@ -49,26 +49,50 @@ export async function claimRecap(
   return true;
 }
 
-/** Ripristina la presa del recap quando l'invio è fallito: il prossimo giro può riprovare. */
+async function logErrore(supabase: Supa, conversationId: number, occasione: string, error: string): Promise<void> {
+  await supabase.from('event_log').insert({
+    type: 'gdo_recap_errore',
+    payload: { conversationId, occasione, error } as never,
+    message: `[gdo] conv ${conversationId}: recap dopo la data: ${error}`,
+    level: 'error',
+  });
+}
+
+/**
+ * Ripristina la presa del recap quando `sendFreeText` ha lanciato (niente è partito): il
+ * prossimo giro può riprovare. Torna il messaggio d'errore se il rilascio stesso fallisce.
+ * Il promemoria di Noemi si azzera solo se porta ancora il timestamp scritto dal nostro claim.
+ */
 async function rilasciaRecap(
   supabase: Supa,
   conversationId: number,
   appuntamentoAt: string,
   prima: { forAt: string | null; sentAt: string | null },
   noemiImpostataDaQui: boolean,
-): Promise<void> {
+): Promise<string | null> {
   const at = new Date(appuntamentoAt).toISOString();
-  await supabase
+  // Il claim ha scritto lo stesso `now` in recap_sent_at e nel promemoria: lo si legge prima di ripristinare.
+  const { data: riga } = await supabase
+    .from('conversations')
+    .select('gdo_recap_sent_at')
+    .eq('id', conversationId)
+    .single();
+  const scrittoDalClaim: string | null = riga?.gdo_recap_sent_at ?? null;
+  const { error } = await supabase
     .from('conversations')
     .update({ gdo_recap_for_at: prima.forAt, gdo_recap_sent_at: prima.sentAt })
     .eq('id', conversationId)
     .eq('gdo_recap_for_at', at);
-  if (noemiImpostataDaQui) {
-    await supabase
+  if (error) return `rilascio del recap fallito: ${error.message}`;
+  if (noemiImpostataDaQui && scrittoDalClaim) {
+    const { error: e2 } = await supabase
       .from('conversations')
       .update({ gdo_noemi_reminded_at: null })
-      .eq('id', conversationId);
+      .eq('id', conversationId)
+      .eq('gdo_noemi_reminded_at', scrittoDalClaim);
+    if (e2) return `rilascio del promemoria di Noemi fallito: ${e2.message}`;
   }
+  return null;
 }
 
 /**
@@ -83,6 +107,8 @@ export async function inviaRecapDopoData(
   occasione: Extract<RecapOccasione, 'registrato' | 'spostato'>,
   nowMs: number = Date.now(),
 ): Promise<RecapTipo | null> {
+  let inviato = false;
+  let tipoInviato: RecapTipo | null = null;
   let claimed: { at: string; prima: { forAt: string | null; sentAt: string | null }; noemi: boolean } | null = null;
   try {
     const { data: conv, error } = await supabase
@@ -123,12 +149,16 @@ export async function inviaRecapDopoData(
       : gdoRecapText({ nome, call, videoLink: null });
     const sent = await sendFreeText({ to: phone, body, from: mittenteDiConversazione(conv) });
 
-    // Riga del messaggio ed evento solo a invio riuscito.
-    await supabase.from('messages').insert({
+    // Da qui il messaggio è partito: la presa NON si rilascia più, il recap non deve uscire
+    // due volte per la stessa data. Gli errori successivi si loggano soltanto.
+    inviato = true;
+    tipoInviato = tipo;
+    const { error: erroreMsg } = await supabase.from('messages').insert({
       conversation_id: conversationId, direction: 'out', body,
       twilio_sid: sent.sid, twilio_status: sent.status,
       sender: 'bot',
     });
+    if (erroreMsg) await logErrore(supabase, conversationId, occasione, `recap inviato ma riga in messages non scritta: ${erroreMsg.message}`);
     await supabase.from('conversations')
       .update({ last_message_at: new Date().toISOString() })
       .eq('id', conversationId);
@@ -142,13 +172,14 @@ export async function inviaRecapDopoData(
   } catch (e) {
     const error = e instanceof Error ? e.message : 'errore';
     try {
-      if (claimed) await rilasciaRecap(supabase, conversationId, claimed.at, claimed.prima, claimed.noemi);
-      await supabase.from('event_log').insert({
-        type: 'gdo_recap_errore',
-        payload: { conversationId, occasione, error } as never,
-        message: `[gdo] conv ${conversationId}: recap dopo la data fallito: ${error}`,
-        level: 'error',
-      });
+      if (inviato) {
+        await logErrore(supabase, conversationId, occasione, `recap inviato, ma un passo successivo è fallito: ${error}`);
+        return tipoInviato;
+      }
+      const erroreRilascio = claimed
+        ? await rilasciaRecap(supabase, conversationId, claimed.at, claimed.prima, claimed.noemi)
+        : null;
+      await logErrore(supabase, conversationId, occasione, erroreRilascio ? `${error}; ${erroreRilascio}` : error);
     } catch (e2) {
       console.error(`[gdo] recap fallito su conv ${conversationId} e anche il log: ${e2 instanceof Error ? e2.message : e2}`);
     }

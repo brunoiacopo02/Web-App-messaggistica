@@ -88,12 +88,16 @@ describe('claimRecap', () => {
  * memoria (select/single, update con .eq/.is/.or), `messages` ed `event_log` raccolgono
  * gli insert.
  */
-function makeDb(conv: Record<string, any>) {
+function makeDb(conv: Record<string, any>, opts: { messagesError?: boolean } = {}) {
   const inseriti: Record<string, any[]> = { messages: [], event_log: [] };
   const supabase: any = {
     from(table: string) {
       if (table !== 'conversations') {
-        return { insert: (r: any) => { inseriti[table].push(r); return Promise.resolve({ error: null }); } };
+        return { insert: (r: any) => {
+          if (table === 'messages' && opts.messagesError) return Promise.resolve({ error: { message: 'insert rifiutato' } });
+          inseriti[table].push(r);
+          return Promise.resolve({ error: null });
+        } };
       }
       const nuovoQ = (payload: any | null) => {
         const filtri: Array<(r: Record<string, any>) => boolean> = [];
@@ -192,5 +196,33 @@ describe('inviaRecapDopoData', () => {
     expect(conv.gdo_noemi_reminded_at).toBe(PRIMA);
     expect(conv.gdo_recap_for_at).toBe('2026-10-22T15:00:00.000Z');
     expect(conv.gdo_recap_sent_at).toBe('2026-10-22T09:30:00.000Z');
+  });
+
+  it("messages.insert fallisce dopo l'invio → la presa resta, errore loggato, nessun secondo invio alla richiamata", async () => {
+    const conv = baseConv();
+    const { supabase, inseriti } = makeDb(conv, { messagesError: true });
+    expect(await inviaRecapDopoData(supabase, 7, 'registrato', NOW)).toBe('senza-video');
+    expect(conv.gdo_recap_for_at).toBe(CALL);
+    expect(inseriti.event_log.map((e) => e.type)).toEqual(['gdo_recap_errore', 'gdo_recap_sent']);
+    expect(await inviaRecapDopoData(supabase, 7, 'registrato', NOW)).toBeNull();
+    expect(sendFreeTextMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('il CRM manda due volte la stessa data → un solo invio', async () => {
+    const { supabase } = makeDb(baseConv());
+    expect(await inviaRecapDopoData(supabase, 7, 'registrato', NOW)).toBe('senza-video');
+    expect(await inviaRecapDopoData(supabase, 7, 'registrato', NOW)).toBeNull();
+    expect(sendFreeTextMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('invio fallito: il promemoria di Noemi scritto da altri nel frattempo non si azzera', async () => {
+    const conv = baseConv();
+    sendFreeTextMock.mockImplementation(async () => {
+      conv.gdo_noemi_reminded_at = '2026-10-22T09:59:00.000Z'; // un altro drain lo riscrive
+      throw new Error('twilio giù');
+    });
+    const { supabase } = makeDb(conv);
+    expect(await inviaRecapDopoData(supabase, 7, 'registrato', NOW)).toBeNull();
+    expect(conv.gdo_noemi_reminded_at).toBe('2026-10-22T09:59:00.000Z');
   });
 });
