@@ -5,6 +5,7 @@ import {
   dueReminder, slotLabel, pickReminder24Template, type ReminderKind,
   decideGdoReminder24, gdoReminderVars, gdoReminderText,
 } from '@/lib/precall-reminders';
+import { claimPromemoriaGdo, rilasciaPromemoriaGdo } from '@/lib/gdo-reminder24-claim';
 import { sendFreeText } from '@/lib/twilio';
 import { templateName } from '@/lib/name';
 import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
@@ -243,9 +244,10 @@ async function promemoriaBot(supabase: Supa, now: number): Promise<EsitoRamo> {
 /**
  * Promemoria del giorno prima per i lead fissati da un GDO: solo T-24h (il T-3h resta
  * del bot), con dentro la chiamata di Noemi. Mai sulle chat con bot_outcome =
- * 'APPUNTAMENTO', che hanno già i promemoria del ramo sopra. "Già inviato" sta in
- * event_log (`gdo_reminder24_sent`) per conversazione E data della call: uno
- * spostamento della call riapre il promemoria.
+ * 'APPUNTAMENTO', che hanno già i promemoria del ramo sopra. "Già inviato" è la colonna
+ * `conversations.gdo_reminder24_for_at`, presa PRIMA dell'invio con la data della call:
+ * uno spostamento della call riapre il promemoria. `gdo_reminder24_sent` in event_log
+ * resta come diagnostica.
  */
 async function promemoriaGdo(supabase: Supa, now: number): Promise<EsitoRamo> {
   const sidGdo = process.env.GDO_REMINDER_24H_TEMPLATE_SID;
@@ -261,7 +263,7 @@ async function promemoriaGdo(supabase: Supa, now: number): Promise<EsitoRamo> {
 
   const { data: convData, error: convErr } = await supabase
     .from('conversations')
-    .select('id, gdo_agenda_at, gdo_appuntamento_at, gdo_video_sent_at, gdo_recap_sent_at, bot_outcome, ai_paused_at, cancel_requested_at, wa_number, leads(phone_e164, first_name)')
+    .select('id, gdo_agenda_at, gdo_appuntamento_at, gdo_video_sent_at, gdo_recap_sent_at, gdo_reminder24_for_at, bot_outcome, ai_paused_at, cancel_requested_at, wa_number, leads(phone_e164, first_name)')
     .not('gdo_agenda_at', 'is', null)
     // Gli appuntamenti del bot hanno già i loro promemoria (ramo sopra).
     .or('bot_outcome.is.null,bot_outcome.neq.APPUNTAMENTO')
@@ -286,19 +288,10 @@ async function promemoriaGdo(supabase: Supa, now: number): Promise<EsitoRamo> {
     // UTC): due scritture dello stesso istante non sono uguali come testo.
     const appuntamentoAt = new Date(callMs).toISOString();
 
-    const { data: giaInviati, error: giaErr } = await supabase
-      .from('event_log')
-      .select('id')
-      .eq('type', 'gdo_reminder24_sent')
-      .eq('payload->>conversationId', String(c.id))
-      .eq('payload->>appuntamentoAt', appuntamentoAt)
-      .limit(1);
-    if (giaErr) {
-      // Senza sapere se è già partito non si rischia un doppio promemoria.
-      await logCronQueryError(supabase, 'precall_reminders_gdo_query_error', giaErr);
-      skipped++;
-      continue;
-    }
+    // "Già inviato" è la colonna presa prima dell'invio (`claimPromemoriaGdo`): per questa
+    // stessa data della call il promemoria non riparte, uno spostamento lo riapre.
+    const presoPerAt: string | null = c.gdo_reminder24_for_at ?? null;
+    const giaInviato = presoPerAt !== null && Date.parse(presoPerAt) === callMs;
 
     const { data: ultimoIn } = await supabase
       .from('messages')
@@ -319,10 +312,18 @@ async function promemoriaGdo(supabase: Supa, now: number): Promise<EsitoRamo> {
       lastInboundAtMs: ultimoIn?.created_at ? Date.parse(ultimoIn.created_at) : null,
       aiPausedAt: c.ai_paused_at ?? null,
       cancelRequestedAt: c.cancel_requested_at ?? null,
-      giaInviato: (giaInviati ?? []).length > 0,
+      giaInviato,
       nowMs: now,
     });
     if (!canale) {
+      skipped++;
+      continue;
+    }
+
+    // La presa PRIMA dell'invio: due giri sovrapposti, o un giro che ha perso la riga di
+    // event_log, non mandano lo stesso promemoria due volte.
+    const presa = await claimPromemoriaGdo(supabase, c.id as number, appuntamentoAt, presoPerAt);
+    if (!presa) {
       skipped++;
       continue;
     }
@@ -332,25 +333,14 @@ async function promemoriaGdo(supabase: Supa, now: number): Promise<EsitoRamo> {
     const from = mittenteDiConversazione(c);
     let ok = false;
 
-    if (canale === 'template') {
-      // In messages va il testo vero, non quello del template coi segnaposto: il
-      // modello rilegge la chat e deve vedere cosa ha ricevuto il lead.
-      const res = await sendTemplateAndLog(supabase, c.id as number, phone, sidGdo, 'Promemoria T-24h GDO', from, vars, body);
-      ok = res.ok;
-    } else {
-      let tw: { sid?: string; status?: string } | null = null;
-      try {
-        tw = await sendFreeText({ to: phone, body, from });
-      } catch (err: unknown) {
-        const e = err as { message?: string };
-        await supabase.from('event_log').insert({
-          type: 'gdo_reminder24_error',
-          payload: { conversationId: c.id, appuntamentoAt, canale } as never,
-          message: `[precall] conv ${c.id}: promemoria GDO in testo libero non partito — ${e?.message ?? 'errore ignoto'}`,
-          level: 'error',
-        });
-      }
-      if (tw) {
+    try {
+      if (canale === 'template') {
+        // In messages va il testo vero, non quello del template coi segnaposto: il
+        // modello rilegge la chat e deve vedere cosa ha ricevuto il lead.
+        const res = await sendTemplateAndLog(supabase, c.id as number, phone, sidGdo, 'Promemoria T-24h GDO', from, vars, body);
+        ok = res.ok;
+      } else {
+        const tw = await sendFreeText({ to: phone, body, from });
         ok = true;
         await supabase.from('messages').insert({
           conversation_id: c.id, direction: 'out', body,
@@ -360,6 +350,27 @@ async function promemoriaGdo(supabase: Supa, now: number): Promise<EsitoRamo> {
         await supabase.from('conversations')
           .update({ last_message_at: new Date().toISOString() })
           .eq('id', c.id);
+      }
+    } catch (err: unknown) {
+      const e = err as { message?: string };
+      await supabase.from('event_log').insert({
+        type: 'gdo_reminder24_error',
+        payload: { conversationId: c.id, appuntamentoAt, canale, partito: ok } as never,
+        message: `[precall] conv ${c.id}: promemoria GDO (${canale}) — ${e?.message ?? 'errore ignoto'}`,
+        level: 'error',
+      });
+    }
+
+    if (!ok) {
+      // Niente è partito: la presa torna com'era, il prossimo giro riprova.
+      const erroreRilascio = await rilasciaPromemoriaGdo(supabase, c.id as number, presa);
+      if (erroreRilascio) {
+        await supabase.from('event_log').insert({
+          type: 'gdo_reminder24_error',
+          payload: { conversationId: c.id, appuntamentoAt, canale } as never,
+          message: `[precall] conv ${c.id}: ${erroreRilascio}`,
+          level: 'error',
+        });
       }
     }
 

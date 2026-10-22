@@ -116,6 +116,7 @@ export type Database = {
           lancio_inizio_inviato_at: string | null
           lancio_promemoria_inviato_at: string | null
           gdo_recap_for_at: string | null
+          gdo_reminder24_for_at: string | null
           gdo_recap_sent_at: string | null
           gdo_warmup_closed_at: string | null
           gdo_warmup_step: number | null
@@ -171,6 +172,7 @@ export type Database = {
           lancio_inizio_inviato_at?: string | null
           lancio_promemoria_inviato_at?: string | null
           gdo_recap_for_at?: string | null
+          gdo_reminder24_for_at?: string | null
           gdo_recap_sent_at?: string | null
           gdo_warmup_closed_at?: string | null
           gdo_warmup_step?: number | null
@@ -226,6 +228,7 @@ export type Database = {
           lancio_inizio_inviato_at?: string | null
           lancio_promemoria_inviato_at?: string | null
           gdo_recap_for_at?: string | null
+          gdo_reminder24_for_at?: string | null
           gdo_recap_sent_at?: string | null
           gdo_warmup_closed_at?: string | null
           gdo_warmup_step?: number | null
