@@ -37,6 +37,9 @@ export interface GdoFollowupInput {
   /** Promemoria del giorno prima dei lead GDO acceso (lib/precall-reminders.ts):
    *  con la data della call nota prende il posto dello slot mattina. Default spento. */
   promemoriaGdoAttivo?: boolean;
+  /** Il promemoria del giorno prima potrà ancora partire per questa call
+   *  (`gdoReminder24Raggiungibile` in lib/precall-reminders.ts). Default no. */
+  promemoriaGdoPossibile?: boolean;
 }
 
 export function decideGdoVideoFollowup(i: GdoFollowupInput): GdoFollowupAction {
@@ -52,10 +55,6 @@ export function decideGdoVideoFollowup(i: GdoFollowupInput): GdoFollowupAction {
   const hasValidAppointment = !Number.isNaN(appointmentTime);
 
   if (hasValidAppointment && appointmentTime <= i.nowMs) return 'none';
-
-  // Con la data nota il promemoria del giorno prima fa anche da sollecito (chiede del
-  // video): il lead non riceve due messaggi programmati per la stessa cosa.
-  if (i.slot === 'mattina' && i.promemoriaGdoAttivo && hasValidAppointment) return 'none';
 
   if (!hasValidAppointment && i.slot === 'sera' && i.romeHourAgenda >= ORA_AGENDA_TARDI) {
     // Senza la data vera, un'agenda arrivata a sera è probabilmente una call a
@@ -85,6 +84,12 @@ export function decideGdoVideoFollowup(i: GdoFollowupInput): GdoFollowupAction {
   if (i.lastMessageIsInbound) return 'none';
 
   if (!i.gdoVideoSentAt) return 'video-template';
+
+  // Con la data nota il promemoria del giorno prima fa anche da sollecito (chiede del
+  // video): il lead non riceve due messaggi programmati per la stessa cosa. Solo se il
+  // promemoria partirà davvero: senza video o col pomeriggio di Noemi già passato non
+  // parte, e lo slot mattina resta l'unico messaggio.
+  if (i.slot === 'mattina' && i.promemoriaGdoAttivo && i.promemoriaGdoPossibile && hasValidAppointment) return 'none';
 
   const finestraAperta = daUltimoInbound !== null && daUltimoInbound < FINESTRA_24H_MS;
   return finestraAperta ? 'sollecito-libero' : 'sollecito-template';

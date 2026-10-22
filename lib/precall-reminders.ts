@@ -134,6 +134,41 @@ function giornoNoemi(call: Date): { giorno: Date; pomeriggio: boolean } {
   return { giorno: pomeriggio ? new Date(call.getTime() - 24 * H) : call, pomeriggio };
 }
 
+/**
+ * Il primo istante in cui il calendario lascia partire il promemoria T-24h di un lead GDO,
+ * o `null` se non partirà più: non prima di r24At, né con l'agenda più giovane di 12 ore,
+ * sempre almeno un'ora prima della call e mai dopo il pomeriggio di Noemi (su una call
+ * del mattino "oggi pomeriggio" sarebbe falso). Solo date: il resto delle condizioni
+ * (video, recap, chat viva) sta in `decideGdoReminder24`.
+ */
+function primoIstanteGdoReminder24(i: {
+  appuntamentoAt: string | null;
+  gdoAgendaAt: string | null;
+  nowMs: number;
+}): number | null {
+  const callMs = i.appuntamentoAt ? Date.parse(i.appuntamentoAt) : NaN;
+  const agendaMs = i.gdoAgendaAt ? Date.parse(i.gdoAgendaAt) : NaN;
+  if (Number.isNaN(callMs) || Number.isNaN(agendaMs)) return null;
+  const primo = Math.max(i.nowMs, reminderTargets(callMs).r24At, agendaMs + GDO_AGENDA_MIN_MS);
+  if (callMs - primo < GDO_ANTICIPO_MIN_MS) return null;
+  const noemi = giornoNoemi(new Date(callMs));
+  if (noemi.pomeriggio && romeDaysBetween(new Date(primo), noemi.giorno) < 0) return null;
+  return primo;
+}
+
+/**
+ * Il promemoria del giorno prima potrà ancora partire per questa call (adesso o più
+ * avanti)? Lo usa il sollecito del mattino (app/api/cron/gdo-video-followups): tace solo
+ * se il promemoria ci sarà davvero, altrimenti il lead resterebbe senza nessuno dei due.
+ */
+export function gdoReminder24Raggiungibile(i: {
+  appuntamentoAt: string | null;
+  gdoAgendaAt: string | null;
+  nowMs: number;
+}): boolean {
+  return primoIstanteGdoReminder24(i) !== null;
+}
+
 /** Il promemoria T-24h di un lead GDO: in template, in testo libero, o niente. */
 export function decideGdoReminder24(i: GdoReminder24Input): 'template' | 'testo' | null {
   if (!i.enabled || !i.gdoAgendaAt || i.botOutcome === 'APPUNTAMENTO') return null;
@@ -141,20 +176,14 @@ export function decideGdoReminder24(i: GdoReminder24Input): 'template' | 'testo'
   // Il promemoria chiede del video: senza video uscito non ha senso.
   if (!i.videoSentAt || !i.appuntamentoAt) return null;
 
-  const callMs = Date.parse(i.appuntamentoAt);
-  if (Number.isNaN(callMs) || callMs - i.nowMs < GDO_ANTICIPO_MIN_MS) return null;
-  if (i.nowMs < reminderTargets(callMs).r24At) return null;
-
-  const agendaMs = Date.parse(i.gdoAgendaAt);
-  if (Number.isNaN(agendaMs) || i.nowMs - agendaMs < GDO_AGENDA_MIN_MS) return null;
+  // Le regole di calendario (r24At, agenda di almeno 12 ore, anticipo, pomeriggio di
+  // Noemi) sono quelle di `gdoReminder24Raggiungibile`: qui si parte solo se il primo
+  // istante utile è adesso.
+  const primo = primoIstanteGdoReminder24(i);
+  if (primo === null || primo > i.nowMs) return null;
 
   const recapMs = i.recapSentAt ? Date.parse(i.recapSentAt) : NaN;
   if (!Number.isNaN(recapMs) && i.nowMs - recapMs < GDO_RECAP_RECENTE_MS) return null;
-
-  // Cron in ritardo su una call del mattino: il pomeriggio di Noemi è già passato e
-  // "oggi pomeriggio" sarebbe falso. Meglio niente.
-  const noemi = giornoNoemi(new Date(callMs));
-  if (noemi.pomeriggio && romeDaysBetween(new Date(i.nowMs), noemi.giorno) < 0) return null;
 
   const daUltimoInbound = i.lastInboundAtMs === null ? null : i.nowMs - i.lastInboundAtMs;
   if (daUltimoInbound !== null && daUltimoInbound < GDO_CONVERSAZIONE_VIVA_MS) return null;

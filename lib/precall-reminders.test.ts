@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   reminderTargets, dueReminder, slotLabel, pickReminder24Template,
   decideGdoReminder24, gdoReminderVars, gdoReminderText, type GdoReminder24Input,
+  gdoReminder24Raggiungibile,
 } from './precall-reminders';
 
 const at = (iso: string) => new Date(iso).getTime();
@@ -177,6 +178,38 @@ describe('decideGdoReminder24: il promemoria del giorno prima ai lead GDO', () =
       appuntamentoAt: '2026-10-23T08:00:00Z',
       gdoAgendaAt: new Date(now - 40 * H).toISOString(),
     }))).toBeNull();
+  });
+});
+
+describe('gdoReminder24Raggiungibile: il promemoria GDO potrà ancora partire?', () => {
+  it('agenda la sera prima, call fra due giorni al mattino: sì (ancora prima di r24At)', () => {
+    expect(gdoReminder24Raggiungibile({
+      gdoAgendaAt: '2026-08-01T19:00:00Z', appuntamentoAt: '2026-08-03T08:00:00Z',
+      nowMs: at('2026-08-02T06:00:00Z'),
+    })).toBe(true);
+  });
+
+  it('agenda alle 14 del giorno prima di una call alle 11:30: il pomeriggio di Noemi passa prima delle 12 ore, no', () => {
+    expect(gdoReminder24Raggiungibile({
+      gdoAgendaAt: '2026-08-02T12:00:00Z', appuntamentoAt: '2026-08-03T09:30:00Z',
+      nowMs: at('2026-08-03T06:00:00Z'),
+    })).toBe(false);
+  });
+
+  it("call fra mezz'ora, o data assente o illeggibile: no", () => {
+    const now = at('2026-08-03T09:00:00Z');
+    expect(gdoReminder24Raggiungibile({ gdoAgendaAt: '2026-08-01T19:00:00Z', appuntamentoAt: '2026-08-03T09:30:00Z', nowMs: now })).toBe(false);
+    expect(gdoReminder24Raggiungibile({ gdoAgendaAt: '2026-08-01T19:00:00Z', appuntamentoAt: null, nowMs: now })).toBe(false);
+    expect(gdoReminder24Raggiungibile({ gdoAgendaAt: null, appuntamentoAt: '2026-08-04T09:30:00Z', nowMs: now })).toBe(false);
+    expect(gdoReminder24Raggiungibile({ gdoAgendaAt: '2026-08-01T19:00:00Z', appuntamentoAt: 'boh', nowMs: now })).toBe(false);
+  });
+
+  it('agenda arrivata da poco ma 12 ore dopo il pomeriggio di Noemi non è passato: sì', () => {
+    // Call alle 17 (Noemi lo stesso giorno, qualche ora prima): agenda alle 23 della sera prima.
+    expect(gdoReminder24Raggiungibile({
+      gdoAgendaAt: '2026-08-02T21:00:00Z', appuntamentoAt: '2026-08-03T15:00:00Z',
+      nowMs: at('2026-08-02T21:30:00Z'),
+    })).toBe(true);
   });
 });
 

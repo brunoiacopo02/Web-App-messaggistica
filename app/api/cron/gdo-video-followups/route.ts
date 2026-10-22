@@ -15,6 +15,7 @@ import {
   type GdoSlot,
 } from '@/lib/gdo-video-followup';
 import { getLancioSettings } from '@/lib/lancio-settings';
+import { gdoReminder24Raggiungibile } from '@/lib/precall-reminders';
 import { romeHour, romeMinute, romeDaysBetween } from '@/lib/rome-time';
 import { templateName } from '@/lib/name';
 import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
@@ -187,6 +188,11 @@ export async function GET(req: NextRequest) {
         romeHourAgenda: romeHour(agendaAt),
         haRispostoDopoVideo,
         promemoriaGdoAttivo,
+        promemoriaGdoPossibile: gdoReminder24Raggiungibile({
+          appuntamentoAt: c.gdo_appuntamento_at ?? null,
+          gdoAgendaAt: c.gdo_agenda_at,
+          nowMs: now.getTime(),
+        }),
       });
 
       if (action === 'none') { report.push({ id: c.id, action: 'none' }); continue; }

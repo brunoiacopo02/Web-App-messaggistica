@@ -365,8 +365,16 @@ describe('decideGdoVideoFollowup — slot mattina e promemoria del giorno prima'
     ...over,
   });
 
-  it('con il promemoria acceso e la data nota lo slot mattina tace', () => {
-    expect(decideGdoVideoFollowup(mattina({ promemoriaGdoAttivo: true }))).toBe('none');
+  it('con il promemoria acceso, la data nota e il promemoria ancora possibile lo slot mattina tace', () => {
+    expect(decideGdoVideoFollowup(mattina({ promemoriaGdoAttivo: true, promemoriaGdoPossibile: true }))).toBe('none');
+  });
+
+  it('promemoria acceso ma non più raggiungibile (pomeriggio di Noemi già passato): il sollecito resta', () => {
+    expect(decideGdoVideoFollowup(mattina({ promemoriaGdoAttivo: true, promemoriaGdoPossibile: false }))).toBe('sollecito-template');
+  });
+
+  it('video mai partito: lo slot mattina lo manda anche col promemoria acceso (il promemoria senza video non parte)', () => {
+    expect(decideGdoVideoFollowup(mattina({ promemoriaGdoAttivo: true, promemoriaGdoPossibile: true, gdoVideoSentAt: null }))).toBe('video-template');
   });
 
   it('con il promemoria spento resta il sollecito di oggi', () => {
@@ -374,6 +382,6 @@ describe('decideGdoVideoFollowup — slot mattina e promemoria del giorno prima'
   });
 
   it('senza data della call il promemoria non può partire: il sollecito resta', () => {
-    expect(decideGdoVideoFollowup(mattina({ promemoriaGdoAttivo: true, appointmentAt: null }))).toBe('sollecito-template');
+    expect(decideGdoVideoFollowup(mattina({ promemoriaGdoAttivo: true, promemoriaGdoPossibile: true, appointmentAt: null }))).toBe('sollecito-template');
   });
 });
