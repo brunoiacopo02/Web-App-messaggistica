@@ -164,3 +164,36 @@ quante NOTA di riscaldamento, quante con `⚠️`, e quanti scarti Conferme ne s
   leggero. La preferenza è la route, senza bloccare la risposta al CRM.
 - Nomi esatti di funzioni e colonne; la migration va **prima** del deploy (regola 11).
 - Test accanto ai moduli in `lib/`, sul modello di `gdo-context-note.test.ts`.
+
+## Stato al rilascio
+
+- **Commit:** da compilare al rilascio.
+- **Template** `fenice_reminder_24h_gdo_v1` (UTILITY, `it`, `twilio/text`), creato il 22/10/2026 con
+  `bun --env-file=<.env.local> scripts/crea-template-reminder-gdo.ts` (idempotente, rilanciabile):
+
+  | Account | SID | Approvazione Meta |
+  |---|---|---|
+  | principale (storico) | `HXb477d7335153f54c0a265a69af578130` | `received` (UTILITY), da verificare |
+  | slot 2 (+393522070047) | `HX382572f465268198258778c49f9ad1fb` | `received` (UTILITY), da verificare |
+  | slot 3 (account elixir) | `HX2df62c3164060220ea7c5f903f9e39bc` | `received` (UTILITY), da verificare |
+
+  Il nome e' identico sui tre account: `lib/template-account.ts` traduce il SID da un account
+  all'altro per friendly_name. Verifica dello stato: `GET https://content.twilio.com/v1/Content/{sid}/ApprovalRequests`
+  (o rilanciare lo script). Meta decide la categoria: se torna MARKETING il template va rifatto
+  con un nome nuovo (`_v2`), non si ricategorizza.
+- **Interruttori:** tutti spenti, nessuna env toccata.
+
+### Come accendere
+
+Su Vercel (progetto del bot, production), poi redeploy:
+
+```
+GDO_RECAP_ENABLED=1                       # A: recap al lead quando il GDO fissa
+GDO_PRECALL_24H_ENABLED=1                 # C: promemoria del giorno prima
+GDO_REMINDER_24H_TEMPLATE_SID=HXb477d7335153f54c0a265a69af578130   # SID dell'account principale
+GDO_WARMUP_ENABLED=1                      # B: riscaldamento (solo dopo A)
+```
+
+Accendere C solo quando il template e' `approved` e UTILITY su tutti e tre gli account. Ordine
+proposto: A+C insieme, B dopo una settimana. **Il riscaldamento (B) funziona solo col recap (A)
+acceso**: da solo non fa nulla.
