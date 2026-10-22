@@ -174,7 +174,7 @@ quante NOTA di riscaldamento, quante con `⚠️`, e quanti scarti Conferme ne s
 
 ## Stato al rilascio
 
-- **Commit:** da compilare al rilascio.
+- **Commit:** `9feba68` su main, deploy Vercel `success` il 22/10/2026. Interruttori tutti spenti.
 - **Template** `fenice_reminder_24h_gdo_v1` (UTILITY, `it`, `twilio/text`), creato il 22/10/2026 con
   `bun --env-file=<.env.local> scripts/crea-template-reminder-gdo.ts` (idempotente, rilanciabile):
 
