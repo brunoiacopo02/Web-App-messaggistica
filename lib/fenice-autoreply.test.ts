@@ -332,6 +332,7 @@ type ClaimedRow = {
   gdo_appuntamento_at?: string | null;
   gdo_recap_for_at?: string | null;
   gdo_warmup_step?: number | null;
+  cancel_requested_at?: string | null;
   lancio_slug?: string | null;
   lancio_fase?: string | null;
   lancio_info?: unknown;
@@ -3190,6 +3191,37 @@ describe('drainMarioReplies — riscaldamento del lead GDO dopo il recap', () =>
 
     expect(calls.convUpdates.some((u: any) => 'gdo_warmup_step' in u)).toBe(false);
     expect(calls.events.some((e: any) => e.type === 'gdo_warmup_step')).toBe(false);
+  });
+
+  it('lead che ha chiesto di annullare: nessuna nota di riscaldamento (veto globale)', async () => {
+    const { supabase, calls } = makeDrainSupabase(postino({ cancel_requested_at: fra(-5 * 60_000) }), [RECAP, RISPOSTA]);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Ok, lo segno.', appointmentFixed: false, passToHuman: false, videoWatched: false, riscaldamento: 1,
+    });
+
+    await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+    expect(vi.mocked(generateMarioReply).mock.calls[0][1]?.contextNote).not.toContain('RISCALDAMENTO');
+    expect(calls.convUpdates.some((u: any) => 'gdo_warmup_step' in u)).toBe(false);
+  });
+
+  it('rigenerazione di Noemi: niente riscaldamento nella nota, e senza tag il passo non avanza', async () => {
+    const { supabase, calls } = makeDrainSupabase(postino({ gdo_noemi_reminded_at: null }), [RECAP, RISPOSTA]);
+    vi.mocked(generateMarioReply)
+      .mockResolvedValueOnce({
+        visibleReply: 'Ottimo! Cosa vuoi ottenere?', appointmentFixed: false, passToHuman: false, videoWatched: true, riscaldamento: 1,
+      })
+      .mockResolvedValueOnce({
+        visibleReply: 'Ottimo! Ti chiama Noemi giovedi pomeriggio.', appointmentFixed: false, passToHuman: false, videoWatched: true,
+      });
+
+    await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+    const note = vi.mocked(generateMarioReply).mock.calls.map((c) => c[1]?.contextNote ?? '');
+    expect(note[0]).toContain('RISCALDAMENTO, PASSO 1');
+    expect(note[1]).toContain('PROMEMORIA NOEMI');
+    expect(note[1]).not.toContain('RISCALDAMENTO');
+    expect(calls.convUpdates.some((u: any) => 'gdo_warmup_step' in u)).toBe(false);
   });
 
   it('con l\'interruttore spento la nota non c\'e e il passo non si muove', async () => {

@@ -957,7 +957,8 @@ export async function drainMarioReplies(
         : null;
       const notaWarmup = noteGdo
         ? notaRiscaldamento({
-            enabled: process.env.GDO_WARMUP_ENABLED === '1',
+            // Veto globale: chi ha chiesto di annullare non riceve domande.
+            enabled: process.env.GDO_WARMUP_ENABLED === '1' && !gdo.cancel_requested_at,
             step: gdoWarmupStep,
             recapForAt: gdoRecapForAt,
             recapInQuestoTurno: recapTipo === 'completo',
@@ -1047,7 +1048,7 @@ export async function drainMarioReplies(
               recapInUscita: recapTipo === 'completo',
               botScheduledAt: botScheduledAt,
               gdoAppuntamentoAt: gdoAppuntamentoAt,
-              notaRiscaldamento: notaWarmup,
+              notaRiscaldamento: null, // Noemi e riscaldamento mai nello stesso turno
             }),
           });
           // Fail-safe: una rigenerazione vuota non vale meno di zero, vale come un
