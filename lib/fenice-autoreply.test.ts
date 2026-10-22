@@ -30,6 +30,7 @@ import { TESTO_POSTO_BLOCCATO } from './lancio-fase';
 import { NOTA_PRIMO_CONTATTO } from './primo-contatto-note';
 import { NOTA_LANCIO_NIENTE_PASSAGGIO } from './lancio-followup';
 import { sendFreeText } from './twilio';
+import { gdoVideoText } from './gdo-agenda';
 
 describe('shouldAutoReply', () => {
   const ok = { toMatchesFenice: true, autoReplyOn: true, aiOwner: 'mario', aiStatus: 'active' };
@@ -401,6 +402,8 @@ function makeDrainSupabase(claimedRow: ClaimedRow, initialRows: FakeMsgRow[]) {
             const stub: any = {
               eq() { return stub; },
               is() { return stub; },
+              // Il claim del recap (`claimRecap`): qui riesce sempre.
+              or() { return stub; },
               select() { return stub; },
               then(resolve: any) { resolve({ data: [{ id: claimedRow.id }] }); },
             };
@@ -3037,5 +3040,85 @@ ${VIDEO}`,
 
     expect(conMedia()).toHaveLength(0);
     expect(calls.events.some((e) => e.type === 'scheda_slug_non_valido')).toBe(true);
+  });
+});
+
+describe('drainMarioReplies — recap GDO al posto della bolla del video', () => {
+  const VIDEO = 'https://corso.feniceacademy.it/conferenza-bx';
+  // Date relative ad adesso: il recap esce solo dentro la finestra di 24h dall'ultimo
+  // messaggio del lead e con la call ad almeno un'ora di distanza.
+  const fra = (ms: number) => new Date(Date.now() + ms).toISOString();
+  const CALL = fra(2 * 24 * 3600_000);
+  const AGENDA: FakeMsgRow = { direction: 'out', body: 'Ciao Mario, sono Marta... il mio collega...', template_sid: 'HX_AGENDA_GDO', created_at: fra(-10 * 60_000) };
+  const OK: FakeMsgRow = { direction: 'in', body: 'ok', template_sid: null, created_at: fra(-60_000) };
+  const DOMANDA: FakeMsgRow = { direction: 'in', body: 'ma quanto costa?', template_sid: null, created_at: fra(-60_000) };
+
+  const postino = (over: Partial<ClaimedRow> = {}): ClaimedRow => ({
+    id: 91, ai_started_at: null, crm_lead_id: 'gdo2', bot_outcome: null,
+    gdo_agenda_at: fra(-10 * 60_000), gdo_video_url: VIDEO, gdo_video_sent_at: null,
+    gdo_appuntamento_at: CALL, leads: { first_name: 'Luca' },
+    ...over,
+  });
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.stubEnv('GDO_RECAP_ENABLED', '1');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(sendOutcome).mockClear();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('il lead dice solo "ok": la bolla del video è il recap, con Noemi', async () => {
+    const { supabase, calls } = makeDrainSupabase(postino(), [AGENDA, OK]);
+
+    await drainMarioReplies(supabase, 91, '+391234567890', () => 0);
+
+    expect(calls.messageInserts).toHaveLength(1);
+    const bolla = calls.messageInserts[0].body;
+    expect(bolla).toContain('ti riassumo tutto');
+    expect(bolla).toContain('*Ti chiama Noemi');
+    expect(bolla).toContain(VIDEO);
+    expect(calls.convUpdates.some((u: any) => u.gdo_recap_for_at === new Date(CALL).toISOString())).toBe(true);
+    expect(calls.convUpdates.some((u: any) => u.gdo_noemi_reminded_at)).toBe(true);
+    expect(calls.events.find((e: any) => e.type === 'gdo_recap_sent')?.payload)
+      .toEqual({ conversationId: 91, tipo: 'completo', occasione: 'turno-video' });
+    expect(calls.events.some((e: any) => e.type === 'gdo_video_sent')).toBe(true);
+  });
+
+  it('il lead fa una domanda: il recap esce come ultima bolla e la nota non chiede Noemi', async () => {
+    const { supabase, calls } = makeDrainSupabase(postino(), [AGENDA, DOMANDA]);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Te lo spiega il tutor in call 🙂',
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+
+    await drainMarioReplies(supabase, 91, '+391234567890', () => 0);
+
+    const bolle = calls.messageInserts.map((m: any) => m.body);
+    expect(bolle[0]).toBe('Te lo spiega il tutor in call 🙂');
+    expect(bolle[bolle.length - 1]).toContain('ti riassumo tutto');
+    expect(bolle[bolle.length - 1]).toContain('*Ti chiama Noemi');
+    expect(vi.mocked(generateMarioReply).mock.calls[0][1]?.contextNote).not.toContain('PROMEMORIA NOEMI');
+    expect(calls.events.some((e: any) => e.type === 'gdo_recap_sent')).toBe(true);
+  });
+
+  it('con l\'interruttore spento la bolla è il video di sempre', async () => {
+    vi.stubEnv('GDO_RECAP_ENABLED', '');
+    const { supabase, calls } = makeDrainSupabase(postino(), [AGENDA, OK]);
+
+    await drainMarioReplies(supabase, 91, '+391234567890', () => 0);
+
+    expect(calls.messageInserts.map((m: any) => m.body)).toEqual([gdoVideoText('Luca', VIDEO)]);
+    expect(calls.events.some((e: any) => e.type === 'gdo_recap_sent')).toBe(false);
+    expect(calls.convUpdates.some((u: any) => 'gdo_recap_for_at' in u)).toBe(false);
+  });
+
+  it('senza la data della call la bolla è il video di sempre', async () => {
+    const { supabase, calls } = makeDrainSupabase(postino({ gdo_appuntamento_at: null }), [AGENDA, OK]);
+
+    await drainMarioReplies(supabase, 91, '+391234567890', () => 0);
+
+    expect(calls.messageInserts.map((m: any) => m.body)).toEqual([gdoVideoText('Luca', VIDEO)]);
+    expect(calls.events.some((e: any) => e.type === 'gdo_recap_sent')).toBe(false);
   });
 });

@@ -51,6 +51,8 @@ export interface GdoNoteInput {
   botScheduledAt?: string | null;
   /** Ora della call fissata dal GDO al telefono. Vince la più recente delle due. */
   gdoAppuntamentoAt?: string | null;
+  /** In questo turno esce il recap GDO, che spiega già Noemi. */
+  recapInUscita?: boolean;
 }
 
 /**
@@ -88,9 +90,10 @@ export function quandoChiamaNoemi(quando: Date | null): string {
 /**
  * Noemi si spiega quando il lead si fa vivo davvero: conferma di aver visto il video,
  * oppure risponde dopo che gli è arrivato almeno un sollecito. E una volta sola.
+ * Nel turno del recap no: Noemi la porta il recap, il modello la ripeterebbe.
  */
 export function serveNoemi(i: GdoNoteInput): boolean {
-  if (i.gdoNoemiRemindedAt) return false;
+  if (i.gdoNoemiRemindedAt || i.recapInUscita) return false;
   return i.videoAppenaConfermato || i.followupsSent > 0;
 }
 

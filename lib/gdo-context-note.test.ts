@@ -30,6 +30,11 @@ describe('gdoContextNote', () => {
 });
 
 describe('serveNoemi', () => {
+  it('mai quando esce il recap: Noemi la porta il recap', () => {
+    expect(serveNoemi(base({ videoAppenaConfermato: true, recapInUscita: true }))).toBe(false);
+    expect(gdoContextNote(base({ videoAppenaConfermato: true, recapInUscita: true }))).not.toContain('PROMEMORIA NOEMI');
+  });
+
   it('quando il lead conferma di aver visto il video', () => {
     expect(serveNoemi(base({ videoAppenaConfermato: true }))).toBe(true);
   });

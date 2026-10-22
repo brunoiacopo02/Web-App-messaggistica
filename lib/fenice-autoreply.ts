@@ -3,6 +3,8 @@ import { generateMarioReply, type MarioTurn } from './mario';
 import { datePiene, tettoGiornaliero } from './booking-capienza';
 import { gdoContextNote } from './gdo-context-note';
 import { gdoVideoText } from './gdo-agenda';
+import { decideGdoRecap, gdoRecapText } from './gdo-recap';
+import { claimRecap } from './gdo-recap-send';
 import { sendFreeText } from './twilio';
 import { marioDelayMs } from './mario-latency';
 import { splitMarioMessages } from './mario-split';
@@ -409,7 +411,7 @@ export async function drainMarioReplies(
     // conversazione c'e' gia' un appuntamento in piedi, e lo declasserebbe.
     // `wa_number` e' il numero con cui questa chat e' nata: ogni bolla del turno — le
     // risposte di Mario, il video del GDO, i turni del lancio — deve partire da li'.
-    .select('id, ai_started_at, crm_lead_id, bot_outcome, bot_scheduled_at, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, gdo_appuntamento_at, lancio_slug, lancio_fase, lancio_ingresso, lancio_info, wa_number, professione, scheda_inviata_at, crm_funnel, leads(first_name)')
+    .select('id, ai_started_at, crm_lead_id, bot_outcome, bot_scheduled_at, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, gdo_appuntamento_at, ai_paused_at, cancel_requested_at, gdo_recap_for_at, gdo_warmup_step, lancio_slug, lancio_fase, lancio_ingresso, lancio_info, wa_number, professione, scheda_inviata_at, crm_funnel, leads(first_name)')
     .single();
   // PGRST116 = nessuna riga: e' il caso NORMALE (conversazione non claimabile, o
   // lucchetto di un altro drain) e non va segnalato. Qualunque altro errore invece qui
@@ -521,6 +523,10 @@ export async function drainMarioReplies(
     gdo_noemi_reminded_at?: string | null;
     bot_scheduled_at?: string | null;
     gdo_appuntamento_at?: string | null;
+    ai_paused_at?: string | null;
+    cancel_requested_at?: string | null;
+    gdo_recap_for_at?: string | null;
+    gdo_warmup_step?: number | null;
     leads?: { first_name?: string | null } | null;
   };
   // Chat del lancio Web Dev AI: il turno lo fa lib/lancio-turno, non Mario.
@@ -540,6 +546,9 @@ export async function drainMarioReplies(
   // Ora vera della call: serve a dire a quando chiama Noemi (mattina ⇒ pomeriggio prima).
   const botScheduledAt = gdo.bot_scheduled_at ?? null;
   const gdoAppuntamentoAt = gdo.gdo_appuntamento_at ?? null;
+  // Il recap GDO gia' uscito per questa call (vedi lib/gdo-recap.ts). `let`: dopo la
+  // presa vale anche per i giri successivi dello stesso drain.
+  let gdoRecapForAt = gdo.gdo_recap_for_at ?? null;
   let gdoVideoMissingLogged = false;
 
   // Carica i messaggi della conversazione dall'arruolamento in poi (in ordine).
@@ -782,9 +791,50 @@ export async function drainMarioReplies(
       // conferma, sia alla rete di sicurezza sul FATTO qui sotto.
       const videoGiaInviato = rows.some((m) => m.direction === 'out' && containsVideoLink(m.body, linkExtra));
 
-      /** Manda il video del GDO come bolla a sé e ne registra l'invio. */
+      const videoDaMandare = postino && shouldSendGdoVideo({ gdoAgendaAt, gdoVideoUrl, gdoVideoSentAt });
+      // Recap GDO (data della call, Noemi, video, FATTO in una bolla): esce al posto della
+      // bolla del video, quindi solo nel turno in cui il video parte. Spento senza
+      // GDO_RECAP_ENABLED; senza data della call resta la bolla del video di sempre.
+      // L'ultimo inbound della cronologia e' il messaggio del lead di questo turno.
+      const recapTipo = videoDaMandare
+        ? decideGdoRecap({
+            enabled: process.env.GDO_RECAP_ENABLED === '1',
+            occasione: 'turno-video',
+            gdoAgendaAt,
+            botOutcome: esitoInPiedi,
+            appuntamentoAt: gdoAppuntamentoAt,
+            recapForAt: gdoRecapForAt,
+            videoSentAt: gdoVideoSentAt,
+            lastInboundAtMs: ultimoInboundAt(rows) || null,
+            aiPausedAt: gdo.ai_paused_at ?? null,
+            cancelRequestedAt: gdo.cancel_requested_at ?? null,
+            nowMs: Date.now(),
+          })
+        : null;
+
+      /**
+       * La bolla del video: il recap se tocca a lui e la presa riesce (per questa call
+       * potrebbe essere gia' uscito), altrimenti il video di sempre. Il recap nomina
+       * Noemi: `claimRecap` segna il promemoria a DB, qui lo si segue in memoria.
+       */
+      const bollaVideoGdo = async (): Promise<string> => {
+        if (recapTipo === 'completo' && gdoAppuntamentoAt && await claimRecap(supabase, conversationId, gdoAppuntamentoAt, true)) {
+          gdoRecapForAt = gdoAppuntamentoAt;
+          gdoNoemiRemindedAt ??= new Date().toISOString();
+          await supabase.from('event_log').insert({
+            type: 'gdo_recap_sent',
+            payload: { conversationId, tipo: recapTipo, occasione: 'turno-video' } as never,
+            message: `[gdo] conv ${conversationId}: recap con data, Noemi e video al posto della bolla del video`,
+            level: 'info',
+          });
+          return gdoRecapText({ nome: gdo.leads?.first_name ?? null, call: new Date(gdoAppuntamentoAt), videoLink: gdoVideoUrl });
+        }
+        return gdoVideoText(gdo.leads?.first_name ?? null, gdoVideoUrl as string);
+      };
+
+      /** Manda il video del GDO (o il recap) come bolla a sé e ne registra l'invio. */
       const inviaVideoGdo = async (): Promise<void> => {
-        const body = gdoVideoText(gdo.leads?.first_name ?? null, gdoVideoUrl as string);
+        const body = await bollaVideoGdo();
         const sent = await sendFreeText({ to: phone, body, from });
         await supabase.from('messages').insert({
           conversation_id: conversationId, direction: 'out', body,
@@ -804,7 +854,6 @@ export async function drainMarioReplies(
         gdoVideoSentAt = sentAt;
       };
 
-      const videoDaMandare = postino && shouldSendGdoVideo({ gdoAgendaAt, gdoVideoUrl, gdoVideoSentAt });
       // Il video può essere l'UNICA risposta solo se il lead non ha chiesto niente. Se
       // ha fatto una domanda o un'obiezione, il modello risponde e il video esce
       // insieme: prima il video partiva al posto della risposta, l'ultimo messaggio
@@ -904,6 +953,7 @@ export async function drainMarioReplies(
                 followupsSent: gdoFollowupsSent,
                 videoAppenaConfermato: false,
                 videoInUscita: videoInsiemeAllaRisposta,
+                recapInUscita: recapTipo === 'completo',
                 botScheduledAt: botScheduledAt,
                 gdoAppuntamentoAt: gdoAppuntamentoAt,
               }),
@@ -973,6 +1023,7 @@ export async function drainMarioReplies(
               followupsSent: gdoFollowupsSent,
               videoAppenaConfermato: true, // forza NOTA_NOEMI anche a followupsSent 0
               videoInUscita: videoInsiemeAllaRisposta,
+              recapInUscita: recapTipo === 'completo',
               botScheduledAt: botScheduledAt,
               gdoAppuntamentoAt: gdoAppuntamentoAt,
             }),
@@ -997,7 +1048,7 @@ export async function drainMarioReplies(
       // Il video esce in coda alla risposta, come ultima bolla: prima si risponde a
       // quello che il lead ha chiesto, poi gli si dà il video.
       if (videoInsiemeAllaRisposta) {
-        parts = [...parts, gdoVideoText(gdo.leads?.first_name ?? null, gdoVideoUrl as string)];
+        parts = [...parts, await bollaVideoGdo()];
       }
 
       // Link Fenice che il modello si è inventato (es. `conferenza-zx`): il lead lo
