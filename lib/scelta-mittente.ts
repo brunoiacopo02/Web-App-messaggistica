@@ -105,7 +105,15 @@ export function sidAperturaMario(): string[] {
 
 export async function scegliMittenteNuovo(
   supabase: Supa,
-  i: { templateSids: string[]; chiave: string; crmLeadId?: string | null; ignoraTetti?: boolean; adesso?: Date },
+  i: {
+    templateSids: string[]; chiave: string; crmLeadId?: string | null; ignoraTetti?: boolean; adesso?: Date;
+    /**
+     * Il primario entra nel giro come gli altri, se ha un tetto > 0 in
+     * `tetti_numeri` (PO 23/10/2026: tutti i numeri HIGH, divisione equa). Solo per
+     * le aperture di Mario: il lancio vuole un secondario apposta e non lo passa.
+     */
+    includiPrimario?: boolean;
+  },
 ): Promise<SceltaMittente> {
   const primario = numeroPrimario();
   if (!primario) throw new Error('TWILIO_WHATSAPP_NUMBER_FENICE non configurato');
@@ -179,11 +187,23 @@ export async function scegliMittenteNuovo(
     candidati.push({ numero, oggi });
   }
 
+  // Il primario in coda alla lista: a parita' di chat passa davanti un secondario.
+  // Non serve verificarne i template ne' le credenziali: e' gia' il ripiego di tutti.
+  // Conteggio fallito o tetto pieno = fuori dal giro, ma resta il ripiego qui sotto.
+  if (i.includiPrimario && !i.ignoraTetti) {
+    const tettoP = tettoDi(tetti, primario);
+    if (tettoP > 0) {
+      const n = await chatNateOggi(supabase as never, primario, i.adesso);
+      if (n !== null && n < tettoP) candidati.push({ numero: primario, oggi: n });
+    }
+  }
+
   if (candidati.length === 0) return alPrimario('nessun_candidato', scartati);
   // Meno chat oggi vince; a parita' resta l'ordine della lista (sort stabile). Con
   // `ignoraTetti` ogni `oggi` resta 0 per tutti (il conteggio non si fa): vince il
   // primo secondario non a riposo e spedibile nell'ordine della lista, senza
   // bilanciamento.
   candidati.sort((a, b) => a.oggi - b.oggi);
+  if (candidati[0].numero === primario) return alPrimario('scelto', scartati);
   return { from: candidati[0].numero, secondario: true, scartati, motivo: 'scelto' };
 }

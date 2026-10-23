@@ -13,7 +13,8 @@ type Supa = ReturnType<typeof getSupabaseAdmin>;
  * Fallisce chiuso: un numero assente, o con un valore che non e' un intero >= 0,
  * vale 0 — cioe' non apre niente. Un numero nuovo si brucia col volume, e
  * l'unico volume giusto e' quello che una persona ha scritto.
- * Il primario non passa di qui: non ha tetto.
+ * Il primario passa di qui solo per le aperture di Mario (`includiPrimario`):
+ * assente o 0 = non entra nel giro e fa solo da ripiego, com'era fino al 23/10/2026.
  */
 const KEY = 'tetti_numeri';
 

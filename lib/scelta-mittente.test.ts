@@ -255,3 +255,54 @@ describe('sidAperturaMario', () => {
     expect(sidAperturaMario()).toEqual(['HX_LEG']);
   });
 });
+
+describe('scegliMittenteNuovo con includiPrimario (PO 23/10/2026: il 3199 torna nel giro)', () => {
+  it('primario con tetto > 0 e meno chat oggi: vince il primario', async () => {
+    tetti({ [P]: 100000, [ELIXIR]: 100000, [N8061]: 100000, [N0047]: 100000 });
+    vi.mocked(chatNateOggi).mockImplementation(async (_s, n) => (n === P ? 3 : 20));
+    const r = await scegli(supa().s, { includiPrimario: true });
+    expect(r).toMatchObject({ from: P, secondario: false, motivo: 'scelto' });
+  });
+
+  it('primario con piu chat oggi: vince il secondario meno carico', async () => {
+    tetti({ [P]: 100000, [ELIXIR]: 100000, [N8061]: 100000, [N0047]: 100000 });
+    vi.mocked(chatNateOggi).mockImplementation(async (_s, n) => (n === P ? 30 : n === N8061 ? 5 : 20));
+    const r = await scegli(supa().s, { includiPrimario: true });
+    expect(r).toMatchObject({ from: N8061, secondario: true, motivo: 'scelto' });
+  });
+
+  it('a parita il secondario passa davanti al primario', async () => {
+    tetti({ [P]: 100000, [ELIXIR]: 100000 });
+    const r = await scegli(supa().s, { includiPrimario: true });
+    expect(r.from).toBe(ELIXIR);
+  });
+
+  it('primario senza tetto in tetti_numeri: resta fuori, come prima', async () => {
+    tetti({ [ELIXIR]: 100000 });
+    vi.mocked(chatNateOggi).mockImplementation(async (_s, n) => (n === ELIXIR ? 50 : 0));
+    const r = await scegli(supa().s, { includiPrimario: true });
+    expect(r).toMatchObject({ from: ELIXIR, secondario: true });
+    expect(vi.mocked(chatNateOggi).mock.calls.map((c) => c[1])).not.toContain(P);
+  });
+
+  it('senza includiPrimario il tetto del primario e ignorato (lancio e altri chiamanti)', async () => {
+    tetti({ [P]: 100000, [ELIXIR]: 100000 });
+    vi.mocked(chatNateOggi).mockImplementation(async (_s, n) => (n === P ? 0 : 50));
+    const r = await scegli(supa().s);
+    expect(r).toMatchObject({ from: ELIXIR, secondario: true });
+  });
+
+  it('primario pieno: non e candidato, ma resta il ripiego se tutti sono fuori', async () => {
+    tetti({ [P]: 10, [ELIXIR]: 10 });
+    vi.mocked(chatNateOggi).mockResolvedValue(10);
+    const r = await scegli(supa().s, { includiPrimario: true });
+    expect(r).toMatchObject({ from: P, secondario: false, motivo: 'nessun_candidato' });
+  });
+
+  it('conteggio del primario fallito: primario fuori dal giro, si sceglie fra i secondari', async () => {
+    tetti({ [P]: 100000, [ELIXIR]: 100000 });
+    vi.mocked(chatNateOggi).mockImplementation(async (_s, n) => (n === P ? null : 40));
+    const r = await scegli(supa().s, { includiPrimario: true });
+    expect(r).toMatchObject({ from: ELIXIR, secondario: true });
+  });
+});

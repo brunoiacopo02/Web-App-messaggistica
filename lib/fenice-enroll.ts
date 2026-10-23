@@ -115,6 +115,7 @@ export async function enrollLeadIntoMario(
     templateSids: sidAperturaMario(),
     chiave: args.phone,
     crmLeadId: args.crmLeadId ?? null,
+    includiPrimario: true,
   });
   const mittenteImposto: string | undefined = scelta.from;
   const { conversationId, waNumber } = await findOrCreateLeadConversation(supabase, {
