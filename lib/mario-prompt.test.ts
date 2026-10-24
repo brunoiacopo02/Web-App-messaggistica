@@ -151,7 +151,7 @@ describe('conferme: anticipo e micro-impegni', () => {
   it('[QUANDO] ha cinque forme, una per caso, e il pomeriggio resta com era', () => {
     expect(p).toContain('[QUANDO] ha sempre e solo una di queste cinque forme');
     expect(p).toContain('alle 9 in punto, appena attacca');
-    expect(p).toContain('dopo le 19:00 non proporre mai le 9:00 del giorno dopo');
+    expect(p).toContain('non proporre mai le 9:00 del prossimo giorno lavorativo (dal sabato, il lunedì)');
     expect(p).toContain('nel pomeriggio, qualche ora prima della videochiamata');
     expect(p).toContain('in mattinata, dalle 9, prima della videochiamata');
     expect(p).toContain('e se non ti trova');
@@ -849,7 +849,7 @@ describe('CHI È NOEMI E QUANDO CHIAMA', () => {
   // Review finale: dal sabato "domani" per Noemi è il lunedì, come per la board Conferme.
   it('domani vuol dire il prossimo giorno lavorativo: dal sabato è il lunedì', () => {
     expect(p).toContain('DOMANI vuol dire il prossimo giorno lavorativo: dal sabato è il lunedì');
-    expect(p).toMatch(/oggi è sabato 24, call lunedì 26 alle 11/);
+    expect(p).toMatch(/oggi è sabato 31, call lunedì 2 alle 11/);
   });
 
   it('non dice più che Noemi la mattina non c è', () => {

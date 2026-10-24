@@ -296,3 +296,12 @@ describe('call alle 9 fissata dopo le 19 del giorno prima (PO 24/10/2026)', () =
     expect(v['3']).toBe('domani alle 9 in punto');
   });
 });
+
+describe('gdoReminder24Raggiungibile: call alle 9 fissata alle 19 del giorno lavorativo prima', () => {
+  it('no: nove-in-punto, il giorno prima è già passato', () => {
+    expect(gdoReminder24Raggiungibile({
+      gdoAgendaAt: '2026-10-29T19:00:00+01:00', appuntamentoAt: '2026-10-30T09:00:00+01:00',
+      nowMs: at('2026-10-29T19:30:00+01:00'),
+    })).toBe(false);
+  });
+});

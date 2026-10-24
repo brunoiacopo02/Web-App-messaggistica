@@ -838,3 +838,11 @@ describe('checkDataAppuntamento: lunedì 26/10 mattina chiuso (temporaneo)', () 
     expect(checkDataAppuntamento('2026-10-27T11:00:00+01:00', SAB, []).ok).toBe(true);
   });
 });
+
+describe('checkDataAppuntamento: confine delle 15 di lunedì 26/10', () => {
+  const SAB = Date.parse('2026-10-24T21:00:00+02:00');
+  it('14:59 rifiutato, 15:00 accettato', () => {
+    expect(checkDataAppuntamento('2026-10-26T14:59:00+01:00', SAB, [])).toEqual({ ok: false, motivo: 'fuori_fascia' });
+    expect(checkDataAppuntamento('2026-10-26T15:00:00+01:00', SAB, []).ok).toBe(true);
+  });
+});

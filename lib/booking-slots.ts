@@ -175,8 +175,12 @@ export function bookingSlotsContext(
   // a mezzanotte): il prompt e la guardia vedevano finestre diverse.
   const { day1, day2, chiusuraPrimaDiDay1, chiusuraDopoDay1 } =
     opts?.days ?? computeBookingDays(now, opts?.ranges, opts?.pieni);
-  const off = romeOffset(now);
-  const tag = `Nel tag [ESITO:APPUNTAMENTO|...] usa la data ISO 8601 del giorno scelto (${day1.date} oppure ${day2.date}) con l'ora concordata e fuso ${off}.`;
+  // L'offset è quello del giorno scelto, non di adesso: a cavallo del cambio d'ora
+  // (25/10/2026) "+02:00" su un lunedì sposterebbe la call di un'ora.
+  const off1 = romeOffset(new Date(`${day1.date}T12:00:00Z`));
+  const off2 = romeOffset(new Date(`${day2.date}T12:00:00Z`));
+  const fuso = off1 === off2 ? `fuso ${off1}` : `fuso ${off1} per ${day1.date} e ${off2} per ${day2.date}`;
+  const tag = `Nel tag [ESITO:APPUNTAMENTO|...] usa la data ISO 8601 del giorno scelto (${day1.date} oppure ${day2.date}) con l'ora concordata e ${fuso}.`;
 
   // Forma A — la chiusura si apre subito dopo day1: quel giorno è l'ultimo utile prima dello stop.
   if (chiusuraDopoDay1) {

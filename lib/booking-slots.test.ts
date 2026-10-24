@@ -322,3 +322,14 @@ describe('bookingSlotsContext: lunedì 26/10 solo dal pomeriggio (temporaneo)', 
     expect(ctx).toContain('martedì 27/10/2026, dalle 10:00 alle 21:00');
   });
 });
+
+describe('bookingSlotsContext: offset per giorno a cavallo del cambio d ora', () => {
+  it('sabato 24/10 sera: il lunedì 26 è +01:00, non +02:00', () => {
+    const ctx = bookingSlotsContext(new Date('2026-10-24T21:00:00+02:00'));
+    expect(ctx).toContain('+01:00');
+    expect(ctx).not.toContain('+02:00');
+  });
+  it('lo stesso offset per entrambi i giorni resta una frase sola', () => {
+    expect(bookingSlotsContext(new Date('2026-06-22T10:00:00+02:00'))).toContain('e fuso +02:00.');
+  });
+});
