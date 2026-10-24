@@ -84,6 +84,8 @@ export function quandoChiamaNoemi(quando: Date | null, fissatoIl: Date = new Dat
   switch (caso) {
     case 'giorno-prima':
       return ` Digli QUANDO lo chiama: la call è ${call}, quindi Noemi lo chiama il giorno prima, ${prima}, perché alle 9 attacca proprio a lavorare e prima della call non farebbe in tempo. Scrivilo così, col giorno e il numero, e digli di tenere il telefono a portata già da ${prima}.`;
+    case 'nove-in-punto':
+      return ` Digli QUANDO lo chiama: la call è ${call}, e a quest'ora Noemi non fa più in tempo a sentirlo il giorno prima: lo chiama ${giorno} alle 9 in punto, appena attacca. Scrivilo col giorno e il numero, e digli di tenere il telefono a portata dalle 9.`;
     case 'mattina-stessa':
       return ` Digli QUANDO lo chiama: la call è ${call}, quindi Noemi lo chiama la mattina stessa, ${giorno} dalle 9, prima della videochiamata. Scrivilo col giorno e il numero, dagli la finestra e mai un orario al minuto.`;
     case 'giorno-prima-poi-mattina':

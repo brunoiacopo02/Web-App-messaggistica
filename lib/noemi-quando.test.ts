@@ -43,3 +43,23 @@ describe('pianoNoemi: quando chiama Noemi (PO 24/10/2026)', () => {
     expect(romeDayKey(giornoLavorativoPrima(new Date('2026-10-28T10:00:00+01:00')))).toBe('2026-10-27');
   });
 });
+
+describe('pianoNoemi: call alle 9 fissata troppo tardi per il giorno prima (PO 24/10/2026)', () => {
+  const ven9 = new Date('2026-10-30T09:00:00+01:00');
+  const lun9 = new Date('2026-11-02T09:00:00+01:00');
+
+  it('fissata dopo le 19 del giorno prima: alle 9 in punto', () => {
+    expect(pianoNoemi(ven9, new Date('2026-10-29T20:30:00+01:00')).caso).toBe('nove-in-punto');
+    expect(pianoNoemi(ven9, new Date('2026-10-29T19:00:00+01:00')).caso).toBe('nove-in-punto');
+  });
+
+  it('fissata prima delle 19 del giorno prima: il giorno prima', () => {
+    expect(pianoNoemi(ven9, new Date('2026-10-29T18:59:00+01:00')).caso).toBe('giorno-prima');
+  });
+
+  it('call del lunedì: il giorno prima è il sabato, la domenica non conta', () => {
+    expect(pianoNoemi(lun9, new Date('2026-10-31T19:00:00+01:00')).caso).toBe('nove-in-punto');
+    expect(pianoNoemi(lun9, new Date('2026-11-01T10:00:00+01:00')).caso).toBe('nove-in-punto');
+    expect(pianoNoemi(lun9, new Date('2026-10-30T12:00:00+01:00')).caso).toBe('giorno-prima');
+  });
+});

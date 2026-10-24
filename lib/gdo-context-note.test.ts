@@ -147,6 +147,12 @@ describe('nota Noemi: dipende dall ora dell appuntamento e da quanto manca', () 
     expect(n).not.toContain('la mattina stessa');
   });
 
+  it('le 9 fissate dopo le 19 del giorno prima: alle 9 in punto, non il giorno prima', () => {
+    const n = nota('2026-10-30T09:00:00+01:00', { fissatoIl: new Date('2026-10-29T20:30:00+01:00') });
+    expect(n).toContain('alle 9 in punto');
+    expect(n).not.toContain('il giorno prima, ');
+  });
+
   it('il giorno prima di un lunedì è il sabato, non la domenica', () => {
     const giovedi = new Date('2026-10-22T11:00:00+02:00');
     const n = nota('2026-10-26T09:00:00+01:00', { fissatoIl: giovedi });

@@ -85,3 +85,10 @@ describe('decideGdoRecap', () => {
   ];
   it.each(casi)('null: %s', (_n, o) => expect(decideGdoRecap(con(o))).toBeNull());
 });
+
+describe('quandoNoemi: call alle 9 fissata a sera', () => {
+  it('fissata dopo le 19 del giorno prima: la mattina stessa alle 9 in punto', () => {
+    expect(quandoNoemi(new Date('2026-10-30T09:00:00+01:00'), new Date('2026-10-29T21:00:00+01:00')))
+      .toBe('venerdì 30 alle 9 in punto, appena attacca');
+  });
+});

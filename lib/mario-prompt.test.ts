@@ -147,9 +147,11 @@ describe('conferme: anticipo e micro-impegni', () => {
   // chiara, anche a costo di essere duri. Resta la via d'uscita del richiamo.
   // Visto in produzione il 22/10: per una call delle 16 il modello scriveva "ti chiama
   // sabato nel primo mattino". Dal 27/10/2026 (PO 24/10) Noemi attacca alle 9 e le call del
-  // mattino si chiamano la mattina stessa: le forme di [QUANDO] diventano quattro.
-  it('[QUANDO] ha quattro forme, una per caso, e il pomeriggio resta com era', () => {
-    expect(p).toContain('[QUANDO] ha sempre e solo una di queste quattro forme');
+  // mattino si chiamano la mattina stessa: le forme di [QUANDO] diventano quattro (cinque dal 24/10 sera: le 9 fissate a sera).
+  it('[QUANDO] ha cinque forme, una per caso, e il pomeriggio resta com era', () => {
+    expect(p).toContain('[QUANDO] ha sempre e solo una di queste cinque forme');
+    expect(p).toContain('alle 9 in punto, appena attacca');
+    expect(p).toContain('dopo le 19:00 non proporre mai le 9:00 del giorno dopo');
     expect(p).toContain('nel pomeriggio, qualche ora prima della videochiamata');
     expect(p).toContain('in mattinata, dalle 9, prima della videochiamata');
     expect(p).toContain('e se non ti trova');

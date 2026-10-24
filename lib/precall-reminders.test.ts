@@ -278,3 +278,21 @@ describe('gdoReminderVars e gdoReminderText', () => {
     );
   });
 });
+
+describe('call alle 9 fissata dopo le 19 del giorno prima (PO 24/10/2026)', () => {
+  const call = '2026-10-30T09:00:00+01:00';
+  const fissata = '2026-10-29T20:30:00+01:00';
+
+  it('il promemoria del giorno prima non è raggiungibile: Noemi non chiama prima', () => {
+    expect(gdoReminder24Raggiungibile({
+      gdoAgendaAt: fissata, appuntamentoAt: call, nowMs: at('2026-10-29T21:00:00+01:00'),
+    })).toBe(false);
+  });
+
+  it('Noemi chiama alle 9 in punto', () => {
+    const v = gdoReminderVars({
+      nome: null, call: new Date(call), nowMs: at('2026-10-29T21:00:00+01:00'), fissatoIl: new Date(fissata),
+    });
+    expect(v['3']).toBe('domani alle 9 in punto');
+  });
+});

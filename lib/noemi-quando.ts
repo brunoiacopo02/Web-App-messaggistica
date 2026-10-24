@@ -10,14 +10,16 @@ import { romeDayKey, romeHour } from './rome-time';
  *   mattina stessa, dalle 9;
  * - call del mattino fissata con più anticipo: il giorno prima, e se non risponde di nuovo
  *   la mattina stessa;
- * - call alle 9: sempre il giorno prima, la mattina stessa non si fa in tempo.
+ * - call alle 9: il giorno prima, la mattina stessa non si fa in tempo; ma se è stata fissata
+ *   dopo le 19 del giorno prima (o più tardi) il giorno prima non c'è più: la mattina stessa
+ *   alle 9 in punto, appena attacca (PO 24/10/2026).
  *
  * Conta QUANDO è stata fissata la call, non adesso: il promemoria del giorno prima parte a
  * 24 ore dalla call, quando "domani" è vero per tutti, ma le Conferme hanno deciso in base
  * al giorno del fissaggio. Il giorno prima di un lunedì è il sabato: la domenica non si
  * lavora.
  */
-export type NoemiCaso = 'pomeriggio' | 'mattina-stessa' | 'giorno-prima-poi-mattina' | 'giorno-prima';
+export type NoemiCaso = 'pomeriggio' | 'mattina-stessa' | 'giorno-prima-poi-mattina' | 'giorno-prima' | 'nove-in-punto';
 
 export interface PianoNoemi {
   caso: NoemiCaso;
@@ -27,6 +29,8 @@ export interface PianoNoemi {
 
 const NOEMI_POMERIGGIO_DALLE = 15;
 const NOEMI_ATTACCA = 9;
+/** Una call alle 9 fissata da quest'ora del giorno prima in poi non fa in tempo ad avere la chiamata del giorno prima. */
+export const NOEMI_ULTIMA_ORA_GIORNO_PRIMA = 19;
 
 /** Mezzogiorno UTC del giorno di Roma `key` ('YYYY-MM-DD'): lontano da ogni mezzanotte. */
 const mezzogiorno = (key: string) => new Date(`${key}T12:00:00Z`);
@@ -51,7 +55,15 @@ export function pianoNoemi(call: Date, fissatoIl: Date): PianoNoemi {
   const giornoPrima = giornoLavorativoPrima(call);
   const ora = romeHour(call);
   if (ora >= NOEMI_POMERIGGIO_DALLE) return { caso: 'pomeriggio', giornoPrima };
-  if (ora <= NOEMI_ATTACCA) return { caso: 'giorno-prima', giornoPrima };
+  if (ora <= NOEMI_ATTACCA) {
+    // Fissata il giorno prima dopo le 19, o in un giorno ancora successivo (il sabato per
+    // il lunedì: la domenica non conta): niente chiamata del giorno prima.
+    const giorniDopo = romeDayKey(fissatoIl);
+    const keyPrima = romeDayKey(giornoPrima);
+    const tardi =
+      giorniDopo > keyPrima || (giorniDopo === keyPrima && romeHour(fissatoIl) >= NOEMI_ULTIMA_ORA_GIORNO_PRIMA);
+    return { caso: tardi ? 'nove-in-punto' : 'giorno-prima', giornoPrima };
+  }
   // 'YYYY-MM-DD' si confronta come stringa: l'ordine è quello del calendario.
   const conAnticipo = romeDayKey(call) > giornoLavorativoDopo(fissatoIl);
   return { caso: conAnticipo ? 'giorno-prima-poi-mattina' : 'mattina-stessa', giornoPrima };

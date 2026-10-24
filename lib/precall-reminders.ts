@@ -147,7 +147,7 @@ function primoIstanteGdoReminder24(i: {
   const primo = Math.max(i.nowMs, reminderTargets(callMs).r24At, agendaMs + GDO_AGENDA_MIN_MS);
   if (callMs - primo < GDO_ANTICIPO_MIN_MS) return null;
   const noemi = pianoNoemi(new Date(callMs), new Date(agendaMs));
-  if (noemi.caso === 'giorno-prima' && romeDaysBetween(new Date(primo), noemi.giornoPrima) < 0) return null;
+  if ((noemi.caso === 'giorno-prima' || noemi.caso === 'nove-in-punto') && romeDaysBetween(new Date(primo), noemi.giornoPrima) < 0) return null;
   return primo;
 }
 
@@ -204,6 +204,7 @@ function noemiRelativo(call: Date, nowMs: number, fissatoIl: Date): string {
     case 'pomeriggio': return `${relativo(call)}, qualche ora prima`;
     case 'mattina-stessa': return mattina;
     case 'giorno-prima': return relativo(giornoPrima);
+    case 'nove-in-punto': return `${relativo(call)} alle 9 in punto`;
     case 'giorno-prima-poi-mattina':
       // Passato il giorno prima resta solo la chiamata del mattino.
       return romeDaysBetween(now, giornoPrima) < 0

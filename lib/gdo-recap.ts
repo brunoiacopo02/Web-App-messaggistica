@@ -30,6 +30,7 @@ export function quandoNoemi(call: Date, fissatoIl: Date = new Date()): string {
     case 'mattina-stessa': return `${giorno} in mattinata dalle 9`;
     case 'giorno-prima-poi-mattina': return `già ${prima}, e se non ti trova ${giorno} in mattinata dalle 9`;
     case 'giorno-prima': return prima;
+    case 'nove-in-punto': return `${giorno} alle 9 in punto, appena attacca`;
   }
 }
 

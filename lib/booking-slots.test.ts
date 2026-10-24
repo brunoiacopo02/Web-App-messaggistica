@@ -314,3 +314,11 @@ describe('computeBookingDays con giorni al completo', () => {
     expect(testo.toLowerCase()).not.toContain('chius');
   });
 });
+
+describe('bookingSlotsContext: lunedì 26/10 solo dal pomeriggio (temporaneo)', () => {
+  it('sabato 24/10: lunedì 26 dalle 15:00, martedì 27 dalle 10:00', () => {
+    const ctx = bookingSlotsContext(new Date('2026-10-24T21:00:00+02:00'));
+    expect(ctx).toContain('lunedì 26/10/2026, dalle 15:00 alle 21:00');
+    expect(ctx).toContain('martedì 27/10/2026, dalle 10:00 alle 21:00');
+  });
+});
