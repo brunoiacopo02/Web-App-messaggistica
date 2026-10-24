@@ -1,5 +1,6 @@
 import { GDO_CONTEXT_NOTE } from './mario';
-import { giornoRoma, oraRoma, romeDayKey, romeHour } from './rome-time';
+import { giornoRoma, oraRoma } from './rome-time';
+import { pianoNoemi } from './noemi-quando';
 
 /**
  * Promemoria che il bot deve portarsi dentro la conversazione con un lead GDO.
@@ -53,33 +54,11 @@ export interface GdoNoteInput {
   gdoAppuntamentoAt?: string | null;
   /** In questo turno esce il recap GDO, che spiega già Noemi. */
   recapInUscita?: boolean;
-  /** Adesso: serve a capire se la call del mattino è domani (si chiama la mattina stessa) o
-   *  più in là (si chiama già il giorno prima). Default: l'ora vera. */
-  now?: Date;
+  /** Quando è stata fissata la call (per i lead GDO: l'arrivo dell'agenda). Decide se Noemi
+   *  chiama la mattina stessa o già il giorno prima, vedi lib/noemi-quando.ts. Default: adesso. */
+  fissatoIl?: Date;
   /** Nota del passo di riscaldamento da fare in questo turno (lib/gdo-warmup.ts). */
   notaRiscaldamento?: string | null;
-}
-
-/**
- * Dal 27/10/2026 (PO 24/10) Noemi attacca alle 9 e le call del mattino (9-14) si chiamano la
- * mattina stessa. Il giorno prima le Conferme chiamano solo le call del mattino fissate con
- * anticipo (e sempre quelle delle 9, che la mattina stessa non farebbero in tempo). Dalle 15 in
- * poi niente cambia: stesso giorno, qualche ora prima.
- */
-const NOEMI_SOGLIA_POMERIGGIO = 15;
-const NOEMI_ATTACCA = 9;
-
-/** Giorni di calendario (Roma) da `da` ad `a`. */
-function giorniTra(da: Date, a: Date): number {
-  const utc = (d: Date) => Date.parse(`${romeDayKey(d)}T12:00:00Z`);
-  return Math.round((utc(a) - utc(da)) / 86_400_000);
-}
-
-/** Il giorno lavorativo prima della call: la domenica non si lavora, prima del lunedì c'è il sabato. */
-function giornoPrima(quando: Date): string {
-  const d = new Date(Date.parse(`${romeDayKey(quando)}T12:00:00Z`) - 86_400_000);
-  if (d.getUTCDay() === 0) d.setUTCDate(d.getUTCDate() - 1);
-  return giornoRoma(d);
 }
 
 /** L'ora vera della call: per un lead GDO può stare su due colonne, vince la più recente. */
@@ -96,23 +75,22 @@ export function oraAppuntamento(
 /** La riga su quando chiama Noemi, vuota se non sappiamo quando è la call. Il giorno è
  *  scritto per intero col numero: "il giorno prima" da solo, a chi legge di fretta, non dice
  *  niente. */
-export function quandoChiamaNoemi(quando: Date | null, now: Date = new Date()): string {
+export function quandoChiamaNoemi(quando: Date | null, fissatoIl: Date = new Date()): string {
   if (!quando) return '';
   const giorno = giornoRoma(quando);
   const call = `${giorno} alle ${oraRoma(quando)}`;
-  const ora = romeHour(quando);
-  if (ora <= NOEMI_ATTACCA) {
-    const prima = giornoPrima(quando);
-    return ` Digli QUANDO lo chiama: la call è ${call}, quindi Noemi lo chiama il giorno prima, ${prima}, perché alle 9 attacca proprio a lavorare e prima della call non farebbe in tempo. Scrivilo così, col giorno e il numero, e digli di tenere il telefono a portata già da ${prima}.`;
-  }
-  if (ora < NOEMI_SOGLIA_POMERIGGIO) {
-    if (giorniTra(now, quando) <= 1) {
+  const { caso, giornoPrima } = pianoNoemi(quando, fissatoIl);
+  const prima = giornoRoma(giornoPrima);
+  switch (caso) {
+    case 'giorno-prima':
+      return ` Digli QUANDO lo chiama: la call è ${call}, quindi Noemi lo chiama il giorno prima, ${prima}, perché alle 9 attacca proprio a lavorare e prima della call non farebbe in tempo. Scrivilo così, col giorno e il numero, e digli di tenere il telefono a portata già da ${prima}.`;
+    case 'mattina-stessa':
       return ` Digli QUANDO lo chiama: la call è ${call}, quindi Noemi lo chiama la mattina stessa, ${giorno} dalle 9, prima della videochiamata. Scrivilo col giorno e il numero, dagli la finestra e mai un orario al minuto.`;
-    }
-    const prima = giornoPrima(quando);
-    return ` Digli QUANDO lo chiama: la call è ${call}, quindi Noemi lo sente già il giorno prima, ${prima}, e se non lo trova lo richiama la mattina stessa, ${giorno} dalle 9. Scrivilo così, col giorno e il numero, e digli di tenere il telefono a portata già da ${prima}.`;
+    case 'giorno-prima-poi-mattina':
+      return ` Digli QUANDO lo chiama: la call è ${call}, quindi Noemi lo sente già il giorno prima, ${prima}, e se non lo trova lo richiama la mattina stessa, ${giorno} dalle 9. Scrivilo così, col giorno e il numero, e digli di tenere il telefono a portata già da ${prima}.`;
+    case 'pomeriggio':
+      return ` Digli QUANDO lo chiama: la call è ${call}, quindi Noemi chiama lo stesso giorno, ${giorno}, qualche ora prima. Scrivilo col giorno e il numero, dagli la finestra e mai un orario al minuto.`;
   }
-  return ` Digli QUANDO lo chiama: la call è ${call}, quindi Noemi chiama lo stesso giorno, ${giornoRoma(quando)}, qualche ora prima. Scrivilo col giorno e il numero, dagli la finestra e mai un orario al minuto.`;
 }
 
 /**
@@ -131,7 +109,7 @@ export function gdoContextNote(i: GdoNoteInput): string {
   // Il promemoria "ricordagli il video" non ha senso nel turno in cui il video esce.
   if (!i.videoInUscita && i.gdoVideoSentAt && !i.gdoVideoWatchedAt) parti.push(NOTA_VIDEO);
   if (serveNoemi(i)) {
-    parti.push(NOTA_NOEMI + quandoChiamaNoemi(oraAppuntamento(i.botScheduledAt, i.gdoAppuntamentoAt), i.now));
+    parti.push(NOTA_NOEMI + quandoChiamaNoemi(oraAppuntamento(i.botScheduledAt, i.gdoAppuntamentoAt), i.fissatoIl));
   }
   // Il riscaldamento va in coda: prima il contesto e i promemoria, poi la domanda del passo.
   if (i.notaRiscaldamento) parti.push(i.notaRiscaldamento);

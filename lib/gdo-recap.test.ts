@@ -6,15 +6,22 @@ import {
 const call = new Date('2026-10-23T10:00:00+02:00'); // venerdì
 
 describe('testi del recap GDO', () => {
-  it('quandoNoemi: call di mattina → pomeriggio del giorno prima', () =>
-    expect(quandoNoemi(call)).toBe('giovedì 22 nel pomeriggio'));
+  // PO 24/10/2026: Noemi attacca alle 9, le call del mattino si chiamano la mattina stessa.
+  const mer = new Date('2026-10-21T16:00:00+02:00');
+  const gio = new Date('2026-10-22T16:00:00+02:00');
+  it('quandoNoemi: mattina di domani → la mattina stessa', () =>
+    expect(quandoNoemi(call, gio)).toBe('venerdì 23 in mattinata dalle 9'));
+  it('quandoNoemi: mattina fissata con anticipo → il giorno prima, poi la mattina stessa', () =>
+    expect(quandoNoemi(call, mer)).toBe('già giovedì 22, e se non ti trova venerdì 23 in mattinata dalle 9'));
+  it('quandoNoemi: call alle 9 → il giorno prima', () =>
+    expect(quandoNoemi(new Date('2026-10-23T09:00:00+02:00'), gio)).toBe('giovedì 22'));
   it('quandoNoemi: call dalle 15 → stesso giorno', () =>
-    expect(quandoNoemi(new Date('2026-10-23T18:00:00+02:00'))).toBe('venerdì 23, qualche ora prima'));
+    expect(quandoNoemi(new Date('2026-10-23T18:00:00+02:00'), gio)).toBe('venerdì 23, qualche ora prima'));
   it('recap completo: una bolla con data, Noemi, video e FATTO', () => {
-    const t = gdoRecapText({ nome: 'Luca Rossi', call, videoLink: 'https://corso.feniceacademy.it/conferenza-bx' });
+    const t = gdoRecapText({ nome: 'Luca Rossi', call, videoLink: 'https://corso.feniceacademy.it/conferenza-bx', fissatoIl: gio });
     expect(t).toContain('Ciao Luca');
     expect(t).toContain('*venerdì 23 alle 10:00*');
-    expect(t).toContain('*Ti chiama Noemi, una nostra collega, giovedì 22 nel pomeriggio*');
+    expect(t).toContain('*Ti chiama Noemi, una nostra collega, venerdì 23 in mattinata dalle 9*');
     expect(t).toContain('se non rispondi la videochiamata non è confermata');
     expect(t).toContain('👉 https://corso.feniceacademy.it/conferenza-bx');
     expect(t).toContain('scrivimi FATTO');

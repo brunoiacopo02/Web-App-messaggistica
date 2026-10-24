@@ -328,7 +328,10 @@ async function promemoriaGdo(supabase: Supa, now: number): Promise<EsitoRamo> {
       continue;
     }
 
-    const vars = gdoReminderVars({ nome: c.leads?.first_name ?? null, call: new Date(callMs), nowMs: now });
+    const vars = gdoReminderVars({
+      nome: c.leads?.first_name ?? null, call: new Date(callMs), nowMs: now,
+      fissatoIl: c.gdo_agenda_at ? new Date(c.gdo_agenda_at) : undefined,
+    });
     const body = gdoReminderText(vars);
     const from = mittenteDiConversazione(c);
     let ok = false;

@@ -833,7 +833,7 @@ export async function drainMarioReplies(
           const prima = { forAt: gdoRecapForAt, sentAt: gdoRecapSentAt };
           if (await claimRecap(supabase, conversationId, gdoAppuntamentoAt, false)) {
             return {
-              body: gdoRecapText({ nome: gdo.leads?.first_name ?? null, call: new Date(gdoAppuntamentoAt), videoLink: gdoVideoUrl }),
+              body: gdoRecapText({ nome: gdo.leads?.first_name ?? null, call: new Date(gdoAppuntamentoAt), videoLink: gdoVideoUrl, fissatoIl: gdoAgendaAt ? new Date(gdoAgendaAt) : undefined }),
               presa: { at: gdoAppuntamentoAt, prima },
             };
           }
@@ -998,6 +998,7 @@ export async function drainMarioReplies(
             recapInUscita: recapTipo === 'completo',
             botScheduledAt: botScheduledAt,
             gdoAppuntamentoAt: gdoAppuntamentoAt,
+            fissatoIl: gdoAgendaAt ? new Date(gdoAgendaAt) : undefined,
           }
         : null;
       const notaWarmup = noteGdo
@@ -1093,6 +1094,7 @@ export async function drainMarioReplies(
               recapInUscita: recapTipo === 'completo',
               botScheduledAt: botScheduledAt,
               gdoAppuntamentoAt: gdoAppuntamentoAt,
+              fissatoIl: gdoAgendaAt ? new Date(gdoAgendaAt) : undefined,
               notaRiscaldamento: null, // Noemi e riscaldamento mai nello stesso turno
             }),
           });

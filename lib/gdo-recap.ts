@@ -1,5 +1,6 @@
 import { firstNameOf } from './name';
-import { giornoRoma, oraRoma, romeHour, sameInstant } from './rome-time';
+import { pianoNoemi } from './noemi-quando';
+import { giornoRoma, oraRoma, sameInstant } from './rome-time';
 
 /**
  * Recap in una sola bolla per il lead prenotato da un GDO: data della videochiamata,
@@ -7,8 +8,6 @@ import { giornoRoma, oraRoma, romeHour, sameInstant } from './rome-time';
  * decisione, senza I/O: l'invio sta altrove.
  */
 
-/** Come in `gdo-context-note`: sotto le 15 Noemi non c'è ancora, si chiama il giorno prima. */
-export const SOGLIA_STESSO_GIORNO = 15;
 /** Sotto questo anticipo il recap non serve più: la call è troppo vicina. */
 const ANTICIPO_MIN_MS = 60 * 60_000;
 /** Finestra di 24h di WhatsApp dall'ultimo messaggio del lead. */
@@ -17,12 +16,21 @@ const FINESTRA_MS = 24 * 3600_000;
 export type RecapTipo = 'completo' | 'senza-video' | 'spostamento';
 export type RecapOccasione = 'turno-video' | 'registrato' | 'spostato';
 
-/** "giovedì 22 nel pomeriggio" oppure "venerdì 23, qualche ora prima". */
-export function quandoNoemi(call: Date): string {
-  if (romeHour(call) < SOGLIA_STESSO_GIORNO) {
-    return `${giornoRoma(new Date(call.getTime() - 24 * 3600_000))} nel pomeriggio`;
+/**
+ * "venerdì 23 in mattinata dalle 9", "già giovedì 22, e se non ti trova venerdì 23 in
+ * mattinata dalle 9", "giovedì 22" (call alle 9) oppure "venerdì 23, qualche ora prima".
+ * La regola sta in lib/noemi-quando.ts; `fissatoIl` è quando è arrivata l'agenda.
+ */
+export function quandoNoemi(call: Date, fissatoIl: Date = new Date()): string {
+  const { caso, giornoPrima } = pianoNoemi(call, fissatoIl);
+  const giorno = giornoRoma(call);
+  const prima = giornoRoma(giornoPrima);
+  switch (caso) {
+    case 'pomeriggio': return `${giorno}, qualche ora prima`;
+    case 'mattina-stessa': return `${giorno} in mattinata dalle 9`;
+    case 'giorno-prima-poi-mattina': return `già ${prima}, e se non ti trova ${giorno} in mattinata dalle 9`;
+    case 'giorno-prima': return prima;
   }
-  return `${giornoRoma(call)}, qualche ora prima`;
 }
 
 function saluto(nome: string | null): string {
@@ -30,11 +38,11 @@ function saluto(nome: string | null): string {
   return n ? `Ciao ${n}` : 'Ciao';
 }
 
-export function gdoRecapText(i: { nome: string | null; call: Date; videoLink: string | null }): string {
+export function gdoRecapText(i: { nome: string | null; call: Date; videoLink: string | null; fissatoIl?: Date }): string {
   const righe = [
     `${saluto(i.nome)}, ti riassumo tutto 👇`,
     `La tua videochiamata è *${giornoRoma(i.call)} alle ${oraRoma(i.call)}*. A quell'ora devi essere libero.`,
-    `*Ti chiama Noemi, una nostra collega, ${quandoNoemi(i.call)}* da un numero di cellulare. Sono 5-10 minuti: rispondi, perché se non rispondi la videochiamata non è confermata.`,
+    `*Ti chiama Noemi, una nostra collega, ${quandoNoemi(i.call, i.fissatoIl)}* da un numero di cellulare. Sono 5-10 minuti: rispondi, perché se non rispondi la videochiamata non è confermata.`,
   ];
   if (i.videoLink) {
     righe.push(

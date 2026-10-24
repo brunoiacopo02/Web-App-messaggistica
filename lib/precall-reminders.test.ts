@@ -171,11 +171,22 @@ describe('decideGdoReminder24: il promemoria del giorno prima ai lead GDO', () =
     expect(decideGdoReminder24(base({ appuntamentoAt: new Date(NOW + 40 * H).toISOString() }))).toBeNull();
   });
 
-  it('call alle 10 e adesso le 08:40 dello stesso giorno: il pomeriggio di Noemi è già passato', () => {
+  // PO 24/10/2026: dalle 9 Noemi chiama la mattina stessa, quindi alle 08:40 il promemoria
+  // di una call delle 10 ha ancora senso. Alle 9 invece Noemi chiama solo il giorno prima.
+  it('call alle 10 e adesso le 08:40 dello stesso giorno: Noemi lo chiama ancora stamattina, parte', () => {
     const now = at('2026-10-23T06:40:00Z'); // venerdì 23, 08:40 a Roma
     expect(decideGdoReminder24(base({
       nowMs: now,
       appuntamentoAt: '2026-10-23T08:00:00Z',
+      gdoAgendaAt: new Date(now - 40 * H).toISOString(),
+    }))).not.toBeNull();
+  });
+
+  it('call alle 9 e adesso le 07:00 dello stesso giorno: il giorno di Noemi è passato, niente', () => {
+    const now = at('2026-10-23T05:00:00Z'); // venerdì 23, 07:00 a Roma
+    expect(decideGdoReminder24(base({
+      nowMs: now,
+      appuntamentoAt: '2026-10-23T07:00:00Z',
       gdoAgendaAt: new Date(now - 40 * H).toISOString(),
     }))).toBeNull();
   });
@@ -189,10 +200,17 @@ describe('gdoReminder24Raggiungibile: il promemoria GDO potrà ancora partire?',
     })).toBe(true);
   });
 
-  it('agenda alle 14 del giorno prima di una call alle 11:30: il pomeriggio di Noemi passa prima delle 12 ore, no', () => {
+  it('agenda alle 14 del giorno prima di una call alle 11:30: Noemi chiama la mattina stessa, sì', () => {
     expect(gdoReminder24Raggiungibile({
       gdoAgendaAt: '2026-08-02T12:00:00Z', appuntamentoAt: '2026-08-03T09:30:00Z',
       nowMs: at('2026-08-03T06:00:00Z'),
+    })).toBe(true);
+  });
+
+  it('agenda alle 14 del giorno prima di una call alle 9: il giorno di Noemi passa prima delle 12 ore, no', () => {
+    expect(gdoReminder24Raggiungibile({
+      gdoAgendaAt: '2026-08-02T12:00:00Z', appuntamentoAt: '2026-08-03T07:00:00Z',
+      nowMs: at('2026-08-03T04:00:00Z'),
     })).toBe(false);
   });
 
@@ -214,11 +232,39 @@ describe('gdoReminder24Raggiungibile: il promemoria GDO potrà ancora partire?',
 });
 
 describe('gdoReminderVars e gdoReminderText', () => {
-  it('call venerdì alle 10, adesso giovedì alle 10: Noemi chiama oggi pomeriggio', () => {
-    const v = gdoReminderVars({ nome: 'mario rossi', call: new Date('2026-10-23T08:00:00Z'), nowMs: at('2026-10-22T08:00:00Z') });
+  // PO 24/10/2026: conta quando è arrivata l'agenda, non adesso (lib/noemi-quando.ts).
+  it('call venerdì alle 10 fissata mercoledì, adesso giovedì alle 10: oggi, e se non ti trova domani mattina', () => {
+    const v = gdoReminderVars({
+      nome: 'mario rossi', call: new Date('2026-10-23T08:00:00Z'), nowMs: at('2026-10-22T08:00:00Z'),
+      fissatoIl: new Date('2026-10-21T14:00:00Z'),
+    });
     expect(v['1']).toBe('Mario');
     expect(v['2']).toBe('venerdì 23 ottobre alle 10:00');
-    expect(v['3']).toBe('oggi pomeriggio');
+    expect(v['3']).toBe('oggi, e se non ti trova domani in mattinata dalle 9');
+  });
+
+  it('call venerdì alle 10 fissata giovedì, adesso venerdì alle 06: oggi in mattinata dalle 9', () => {
+    const v = gdoReminderVars({
+      nome: null, call: new Date('2026-10-23T08:00:00Z'), nowMs: at('2026-10-23T04:00:00Z'),
+      fissatoIl: new Date('2026-10-22T14:00:00Z'),
+    });
+    expect(v['3']).toBe('oggi in mattinata dalle 9');
+  });
+
+  it('call venerdì alle 10 fissata mercoledì, adesso venerdì alle 07: oggi in mattinata', () => {
+    const v = gdoReminderVars({
+      nome: null, call: new Date('2026-10-23T08:00:00Z'), nowMs: at('2026-10-23T05:00:00Z'),
+      fissatoIl: new Date('2026-10-21T14:00:00Z'),
+    });
+    expect(v['3']).toBe('oggi in mattinata dalle 9');
+  });
+
+  it('call venerdì alle 9, adesso giovedì alle 9: oggi', () => {
+    const v = gdoReminderVars({
+      nome: null, call: new Date('2026-10-23T07:00:00Z'), nowMs: at('2026-10-22T07:00:00Z'),
+      fissatoIl: new Date('2026-10-21T14:00:00Z'),
+    });
+    expect(v['3']).toBe('oggi');
   });
 
   it('call venerdì alle 18, adesso giovedì alle 18: domani, qualche ora prima', () => {

@@ -102,6 +102,16 @@ export async function rilasciaRecap(
 }
 
 /**
+ * Quando conta come fissata la call, per dire quando chiama Noemi (lib/noemi-quando.ts):
+ * uno spostamento è un fissaggio nuovo, come per la board Conferme del CRM; altrimenti
+ * vale l'arrivo dell'agenda.
+ */
+function fissatoIlRecap(occasione: RecapOccasione, gdoAgendaAt: string | null | undefined, nowMs: number): Date {
+  if (occasione !== 'spostato' && gdoAgendaAt) return new Date(gdoAgendaAt);
+  return new Date(nowMs);
+}
+
+/**
  * Il CRM ci ha appena dato (o cambiato) la data della call di un lead GDO: se il video è
  * già partito e la finestra di 24 ore è aperta, gli mandiamo il recap in testo libero.
  * Torna il tipo mandato, o `null` se non è uscito niente. Non lancia mai: gli errori vanno
@@ -154,7 +164,7 @@ export async function inviaRecapDopoData(
     const call = new Date(appuntamentoAt);
     const body = tipo === 'spostamento'
       ? gdoSpostamentoText({ nome, call })
-      : gdoRecapText({ nome, call, videoLink: null });
+      : gdoRecapText({ nome, call, videoLink: null, fissatoIl: fissatoIlRecap(occasione, conv.gdo_agenda_at, nowMs) });
     const sent = await sendFreeText({ to: phone, body, from: mittenteDiConversazione(conv) });
 
     // Da qui il messaggio è partito: la presa NON si rilascia più, il recap non deve uscire

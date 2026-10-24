@@ -296,6 +296,7 @@ export async function GET(req: NextRequest) {
             videoAppenaConfermato: false,
             botScheduledAt: c.bot_scheduled_at ?? null,
             gdoAppuntamentoAt: c.gdo_appuntamento_at ?? null,
+            fissatoIl: c.gdo_agenda_at ? new Date(c.gdo_agenda_at) : undefined,
           }),
         });
         // Stesse due lavorazioni del drain (lib/fenice-autoreply.ts): un a-capo è una

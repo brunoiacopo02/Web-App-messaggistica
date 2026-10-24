@@ -1,5 +1,5 @@
-import { formatRomeDateTime, giornoRoma, romeDaysBetween, romeHour, romeOffset } from './rome-time';
-import { SOGLIA_STESSO_GIORNO } from './gdo-recap';
+import { formatRomeDateTime, giornoRoma, romeDaysBetween, romeOffset } from './rome-time';
+import { pianoNoemi } from './noemi-quando';
 import { templateName } from './name';
 
 const H = 3600_000;
@@ -127,18 +127,13 @@ export interface GdoReminder24Input {
   nowMs: number;
 }
 
-/** Un istante del giorno in cui chiama Noemi: il giorno prima se la call è
- * prima delle 15, altrimenti lo stesso giorno qualche ora prima (come `quandoNoemi`). */
-function giornoNoemi(call: Date): { giorno: Date; pomeriggio: boolean } {
-  const pomeriggio = romeHour(call) < SOGLIA_STESSO_GIORNO;
-  return { giorno: pomeriggio ? new Date(call.getTime() - 24 * H) : call, pomeriggio };
-}
 
 /**
  * Il primo istante in cui il calendario lascia partire il promemoria T-24h di un lead GDO,
  * o `null` se non partirà più: non prima di r24At, né con l'agenda più giovane di 12 ore,
- * sempre almeno un'ora prima della call e mai dopo il pomeriggio di Noemi (su una call
- * del mattino "oggi pomeriggio" sarebbe falso). Solo date: il resto delle condizioni
+ * sempre almeno un'ora prima della call e mai dopo l'ultima chiamata di Noemi: su una call
+ * delle 9 Noemi chiama solo il giorno prima, e il mattino stesso "ti chiama oggi" sarebbe
+ * falso. Sulle altre l'ultima chiamata è il giorno della call (lib/noemi-quando.ts). Solo date: il resto delle condizioni
  * (video, recap, chat viva) sta in `decideGdoReminder24`.
  */
 function primoIstanteGdoReminder24(i: {
@@ -151,8 +146,8 @@ function primoIstanteGdoReminder24(i: {
   if (Number.isNaN(callMs) || Number.isNaN(agendaMs)) return null;
   const primo = Math.max(i.nowMs, reminderTargets(callMs).r24At, agendaMs + GDO_AGENDA_MIN_MS);
   if (callMs - primo < GDO_ANTICIPO_MIN_MS) return null;
-  const noemi = giornoNoemi(new Date(callMs));
-  if (noemi.pomeriggio && romeDaysBetween(new Date(primo), noemi.giorno) < 0) return null;
+  const noemi = pianoNoemi(new Date(callMs), new Date(agendaMs));
+  if (noemi.caso === 'giorno-prima' && romeDaysBetween(new Date(primo), noemi.giornoPrima) < 0) return null;
   return primo;
 }
 
@@ -176,7 +171,7 @@ export function decideGdoReminder24(i: GdoReminder24Input): 'template' | 'testo'
   // Il promemoria chiede del video: senza video uscito non ha senso.
   if (!i.videoSentAt || !i.appuntamentoAt) return null;
 
-  // Le regole di calendario (r24At, agenda di almeno 12 ore, anticipo, pomeriggio di
+  // Le regole di calendario (r24At, agenda di almeno 12 ore, anticipo, giorno di
   // Noemi) sono quelle di `gdoReminder24Raggiungibile`: qui si parte solo se il primo
   // istante utile è adesso.
   const primo = primoIstanteGdoReminder24(i);
@@ -190,24 +185,41 @@ export function decideGdoReminder24(i: GdoReminder24Input): 'template' | 'testo'
   return daUltimoInbound !== null && daUltimoInbound < GDO_FINESTRA_MS ? 'testo' : 'template';
 }
 
-/** Quando chiama Noemi, detto rispetto a oggi: "oggi pomeriggio", "domani, qualche ora prima"… */
-function noemiRelativo(call: Date, nowMs: number): string {
-  const noemi = giornoNoemi(call);
-  const suffisso = noemi.pomeriggio ? ' pomeriggio' : ', qualche ora prima';
-  const giorni = romeDaysBetween(new Date(nowMs), noemi.giorno);
-  if (giorni === 0) return `oggi${suffisso}`;
-  if (giorni === 1) return `domani${suffisso}`;
-  return `${giornoRoma(noemi.giorno)} pomeriggio`;
+/**
+ * Quando chiama Noemi, detto rispetto a oggi: "domani, qualche ora prima", "oggi in mattinata
+ * dalle 9", "oggi, e se non ti trova domani in mattinata dalle 9"… La regola sta in
+ * lib/noemi-quando.ts e conta da quando è stata fissata la call (`fissatoIl`).
+ */
+function noemiRelativo(call: Date, nowMs: number, fissatoIl: Date): string {
+  const now = new Date(nowMs);
+  const relativo = (d: Date) => {
+    const giorni = romeDaysBetween(now, d);
+    if (giorni === 0) return 'oggi';
+    if (giorni === 1) return 'domani';
+    return giornoRoma(d);
+  };
+  const { caso, giornoPrima } = pianoNoemi(call, fissatoIl);
+  const mattina = `${relativo(call)} in mattinata dalle 9`;
+  switch (caso) {
+    case 'pomeriggio': return `${relativo(call)}, qualche ora prima`;
+    case 'mattina-stessa': return mattina;
+    case 'giorno-prima': return relativo(giornoPrima);
+    case 'giorno-prima-poi-mattina':
+      // Passato il giorno prima resta solo la chiamata del mattino.
+      return romeDaysBetween(now, giornoPrima) < 0
+        ? mattina
+        : `${relativo(giornoPrima)}, e se non ti trova ${mattina}`;
+  }
 }
 
 export type GdoReminderVars = { '1': string; '2': string; '3': string };
 
 /** Variabili del template `fenice_reminder_24h_gdo_v1`. */
-export function gdoReminderVars(i: { nome: string | null; call: Date; nowMs: number }): GdoReminderVars {
+export function gdoReminderVars(i: { nome: string | null; call: Date; nowMs: number; fissatoIl?: Date }): GdoReminderVars {
   return {
     '1': templateName(i.nome),
     '2': formatRomeDateTime(i.call.toISOString()),
-    '3': noemiRelativo(i.call, i.nowMs),
+    '3': noemiRelativo(i.call, i.nowMs, i.fissatoIl ?? new Date(i.nowMs)),
   };
 }
 

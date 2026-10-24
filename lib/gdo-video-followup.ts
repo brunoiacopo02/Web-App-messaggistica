@@ -87,7 +87,7 @@ export function decideGdoVideoFollowup(i: GdoFollowupInput): GdoFollowupAction {
 
   // Con la data nota il promemoria del giorno prima fa anche da sollecito (chiede del
   // video): il lead non riceve due messaggi programmati per la stessa cosa. Solo se il
-  // promemoria partirà davvero: senza video o col pomeriggio di Noemi già passato non
+  // promemoria partirà davvero: senza video o col giorno di Noemi già passato non
   // parte, e lo slot mattina resta l'unico messaggio.
   if (i.slot === 'mattina' && i.promemoriaGdoAttivo && i.promemoriaGdoPossibile && hasValidAppointment) return 'none';
 

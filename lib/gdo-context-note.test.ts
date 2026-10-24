@@ -72,7 +72,7 @@ describe('contenuto del promemoria Noemi', () => {
   });
 
   it('scrive il giorno della chiamata di Noemi per intero, col numero', () => {
-    const mattina = gdoContextNote(base({ videoAppenaConfermato: true, gdoAppuntamentoAt: '2026-10-23T10:00:00+02:00', now: new Date('2026-10-20T11:00:00+02:00') }));
+    const mattina = gdoContextNote(base({ videoAppenaConfermato: true, gdoAppuntamentoAt: '2026-10-23T10:00:00+02:00', fissatoIl: new Date('2026-10-20T11:00:00+02:00') }));
     expect(mattina).toContain('la call è venerdì 23 alle 10:00');
     expect(mattina).toContain('giovedì 22');
     const sera = gdoContextNote(base({ videoAppenaConfermato: true, gdoAppuntamentoAt: '2026-10-23T18:00:00+02:00' }));
@@ -121,9 +121,9 @@ const baseNoemi = {
 // PO 24/10/2026: dal 27/10 Noemi attacca alle 9 e le call del mattino si chiamano la
 // mattina stessa. Il giorno prima si chiamano solo quelle fissate con anticipo (e le 9).
 describe('nota Noemi: dipende dall ora dell appuntamento e da quanto manca', () => {
-  const now = new Date('2026-10-26T11:00:00+01:00'); // lunedì 26/10
+  const now = new Date('2026-10-26T11:00:00+01:00'); // lunedì 26/10, quando si fissa
   const nota = (iso: string, extra: Partial<GdoNoteInput> = {}) =>
-    gdoContextNote({ ...baseNoemi, botScheduledAt: iso, gdoAppuntamentoAt: null, now, ...extra });
+    gdoContextNote({ ...baseNoemi, botScheduledAt: iso, gdoAppuntamentoAt: null, fissatoIl: now, ...extra });
 
   it('mattina di domani: la mattina stessa, dalle 9', () => {
     const n = nota('2026-10-27T10:00:00+01:00');
@@ -149,7 +149,7 @@ describe('nota Noemi: dipende dall ora dell appuntamento e da quanto manca', () 
 
   it('il giorno prima di un lunedì è il sabato, non la domenica', () => {
     const giovedi = new Date('2026-10-22T11:00:00+02:00');
-    const n = nota('2026-10-26T09:00:00+01:00', { now: giovedi });
+    const n = nota('2026-10-26T09:00:00+01:00', { fissatoIl: giovedi });
     expect(n).toContain('il giorno prima, sabato 24');
   });
 
@@ -173,7 +173,7 @@ describe('nota Noemi: dipende dall ora dell appuntamento e da quanto manca', () 
   });
 
   it('senza nessuna data non inventa un orario', () => {
-    const n = gdoContextNote({ ...baseNoemi, botScheduledAt: null, gdoAppuntamentoAt: null, now });
+    const n = gdoContextNote({ ...baseNoemi, botScheduledAt: null, gdoAppuntamentoAt: null, fissatoIl: now });
     expect(n).not.toContain('il giorno prima');
     expect(n).not.toContain('lo stesso giorno');
     expect(n).toContain('PROMEMORIA NOEMI');
