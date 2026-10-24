@@ -545,7 +545,8 @@ export async function drainMarioReplies(
   // Non incrementato qui: il contatore dei solleciti lo muove solo il cron dedicato.
   const gdoFollowupsSent = gdo.gdo_video_followups_sent ?? 0;
   let gdoNoemiRemindedAt = gdo.gdo_noemi_reminded_at ?? null;
-  // Ora vera della call: serve a dire a quando chiama Noemi (mattina ⇒ pomeriggio prima).
+  // Ora vera della call: serve a dire quando chiama Noemi (mattina di domani ⇒ la mattina stessa,
+  // mattina più in là ⇒ già il giorno prima; vedi quandoChiamaNoemi).
   const botScheduledAt = gdo.bot_scheduled_at ?? null;
   const gdoAppuntamentoAt = gdo.gdo_appuntamento_at ?? null;
   // Il recap GDO gia' uscito per questa call (vedi lib/gdo-recap.ts). `let`: dopo la

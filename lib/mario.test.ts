@@ -275,10 +275,11 @@ describe('generateMarioReply — i giorni prenotabili escono col risultato', () 
     for (const g of r.bookingDays!) expect(system).toContain(g);
   });
 
-  it('alle 20:10 la finestra è già ruotata: sono quelli nuovi a viaggiare, non i vecchi', async () => {
+  // Dal 26/10/2026 la finestra ruota a mezzanotte, non più alle 20:00.
+  it('a mezzanotte la finestra è già ruotata: sono quelli nuovi a viaggiare, non i vecchi', async () => {
     messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'Ok!' }] });
     const r = await generateMarioReply([{ role: 'user', content: 'ok' }], {
-      now: new Date('2026-09-10T18:10:00Z'),
+      now: new Date('2026-09-10T22:10:00Z'), // 00:10 di venerdì 11 a Roma
     });
     // Sabato 12 e lunedì 14: domenica 13 non è mai prenotabile.
     expect(r.bookingDays).toEqual(['2026-09-12', '2026-09-14']);

@@ -146,10 +146,15 @@ describe('conferme: anticipo e micro-impegni', () => {
   // Decisione PO 22/10/2026: con lead dall'italiano di base la chiamata di Noemi va detta
   // chiara, anche a costo di essere duri. Resta la via d'uscita del richiamo.
   // Visto in produzione il 22/10: per una call delle 16 il modello scriveva "ti chiama
-  // sabato nel primo mattino". Noemi attacca alle 13.
-  it('[QUANDO] ha solo due forme, sempre di pomeriggio, mai la mattina', () => {
+  // sabato nel primo mattino". Dal 27/10/2026 (PO 24/10) Noemi attacca alle 9 e le call del
+  // mattino si chiamano la mattina stessa: le forme di [QUANDO] diventano quattro.
+  it('[QUANDO] ha quattro forme, una per caso, e il pomeriggio resta com era', () => {
+    expect(p).toContain('[QUANDO] ha sempre e solo una di queste quattro forme');
     expect(p).toContain('nel pomeriggio, qualche ora prima della videochiamata');
-    expect(p).toContain('Mai "mattina", "primo mattino" o "mattinata" in [QUANDO]');
+    expect(p).toContain('in mattinata, dalle 9, prima della videochiamata');
+    expect(p).toContain('e se non ti trova');
+    expect(p).not.toContain('Mai "mattina", "primo mattino" o "mattinata" in [QUANDO]');
+    expect(p).not.toContain('Noemi la mattina non chiama');
   });
 
   it('dice chiaro che senza la risposta a Noemi la videochiamata non è confermata', () => {
@@ -828,33 +833,32 @@ describe('CHI È NOEMI E QUANDO CHIAMA', () => {
     expect(p).toContain('non chiamarla mai "la consulente" o "la tutor"');
   });
 
-  it('lega l orario della chiamata all ora della call, con la soglia delle 15', () => {
+  // Dal 27/10/2026 (PO 24/10) Noemi attacca alle 9: le call del mattino si chiamano la
+  // mattina stessa, il giorno prima solo se fissate con anticipo, e le 9 sempre il giorno
+  // prima. Dalle 15 non cambia niente.
+  it('lega l orario della chiamata all ora della call e a quanto manca', () => {
     expect(p).toContain('call dalle 15:00 in poi');
-    expect(p).toContain('call PRIMA DELLE 15:00');
-    expect(p).toContain('il POMERIGGIO DEL GIORNO PRIMA');
+    expect(p).toContain('Noemi attacca alle 9:00');
+    expect(p).toContain('call del mattino (10:00-14:00) DOMANI');
+    expect(p).toContain('call del mattino (10:00-14:00) PIÙ IN LÀ');
+    expect(p).toContain('call alle 9:00');
   });
 
-  // Noemi attacca alle 13:00 (quella resta la sua ora vera), ma "qualche ora prima" di
-  // una call alle 13 o alle 14 cadrebbe prima delle 13, quando Noemi non c'è ancora: al
-  // committente questo spostava la soglia fra i due rami da 13:00 a 15:00 (02/09).
-  it("non promette mai un anticipo prima delle 13, quando Noemi non c'è", () => {
-    expect(p).toContain("prima di quell'ora non chiama mai");
-    expect(p).toContain('Mai la mattina');
-  });
-
-  it('copre esplicitamente le call delle 13 e delle 14 chiamando il giorno prima', () => {
-    expect(p).toMatch(/call.*delle 13 e delle 14/);
+  it('non dice più che Noemi la mattina non c è', () => {
+    expect(p).not.toContain('Noemi attacca alle 13:00');
+    expect(p).not.toContain('Mai la mattina stessa');
+    expect(p).not.toContain('il POMERIGGIO DEL GIORNO PRIMA');
   });
 
   it('vieta le frasi che fanno tenere il telefono nel momento sbagliato', () => {
     for (const frase of [
       'ti chiama poco prima',
       'ti chiama qualche minuto prima',
-      'ti chiama la mattina stessa',
       'ti sta per chiamare',
     ]) {
       expect(p).toContain(frase);
     }
+    expect(p).not.toContain('"ti chiama la mattina stessa"');
     expect(p).toContain('Queste frasi sono SBAGLIATE');
   });
 

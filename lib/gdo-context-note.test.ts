@@ -72,9 +72,9 @@ describe('contenuto del promemoria Noemi', () => {
   });
 
   it('scrive il giorno della chiamata di Noemi per intero, col numero', () => {
-    const mattina = gdoContextNote(base({ videoAppenaConfermato: true, gdoAppuntamentoAt: '2026-10-23T10:00:00+02:00' }));
+    const mattina = gdoContextNote(base({ videoAppenaConfermato: true, gdoAppuntamentoAt: '2026-10-23T10:00:00+02:00', now: new Date('2026-10-20T11:00:00+02:00') }));
     expect(mattina).toContain('la call è venerdì 23 alle 10:00');
-    expect(mattina).toContain('giovedì 22 nel pomeriggio');
+    expect(mattina).toContain('giovedì 22');
     const sera = gdoContextNote(base({ videoAppenaConfermato: true, gdoAppuntamentoAt: '2026-10-23T18:00:00+02:00' }));
     expect(sera).toContain('lo stesso giorno, venerdì 23');
   });
@@ -118,80 +118,65 @@ const baseNoemi = {
   videoAppenaConfermato: true,
 };
 
-describe('nota Noemi: dipende dall ora dell appuntamento', () => {
-  it('appuntamento di mattina: Noemi chiama il pomeriggio prima', () => {
-    const nota = gdoContextNote({
-      ...baseNoemi,
-      botScheduledAt: '2026-09-11T10:00:00+02:00',
-      gdoAppuntamentoAt: null,
-    });
-    expect(nota).toContain('il pomeriggio del giorno prima');
-    expect(nota).not.toContain('lo stesso giorno');
+// PO 24/10/2026: dal 27/10 Noemi attacca alle 9 e le call del mattino si chiamano la
+// mattina stessa. Il giorno prima si chiamano solo quelle fissate con anticipo (e le 9).
+describe('nota Noemi: dipende dall ora dell appuntamento e da quanto manca', () => {
+  const now = new Date('2026-10-26T11:00:00+01:00'); // lunedì 26/10
+  const nota = (iso: string, extra: Partial<GdoNoteInput> = {}) =>
+    gdoContextNote({ ...baseNoemi, botScheduledAt: iso, gdoAppuntamentoAt: null, now, ...extra });
+
+  it('mattina di domani: la mattina stessa, dalle 9', () => {
+    const n = nota('2026-10-27T10:00:00+01:00');
+    expect(n).toContain('la mattina stessa, martedì 27 dalle 9');
+    expect(n).not.toContain('il giorno prima');
   });
 
-  it('appuntamento di pomeriggio: Noemi chiama lo stesso giorno', () => {
-    const nota = gdoContextNote({
-      ...baseNoemi,
-      botScheduledAt: '2026-09-11T16:00:00+02:00',
-      gdoAppuntamentoAt: null,
-    });
-    expect(nota).toContain('lo stesso giorno');
+  it('mattina di dopodomani: il giorno prima, e se non lo trova la mattina stessa', () => {
+    const n = nota('2026-10-28T11:00:00+01:00');
+    expect(n).toContain('il giorno prima, martedì 27');
+    expect(n).toContain('la mattina stessa, mercoledì 28 dalle 9');
   });
 
-  it('appuntamento alle 13:00: sotto soglia, Noemi chiama il giorno prima', () => {
-    const nota = gdoContextNote({
-      ...baseNoemi,
-      botScheduledAt: '2026-09-11T13:00:00+02:00',
-      gdoAppuntamentoAt: null,
-    });
-    expect(nota).toContain('il pomeriggio del giorno prima');
-    expect(nota).not.toContain('lo stesso giorno');
+  it('le 14 di domani sono ancora mattina: la mattina stessa', () => {
+    expect(nota('2026-10-27T14:00:00+01:00')).toContain('la mattina stessa');
   });
 
-  it('appuntamento alle 14:00: sotto soglia, Noemi chiama il giorno prima', () => {
-    const nota = gdoContextNote({
-      ...baseNoemi,
-      botScheduledAt: '2026-09-11T14:00:00+02:00',
-      gdoAppuntamentoAt: null,
-    });
-    expect(nota).toContain('il pomeriggio del giorno prima');
-    expect(nota).not.toContain('lo stesso giorno');
+  it('le 9: sempre il giorno prima, mai la mattina stessa', () => {
+    const n = nota('2026-10-27T09:00:00+01:00');
+    expect(n).toContain('il giorno prima, lunedì 26');
+    expect(n).not.toContain('la mattina stessa');
   });
 
-  it('appuntamento alle 15:00: soglia raggiunta, Noemi chiama lo stesso giorno', () => {
-    const nota = gdoContextNote({
-      ...baseNoemi,
-      botScheduledAt: '2026-09-11T15:00:00+02:00',
-      gdoAppuntamentoAt: null,
-    });
-    expect(nota).toContain('lo stesso giorno');
-    expect(nota).not.toContain('il pomeriggio del giorno prima');
+  it('il giorno prima di un lunedì è il sabato, non la domenica', () => {
+    const giovedi = new Date('2026-10-22T11:00:00+02:00');
+    const n = nota('2026-10-26T09:00:00+01:00', { now: giovedi });
+    expect(n).toContain('il giorno prima, sabato 24');
   });
 
-  it('appuntamento alle 18:00: stesso giorno', () => {
-    const nota = gdoContextNote({
-      ...baseNoemi,
-      botScheduledAt: '2026-09-11T18:00:00+02:00',
-      gdoAppuntamentoAt: null,
-    });
-    expect(nota).toContain('lo stesso giorno');
-    expect(nota).not.toContain('il pomeriggio del giorno prima');
+  it('dalle 15 in poi: lo stesso giorno, qualche ora prima (invariato)', () => {
+    for (const iso of ['2026-10-27T15:00:00+01:00', '2026-10-27T18:00:00+01:00', '2026-10-28T16:00:00+01:00']) {
+      const n = nota(iso);
+      expect(n).toContain('lo stesso giorno');
+      expect(n).not.toContain('il giorno prima');
+    }
+  });
+
+  it('non dice più che Noemi la mattina non chiama', () => {
+    const n = nota('2026-10-27T10:00:00+01:00');
+    expect(n).not.toContain('non la mattina della call');
+    expect(n).not.toContain('nel pomeriggio');
   });
 
   it('vince la data piu recente fra le due colonne', () => {
-    const nota = gdoContextNote({
-      ...baseNoemi,
-      botScheduledAt: '2026-09-11T10:00:00+02:00',
-      gdoAppuntamentoAt: '2026-09-12T16:00:00+02:00',
-    });
-    expect(nota).toContain('lo stesso giorno');
+    const n = nota('2026-10-27T10:00:00+01:00', { gdoAppuntamentoAt: '2026-10-28T16:00:00+01:00' });
+    expect(n).toContain('lo stesso giorno');
   });
 
   it('senza nessuna data non inventa un orario', () => {
-    const nota = gdoContextNote({ ...baseNoemi, botScheduledAt: null, gdoAppuntamentoAt: null });
-    expect(nota).not.toContain('il pomeriggio del giorno prima');
-    expect(nota).not.toContain('lo stesso giorno');
-    expect(nota).toContain('PROMEMORIA NOEMI');
+    const n = gdoContextNote({ ...baseNoemi, botScheduledAt: null, gdoAppuntamentoAt: null, now });
+    expect(n).not.toContain('il giorno prima');
+    expect(n).not.toContain('lo stesso giorno');
+    expect(n).toContain('PROMEMORIA NOEMI');
   });
 });
 
