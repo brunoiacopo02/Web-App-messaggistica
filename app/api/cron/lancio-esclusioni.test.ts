@@ -325,6 +325,16 @@ describe('precall-reminders: nessun promemoria sulle chat del lancio', () => {
     const destinatari = sendTemplateAndLog.mock.calls.map((c) => c[2]);
     expect(destinatari).toEqual([tel(2), tel(3)]);
   });
+
+  it('il promemoria non arriva a un lead parcheggiato dalle Conferme (da_rifissare)', async () => {
+    stato.righe.crm_lead_status = [
+      { lead_id: 'L3', conversation_id: 3, conferme_outcome: 'da_rifissare' },
+      { lead_id: 'L2', conversation_id: 2, conferme_outcome: 'confermato' },
+    ];
+    await richiestaGet(precallReminders, '/api/cron/precall-reminders');
+    const destinatari = sendTemplateAndLog.mock.calls.map((c) => c[2]);
+    expect(destinatari).toEqual([tel(2)]);
+  });
 });
 
 // ─────────────────────────── gdo-video-followups ───────────────────────────
@@ -357,6 +367,14 @@ describe('gdo-video-followups: nessun sollecito sulle chat del lancio', () => {
   it('il lancio in corso non entra nel giro dei solleciti, il lancio chiuso sì', async () => {
     await richiestaGet(gdoVideoFollowups, '/api/cron/gdo-video-followups');
     expect(convLette()).toEqual([2, 3]);
+  });
+
+  it('un lead parcheggiato dalle Conferme (da_rifissare) non riceve video né solleciti', async () => {
+    stato.righe.crm_lead_status = [{ lead_id: 'L3', conversation_id: 3, conferme_outcome: 'da_rifissare' }];
+    const body = await (await richiestaGet(gdoVideoFollowups, '/api/cron/gdo-video-followups')).json();
+    const destinatari = sendTemplateAndLog.mock.calls.map((c) => c[2]);
+    expect(destinatari).not.toContain(tel(3));
+    expect(body.report).toContainEqual({ id: 3, action: 'skip', reason: 'parcheggiato' });
   });
 });
 

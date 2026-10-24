@@ -118,6 +118,7 @@ export type Database = {
           gdo_recap_for_at: string | null
           gdo_reminder24_for_at: string | null
           gdo_appuntamento_set_at: string | null
+          conf_richiamo_sollecito_for_at: string | null
           gdo_recap_sent_at: string | null
           gdo_warmup_closed_at: string | null
           gdo_warmup_step: number | null
@@ -175,6 +176,7 @@ export type Database = {
           gdo_recap_for_at?: string | null
           gdo_reminder24_for_at?: string | null
           gdo_appuntamento_set_at?: string | null
+          conf_richiamo_sollecito_for_at?: string | null
           gdo_recap_sent_at?: string | null
           gdo_warmup_closed_at?: string | null
           gdo_warmup_step?: number | null
@@ -232,6 +234,7 @@ export type Database = {
           gdo_recap_for_at?: string | null
           gdo_reminder24_for_at?: string | null
           gdo_appuntamento_set_at?: string | null
+          conf_richiamo_sollecito_for_at?: string | null
           gdo_recap_sent_at?: string | null
           gdo_warmup_closed_at?: string | null
           gdo_warmup_step?: number | null
@@ -261,7 +264,7 @@ export type Database = {
         ]
       }
       // NB: tabella aggiunta a mano (migration 20260827000001_crm_lead_status, colonne
-      // contatto_umano_* dalla 20260829000001) in attesa
+      // contatto_umano_* dalla 20260829000001, recall_at dalla 20261024000002) in attesa
       // del prossimo `npm run supabase:gen-types`, che la riprodurrà identica.
       // Colonne `lancio_*` di conversations aggiunte a mano (migration 20260914000001_lancio_webdev).
       crm_lead_status: {
@@ -285,6 +288,7 @@ export type Database = {
           lead_id: string
           presented: boolean
           presented_at: string | null
+          recall_at: string | null
           sales_outcome: string | null
           sales_outcome_at: string | null
           sold: boolean
@@ -313,6 +317,7 @@ export type Database = {
           lead_id: string
           presented?: boolean
           presented_at?: string | null
+          recall_at?: string | null
           sales_outcome?: string | null
           sales_outcome_at?: string | null
           sold?: boolean
@@ -341,6 +346,7 @@ export type Database = {
           lead_id?: string
           presented?: boolean
           presented_at?: string | null
+          recall_at?: string | null
           sales_outcome?: string | null
           sales_outcome_at?: string | null
           sold?: boolean

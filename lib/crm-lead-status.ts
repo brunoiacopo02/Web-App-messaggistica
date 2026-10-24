@@ -28,6 +28,9 @@ export type CrmLeadStatus = {
   soldAmountEur?: number | string | null;
   discardReason?: string | null;
   agendaStatus?: string | null;
+  /** Il richiamo blu delle Conferme: c'e' quando il lead e' parcheggiato senza data
+   *  (`confermeOutcome = 'da_rifissare'`) e dice quando lo richiamano (dal 24/10/2026). */
+  recallAt?: string | null;
   /** Che fine ha fatto la richiesta di parlare con una persona (dal 29/08/2026).
    *  Assente per i lead che non ne hanno mai fatta una: e' un blocco, non un campo. */
   contattoUmano?: ContattoUmanoStatus | null;
@@ -76,6 +79,7 @@ export type CrmLeadStatusRow = {
   sold_amount_eur: number | null;
   discard_reason: string | null;
   agenda_status: string | null;
+  recall_at: string | null;
   contatto_umano_stato: string | null;
   contatto_umano_preso_da: string | null;
   contatto_umano_preso_il: string | null;
@@ -154,6 +158,7 @@ export function toRow(lead: CrmLeadStatus, conversationId: number | null): CrmLe
     sold_amount_eur: importo(lead.soldAmountEur),
     discard_reason: testo(lead.discardReason),
     agenda_status: testo(lead.agendaStatus),
+    recall_at: testo(lead.recallAt),
     // Il blocco puo' non esserci (lead che non ha mai chiesto una persona) o arrivare
     // mezzo vuoto (richiesta ancora `pending`, quindi senza esito): si legge campo per
     // campo, senza pretendere l'oggetto intero.

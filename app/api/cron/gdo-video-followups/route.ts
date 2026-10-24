@@ -22,6 +22,7 @@ import { templateName } from '@/lib/name';
 import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
 import { mittenteDiConversazione, numeroPrimario } from '@/lib/mittente';
+import { conversazioniParcheggiate } from '@/lib/conf-richiamo';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -130,6 +131,9 @@ export async function GET(req: NextRequest) {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const convs = (data ?? []) as any[];
+  // Lead parcheggiati dalle Conferme (da_rifissare): video e solleciti parlano di una
+  // call che non c'è più. Li scrive il sollecito del richiamo (precall-reminders).
+  const parcheggiate = await conversazioniParcheggiate(supabase, convs.map((c) => c.id as number));
   const report: Record<string, unknown>[] = [];
   let sent = 0;
 
@@ -137,6 +141,7 @@ export async function GET(req: NextRequest) {
     try {
       const phone = c.leads?.phone_e164 as string | undefined;
       if (!phone) { report.push({ id: c.id, action: 'skip', reason: 'no_phone' }); continue; }
+      if (parcheggiate.has(c.id)) { report.push({ id: c.id, action: 'skip', reason: 'parcheggiato' }); continue; }
       // Il numero con cui l'agenda e' partita: video e solleciti restano su quello. Il
       // `?? primario` e' solo per il tipo — col primario configurato non e' mai undefined.
       const from = mittenteDiConversazione(c) ?? primario;

@@ -19,10 +19,19 @@ import { sendTemplateAndLog } from '@/lib/messaging';
 const NOW = Date.parse('2026-10-22T13:00:00Z'); // 15:00 a Roma
 const CALL = '2026-10-23T12:00:00.000Z'; // domani 14:00 a Roma: Noemi oggi pomeriggio
 
-function makeDb(conv: Record<string, any>, opts: { eventoNonScritto?: boolean } = {}) {
+function makeDb(conv: Record<string, any>, opts: { eventoNonScritto?: boolean; parcheggiata?: boolean } = {}) {
   const events: any[] = [];
   const supabase: any = {
     from(table: string) {
+      if (table === 'crm_lead_status') {
+        // Le conversazioni parcheggiate dalle Conferme (esito da_rifissare).
+        const q: any = {};
+        for (const m of ['select', 'eq', 'in']) q[m] = () => q;
+        q.then = (resolve: any) => resolve({
+          data: opts.parcheggiata ? [{ conversation_id: conv.id }] : [], error: null,
+        });
+        return q;
+      }
       if (table === 'conversations') {
         return {
           // La select dei candidati: torna la riga viva.
@@ -160,6 +169,13 @@ describe('promemoria GDO del giorno prima: la presa sta sulla colonna, prima del
     await giro();
     expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
     expect(db.conv.gdo_reminder24_for_at).toBe(CALL);
+  });
+
+  it('lead parcheggiato dalle Conferme (da_rifissare): niente promemoria, nessuna presa', async () => {
+    db = makeDb(conv(), { parcheggiata: true });
+    await giro();
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+    expect(db.conv.gdo_reminder24_for_at).toBeNull();
   });
 
   it('la stessa call già presa (scritta in un altro fuso) non riparte', async () => {

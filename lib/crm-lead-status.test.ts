@@ -139,6 +139,18 @@ describe('toRow', () => {
     expect(toRow(p.page.leads[0], null).sold_amount_eur).toBeNull();
   });
 
+  it('porta il richiamo blu delle Conferme su recall_at', () => {
+    const row = toRow({ leadId: 'abc', updatedAt: '2026-10-24T09:00:00.000Z',
+      confermeOutcome: 'da_rifissare', recallAt: '2026-10-24T16:00:00+02:00' }, 7);
+    expect(row.recall_at).toBe('2026-10-24T16:00:00+02:00');
+  });
+
+  it('senza richiamo, o con un richiamo vuoto, recall_at resta null', () => {
+    expect(toRow({ leadId: 'abc', updatedAt: '2026-10-24T09:00:00.000Z' }, 7).recall_at).toBeNull();
+    expect(toRow({ leadId: 'abc', updatedAt: '2026-10-24T09:00:00.000Z', recallAt: '' }, 7).recall_at).toBeNull();
+    expect(toRow({ leadId: 'abc', updatedAt: '2026-10-24T09:00:00.000Z', recallAt: null }, 7).recall_at).toBeNull();
+  });
+
   it('senza conversazione agganciata la colonna resta null', () => {
     const p = parseLeadStatusPage({ leads: [LEAD], hasMore: false });
     if (!p.ok) throw new Error('pagina non valida');

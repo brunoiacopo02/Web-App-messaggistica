@@ -38,7 +38,7 @@ const WINDOW_START_MIN = 8 * 60 + 30;
 const WINDOW_END_MIN = 20 * 60 + 30;
 
 /** Clampa `ms` dentro la fascia 08:30-20:30 Europe/Rome dello stesso giorno solare Rome. */
-function clampToSendWindow(ms: number): number {
+export function clampToSendWindow(ms: number): number {
   const p = romeParts(ms);
   const minsOfDay = p.hh * 60 + p.mm;
   if (minsOfDay < WINDOW_START_MIN) return romeLocalMs(p.y, p.m, p.d, 8, 30);

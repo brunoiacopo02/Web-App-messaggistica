@@ -12,6 +12,10 @@ import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
 import { mittenteDiConversazione } from '@/lib/mittente';
 import { fissatoIlDi } from '@/lib/noemi-quando';
+import {
+  decideSollecitoRichiamo, sollecitoRichiamoText, conversazioniParcheggiate,
+  claimSollecitoRichiamo, rilasciaSollecitoRichiamo, ESITO_PARCHEGGIATO,
+} from '@/lib/conf-richiamo';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,6 +30,10 @@ export const maxDuration = 120;
 //
 // Secondo ramo, con interruttore suo (GDO_PRECALL_24H_ENABLED): il solo T-24h per i
 // lead fissati da un GDO, vedi `promemoriaGdo` in fondo.
+//
+// Terzo ramo (CONF_RICHIAMO_SOLLECITO_ENABLED): il sollecito prima del richiamo blu
+// delle Conferme, vedi `promemoriaRichiamo`. Sui lead parcheggiati dalle Conferme
+// (esito da_rifissare) i promemoria dei primi due rami non partono: la call non c'è più.
 
 const H = 3600_000;
 
@@ -43,13 +51,15 @@ type EsitoRamo = { sent: number; skipped: number; config?: true };
 export async function GET(req: NextRequest) {
   if (!authorized(req)) return new NextResponse('unauthorized', { status: 401 });
 
-  // Due rami, ognuno col suo interruttore: i promemoria degli appuntamenti fissati dal
-  // bot (T-24h e T-3h) e il T-24h dei lead fissati da un GDO, con dentro Noemi.
+  // Tre rami, ognuno col suo interruttore: i promemoria degli appuntamenti fissati dal
+  // bot (T-24h e T-3h), il T-24h dei lead fissati da un GDO, con dentro Noemi, e il
+  // sollecito prima del richiamo delle Conferme.
   const botAcceso = process.env.PRECALL_REMINDERS_ENABLED === '1';
   const gdoAcceso = process.env.GDO_PRECALL_24H_ENABLED === '1';
+  const richiamoAcceso = process.env.CONF_RICHIAMO_SOLLECITO_ENABLED === '1';
 
   // Kill-switch: uscita immediata, prima di toccare Supabase o Twilio.
-  if (!botAcceso && !gdoAcceso) {
+  if (!botAcceso && !gdoAcceso && !richiamoAcceso) {
     return NextResponse.json({ ok: true, skipped: 'disabled' });
   }
 
@@ -57,6 +67,7 @@ export async function GET(req: NextRequest) {
   const now = Date.now();
   const bot = botAcceso ? await promemoriaBot(supabase, now) : null;
   const gdo = gdoAcceso ? await promemoriaGdo(supabase, now) : null;
+  const richiamo = richiamoAcceso ? await promemoriaRichiamo(supabase, now) : null;
 
   // Col solo ramo del bot acceso la risposta resta quella di sempre.
   const base = bot
@@ -64,7 +75,7 @@ export async function GET(req: NextRequest) {
       ? { ok: true, sent: 0, skipped: 'config' }
       : { ok: true, sent: bot.sent, skipped: bot.skipped }
     : { ok: true, sent: 0, skipped: 0 };
-  return NextResponse.json(gdo ? { ...base, gdo } : base);
+  return NextResponse.json({ ...base, ...(gdo ? { gdo } : {}), ...(richiamo ? { richiamo } : {}) });
 }
 
 /** Promemoria T-24h e T-3h degli appuntamenti fissati dal bot (bot_outcome = 'APPUNTAMENTO'). */
@@ -127,6 +138,8 @@ async function promemoriaBot(supabase: Supa, now: number): Promise<EsitoRamo> {
 
   if (convs.length > 0) {
     const convIds = convs.map((c) => c.id as number);
+    // Lead parcheggiati dalle Conferme: la call che il promemoria ricorda non c'è più.
+    const parcheggiate = await conversazioniParcheggiate(supabase, convIds);
 
     // Un'unica query per sapere quali promemoria sono già stati inviati su queste
     // conversazioni: idempotenza derivata da messages.template_sid. Le righe
@@ -159,7 +172,7 @@ async function promemoriaBot(supabase: Supa, now: number): Promise<EsitoRamo> {
       const phone = c.leads?.phone_e164 as string | undefined;
       const scheduledAtRaw = c.bot_scheduled_at as string | null;
       const scheduledAt = scheduledAtRaw ? Date.parse(scheduledAtRaw) : NaN;
-      if (!phone || Number.isNaN(scheduledAt)) {
+      if (!phone || Number.isNaN(scheduledAt) || parcheggiate.has(c.id as number)) {
         skipped++;
         continue;
       }
@@ -275,13 +288,17 @@ async function promemoriaGdo(supabase: Supa, now: number): Promise<EsitoRamo> {
     .lte('gdo_appuntamento_at', new Date(now + 30 * H).toISOString());
   if (convErr) await logCronQueryError(supabase, 'precall_reminders_gdo_query_error', convErr);
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const candidati = (convData ?? []) as any[];
+  // Lead parcheggiati dalle Conferme: niente "ti ricordo la call", la call non c'è più.
+  const parcheggiate = await conversazioniParcheggiate(supabase, candidati.map((c) => c.id as number));
+
   let sent = 0;
   let skipped = 0;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  for (const c of (convData ?? []) as any[]) {
+  for (const c of candidati) {
     const phone = c.leads?.phone_e164 as string | undefined;
     const callMs = c.gdo_appuntamento_at ? Date.parse(c.gdo_appuntamento_at) : NaN;
-    if (!phone || Number.isNaN(callMs)) {
+    if (!phone || Number.isNaN(callMs) || parcheggiate.has(c.id as number)) {
       skipped++;
       continue;
     }
@@ -388,6 +405,156 @@ async function promemoriaGdo(supabase: Supa, now: number): Promise<EsitoRamo> {
       type: 'gdo_reminder24_sent',
       payload: { conversationId: c.id, appuntamentoAt, canale } as never,
       message: `[precall] conv ${c.id}: promemoria GDO del giorno prima (${canale})`,
+      level: 'info',
+    });
+  }
+  return { sent, skipped };
+}
+
+/**
+ * Il sollecito prima del richiamo blu delle Conferme: il lead è parcheggiato senza data
+ * (da_rifissare) e Noemi lo richiama all'ora di `recall_at`. Circa due ore prima il bot
+ * gli scrive che lo chiamerà e di guardare il video. Template opzionale
+ * (`CONF_RICHIAMO_TEMPLATE_SID`): senza, si scrive solo a chi è dentro le 24 ore e gli
+ * altri si saltano in silenzio. "Già inviato" è `conversations.conf_richiamo_sollecito_for_at`,
+ * presa PRIMA dell'invio col richiamo: un richiamo spostato riapre il sollecito.
+ */
+async function promemoriaRichiamo(supabase: Supa, now: number): Promise<EsitoRamo> {
+  const sid = process.env.CONF_RICHIAMO_TEMPLATE_SID || null;
+
+  const { data: statusData, error: statusErr } = await supabase
+    .from('crm_lead_status')
+    .select('conversation_id, recall_at, crm_updated_at')
+    .eq('conferme_outcome', ESITO_PARCHEGGIATO)
+    .not('conversation_id', 'is', null)
+    .gte('recall_at', new Date(now - 1 * H).toISOString())
+    .lte('recall_at', new Date(now + 3 * H).toISOString());
+  if (statusErr) await logCronQueryError(supabase, 'conf_richiamo_query_error', statusErr);
+
+  // Più righe sulla stessa chat (lead gemelli nel CRM): vale la più fresca.
+  const perConv = new Map<number, { recallAt: string; aggiornata: string }>();
+  for (const r of (statusData ?? []) as Array<{ conversation_id: number; recall_at: string; crm_updated_at: string }>) {
+    const gia = perConv.get(r.conversation_id);
+    if (!gia || Date.parse(r.crm_updated_at) > Date.parse(gia.aggiornata)) {
+      perConv.set(r.conversation_id, { recallAt: r.recall_at, aggiornata: r.crm_updated_at });
+    }
+  }
+  if (perConv.size === 0) return { sent: 0, skipped: 0 };
+
+  const { data: convData, error: convErr } = await supabase
+    .from('conversations')
+    .select('id, ai_paused_at, wa_number, conf_richiamo_sollecito_for_at, leads(phone_e164, first_name)')
+    .in('id', [...perConv.keys()])
+    // Fermo manuale dal pannello: nessun invio automatico. La disdetta chiesta invece
+    // non ferma il sollecito: il parcheggio di solito segue proprio uno spostamento.
+    .is('ai_paused_at', null)
+    .or(FILTRO_FUORI_LANCIO);
+  if (convErr) await logCronQueryError(supabase, 'conf_richiamo_query_error', convErr);
+
+  let sent = 0;
+  let skipped = 0;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const c of (convData ?? []) as any[]) {
+    const phone = c.leads?.phone_e164 as string | undefined;
+    const recallAtRaw = perConv.get(c.id as number)?.recallAt ?? null;
+    const recallMs = recallAtRaw ? Date.parse(recallAtRaw) : NaN;
+    if (!phone || Number.isNaN(recallMs)) {
+      skipped++;
+      continue;
+    }
+    // Stesso istante, non stessa stringa: il CRM manda +02:00, Postgres torna UTC.
+    const recallAt = new Date(recallMs).toISOString();
+    const presoPerAt: string | null = c.conf_richiamo_sollecito_for_at ?? null;
+    const giaInviato = presoPerAt !== null && Date.parse(presoPerAt) === recallMs;
+
+    const { data: ultimoIn } = await supabase
+      .from('messages')
+      .select('created_at')
+      .eq('conversation_id', c.id)
+      .eq('direction', 'in')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const canale = decideSollecitoRichiamo({
+      enabled: true,
+      confermeOutcome: ESITO_PARCHEGGIATO,
+      recallAt,
+      aiPausedAt: c.ai_paused_at ?? null,
+      giaInviato,
+      lastInboundAtMs: ultimoIn?.created_at ? Date.parse(ultimoIn.created_at) : null,
+      haTemplate: !!sid,
+      nowMs: now,
+    });
+    if (!canale) {
+      skipped++;
+      continue;
+    }
+
+    // La presa PRIMA dell'invio: due giri sovrapposti non mandano due solleciti.
+    const presa = await claimSollecitoRichiamo(supabase, c.id as number, recallAt, presoPerAt);
+    if (!presa) {
+      skipped++;
+      continue;
+    }
+
+    const vars = { '1': templateName(c.leads?.first_name ?? null), '2': slotLabel(recallMs, now) };
+    const body = sollecitoRichiamoText(vars);
+    const from = mittenteDiConversazione(c);
+    let ok = false;
+    let errore: string | null = null;
+
+    try {
+      if (canale === 'template' && sid) {
+        // In messages va il testo vero, non quello coi segnaposto.
+        const res = await sendTemplateAndLog(supabase, c.id as number, phone, sid, 'Sollecito richiamo Conferme', from, vars, body);
+        ok = res.ok;
+        if (!res.ok) errore = res.error ?? 'invio del template fallito';
+      } else {
+        const tw = await sendFreeText({ to: phone, body, from });
+        ok = true;
+        await supabase.from('messages').insert({
+          conversation_id: c.id, direction: 'out', body,
+          twilio_sid: tw.sid, twilio_status: tw.status,
+          sender: 'bot',
+        });
+        await supabase.from('conversations')
+          .update({ last_message_at: new Date().toISOString() })
+          .eq('id', c.id);
+      }
+    } catch (err: unknown) {
+      errore = (err as { message?: string })?.message ?? 'errore ignoto';
+    }
+
+    if (!ok) {
+      // Niente è partito: la presa torna com'era, il prossimo giro riprova.
+      const erroreRilascio = await rilasciaSollecitoRichiamo(supabase, c.id as number, presa);
+      await supabase.from('event_log').insert({
+        type: 'conf_richiamo_sollecito_error',
+        payload: { conversationId: c.id, recallAt, canale } as never,
+        message: `[precall] conv ${c.id}: sollecito richiamo Conferme (${canale}) non partito: ${errore ?? 'errore ignoto'}`
+          + (erroreRilascio ? `; ${erroreRilascio}` : ''),
+        level: 'error',
+      });
+      skipped++;
+      continue;
+    }
+
+    if (errore) {
+      // Il messaggio è partito ma qualcosa dopo (messages, last_message_at) no: la presa
+      // resta, il lead non deve ricevere il sollecito due volte.
+      await supabase.from('event_log').insert({
+        type: 'conf_richiamo_sollecito_error',
+        payload: { conversationId: c.id, recallAt, canale, partito: true } as never,
+        message: `[precall] conv ${c.id}: sollecito richiamo Conferme partito, registrazione fallita: ${errore}`,
+        level: 'error',
+      });
+    }
+    sent++;
+    await supabase.from('event_log').insert({
+      type: 'conf_richiamo_sollecito_sent',
+      payload: { conversationId: c.id, recallAt, canale } as never,
+      message: `[precall] conv ${c.id}: sollecito prima del richiamo Conferme (${canale})`,
       level: 'info',
     });
   }
