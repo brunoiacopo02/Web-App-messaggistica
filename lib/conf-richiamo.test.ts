@@ -103,33 +103,58 @@ describe('sollecitoRichiamoText', () => {
 });
 
 describe('conversazioniParcheggiate', () => {
-  function fintoSupabase(righe: Array<{ conversation_id: number | null; conferme_outcome: string | null }>) {
+  type RigaStatus = { conversation_id: number | null; lead_id: string; conferme_outcome: string | null };
+  function fintoSupabase(
+    righe: RigaStatus[],
+    convs: Array<{ id: number; crm_lead_id: string | null }> = [],
+    erroreSu: string | null = null,
+  ) {
     const chiamate: string[] = [];
+    const eventi: any[] = [];
     const supabase = {
       from(table: string) {
         chiamate.push(table);
         const filtri: Array<(r: any) => boolean> = [];
+        const sorgente: any[] = table === 'crm_lead_status' ? righe : table === 'conversations' ? convs : [];
         const q: any = {
           select: () => q,
           eq: (c: string, v: unknown) => { filtri.push((r) => r[c] === v); return q; },
           in: (c: string, v: unknown[]) => { filtri.push((r) => v.includes(r[c])); return q; },
-          then: (resolve: any) => resolve({ data: righe.filter((r) => filtri.every((f) => f(r))), error: null }),
+          then: (resolve: any) => resolve(erroreSu === table
+            ? { data: null, error: { message: 'giù' } }
+            : { data: sorgente.filter((r) => filtri.every((f) => f(r))), error: null }),
+          insert: async (r: any) => { eventi.push(r); return { error: null }; },
         };
         return q;
       },
     };
-    return { supabase, chiamate };
+    return { supabase, chiamate, eventi };
   }
+
+  // Ogni chat punta al suo lead del CRM; la 3 e' passata dal lead L3-vecchio a L3.
+  const CONVS = [
+    { id: 1, crm_lead_id: 'L1' }, { id: 2, crm_lead_id: 'L2' }, { id: 3, crm_lead_id: 'L3' },
+    { id: 9, crm_lead_id: 'L9' },
+  ];
 
   it('torna solo le conversazioni con esito da_rifissare, tra quelle chieste', async () => {
     const { supabase } = fintoSupabase([
-      { conversation_id: 1, conferme_outcome: 'da_rifissare' },
-      { conversation_id: 2, conferme_outcome: 'confermato' },
-      { conversation_id: 3, conferme_outcome: 'da_rifissare' },
-      { conversation_id: 9, conferme_outcome: 'da_rifissare' },
-    ]);
+      { conversation_id: 1, lead_id: 'L1', conferme_outcome: 'da_rifissare' },
+      { conversation_id: 2, lead_id: 'L2', conferme_outcome: 'confermato' },
+      { conversation_id: 3, lead_id: 'L3', conferme_outcome: 'da_rifissare' },
+      { conversation_id: 9, lead_id: 'L9', conferme_outcome: 'da_rifissare' },
+    ], CONVS);
     const s = await conversazioniParcheggiate(supabase, [1, 2, 3]);
     expect([...s].sort()).toEqual([1, 3]);
+  });
+
+  it("una riga gemella vecchia (lead_id diverso dal crm_lead_id della chat) non parcheggia l'appuntamento vivo", async () => {
+    const { supabase } = fintoSupabase([
+      { conversation_id: 3, lead_id: 'L3-vecchio', conferme_outcome: 'da_rifissare' },
+      { conversation_id: 3, lead_id: 'L3', conferme_outcome: 'confermato' },
+    ], CONVS);
+    const s = await conversazioniParcheggiate(supabase, [3]);
+    expect(s.size).toBe(0);
   });
 
   it('nessun id: nessuna query', async () => {
@@ -139,15 +164,24 @@ describe('conversazioniParcheggiate', () => {
     expect(chiamate).toEqual([]);
   });
 
-  it('query in errore: insieme vuoto (i promemoria restano quelli di sempre)', async () => {
-    const supabase = {
-      from: () => {
-        const q: any = { select: () => q, eq: () => q, in: () => q,
-          then: (resolve: any) => resolve({ data: null, error: { message: 'giù' } }) };
-        return q;
-      },
-    };
+  it('nessuna riga parcheggiata: non si leggono le conversazioni', async () => {
+    const { supabase, chiamate } = fintoSupabase([], CONVS);
+    await conversazioniParcheggiate(supabase, [1, 2]);
+    expect(chiamate).toEqual(['crm_lead_status']);
+  });
+
+  it('query in errore: insieme vuoto (i promemoria restano quelli di sempre) e riga in event_log', async () => {
+    const { supabase, eventi } = fintoSupabase([], CONVS, 'crm_lead_status');
     const s = await conversazioniParcheggiate(supabase, [1]);
     expect(s.size).toBe(0);
+    expect(eventi.map((e) => e.type)).toEqual(['conf_parcheggiati_query_error']);
+  });
+
+  it('lettura delle conversazioni in errore: insieme vuoto e riga in event_log', async () => {
+    const { supabase, eventi } = fintoSupabase(
+      [{ conversation_id: 1, lead_id: 'L1', conferme_outcome: 'da_rifissare' }], CONVS, 'conversations');
+    const s = await conversazioniParcheggiate(supabase, [1]);
+    expect(s.size).toBe(0);
+    expect(eventi.map((e) => e.type)).toEqual(['conf_parcheggiati_query_error']);
   });
 });

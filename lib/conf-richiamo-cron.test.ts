@@ -97,7 +97,7 @@ const status = (over: Riga = {}): Riga => ({
   crm_updated_at: '2026-10-20T09:00:00Z', ...over,
 });
 const conv = (over: Riga = {}): Riga => ({
-  id: 5, ai_paused_at: null, cancel_requested_at: null, wa_number: null,
+  id: 5, crm_lead_id: 'L1', ai_paused_at: null, cancel_requested_at: null, wa_number: null,
   lancio_slug: null, lancio_fase: null, conf_richiamo_sollecito_for_at: null,
   leads: { phone_e164: '+393331112233', first_name: 'anna' },
   ...over,
@@ -209,12 +209,39 @@ describe('sollecito prima del richiamo blu delle Conferme', () => {
       ],
       convs: [
         conv({ ai_paused_at: '2026-10-20T08:00:00Z' }),
-        conv({ id: 6, lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa' }),
-        conv({ id: 7 }),
+        conv({ id: 6, crm_lead_id: 'L2', lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa' }),
+        conv({ id: 7, crm_lead_id: 'L3' }),
       ],
     });
     await giro();
     expect(sendTemplateAndLog).not.toHaveBeenCalled();
+  });
+
+  it('riga gemella vecchia (lead_id non più quello della chat): nessun sollecito', async () => {
+    db = makeDb({
+      status: [
+        status({ lead_id: 'L1-vecchio' }),
+        // La riga vera della chat: confermata, quindi fuori dalla query dei parcheggiati.
+        status({ conferme_outcome: 'confermato' }),
+      ],
+      convs: [conv()],
+    });
+    const body = await giro();
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+    expect(body.richiamo).toEqual({ sent: 0, skipped: 1 });
+  });
+
+  it('riga gemella vecchia con un richiamo diverso: vale quello della riga della chat', async () => {
+    db = makeDb({
+      status: [
+        status({ lead_id: 'L1-vecchio', recall_at: '2026-10-20T15:00:00+02:00', crm_updated_at: '2026-10-20T11:00:00Z' }),
+        status(),
+      ],
+      convs: [conv()],
+    });
+    await giro();
+    expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+    expect(db.convs[0].conf_richiamo_sollecito_for_at).toBe(RICHIAMO_UTC);
   });
 
   it('richiamo troppo lontano o già passato: fuori dalla query', async () => {
@@ -223,7 +250,7 @@ describe('sollecito prima del richiamo blu delle Conferme', () => {
         status({ recall_at: '2026-10-21T16:00:00+02:00' }),
         status({ lead_id: 'L2', conversation_id: 6, recall_at: '2026-10-20T11:00:00+02:00' }),
       ],
-      convs: [conv(), conv({ id: 6 })],
+      convs: [conv(), conv({ id: 6, crm_lead_id: 'L2' })],
     });
     await giro();
     expect(sendTemplateAndLog).not.toHaveBeenCalled();

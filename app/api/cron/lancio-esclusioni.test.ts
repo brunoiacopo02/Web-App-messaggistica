@@ -327,9 +327,12 @@ describe('precall-reminders: nessun promemoria sulle chat del lancio', () => {
   });
 
   it('il promemoria non arriva a un lead parcheggiato dalle Conferme (da_rifissare)', async () => {
+    stato.righe.conversations = stato.righe.conversations.map((c) => ({ ...c, crm_lead_id: `L${c.id}` }));
     stato.righe.crm_lead_status = [
       { lead_id: 'L3', conversation_id: 3, conferme_outcome: 'da_rifissare' },
       { lead_id: 'L2', conversation_id: 2, conferme_outcome: 'confermato' },
+      // Riga gemella vecchia: la chat 2 oggi punta a L2, questa non la parcheggia.
+      { lead_id: 'L2-vecchio', conversation_id: 2, conferme_outcome: 'da_rifissare' },
     ];
     await richiestaGet(precallReminders, '/api/cron/precall-reminders');
     const destinatari = sendTemplateAndLog.mock.calls.map((c) => c[2]);
@@ -370,6 +373,7 @@ describe('gdo-video-followups: nessun sollecito sulle chat del lancio', () => {
   });
 
   it('un lead parcheggiato dalle Conferme (da_rifissare) non riceve video né solleciti', async () => {
+    stato.righe.conversations = stato.righe.conversations.map((c) => ({ ...c, crm_lead_id: `L${c.id}` }));
     stato.righe.crm_lead_status = [{ lead_id: 'L3', conversation_id: 3, conferme_outcome: 'da_rifissare' }];
     const body = await (await richiestaGet(gdoVideoFollowups, '/api/cron/gdo-video-followups')).json();
     const destinatari = sendTemplateAndLog.mock.calls.map((c) => c[2]);

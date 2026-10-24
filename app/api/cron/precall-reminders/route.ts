@@ -424,26 +424,27 @@ async function promemoriaRichiamo(supabase: Supa, now: number): Promise<EsitoRam
 
   const { data: statusData, error: statusErr } = await supabase
     .from('crm_lead_status')
-    .select('conversation_id, recall_at, crm_updated_at')
+    .select('conversation_id, lead_id, recall_at')
     .eq('conferme_outcome', ESITO_PARCHEGGIATO)
     .not('conversation_id', 'is', null)
     .gte('recall_at', new Date(now - 1 * H).toISOString())
     .lte('recall_at', new Date(now + 3 * H).toISOString());
   if (statusErr) await logCronQueryError(supabase, 'conf_richiamo_query_error', statusErr);
 
-  // Più righe sulla stessa chat (lead gemelli nel CRM): vale la più fresca.
-  const perConv = new Map<number, { recallAt: string; aggiornata: string }>();
-  for (const r of (statusData ?? []) as Array<{ conversation_id: number; recall_at: string; crm_updated_at: string }>) {
-    const gia = perConv.get(r.conversation_id);
-    if (!gia || Date.parse(r.crm_updated_at) > Date.parse(gia.aggiornata)) {
-      perConv.set(r.conversation_id, { recallAt: r.recall_at, aggiornata: r.crm_updated_at });
-    }
+  // Per ogni chat le righe per lead: sotto vale solo quella del lead a cui la chat punta
+  // oggi (`crm_lead_id`). Una riga gemella rimasta agganciata da un lead precedente non
+  // deve far partire il sollecito, né sceglierne l'orario.
+  const perConv = new Map<number, Map<string, string>>();
+  for (const r of (statusData ?? []) as Array<{ conversation_id: number; lead_id: string; recall_at: string }>) {
+    const perLead = perConv.get(r.conversation_id) ?? new Map<string, string>();
+    perLead.set(r.lead_id, r.recall_at);
+    perConv.set(r.conversation_id, perLead);
   }
   if (perConv.size === 0) return { sent: 0, skipped: 0 };
 
   const { data: convData, error: convErr } = await supabase
     .from('conversations')
-    .select('id, ai_paused_at, wa_number, conf_richiamo_sollecito_for_at, leads(phone_e164, first_name)')
+    .select('id, crm_lead_id, ai_paused_at, wa_number, conf_richiamo_sollecito_for_at, leads(phone_e164, first_name)')
     .in('id', [...perConv.keys()])
     // Fermo manuale dal pannello: nessun invio automatico. La disdetta chiesta invece
     // non ferma il sollecito: il parcheggio di solito segue proprio uno spostamento.
@@ -456,7 +457,7 @@ async function promemoriaRichiamo(supabase: Supa, now: number): Promise<EsitoRam
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   for (const c of (convData ?? []) as any[]) {
     const phone = c.leads?.phone_e164 as string | undefined;
-    const recallAtRaw = perConv.get(c.id as number)?.recallAt ?? null;
+    const recallAtRaw = c.crm_lead_id ? perConv.get(c.id as number)?.get(c.crm_lead_id) ?? null : null;
     const recallMs = recallAtRaw ? Date.parse(recallAtRaw) : NaN;
     if (!phone || Number.isNaN(recallMs)) {
       skipped++;

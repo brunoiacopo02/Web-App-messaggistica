@@ -12,6 +12,7 @@
 // alle route (lista dei parcheggiati, presa del sollecito).
 
 import { clampToSendWindow } from './precall-reminders';
+import { logCronQueryError } from './cron-query-error';
 
 const H = 3600_000;
 const MIN = 60_000;
@@ -77,23 +78,47 @@ const PEZZO = 200;
 
 /**
  * Fra queste conversazioni, quelle parcheggiate dalle Conferme (riga di
- * `crm_lead_status` con esito da_rifissare). Una query per giro, non una per chat. Se la
- * query fallisce torna l'insieme vuoto: i promemoria restano quelli di sempre.
+ * `crm_lead_status` con esito da_rifissare). Conta solo la riga del lead a cui la chat
+ * punta oggi (`lead_id = conversations.crm_lead_id`): una riga gemella rimasta agganciata
+ * da un lead precedente zittirebbe i promemoria di un appuntamento vivo. Due query per
+ * giro, non una per chat. Se una query fallisce resta la riga in event_log e si torna
+ * all'insieme vuoto: i promemoria restano quelli di sempre.
  */
-export async function conversazioniParcheggiate(supabase: Supa, ids: number[]): Promise<Set<number>> {
+export async function conversazioniParcheggiate(
+  supabase: Supa,
+  ids: number[],
+  tipoErrore = 'conf_parcheggiati_query_error',
+): Promise<Set<number>> {
   const out = new Set<number>();
   for (let i = 0; i < ids.length; i += PEZZO) {
     const { data, error } = await supabase
       .from('crm_lead_status')
-      .select('conversation_id')
+      .select('conversation_id, lead_id')
       .eq('conferme_outcome', ESITO_PARCHEGGIATO)
       .in('conversation_id', ids.slice(i, i + PEZZO));
     if (error) {
-      console.error(`[conf-richiamo] lettura dei parcheggiati fallita: ${error.message}`);
+      await logCronQueryError(supabase as never, tipoErrore, error);
       continue;
     }
-    for (const r of (data ?? []) as Array<{ conversation_id: number | null }>) {
-      if (r.conversation_id != null) out.add(r.conversation_id);
+    const righe = ((data ?? []) as Array<{ conversation_id: number | null; lead_id: string }>)
+      .filter((r) => r.conversation_id != null);
+    if (righe.length === 0) continue;
+
+    const { data: convs, error: convErr } = await supabase
+      .from('conversations')
+      .select('id, crm_lead_id')
+      .in('id', [...new Set(righe.map((r) => r.conversation_id as number))]);
+    if (convErr) {
+      await logCronQueryError(supabase as never, tipoErrore, convErr);
+      continue;
+    }
+    const leadDellaChat = new Map<number, string | null>();
+    for (const c of (convs ?? []) as Array<{ id: number; crm_lead_id: string | null }>) {
+      leadDellaChat.set(c.id, c.crm_lead_id);
+    }
+    for (const r of righe) {
+      const lead = leadDellaChat.get(r.conversation_id as number);
+      if (lead && lead === r.lead_id) out.add(r.conversation_id as number);
     }
   }
   return out;

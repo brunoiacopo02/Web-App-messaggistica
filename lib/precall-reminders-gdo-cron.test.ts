@@ -28,7 +28,7 @@ function makeDb(conv: Record<string, any>, opts: { eventoNonScritto?: boolean; p
         const q: any = {};
         for (const m of ['select', 'eq', 'in']) q[m] = () => q;
         q.then = (resolve: any) => resolve({
-          data: opts.parcheggiata ? [{ conversation_id: conv.id }] : [], error: null,
+          data: opts.parcheggiata ? [{ conversation_id: conv.id, lead_id: conv.crm_lead_id }] : [], error: null,
         });
         return q;
       }
@@ -37,7 +37,7 @@ function makeDb(conv: Record<string, any>, opts: { eventoNonScritto?: boolean; p
           // La select dei candidati: torna la riga viva.
           select() {
             const q: any = {};
-            for (const m of ['not', 'or', 'is', 'gte', 'lte', 'eq']) q[m] = () => q;
+            for (const m of ['not', 'or', 'is', 'gte', 'lte', 'eq', 'in']) q[m] = () => q;
             q.then = (resolve: any) => resolve({ data: [conv], error: null });
             return q;
           },
@@ -105,7 +105,7 @@ function makeDb(conv: Record<string, any>, opts: { eventoNonScritto?: boolean; p
 }
 
 const conv = (over: Record<string, any> = {}) => ({
-  id: 5, gdo_agenda_at: '2026-10-21T15:00:00Z', gdo_appuntamento_at: CALL,
+  id: 5, crm_lead_id: 'L5', gdo_agenda_at: '2026-10-21T15:00:00Z', gdo_appuntamento_at: CALL,
   gdo_video_sent_at: '2026-10-21T16:00:00Z', gdo_recap_sent_at: null, gdo_reminder24_for_at: null,
   bot_outcome: null, ai_paused_at: null, cancel_requested_at: null, wa_number: null,
   leads: { phone_e164: '+393331112233', first_name: 'Anna' },
