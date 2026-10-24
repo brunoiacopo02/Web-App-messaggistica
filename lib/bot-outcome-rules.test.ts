@@ -615,40 +615,47 @@ describe('checkDataAppuntamento — finestra dei due giorni', () => {
     const ven = Date.parse('2026-09-11T09:00:00+02:00');
     expect(checkDataAppuntamento('2026-09-14T15:00:00+02:00', ven, [])).toEqual({ ok: true });
   });
+
+  // PO 24/10/2026: niente più rotazione alle 20, domani mattina è prenotabile.
+  it('lunedì alle 23:30 martedì mattina è dentro, anche alle 9', () => {
+    const lunSera = Date.parse('2026-10-26T23:30:00+01:00');
+    expect(checkDataAppuntamento('2026-10-27T10:00:00+01:00', lunSera, [])).toEqual({ ok: true });
+    expect(checkDataAppuntamento('2026-10-27T09:00:00+01:00', lunSera, [])).toEqual({ ok: true });
+  });
 });
 
 // Il difetto di montaggio del 10/09: la finestra che il modello vede nel prompt e
-// quella che la guardia ricalcola sono due calcoli in due istanti, e `computeBookingDays`
-// ruota l'ancora di un giorno alle 20:00. Il bot alle 19:45 propone "domani alle 20", il
-// lead risponde alle 20:10, e la call promessa in chat veniva scartata: al lead "ci
-// vediamo domani", al CRM "appuntamento non fissato", e non lo chiamava nessuno.
+// quella che la guardia ricalcola sono due calcoli in due istanti. Allora l'ancora
+// ruotava alle 20:00 (il bot alle 19:45 proponeva "domani alle 20", il lead rispondeva
+// alle 20:10 e la call veniva scartata); dal 26/10/2026 ruota solo a mezzanotte, e lo
+// stesso difetto resta possibile a cavallo della mezzanotte.
 describe('checkDataAppuntamento — la finestra viaggia col turno, non si ricalcola', () => {
-  // Giovedì 10 settembre 2026. Alle 19:45 il prompt mostra venerdì 11 e sabato 12;
-  // alle 20:10 l'ancora è già ruotata e il calcolo dà sabato 12 e lunedì 14.
+  // Giovedì 10 settembre 2026. Alle 23:50 il prompt mostra venerdì 11 e sabato 12;
+  // alle 00:10 di venerdì l'ancora è già ruotata e il calcolo dà sabato 12 e lunedì 14.
   const prima = ['2026-09-11', '2026-09-12'];
-  const dopoLeVenti = Date.parse('2026-09-10T20:10:00+02:00');
+  const dopoMezzanotte = Date.parse('2026-09-11T00:10:00+02:00');
   const promessa = '2026-09-11T20:00:00+02:00';
 
-  it('accetta il giorno che il modello aveva davanti, anche dopo la rotazione delle 20:00', () => {
-    expect(checkDataAppuntamento(promessa, dopoLeVenti, [], prima)).toEqual({ ok: true });
+  it('accetta il giorno che il modello aveva davanti, anche dopo la rotazione di mezzanotte', () => {
+    expect(checkDataAppuntamento(promessa, dopoMezzanotte, [], prima)).toEqual({ ok: true });
   });
 
   it('senza i giorni del turno lo scarterebbe: è esattamente il caso che il fix chiude', () => {
-    expect(checkDataAppuntamento(promessa, dopoLeVenti, [])).toEqual({
+    expect(checkDataAppuntamento(promessa, dopoMezzanotte, [])).toEqual({
       ok: false,
       motivo: 'fuori_finestra',
     });
   });
 
   it('i giorni passati non sono un lasciapassare: fuori da quei due resta fuori finestra', () => {
-    expect(checkDataAppuntamento('2026-09-15T15:00:00+02:00', dopoLeVenti, [], prima)).toEqual({
+    expect(checkDataAppuntamento('2026-09-15T15:00:00+02:00', dopoMezzanotte, [], prima)).toEqual({
       ok: false,
       motivo: 'fuori_finestra',
     });
   });
 
   it('le altre regole valgono lo stesso: dentro la finestra vista, ma alle 02:00, non si fissa', () => {
-    expect(checkDataAppuntamento('2026-09-11T02:00:00+02:00', dopoLeVenti, [], prima)).toEqual({
+    expect(checkDataAppuntamento('2026-09-11T02:00:00+02:00', dopoMezzanotte, [], prima)).toEqual({
       ok: false,
       motivo: 'fuori_fascia',
     });

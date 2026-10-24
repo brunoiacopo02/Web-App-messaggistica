@@ -1,4 +1,4 @@
-import { romeOffset, romeHour } from './rome-time';
+import { romeOffset } from './rome-time';
 import { bookingBlackout, isBookableDate, type BlackoutRange } from './booking-blackout';
 
 // Calcolo degli unici due giorni in cui Mario può fissare l'appuntamento:
@@ -100,10 +100,10 @@ const toBookingDay = (v: Ymd): BookingDay => ({ label: labelIt(v), date: isoDate
 /** I due (e soli due) giorni prenotabili a partire da `now`: niente domeniche, niente giorni chiusi. */
 export function computeBookingDays(now: Date, ranges?: BlackoutRange[], pieni?: GiorniPieni): BookingDays {
   const chiusure = ranges ?? bookingBlackout(process.env.BOOKING_BLACKOUT);
-  let today = romeYmd(now);
-  // Dopo le 20:00 l'agenda del giorno corrente non è più prenotabile: entra in
-  // vigore quella del giorno successivo. Anticipiamo l'anchor di un giorno.
-  if (romeHour(now) >= 20) today = addDays(today, 1);
+  // Niente più rotazione alle 20:00 (PO 24/10/2026): le Conferme chiamano la mattina
+  // stessa dalle 9, quindi anche a tarda sera domani resta il primo giorno, mattina
+  // compresa. La finestra ruota solo a mezzanotte.
+  const today = romeYmd(now);
 
   const s1 = nextBookable(today, chiusure, pieni);
   const s2 = nextBookable(s1.day, chiusure, pieni);
@@ -117,8 +117,12 @@ export function computeBookingDays(now: Date, ranges?: BlackoutRange[], pieni?: 
   };
 }
 
-/** Un appuntamento a giorni di distanza ha la giornata intera libera; "domani" no, la mattina è andata. */
-const fascia = (imminente: boolean) => (imminente ? 'dalle 15:00 alle 21:00' : 'dalle 09:00 alle 21:00');
+/**
+ * Stessa fascia per entrambi i giorni (PO 24/10/2026): dalle Conferme che chiamano la
+ * mattina stessa anche domani mattina è prenotabile. Le 9 restano un'opzione di
+ * emergenza: la call di primo mattino è scomoda e Noemi attacca proprio alle 9.
+ */
+const FASCIA = 'dalle 10:00 alle 21:00 (ultimo slot alle 21:00; le 09:00 solo se il lead non può in nessun altro orario)';
 
 const INTESTAZIONE = 'SLOT APPUNTAMENTO DISPONIBILI (la domenica non è mai disponibile, fuso Europe/Rome):';
 
@@ -148,9 +152,9 @@ export function bookingSlotsContext(
 ): string {
   // `days` già calcolati: serve a chi deve tenersi i due giorni che il modello ha
   // visto e farli viaggiare fino alla guardia (`checkDataAppuntamento`). Ricalcolarli
-  // là è la cosa che rompeva le sere: `computeBookingDays` ruota l'ancora alle 20:00,
-  // quindi il prompt delle 19:45 e la guardia delle 20:10 vedevano finestre diverse.
-  const { day1, day2, day1Imminente, chiusuraPrimaDiDay1, chiusuraDopoDay1 } =
+  // là è la cosa che rompeva le sere quando l'ancora ruotava alle 20:00 (oggi ruota solo
+  // a mezzanotte): il prompt e la guardia vedevano finestre diverse.
+  const { day1, day2, chiusuraPrimaDiDay1, chiusuraDopoDay1 } =
     opts?.days ?? computeBookingDays(now, opts?.ranges, opts?.pieni);
   const off = romeOffset(now);
   const tag = `Nel tag [ESITO:APPUNTAMENTO|...] usa la data ISO 8601 del giorno scelto (${day1.date} oppure ${day2.date}) con l'ora concordata e fuso ${off}.`;
@@ -159,10 +163,10 @@ export function bookingSlotsContext(
   if (chiusuraDopoDay1) {
     return [
       INTESTAZIONE,
-      `- ${day1.label}, ${fascia(day1Imminente)} (ultimo slot alle 21:00)`,
+      `- ${day1.label}, ${FASCIA}`,
       `CHIUSURA: dopo ${day1.label} siamo chiusi fino a ${chiusuraDopoDay1.label} compreso, si riparte ${day2.label}.`,
       `Proponi SOLO ${day1.label}. Se serve dire perché, dì come stanno le cose: dopo quel giorno siamo chiusi per la settimana di ferragosto. È un fatto, non una leva di vendita: dillo semplicemente, senza spingere sulla fretta.`,
-      `Solo se il lead dice che non può, proponi ${day2.label}, dalle 09:00 alle 21:00 (ultimo slot alle 21:00).`,
+      `Solo se il lead dice che non può, proponi ${day2.label}, ${FASCIA}.`,
       tag,
       AMBITO,
     ].join('\n');
@@ -172,8 +176,8 @@ export function bookingSlotsContext(
   if (chiusuraPrimaDiDay1) {
     return [
       INTESTAZIONE,
-      `- PROPONI SEMPRE PRIMA questo: ${day1.label}, ${fascia(day1Imminente)} (ultimo slot alle 21:00)`,
-      `- SOLO se il lead proprio non riesce nel giorno sopra: ${day2.label}, dalle 09:00 alle 21:00 (ultimo slot alle 21:00)`,
+      `- PROPONI SEMPRE PRIMA questo: ${day1.label}, ${FASCIA}`,
+      `- SOLO se il lead proprio non riesce nel giorno sopra: ${day2.label}, ${FASCIA}`,
       `CHIUSURA: siamo chiusi fino a ${chiusuraPrimaDiDay1.label} compreso, la prima data utile è ${day1.label}. Se il lead chiede una data prima, dì come stanno le cose: siamo fermi per la settimana di ferragosto. È un fatto, non una leva di vendita.`,
       UNO_ALLA_VOLTA(day1.label),
       `Puoi fissare l'appuntamento SOLO in uno di questi due giorni e dentro queste fasce orarie. Nessun altro giorno o orario è ammesso.`,
@@ -185,8 +189,8 @@ export function bookingSlotsContext(
   // Forma normale — nessuna chiusura in vista: parola per parola com'è sempre stato.
   return [
     INTESTAZIONE,
-    `- PROPONI SEMPRE PRIMA questo: ${day1.label}, ${fascia(day1Imminente)} (ultimo slot alle 21:00)`,
-    `- SOLO se il lead proprio non riesce nel giorno sopra: ${day2.label}, dalle 09:00 alle 21:00 (ultimo slot alle 21:00)`,
+    `- PROPONI SEMPRE PRIMA questo: ${day1.label}, ${FASCIA}`,
+    `- SOLO se il lead proprio non riesce nel giorno sopra: ${day2.label}, ${FASCIA}`,
     UNO_ALLA_VOLTA(day1.label),
     `Puoi fissare l'appuntamento SOLO in uno di questi due giorni e dentro queste fasce orarie. Nessun altro giorno o orario è ammesso.`,
     tag,

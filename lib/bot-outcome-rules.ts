@@ -240,7 +240,7 @@ export type AppuntamentoCheck = { ok: true } | { ok: false; motivo: MotivoAppunt
  *
  * `bookingDays` sono i due giorni ('YYYY-MM-DD') che il modello ha visto nel prompt di
  * QUEL turno. Vanno passati sempre che si possa: senza, la finestra si ricalcola qui e
- * dopo le 20:00 non è più la stessa (vedi sotto). Chi non li ha — la route di recupero
+ * dopo la mezzanotte non è più la stessa (vedi sotto). Chi non li ha — la route di recupero
  * manuale, i cron — non perde la guardia: si ricade sul calcolo.
  */
 export function checkDataAppuntamento(
@@ -270,9 +270,9 @@ export function checkDataAppuntamento(
   //
   // I giorni sono quelli che il modello ha visto nel blocco SLOT APPUNTAMENTO
   // DISPONIBILI quando ha scritto al lead, non un secondo calcolo fatto adesso:
-  // `computeBookingDays` ruota l'ancora di un giorno alle 20:00, quindi il bot che alle
-  // 19:45 promette "domani alle 20" e il lead che risponde alle 20:10 cadevano su due
-  // finestre diverse, e la call promessa in chat veniva scartata. Quando i giorni non
+  // `computeBookingDays` ruota l'ancora a mezzanotte (fino al 25/10/2026 alle 20:00),
+  // quindi il bot che alle 23:50 promette "domani alle 20" e il lead che risponde alle
+  // 00:10 cadono su due finestre diverse, e la call promessa in chat verrebbe scartata. Quando i giorni non
   // arrivano (chiamanti fuori dal drain: recupero manuale, cron) si ricalcola qui:
   // meglio la finestra di adesso che nessun controllo.
   const finestra =
