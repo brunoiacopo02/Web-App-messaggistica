@@ -12,7 +12,7 @@
 import { gdoReminderText } from '../lib/precall-reminders';
 
 const NAME = 'fenice_reminder_24h_gdo_v1';
-const ESEMPIO = { '1': 'Luca', '2': 'venerdì 23 ottobre alle 10:00', '3': 'oggi pomeriggio' };
+const ESEMPIO = { '1': 'Luca', '2': 'venerdì 23 ottobre alle 10:00', '3': 'domani in mattinata dalle 9' };
 // Il corpo con i segnaposto: stessa funzione del codice, cosi' non puo' divergere.
 const BODY = gdoReminderText({ '1': '{{1}}', '2': '{{2}}', '3': '{{3}}' });
 

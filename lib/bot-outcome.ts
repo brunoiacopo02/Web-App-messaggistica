@@ -474,8 +474,8 @@ export type SendOutcomeArgs = {
   notaContattoUmano?: string;
   /** I due giorni prenotabili ('YYYY-MM-DD') che il modello aveva davanti quando ha
    *  fissato: li porta il drain, presi dal prompt di quel turno. Servono alla guardia
-   *  `fuori_finestra`, che senza li ricalcolerebbe — e alle 20:00 l'ancora ruota, così
-   *  la call appena promessa al lead risulterebbe fuori finestra. Chi non li ha (la
+   *  `fuori_finestra`, che senza li ricalcolerebbe — e a mezzanotte (ora di Roma) l'ancora
+   *  ruota, così la call appena promessa al lead risulterebbe fuori finestra. Chi non li ha (la
    *  route di recupero manuale, i cron) li lascia vuoti: la guardia ricalcola. */
   bookingDays?: readonly string[];
   /** Interno, usato solo dalla ricorsione del ramo `restituisci` delle tre fasce
@@ -621,8 +621,8 @@ export async function registraEsitoSenzaLeadId(
   //    fascia non e' un appuntamento. Gli adottati sono proprio i lead che lo slot se lo
   //    propongono da soli. Non si scrive niente e la conversazione resta aperta.
   //    `args.bookingDays` sono i due giorni che il modello aveva davanti in QUESTO turno:
-  //    senza, la guardia li ricalcola, e alle 20:00 l'ancora ruota — la call promessa al
-  //    lead alle 19:45 e accettata alle 20:10 uscirebbe `fuori_finestra`. Stesso
+  //    senza, la guardia li ricalcola, e a mezzanotte (ora di Roma) l'ancora ruota — la
+  //    call promessa al lead alle 23:50 e accettata alle 00:10 uscirebbe `fuori_finestra`. Stesso
   //    argomento che il drain passa gia' a `sendOutcome`.
   if (args.outcome === 'APPUNTAMENTO' && action.kind === 'normal') {
     const check = checkDataAppuntamento(

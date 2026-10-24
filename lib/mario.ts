@@ -24,7 +24,7 @@ export type MarioResult = {
   notaCrm?: string;
   /** I due giorni prenotabili ('YYYY-MM-DD') che il modello ha DAVVERO visto nel
    *  prompt di questo turno. Viaggiano fino a `checkDataAppuntamento` perché guardia e
-   *  prompt giudichino la stessa finestra: ricalcolarla dopo significa, alle 20:00,
+   *  prompt giudichino la stessa finestra: ricalcolarla dopo significa, a mezzanotte,
    *  scartare la call che il bot ha appena promesso al lead. Lo riempie solo
    *  `generateMarioReply`: `parseMarioReply`, che vede solo il testo, non lo conosce. */
   bookingDays?: readonly string[];
@@ -202,7 +202,7 @@ export async function generateMarioReply(
   // I due giorni si calcolano UNA volta e si passano al blocco del prompt, così quelli
   // che il modello legge sono esattamente quelli che restituiamo al chiamante: sono
   // loro a dover arrivare fino alla guardia sull'esito, non un secondo calcolo fatto
-  // qualche minuto dopo (alle 20:00 l'ancora ruota e la finestra cambia sotto i piedi).
+  // qualche minuto dopo (a mezzanotte l'ancora ruota e la finestra cambia sotto i piedi).
   const giorni = computeBookingDays(now);
   // Il prompt e' spezzato in due SOLO per la cache di Anthropic: il primo blocco e'
   // il manuale, identico per ogni lead (varia solo col nome persona, quindi due sole

@@ -1343,8 +1343,8 @@ export async function drainMarioReplies(
             leadWords: [...history].reverse().find((t) => t.role === 'user')?.content,
             report,
             // I due giorni prenotabili che il modello ha visto in QUESTO turno: la
-            // guardia sulla data li usa al posto di ricalcolarli. Alle 20:00 l'ancora
-            // dei giorni ruota, e una call promessa alle 19:45 veniva scartata dopo
+            // guardia sulla data li usa al posto di ricalcolarli. A mezzanotte (ora di
+            // Roma) l'ancora dei giorni ruota, e una call promessa poco prima veniva scartata dopo
             // essere già stata confermata al lead in chat.
             bookingDays: result.bookingDays,
           }, soloNota ? { noteOnly: true } : exPostino ? { notaSeRifiutato: true } : {});
@@ -1389,7 +1389,7 @@ export async function drainMarioReplies(
               note: result.note,
               leadWords: [...history].reverse().find((t) => t.role === 'user')?.content,
               // Gli stessi due giorni che viaggiano verso `sendOutcome` qui sopra: la
-              // guardia sulla data li vuole anche sugli adottati, o alle 20:00 l'ancora
+              // guardia sulla data li vuole anche sugli adottati, o a mezzanotte l'ancora
               // ruota e la call appena promessa in chat risulta fuori finestra.
               bookingDays: result.bookingDays,
             },
