@@ -42,7 +42,8 @@ describe('runAppointmentSet', () => {
     const r = await runAppointmentSet(supabase, { leadId: 'u1', appointmentAt: D1 });
 
     expect(r).toMatchObject({ ok: true, esito: 'registrato', conversationId: 7 });
-    expect(calls.updates).toEqual([{ gdo_appuntamento_at: D1 }]);
+    expect(calls.updates).toEqual([{ gdo_appuntamento_at: D1, gdo_appuntamento_set_at: expect.any(String) }]);
+    expect(Math.abs(Date.parse(String(calls.updates[0].gdo_appuntamento_set_at)) - Date.now())).toBeLessThan(5000);
     expect(calls.events.map((e) => e.type)).toContain('appuntamento_registrato');
   });
 
@@ -51,7 +52,7 @@ describe('runAppointmentSet', () => {
     const r = await runAppointmentSet(supabase, { leadId: 'u1', appointmentAt: D2 });
 
     expect(r).toMatchObject({ ok: true, esito: 'spostato', precedente: D1 });
-    expect(calls.updates).toEqual([{ gdo_appuntamento_at: D2 }]);
+    expect(calls.updates).toEqual([{ gdo_appuntamento_at: D2, gdo_appuntamento_set_at: expect.any(String) }]);
     const ev = calls.events.find((e) => e.type === 'appuntamento_spostato');
     expect(ev?.payload).toMatchObject({ da: D1, a: D2 });
   });
@@ -90,6 +91,6 @@ describe('runAppointmentSet', () => {
     const { supabase, calls } = makeSupabase({ id: 7, gdo_appuntamento_at: null });
     await runAppointmentSet(supabase, { leadId: 'u1', appointmentAt: D1 });
 
-    for (const patch of calls.updates) expect(Object.keys(patch)).toEqual(['gdo_appuntamento_at']);
+    for (const patch of calls.updates) expect(Object.keys(patch)).toEqual(['gdo_appuntamento_at', 'gdo_appuntamento_set_at']);
   });
 });

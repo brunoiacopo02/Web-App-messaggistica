@@ -22,7 +22,8 @@ export type AppointmentSetResult = {
  * Con questa data `lib/gdo-video-followup.ts` smette di indovinare: oggi usa
  * ORA_AGENDA_TARDI=18 come ripiego e tace del tutto se l'agenda arriva a sera.
  *
- * Scrive solo `gdo_appuntamento_at`. `bot_scheduled_at` resta il registro del NOSTRO
+ * Scrive `gdo_appuntamento_at` e `gdo_appuntamento_set_at` (quando l'abbiamo ricevuta: conta
+ * per dire quando chiama Noemi, vedi `fissatoIlDi`). `bot_scheduled_at` resta il registro del NOSTRO
  * esito: riscriverlo qui cambierebbe il significato delle note di spostamento e la
  * logica del lead terminale in `resolveOutcomeAction`.
  */
@@ -59,7 +60,7 @@ export async function runAppointmentSet(
 
   await supabase
     .from('conversations')
-    .update({ gdo_appuntamento_at: payload.appointmentAt })
+    .update({ gdo_appuntamento_at: payload.appointmentAt, gdo_appuntamento_set_at: new Date().toISOString() })
     .eq('id', conv.id);
 
   if (precedente) {

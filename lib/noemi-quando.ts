@@ -68,3 +68,18 @@ export function pianoNoemi(call: Date, fissatoIl: Date): PianoNoemi {
   const conAnticipo = romeDayKey(call) > giornoLavorativoDopo(fissatoIl);
   return { caso: conAnticipo ? 'giorno-prima-poi-mattina' : 'mattina-stessa', giornoPrima };
 }
+
+/**
+ * Da quando conta la call per dire quando chiama Noemi: il più recente fra l'arrivo
+ * dell'agenda e l'ultima data ricevuta dal CRM (primo fissaggio o spostamento).
+ * `undefined` se nessuno dei due è una data valida.
+ */
+export function fissatoIlDi(c: {
+  gdo_agenda_at?: string | null;
+  gdo_appuntamento_set_at?: string | null;
+}): Date | undefined {
+  const ms = [c.gdo_agenda_at, c.gdo_appuntamento_set_at]
+    .map((v) => (v ? Date.parse(v) : NaN))
+    .filter((n) => !Number.isNaN(n));
+  return ms.length ? new Date(Math.max(...ms)) : undefined;
+}

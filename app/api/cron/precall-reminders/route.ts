@@ -11,6 +11,7 @@ import { templateName } from '@/lib/name';
 import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
 import { mittenteDiConversazione } from '@/lib/mittente';
+import { fissatoIlDi } from '@/lib/noemi-quando';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -263,7 +264,7 @@ async function promemoriaGdo(supabase: Supa, now: number): Promise<EsitoRamo> {
 
   const { data: convData, error: convErr } = await supabase
     .from('conversations')
-    .select('id, gdo_agenda_at, gdo_appuntamento_at, gdo_video_sent_at, gdo_recap_sent_at, gdo_reminder24_for_at, bot_outcome, ai_paused_at, cancel_requested_at, wa_number, leads(phone_e164, first_name)')
+    .select('id, gdo_agenda_at, gdo_appuntamento_set_at, gdo_appuntamento_at, gdo_video_sent_at, gdo_recap_sent_at, gdo_reminder24_for_at, bot_outcome, ai_paused_at, cancel_requested_at, wa_number, leads(phone_e164, first_name)')
     .not('gdo_agenda_at', 'is', null)
     // Gli appuntamenti del bot hanno già i loro promemoria (ramo sopra).
     .or('bot_outcome.is.null,bot_outcome.neq.APPUNTAMENTO')
@@ -305,6 +306,7 @@ async function promemoriaGdo(supabase: Supa, now: number): Promise<EsitoRamo> {
     const canale = decideGdoReminder24({
       enabled: true,
       gdoAgendaAt: c.gdo_agenda_at ?? null,
+      fissatoIl: fissatoIlDi(c)?.toISOString() ?? null,
       botOutcome: c.bot_outcome ?? null,
       appuntamentoAt,
       videoSentAt: c.gdo_video_sent_at ?? null,
@@ -330,7 +332,7 @@ async function promemoriaGdo(supabase: Supa, now: number): Promise<EsitoRamo> {
 
     const vars = gdoReminderVars({
       nome: c.leads?.first_name ?? null, call: new Date(callMs), nowMs: now,
-      fissatoIl: c.gdo_agenda_at ? new Date(c.gdo_agenda_at) : undefined,
+      fissatoIl: fissatoIlDi(c),
     });
     const body = gdoReminderText(vars);
     const from = mittenteDiConversazione(c);

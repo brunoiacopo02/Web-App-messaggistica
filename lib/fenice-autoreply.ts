@@ -36,6 +36,7 @@ import { mittenteDiConversazione } from './mittente';
 import { chiedeLaScheda, professioniContextNote, professioniVince, schedaDaInviare } from './professioni-nota';
 import { isSlugProfessione, PROVENIENZA_PROFESSIONI } from './professioni';
 import { inviaScheda } from './scheda-invio';
+import { fissatoIlDi } from './noemi-quando';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -412,7 +413,7 @@ export async function drainMarioReplies(
     // conversazione c'e' gia' un appuntamento in piedi, e lo declasserebbe.
     // `wa_number` e' il numero con cui questa chat e' nata: ogni bolla del turno — le
     // risposte di Mario, il video del GDO, i turni del lancio — deve partire da li'.
-    .select('id, ai_started_at, crm_lead_id, bot_outcome, bot_scheduled_at, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, gdo_appuntamento_at, ai_paused_at, cancel_requested_at, gdo_recap_for_at, gdo_recap_sent_at, gdo_warmup_step, lancio_slug, lancio_fase, lancio_ingresso, lancio_info, wa_number, professione, scheda_inviata_at, crm_funnel, leads(first_name)')
+    .select('id, ai_started_at, crm_lead_id, bot_outcome, bot_scheduled_at, gdo_agenda_at, gdo_appuntamento_set_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at, gdo_video_followups_sent, gdo_noemi_reminded_at, gdo_appuntamento_at, ai_paused_at, cancel_requested_at, gdo_recap_for_at, gdo_recap_sent_at, gdo_warmup_step, lancio_slug, lancio_fase, lancio_ingresso, lancio_info, wa_number, professione, scheda_inviata_at, crm_funnel, leads(first_name)')
     .single();
   // PGRST116 = nessuna riga: e' il caso NORMALE (conversazione non claimabile, o
   // lucchetto di un altro drain) e non va segnalato. Qualunque altro errore invece qui
@@ -517,6 +518,7 @@ export async function drainMarioReplies(
   // Il bot fa da canale ma il lead non è nostro: niente esiti, niente stati terminali.
   const gdo = claimed as {
     gdo_agenda_at?: string | null;
+    gdo_appuntamento_set_at?: string | null;
     gdo_video_url?: string | null;
     gdo_video_sent_at?: string | null;
     gdo_video_watched_at?: string | null;
@@ -536,6 +538,8 @@ export async function drainMarioReplies(
     lancio_slug?: string | null; lancio_fase?: string | null; lancio_ingresso?: string | null; lancio_info?: LancioInfo | null;
   };
   const gdoAgendaAt = gdo.gdo_agenda_at ?? null;
+  // Da quando conta la call per dire quando chiama Noemi: agenda o ultimo spostamento.
+  const fissatoIlGdo = fissatoIlDi(gdo);
   const gdoVideoUrl = gdo.gdo_video_url ?? null;
   // La chat ha ricevuto un'agenda GDO. Se il turno e' davvero del postino lo decide il giro
   // (`postino` nel ciclo qui sotto): il funnel Professioni vince su un'agenda gia' passata.
@@ -833,7 +837,7 @@ export async function drainMarioReplies(
           const prima = { forAt: gdoRecapForAt, sentAt: gdoRecapSentAt };
           if (await claimRecap(supabase, conversationId, gdoAppuntamentoAt, false)) {
             return {
-              body: gdoRecapText({ nome: gdo.leads?.first_name ?? null, call: new Date(gdoAppuntamentoAt), videoLink: gdoVideoUrl, fissatoIl: gdoAgendaAt ? new Date(gdoAgendaAt) : undefined }),
+              body: gdoRecapText({ nome: gdo.leads?.first_name ?? null, call: new Date(gdoAppuntamentoAt), videoLink: gdoVideoUrl, fissatoIl: fissatoIlGdo }),
               presa: { at: gdoAppuntamentoAt, prima },
             };
           }
@@ -998,7 +1002,7 @@ export async function drainMarioReplies(
             recapInUscita: recapTipo === 'completo',
             botScheduledAt: botScheduledAt,
             gdoAppuntamentoAt: gdoAppuntamentoAt,
-            fissatoIl: gdoAgendaAt ? new Date(gdoAgendaAt) : undefined,
+            fissatoIl: fissatoIlGdo,
           }
         : null;
       const notaWarmup = noteGdo
@@ -1094,7 +1098,7 @@ export async function drainMarioReplies(
               recapInUscita: recapTipo === 'completo',
               botScheduledAt: botScheduledAt,
               gdoAppuntamentoAt: gdoAppuntamentoAt,
-              fissatoIl: gdoAgendaAt ? new Date(gdoAgendaAt) : undefined,
+              fissatoIl: fissatoIlGdo,
               notaRiscaldamento: null, // Noemi e riscaldamento mai nello stesso turno
             }),
           });

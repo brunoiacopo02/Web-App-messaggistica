@@ -305,3 +305,40 @@ describe('gdoReminder24Raggiungibile: call alle 9 fissata alle 19 del giorno lav
     })).toBe(false);
   });
 });
+
+describe('fissatoIl: la call spostata conta dallo spostamento, non dall agenda', () => {
+  const H = 3600_000;
+  // Giovedì 22/10/2026 14:00 a Roma: la call è venerdì 23 alle 11, agenda di 3 giorni fa.
+  const NOW = at('2026-10-22T12:00:00Z');
+  const agenda = new Date(NOW - 72 * H).toISOString();
+  const spostata = new Date(NOW - 3 * H).toISOString(); // giovedì mattina: la call di venerdì è «domani»
+
+  it('gdoReminderVars: senza fissatoIl dello spostamento "giorno prima e poi mattina", con lui "mattina"', () => {
+    const call = new Date(NOW + 21 * H);
+    const vecchio = gdoReminderVars({ nome: 'Anna', call, nowMs: NOW, fissatoIl: new Date(agenda) });
+    const nuovo = gdoReminderVars({ nome: 'Anna', call, nowMs: NOW, fissatoIl: new Date(spostata) });
+    expect(vecchio['3']).toContain('e se non ti trova');
+    expect(nuovo['3']).not.toContain('e se non ti trova');
+    expect(nuovo['3']).toContain('in mattinata dalle 9');
+  });
+
+  it('gdoReminder24Raggiungibile accetta fissatoIl; la regola delle 12 ore resta sull agenda', () => {
+    const i = { appuntamentoAt: new Date(NOW + 21 * H).toISOString(), gdoAgendaAt: agenda, nowMs: NOW };
+    expect(gdoReminder24Raggiungibile({ ...i, fissatoIl: spostata })).toBe(true);
+    // Spostata un ora fa: conta l agenda (3 giorni), quindi niente attesa di 12 ore.
+    expect(gdoReminder24Raggiungibile({ ...i, fissatoIl: new Date(NOW - H).toISOString() })).toBe(true);
+    // Agenda di 2 ore fa: attende comunque, anche se la data è più vecchia.
+    expect(gdoReminder24Raggiungibile({ ...i, gdoAgendaAt: new Date(NOW - 2 * H).toISOString(), fissatoIl: spostata })).toBe(true);
+  });
+
+  it('decideGdoReminder24 accetta fissatoIl e non salta la regola delle 12 ore', () => {
+    const b: GdoReminder24Input = {
+      enabled: true, gdoAgendaAt: agenda, botOutcome: null,
+      appuntamentoAt: new Date(NOW + 21 * H).toISOString(), videoSentAt: new Date(NOW - 70 * H).toISOString(),
+      recapSentAt: null, lastInboundAtMs: null, aiPausedAt: null, cancelRequestedAt: null,
+      giaInviato: false, nowMs: NOW, fissatoIl: new Date(NOW - 1 * H).toISOString(),
+    };
+    expect(decideGdoReminder24(b)).toBe('template');
+    expect(decideGdoReminder24({ ...b, gdoAgendaAt: new Date(NOW - 8 * H).toISOString() })).toBeNull();
+  });
+});

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pianoNoemi, giornoLavorativoPrima } from './noemi-quando';
+import { pianoNoemi, giornoLavorativoPrima, fissatoIlDi } from './noemi-quando';
 import { romeDayKey } from './rome-time';
 
 const lun = new Date('2026-10-26T11:00:00+01:00');
@@ -61,5 +61,20 @@ describe('pianoNoemi: call alle 9 fissata troppo tardi per il giorno prima (PO 2
     expect(pianoNoemi(lun9, new Date('2026-10-31T19:00:00+01:00')).caso).toBe('nove-in-punto');
     expect(pianoNoemi(lun9, new Date('2026-11-01T10:00:00+01:00')).caso).toBe('nove-in-punto');
     expect(pianoNoemi(lun9, new Date('2026-10-30T12:00:00+01:00')).caso).toBe('giorno-prima');
+  });
+});
+
+describe('fissatoIlDi: l ultimo gesto del GDO sulla call', () => {
+  it('prende il più recente fra agenda e data della call', () => {
+    expect(fissatoIlDi({ gdo_agenda_at: '2026-10-20T10:00:00Z', gdo_appuntamento_set_at: '2026-10-23T18:00:00Z' })?.toISOString())
+      .toBe('2026-10-23T18:00:00.000Z');
+    expect(fissatoIlDi({ gdo_agenda_at: '2026-10-23T10:00:00Z', gdo_appuntamento_set_at: '2026-10-20T18:00:00Z' })?.toISOString())
+      .toBe('2026-10-23T10:00:00.000Z');
+  });
+  it('con uno solo valido usa quello; senza nessuno, undefined', () => {
+    expect(fissatoIlDi({ gdo_agenda_at: '2026-10-20T10:00:00Z', gdo_appuntamento_set_at: null })?.toISOString()).toBe('2026-10-20T10:00:00.000Z');
+    expect(fissatoIlDi({ gdo_agenda_at: 'boh', gdo_appuntamento_set_at: '2026-10-21T10:00:00Z' })?.toISOString()).toBe('2026-10-21T10:00:00.000Z');
+    expect(fissatoIlDi({ gdo_agenda_at: null, gdo_appuntamento_set_at: null })).toBeUndefined();
+    expect(fissatoIlDi({})).toBeUndefined();
   });
 });

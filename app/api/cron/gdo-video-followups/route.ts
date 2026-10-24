@@ -16,6 +16,7 @@ import {
 } from '@/lib/gdo-video-followup';
 import { getLancioSettings } from '@/lib/lancio-settings';
 import { gdoReminder24Raggiungibile } from '@/lib/precall-reminders';
+import { fissatoIlDi } from '@/lib/noemi-quando';
 import { romeHour, romeMinute, romeDaysBetween } from '@/lib/rome-time';
 import { templateName } from '@/lib/name';
 import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
@@ -104,7 +105,7 @@ export async function GET(req: NextRequest) {
   const { data, error } = await supabase
     .from('conversations')
     .select(`
-      id, gdo_agenda_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at,
+      id, gdo_agenda_at, gdo_appuntamento_set_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at,
       gdo_video_followups_sent, gdo_noemi_reminded_at, gdo_appuntamento_at, bot_scheduled_at,
       ai_started_at, wa_number, leads(phone_e164, first_name)
     `)
@@ -191,6 +192,7 @@ export async function GET(req: NextRequest) {
         promemoriaGdoPossibile: gdoReminder24Raggiungibile({
           appuntamentoAt: c.gdo_appuntamento_at ?? null,
           gdoAgendaAt: c.gdo_agenda_at,
+          fissatoIl: fissatoIlDi(c)?.toISOString() ?? null,
           nowMs: now.getTime(),
         }),
       });
@@ -296,7 +298,7 @@ export async function GET(req: NextRequest) {
             videoAppenaConfermato: false,
             botScheduledAt: c.bot_scheduled_at ?? null,
             gdoAppuntamentoAt: c.gdo_appuntamento_at ?? null,
-            fissatoIl: c.gdo_agenda_at ? new Date(c.gdo_agenda_at) : undefined,
+            fissatoIl: fissatoIlDi(c),
           }),
         });
         // Stesse due lavorazioni del drain (lib/fenice-autoreply.ts): un a-capo è una

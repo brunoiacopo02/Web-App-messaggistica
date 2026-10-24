@@ -115,6 +115,9 @@ const GDO_ANTICIPO_MIN_MS = 1 * H;
 export interface GdoReminder24Input {
   enabled: boolean;
   gdoAgendaAt: string | null;
+  /** Da quando conta la call (agenda o ultimo spostamento): decide il piano di Noemi.
+   *  L'attesa di 12 ore resta sull'agenda. Assente = `gdoAgendaAt`. */
+  fissatoIl?: string | null;
   botOutcome: string | null;
   appuntamentoAt: string | null;
   videoSentAt: string | null;
@@ -139,6 +142,7 @@ export interface GdoReminder24Input {
 function primoIstanteGdoReminder24(i: {
   appuntamentoAt: string | null;
   gdoAgendaAt: string | null;
+  fissatoIl?: string | null;
   nowMs: number;
 }): number | null {
   const callMs = i.appuntamentoAt ? Date.parse(i.appuntamentoAt) : NaN;
@@ -146,7 +150,8 @@ function primoIstanteGdoReminder24(i: {
   if (Number.isNaN(callMs) || Number.isNaN(agendaMs)) return null;
   const primo = Math.max(i.nowMs, reminderTargets(callMs).r24At, agendaMs + GDO_AGENDA_MIN_MS);
   if (callMs - primo < GDO_ANTICIPO_MIN_MS) return null;
-  const noemi = pianoNoemi(new Date(callMs), new Date(agendaMs));
+  const fissatoMs = i.fissatoIl ? Date.parse(i.fissatoIl) : NaN;
+  const noemi = pianoNoemi(new Date(callMs), new Date(Number.isNaN(fissatoMs) ? agendaMs : fissatoMs));
   if ((noemi.caso === 'giorno-prima' || noemi.caso === 'nove-in-punto') && romeDaysBetween(new Date(primo), noemi.giornoPrima) < 0) return null;
   return primo;
 }
@@ -159,6 +164,7 @@ function primoIstanteGdoReminder24(i: {
 export function gdoReminder24Raggiungibile(i: {
   appuntamentoAt: string | null;
   gdoAgendaAt: string | null;
+  fissatoIl?: string | null;
   nowMs: number;
 }): boolean {
   return primoIstanteGdoReminder24(i) !== null;

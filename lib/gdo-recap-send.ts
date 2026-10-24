@@ -6,6 +6,7 @@
 
 import { decideGdoRecap, gdoRecapText, gdoSpostamentoText, type RecapOccasione, type RecapTipo } from './gdo-recap';
 import { mittenteDiConversazione } from './mittente';
+import { fissatoIlDi } from './noemi-quando';
 import { sendFreeText } from './twilio';
 
 type Supa = {
@@ -106,8 +107,12 @@ export async function rilasciaRecap(
  * uno spostamento è un fissaggio nuovo, come per la board Conferme del CRM; altrimenti
  * vale l'arrivo dell'agenda.
  */
-function fissatoIlRecap(occasione: RecapOccasione, gdoAgendaAt: string | null | undefined, nowMs: number): Date {
-  if (occasione !== 'spostato' && gdoAgendaAt) return new Date(gdoAgendaAt);
+function fissatoIlRecap(
+  occasione: RecapOccasione,
+  conv: { gdo_agenda_at?: string | null; gdo_appuntamento_set_at?: string | null },
+  nowMs: number,
+): Date {
+  if (occasione !== 'spostato') return fissatoIlDi(conv) ?? new Date(nowMs);
   return new Date(nowMs);
 }
 
@@ -131,7 +136,7 @@ export async function inviaRecapDopoData(
   try {
     const { data: conv, error } = await supabase
       .from('conversations')
-      .select('id, bot_outcome, gdo_agenda_at, gdo_appuntamento_at, gdo_video_url, gdo_video_sent_at, gdo_recap_for_at, gdo_recap_sent_at, gdo_noemi_reminded_at, ai_paused_at, cancel_requested_at, last_inbound_at, wa_number, leads(phone_e164, first_name)')
+      .select('id, bot_outcome, gdo_agenda_at, gdo_appuntamento_set_at, gdo_appuntamento_at, gdo_video_url, gdo_video_sent_at, gdo_recap_for_at, gdo_recap_sent_at, gdo_noemi_reminded_at, ai_paused_at, cancel_requested_at, last_inbound_at, wa_number, leads(phone_e164, first_name)')
       .eq('id', conversationId)
       .single();
     if (error || !conv) return null;
@@ -164,7 +169,7 @@ export async function inviaRecapDopoData(
     const call = new Date(appuntamentoAt);
     const body = tipo === 'spostamento'
       ? gdoSpostamentoText({ nome, call })
-      : gdoRecapText({ nome, call, videoLink: null, fissatoIl: fissatoIlRecap(occasione, conv.gdo_agenda_at, nowMs) });
+      : gdoRecapText({ nome, call, videoLink: null, fissatoIl: fissatoIlRecap(occasione, conv, nowMs) });
     const sent = await sendFreeText({ to: phone, body, from: mittenteDiConversazione(conv) });
 
     // Da qui il messaggio è partito: la presa NON si rilascia più, il recap non deve uscire
