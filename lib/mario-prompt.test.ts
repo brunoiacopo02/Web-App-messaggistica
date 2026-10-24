@@ -844,6 +844,12 @@ describe('CHI È NOEMI E QUANDO CHIAMA', () => {
     expect(p).toContain('call alle 9:00');
   });
 
+  // Review finale: dal sabato "domani" per Noemi è il lunedì, come per la board Conferme.
+  it('domani vuol dire il prossimo giorno lavorativo: dal sabato è il lunedì', () => {
+    expect(p).toContain('DOMANI vuol dire il prossimo giorno lavorativo: dal sabato è il lunedì');
+    expect(p).toMatch(/oggi è sabato 24, call lunedì 26 alle 11/);
+  });
+
   it('non dice più che Noemi la mattina non c è', () => {
     expect(p).not.toContain('Noemi attacca alle 13:00');
     expect(p).not.toContain('Mai la mattina stessa');
