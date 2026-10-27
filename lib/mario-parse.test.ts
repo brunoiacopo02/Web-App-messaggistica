@@ -99,19 +99,14 @@ describe('[SCHEDA]', () => {
   });
 });
 
-describe('[RISCALDAMENTO]', () => {
-  it('passo letto e tolto dal testo visibile', () => {
+describe('[RISCALDAMENTO] (tag del vecchio riscaldamento, oggi inerte)', () => {
+  it('tolto dal testo visibile e senza effetti', () => {
     const r = parseMarioReply('ok ci sentiamo [RISCALDAMENTO:2]');
-    expect(r.riscaldamento).toBe(2);
-    expect(r.visibleReply).not.toContain('RISCALDAMENTO');
     expect(r.visibleReply).toBe('ok ci sentiamo');
+    expect('riscaldamento' in r).toBe(false);
   });
-  it('due tag: vince l\'ultimo, nessuno resta in chat', () => {
+  it('due tag: nessuno resta in chat', () => {
     const r = parseMarioReply('a [RISCALDAMENTO:1] b [riscaldamento:0]');
-    expect(r.riscaldamento).toBe(0);
     expect(r.visibleReply).not.toMatch(/RISCALDAMENTO/i);
-  });
-  it('senza tag nessun campo', () => {
-    expect(parseMarioReply('ciao').riscaldamento).toBeUndefined();
   });
 });

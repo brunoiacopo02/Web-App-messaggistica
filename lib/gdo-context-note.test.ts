@@ -194,12 +194,7 @@ describe('oraAppuntamento', () => {
 });
 
 describe('gdoContextNote: riscaldamento', () => {
-  it('la nota del passo va in coda, dopo il contesto', () => {
-    const nota = gdoContextNote(base({ notaRiscaldamento: 'RISCALDAMENTO, PASSO 1: x' }));
-    expect(nota.startsWith(GDO_CONTEXT_NOTE)).toBe(true);
-    expect(nota.endsWith('\n\nRISCALDAMENTO, PASSO 1: x')).toBe(true);
-  });
-  it('senza nota nessuna traccia del riscaldamento', () => {
-    expect(gdoContextNote(base({ notaRiscaldamento: null }))).not.toContain('RISCALDAMENTO');
+  it('nessuna istruzione di riscaldamento al modello: le domande le scrive il codice', () => {
+    expect(gdoContextNote(base({}))).not.toMatch(/RISCALDAMENTO/i);
   });
 });

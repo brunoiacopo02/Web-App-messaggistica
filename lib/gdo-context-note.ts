@@ -57,8 +57,6 @@ export interface GdoNoteInput {
   /** Quando è stata fissata la call (per i lead GDO: l'arrivo dell'agenda). Decide se Noemi
    *  chiama la mattina stessa o già il giorno prima, vedi lib/noemi-quando.ts. Default: adesso. */
   fissatoIl?: Date;
-  /** Nota del passo di riscaldamento da fare in questo turno (lib/gdo-warmup.ts). */
-  notaRiscaldamento?: string | null;
 }
 
 /** L'ora vera della call: per un lead GDO può stare su due colonne, vince la più recente. */
@@ -113,7 +111,5 @@ export function gdoContextNote(i: GdoNoteInput): string {
   if (serveNoemi(i)) {
     parti.push(NOTA_NOEMI + quandoChiamaNoemi(oraAppuntamento(i.botScheduledAt, i.gdoAppuntamentoAt), i.fissatoIl));
   }
-  // Il riscaldamento va in coda: prima il contesto e i promemoria, poi la domanda del passo.
-  if (i.notaRiscaldamento) parti.push(i.notaRiscaldamento);
   return parti.join('\n\n');
 }

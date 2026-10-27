@@ -86,6 +86,17 @@ Mittente: quello della chat (`mittenteDiConversazione`), come ogni altro invio.
 
 ### B. Riscaldamento (dentro la risposta del modello, guidato da una nota di contesto)
 
+> **Superato il 27/10/2026 (branch `feat/riscaldamento-codice`, opzione A).** Con la nota nel
+> prompt la domanda 1 è partita in 4 chat su 8 e la 2 mai: le regole fisse del prompt vincevano.
+> Ora le due domande le scrive il codice (`DOMANDA_1`/`DOMANDA_2` in `lib/gdo-warmup.ts`), in
+> fondo alla stessa bolla della risposta del modello dopo una riga vuota; il modello non riceve
+> più nessuna istruzione e il tag `[RISCALDAMENTO:n]` è inerte. Il turno dopo una domanda le
+> parole del lead vanno subito al CRM come NOTA ("Riscaldamento – obiettivo e perché adesso:
+> «…»" / "Riscaldamento – budget e chi decide: «…»", ⚠️ sui segnali brutti). Regola del lead che
+> non risponde: una domanda non si ripete mai; il messaggio subito dopo vale come risposta (nota
+> solo se è una risposta vera), poi si passa oltre: la domanda 2 al primo turno buono, e dopo la
+> domanda 2 il primo turno chiude (passo 3). Il testo qui sotto resta come storia del primo disegno.
+
 Non è un messaggio programmato: è una nota appesa al system prompt, come `NOTA_VIDEO` e
 `NOTA_NOEMI` in `lib/gdo-context-note.ts`.
 
