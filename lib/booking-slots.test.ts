@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { computeBookingDays, bookingSlotsContext } from './booking-slots';
+import { computeBookingDays, bookingSlotsContext, NOVE_SOLO_EMERGENZA } from './booking-slots';
+import { checkDataAppuntamento } from './bot-outcome-rules';
 import { romeHour } from './rome-time';
 
 describe('computeBookingDays', () => {
@@ -73,7 +74,7 @@ describe('bookingSlotsContext', () => {
   it('riporta le fasce orarie corrette e le date assolute', () => {
     const ctx = bookingSlotsContext(new Date('2026-06-22T10:00:00+02:00'));
     expect(ctx).toContain('dalle 10:00 alle 21:00');
-    expect(ctx).toContain('le 09:00 solo se il lead non può in nessun altro orario');
+    expect(ctx).toContain('LE 09:00 NON LE PROPONI MAI');
     expect(ctx).not.toContain('dalle 15:00');
     expect(ctx).not.toContain('dalle 09:00');
     expect(ctx).toContain('2026-06-23');
@@ -331,5 +332,44 @@ describe('bookingSlotsContext: offset per giorno a cavallo del cambio d ora', ()
   });
   it('lo stesso offset per entrambi i giorni resta una frase sola', () => {
     expect(bookingSlotsContext(new Date('2026-06-22T10:00:00+02:00'))).toContain('e fuso +02:00.');
+  });
+});
+
+// PO 27/10/2026: il bot fissava troppe call alle 9 (10 su 154 dal 20/10), metà proposte da lui.
+describe('le 9 solo in emergenza', () => {
+  const now = new Date('2026-10-28T11:00:00+01:00'); // mercoledì, finestra gio 29 + ven 30
+  const ctx = bookingSlotsContext(now, { ranges: [] });
+  const chiusura = bookingSlotsContext(new Date('2026-08-10T11:00:00+02:00'), {
+    ranges: [{ from: '2026-08-12', to: '2026-08-16' }],
+  });
+
+  it('nessuna fascia proposta parte dalle 9', () => {
+    for (const c of [ctx, chiusura]) {
+      // Le righe delle fasce e le proposte di giorno: tutto tranne la regola delle 9.
+      const proposte = c.split('\n').filter((r) => r !== NOVE_SOLO_EMERGENZA);
+      expect(proposte.length).toBeGreaterThan(3);
+      for (const r of proposte) expect(r).not.toMatch(/\b0?9(:00)?\b/);
+    }
+  });
+
+  it('la regola delle 9 sta in ogni forma del blocco slot', () => {
+    expect(ctx).toContain(NOVE_SOLO_EMERGENZA);
+    expect(chiusura).toContain(NOVE_SOLO_EMERGENZA);
+  });
+
+  it('a chi chiede le 9 o la mattina presto si propone dalle 10, il pomeriggio o la sera', () => {
+    expect(NOVE_SOLO_EMERGENZA).toContain('la mattina presto');
+    expect(NOVE_SOLO_EMERGENZA).toContain('dalle 10:00 in poi, oppure il pomeriggio o la sera fino alle 21');
+  });
+
+  it('le 9 si accettano solo se il lead insiste che è l unico momento', () => {
+    expect(NOVE_SOLO_EMERGENZA).toContain('SOLO se, dopo la tua alternativa, il lead insiste');
+  });
+
+  it('la guardia lascia passare le 9 (emergenza) e rifiuta le 8', () => {
+    const { day1, day2 } = computeBookingDays(now, []);
+    const giorni = [day1.date, day2.date];
+    expect(checkDataAppuntamento('2026-10-29T09:00:00+01:00', now.getTime(), [], giorni)).toEqual({ ok: true });
+    expect(checkDataAppuntamento('2026-10-29T08:30:00+01:00', now.getTime(), [], giorni)).toEqual({ ok: false, motivo: 'fuori_fascia' });
   });
 });

@@ -122,7 +122,19 @@ export function computeBookingDays(now: Date, ranges?: BlackoutRange[], pieni?: 
  * mattina stessa anche domani mattina è prenotabile. Le 9 restano un'opzione di
  * emergenza: la call di primo mattino è scomoda e Noemi attacca proprio alle 9.
  */
-const FASCIA = 'dalle 10:00 alle 21:00 (ultimo slot alle 21:00; le 09:00 solo se il lead non può in nessun altro orario)';
+const FASCIA = 'dalle 10:00 alle 21:00 (ultimo slot alle 21:00)';
+
+/**
+ * Le 9 il bot non le propone mai (PO 27/10/2026). Dal 20 al 27/10 sono finite alle 9 10
+ * call su 154: in 5 le aveva messe in campo il bot ("ho disponibilità già dalle 9", "le 9,
+ * le 10?", "mattina presto" tradotto in 9:00), in 4 le nominava il lead e il bot diceva sì
+ * al primo colpo (una era una data registrata male). Restano accettabili (la guardia `checkDataAppuntamento` le
+ * lascia passare) solo per chi insiste che è l'unico momento possibile.
+ */
+export const NOVE_SOLO_EMERGENZA =
+  "LE 09:00 NON LE PROPONI MAI: non le nomini fra gli orari che offri, neanche come alternativa (mai \"le 9 o le 10\", mai \"dalle 9\"). " +
+  "Se il lead chiede le 9, \"la mattina presto\" o \"il prima possibile la mattina\", proponigli con garbo un orario dalle 10:00 in poi, oppure il pomeriggio o la sera fino alle 21, quello che si incastra meglio con la sua giornata. " +
+  "Le 09:00 le accetti SOLO se, dopo la tua alternativa, il lead insiste che è l'unico momento in cui può fare la call: è un'emergenza, non un orario come gli altri.";
 
 /**
  * TEMPORANEO, da togliere dopo il 27/10/2026: le Conferme attaccano alle 9 solo da martedì
@@ -190,6 +202,7 @@ export function bookingSlotsContext(
       `CHIUSURA: dopo ${day1.label} siamo chiusi fino a ${chiusuraDopoDay1.label} compreso, si riparte ${day2.label}.`,
       `Proponi SOLO ${day1.label}. Se serve dire perché, dì come stanno le cose: dopo quel giorno siamo chiusi per la settimana di ferragosto. È un fatto, non una leva di vendita: dillo semplicemente, senza spingere sulla fretta.`,
       `Solo se il lead dice che non può, proponi ${day2.label}, ${fasciaDel(day2.date)}.`,
+      NOVE_SOLO_EMERGENZA,
       tag,
       AMBITO,
     ].join('\n');
@@ -204,6 +217,7 @@ export function bookingSlotsContext(
       `CHIUSURA: siamo chiusi fino a ${chiusuraPrimaDiDay1.label} compreso, la prima data utile è ${day1.label}. Se il lead chiede una data prima, dì come stanno le cose: siamo fermi per la settimana di ferragosto. È un fatto, non una leva di vendita.`,
       UNO_ALLA_VOLTA(day1.label),
       `Puoi fissare l'appuntamento SOLO in uno di questi due giorni e dentro queste fasce orarie. Nessun altro giorno o orario è ammesso.`,
+      NOVE_SOLO_EMERGENZA,
       tag,
       AMBITO,
     ].join('\n');
@@ -216,6 +230,7 @@ export function bookingSlotsContext(
     `- SOLO se il lead proprio non riesce nel giorno sopra: ${day2.label}, ${fasciaDel(day2.date)}`,
     UNO_ALLA_VOLTA(day1.label),
     `Puoi fissare l'appuntamento SOLO in uno di questi due giorni e dentro queste fasce orarie. Nessun altro giorno o orario è ammesso.`,
+    NOVE_SOLO_EMERGENZA,
     tag,
     AMBITO,
   ].join('\n');

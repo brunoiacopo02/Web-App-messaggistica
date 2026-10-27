@@ -151,7 +151,8 @@ describe('conferme: anticipo e micro-impegni', () => {
   it('[QUANDO] ha cinque forme, una per caso, e il pomeriggio resta com era', () => {
     expect(p).toContain('[QUANDO] ha sempre e solo una di queste cinque forme');
     expect(p).toContain('alle 9 in punto, appena attacca');
-    expect(p).toContain('non proporre mai le 9:00 del prossimo giorno lavorativo (dal sabato, il lunedì)');
+    expect(p).toContain('Le 9:00 comunque non le proponi mai tu');
+    expect(p).not.toContain('presto la mattina');
     expect(p).toContain('nel pomeriggio, qualche ora prima della videochiamata');
     expect(p).toContain('in mattinata, dalle 9, prima della videochiamata');
     expect(p).toContain('e se non ti trova');
