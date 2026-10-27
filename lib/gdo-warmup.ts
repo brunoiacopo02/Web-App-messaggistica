@@ -39,15 +39,46 @@ const PASSO_2 =
 const chiusura = (call: Date): string =>
   `RISCALDAMENTO, CHIUSURA: il lead ha risposto anche alla seconda domanda. Ringrazia in una riga e ricordagli in una riga la videochiamata di ${giornoRoma(call)} alle ${oraRoma(call)}. In coda metti [NOTA|Riscaldamento prima della call: obiettivo "<sue parole>"; prezzo e chi decide "<sue parole>"] e [RISCALDAMENTO:3]. Se ti ha detto che non ha soldi, che non ricorda di aver fissato o che non gli interessa, la nota comincia con "⚠️ Da verificare: ". Non dargli nessun esito e non scartarlo.`;
 
+/**
+ * Perché la nota entra nel prompt (`in_prompt`) o tace, per l'evento diagnostico
+ * `gdo_warmup_nota`. Le guardie sono le stesse di `notaRiscaldamento`, nello stesso ordine.
+ */
+export type MotivoRiscaldamento =
+  | 'in_prompt'
+  | 'spento'
+  | 'cancel'
+  | 'chiuso'
+  | 'no_recap'
+  | 'recap_turno'
+  | 'noemi'
+  | 'meno_3h'
+  | 'non_postino';
+
+export interface MotivoRiscaldamentoInput extends RiscaldamentoInput {
+  /** Il turno e' del postino (agenda GDO e funnel Professioni che non vince). Default true. */
+  postino?: boolean;
+  /** Il lead ha chiesto di annullare. Default false (il chiamante puo' averlo gia' messo in `enabled`). */
+  cancelRequested?: boolean;
+}
+
+export function motivoRiscaldamento(i: MotivoRiscaldamentoInput): MotivoRiscaldamento {
+  if (!i.enabled) return 'spento';
+  if (i.postino === false) return 'non_postino';
+  if (i.cancelRequested) return 'cancel';
+  if ((i.step ?? 0) >= RISCALDAMENTO_CHIUSO) return 'chiuso';
+  if (!i.recapForAt) return 'no_recap';
+  if (i.recapInQuestoTurno) return 'recap_turno';
+  if (i.serveNoemi) return 'noemi';
+  const callMs = i.appuntamentoAt ? Date.parse(i.appuntamentoAt) : NaN;
+  if (Number.isNaN(callMs) || callMs - i.nowMs < MIN_ANTICIPO_MS) return 'meno_3h';
+  return 'in_prompt';
+}
+
 /** La nota del passo da fare in questo turno, o null se il riscaldamento tace. */
 export function notaRiscaldamento(i: RiscaldamentoInput): string | null {
-  if (!i.enabled) return null;
+  if (motivoRiscaldamento(i) !== 'in_prompt') return null;
   const step = i.step ?? 0;
-  if (step >= RISCALDAMENTO_CHIUSO) return null;
-  if (!i.recapForAt || i.recapInQuestoTurno || i.serveNoemi) return null;
-  const callMs = i.appuntamentoAt ? Date.parse(i.appuntamentoAt) : NaN;
-  if (Number.isNaN(callMs) || callMs - i.nowMs < MIN_ANTICIPO_MS) return null;
-  const call = new Date(callMs);
+  const call = new Date(Date.parse(i.appuntamentoAt as string));
   if (step === 0) return passo1(call);
   if (step === 1) return PASSO_2;
   return chiusura(call);

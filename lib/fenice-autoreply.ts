@@ -2,7 +2,7 @@ import type { getSupabaseAdmin } from './supabase/admin';
 import { generateMarioReply, type MarioTurn } from './mario';
 import { datePiene, tettoGiornaliero } from './booking-capienza';
 import { gdoContextNote, serveNoemi, type GdoNoteInput } from './gdo-context-note';
-import { avanzaRiscaldamento, notaRiscaldamento } from './gdo-warmup';
+import { avanzaRiscaldamento, motivoRiscaldamento, notaRiscaldamento } from './gdo-warmup';
 import { gdoVideoText } from './gdo-agenda';
 import { decideGdoRecap, gdoRecapText } from './gdo-recap';
 import { claimRecap, rilasciaRecap } from './gdo-recap-send';
@@ -1017,6 +1017,23 @@ export async function drainMarioReplies(
             nowMs: Date.now(),
           })
         : null;
+      // Diagnostica (evento `gdo_warmup_nota`): perche' la nota entra o salta, su ogni
+      // turno di una chat con agenda GDO a interruttore acceso. Non cambia nulla del turno.
+      const warmupAcceso = process.env.GDO_WARMUP_ENABLED === '1';
+      const motivoWarmup = agendaGdo && warmupAcceso
+        ? motivoRiscaldamento({
+            enabled: true,
+            postino,
+            cancelRequested: !!gdo.cancel_requested_at,
+            step: gdoWarmupStep,
+            recapForAt: gdoRecapForAt,
+            recapInQuestoTurno: recapTipo === 'completo',
+            appuntamentoAt: gdoAppuntamentoAt,
+            serveNoemi: noteGdo ? serveNoemi(noteGdo) : false,
+            nowMs: Date.now(),
+          })
+        : null;
+      const stepWarmupTurno = gdoWarmupStep;
       const result = await generateMarioReply(history, {
         personaName: PERSONA_NAME[persona],
         giorniPieni,
@@ -1052,6 +1069,8 @@ export async function drainMarioReplies(
       // Il passo del riscaldamento si legge dal testo che parte davvero: se la
       // rigenerazione di Noemi sostituisce il testo, vale il suo tag.
       let tagRiscaldamento = result.riscaldamento;
+      // Solo diagnostica: la rigenerazione di Noemi ha sostituito il testo (senza nota).
+      let rigenerataNoemi = false;
       // Il lancio non passa MAI un lead ai GDO (PO 25/09/2026): senza appuntamento il
       // [PASSAGGIO_UMANO] si ignora e la riga del modello, che prometterebbe un contatto,
       // cede il posto alla proposta della call col consulente.
@@ -1107,6 +1126,7 @@ export async function drainMarioReplies(
           if (retry.visibleReply?.trim()) {
             visibleReply = retry.visibleReply;
             tagRiscaldamento = retry.riscaldamento;
+            rigenerataNoemi = true;
           }
         } catch (err) {
           const m = err instanceof Error ? err.message : 'errore';
@@ -1280,6 +1300,29 @@ export async function drainMarioReplies(
             message: `[bot-fissatore] conv ${conversationId}: eccezione inviando la nota col secondo recapito del lead — ${m}`,
             level: 'error',
           });
+        }
+      }
+
+      // Diagnostica del riscaldamento: il motivo per cui la domanda parte o salta e il tag
+      // che il modello ha rimesso. Non deve mai rompere il turno: la risposta e' gia' uscita.
+      if (motivoWarmup) {
+        try {
+          const tagRicevuto = tagRiscaldamento ?? null;
+          await supabase.from('event_log').insert({
+            type: 'gdo_warmup_nota',
+            payload: {
+              conversationId,
+              step: stepWarmupTurno,
+              motivo: motivoWarmup,
+              tagRicevuto,
+              // La rigenerazione di Noemi sostituisce il testo con uno senza nota.
+              rigenerataSenzaNota: !!notaWarmup && rigenerataNoemi,
+            } as never,
+            message: `[gdo] conv ${conversationId}: riscaldamento passo ${stepWarmupTurno ?? 0}, nota ${motivoWarmup}, tag ${tagRicevuto ?? 'nessuno'}`,
+            level: 'info',
+          });
+        } catch {
+          // solo diagnostica
         }
       }
 

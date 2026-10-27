@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { avanzaRiscaldamento, notaRiscaldamento } from './gdo-warmup';
+import { avanzaRiscaldamento, motivoRiscaldamento, notaRiscaldamento } from './gdo-warmup';
 
 const NOW = Date.parse('2026-10-21T12:00:00+02:00');
 const CALL = '2026-10-23T10:00:00+02:00'; // venerdì 23
@@ -63,5 +63,35 @@ describe('avanzaRiscaldamento', () => {
     [3, 0, { step: 3, chiuso: false }], // già chiuso: niente da chiudere
   ] as const)('(%s, %s)', (step, tag, atteso) => {
     expect(avanzaRiscaldamento(step, tag)).toEqual(atteso);
+  });
+});
+
+describe('motivoRiscaldamento: perché la nota parte o salta', () => {
+  it.each([
+    ['interruttore spento', { enabled: false }, 'spento'],
+    ['turno non del postino', { postino: false }, 'non_postino'],
+    ['lead con cancel', { cancelRequested: true }, 'cancel'],
+    ['riscaldamento chiuso (passo 3)', { step: 3 }, 'chiuso'],
+    ['recap mai mandato', { recapForAt: null }, 'no_recap'],
+    ['recap partito in questo turno', { recapInQuestoTurno: true }, 'recap_turno'],
+    ['in questo turno si spiega Noemi', { serveNoemi: true }, 'noemi'],
+    ['call fra 2 ore', { appuntamentoAt: new Date(NOW + 2 * 3600_000).toISOString() }, 'meno_3h'],
+    ['call senza data', { appuntamentoAt: null }, 'meno_3h'],
+    ['tutto a posto', {}, 'in_prompt'],
+    ['passo 2, tutto a posto', { step: 2, postino: true, cancelRequested: false }, 'in_prompt'],
+  ] as const)('%s → %s', (_, over, motivo) => {
+    expect(motivoRiscaldamento({ ...base, ...over })).toBe(motivo);
+  });
+
+  it('spento vince su tutto il resto', () => {
+    expect(motivoRiscaldamento({ ...base, enabled: false, postino: false, cancelRequested: true, step: 3 })).toBe('spento');
+  });
+
+  it('la nota esiste se e solo se il motivo è in_prompt', () => {
+    const casi = [{}, { step: 1 }, { step: 3 }, { recapForAt: null }, { serveNoemi: true }, { enabled: false }];
+    for (const over of casi) {
+      const i = { ...base, ...over };
+      expect(notaRiscaldamento(i) !== null).toBe(motivoRiscaldamento(i) === 'in_prompt');
+    }
   });
 });
