@@ -43,6 +43,19 @@ import { brochureContextNote, professioniContextNote, professioniVince, richiest
 import { isSlugProfessione, PROVENIENZA_PROFESSIONI } from './professioni';
 import { inviaScheda, testoScheda } from './scheda-invio';
 import { fissatoIlDi } from './noemi-quando';
+import {
+  giorniSpostamento,
+  motivoDataNonValida,
+  motivoNonSpostabile,
+  notaSpostamentoPrompt,
+  spostamentoAbilitato,
+  testoSpostamentoFatto,
+  TESTO_SPOSTAMENTO_NON_FATTO,
+  type MotivoNonSpostabile,
+} from './gdo-spostamento';
+import { giaSpostatoDalBot, inviaSpostamentoAlCrm, registraSpostamentoInChat, statoCrmLocale } from './gdo-spostamento-send';
+import { isoWithOffset } from './bot-contract';
+import { sameInstant } from './rome-time';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -553,7 +566,8 @@ export async function drainMarioReplies(
   };
   const gdoAgendaAt = gdo.gdo_agenda_at ?? null;
   // Da quando conta la call per dire quando chiama Noemi: agenda o ultimo spostamento.
-  const fissatoIlGdo = fissatoIlDi(gdo);
+  // `let`: lo spostamento fatto dal bot (lib/gdo-spostamento.ts) lo riporta ad adesso.
+  let fissatoIlGdo = fissatoIlDi(gdo);
   const gdoVideoUrl = gdo.gdo_video_url ?? null;
   // La chat ha ricevuto un'agenda GDO. Se il turno e' davvero del postino lo decide il giro
   // (`postino` nel ciclo qui sotto): il funnel Professioni vince su un'agenda gia' passata.
@@ -566,7 +580,8 @@ export async function drainMarioReplies(
   // Ora vera della call: serve a dire quando chiama Noemi (mattina di domani ⇒ la mattina stessa,
   // mattina più in là ⇒ già il giorno prima; vedi quandoChiamaNoemi).
   const botScheduledAt = gdo.bot_scheduled_at ?? null;
-  const gdoAppuntamentoAt = gdo.gdo_appuntamento_at ?? null;
+  // `let`: dopo uno spostamento fatto dal bot vale la data nuova per il resto del drain.
+  let gdoAppuntamentoAt = gdo.gdo_appuntamento_at ?? null;
   // Il recap GDO gia' uscito per questa call (vedi lib/gdo-recap.ts). `let`: dopo la
   // presa vale anche per i giri successivi dello stesso drain.
   let gdoRecapForAt = gdo.gdo_recap_for_at ?? null;
@@ -1061,6 +1076,36 @@ export async function drainMarioReplies(
           })
         : null;
       const stepWarmupTurno = gdoWarmupStep;
+      // Spostamento della call fatto dal bot (PO 28/10/2026, lib/gdo-spostamento.ts): solo
+      // sul postino, una volta sola, se le Conferme non hanno ancora esitato il lead. Le due
+      // letture (evento "gia' spostato", stato CRM locale) si pagano solo quando il resto
+      // e' gia' in regola. Il blocco nel prompt c'e' solo se lo spostamento si puo' fare.
+      const rangesSpostamento = bookingBlackout(process.env.BOOKING_BLACKOUT);
+      const baseSpostamento = {
+        enabled: spostamentoAbilitato(process.env.GDO_SPOSTAMENTO_BOT_ENABLED),
+        postino: postino && !!crmLeadId,
+        botOutcome: esitoInPiedi,
+        appuntamentoAt: gdoAppuntamentoAt,
+        nowMs: Date.now(),
+      };
+      let motivoNoSposta: MotivoNonSpostabile | null = motivoNonSpostabile({ ...baseSpostamento, giaSpostato: false });
+      if (motivoNoSposta === null && crmLeadId) {
+        const [gia, crm] = await Promise.all([
+          giaSpostatoDalBot(supabase, conversationId),
+          statoCrmLocale(supabase, crmLeadId),
+        ]);
+        motivoNoSposta = motivoNonSpostabile({
+          ...baseSpostamento,
+          giaSpostato: gia,
+          confermeOutcome: crm?.confermeOutcome ?? null,
+          presented: crm?.presented ?? null,
+          salesOutcome: crm?.salesOutcome ?? null,
+        });
+      }
+      const giorniSposta = giorniSpostamento(new Date(), rangesSpostamento);
+      const notaSposta = motivoNoSposta === null && giorniSposta.length > 0 && gdoAppuntamentoAt
+        ? notaSpostamentoPrompt({ giorni: giorniSposta, callAt: new Date(gdoAppuntamentoAt) })
+        : null;
       const result = await generateMarioReply(history, {
         personaName: PERSONA_NAME[persona],
         giorniPieni,
@@ -1070,7 +1115,7 @@ export async function drainMarioReplies(
         // nota e' un'altra, la dichiarazione IA: un postino ha sempre ricevuto l'agenda,
         // quindi i due casi non si incontrano mai.
         ...(noteGdo
-          ? { contextNote: gdoContextNote(noteGdo) }
+          ? { contextNote: [gdoContextNote(noteGdo), notaSposta].filter(Boolean).join('\n\n') }
           : notaLancioCompleta
             ? { contextNote: notaLancioCompleta }
             : notaStudente
@@ -1159,7 +1204,7 @@ export async function drainMarioReplies(
           const retry = await generateMarioReply(history, {
             personaName: PERSONA_NAME[persona],
             giorniPieni,
-            contextNote: gdoContextNote({
+            contextNote: [gdoContextNote({
               gdoVideoSentAt: gdoVideoSentAt,
               gdoVideoWatchedAt: watchedAt, // appena confermato: sopprime NOTA_VIDEO nella nota
               gdoNoemiRemindedAt: gdoNoemiRemindedAt,
@@ -1170,7 +1215,7 @@ export async function drainMarioReplies(
               botScheduledAt: botScheduledAt,
               gdoAppuntamentoAt: gdoAppuntamentoAt,
               fissatoIl: fissatoIlGdo,
-            }),
+            }), notaSposta].filter(Boolean).join('\n\n'),
           });
           // Fail-safe: una rigenerazione vuota non vale meno di zero, vale come un
           // fallimento — si manda comunque la prima risposta, il lead non resta muto.
@@ -1189,15 +1234,80 @@ export async function drainMarioReplies(
         }
       }
 
+      // Spostamento della call (lib/gdo-spostamento.ts): il modello ha scritto [SPOSTA|...].
+      // Si decide PRIMA di mandare il testo: il lead legge "fatto" solo se il CRM ha
+      // davvero spostato. Il codice verifica la data, il CRM decide; ogni "no" ripiega
+      // sulla nota SPOSTAMENTO CHIESTO di sempre (esito RICHIAMO sul canale solo-nota).
+      let spostamentoFatto = false;
+      let bollaSpostamento: string | null = null;
+      if (postino && crmLeadId && result.spostaAt !== undefined) {
+        const adesso = new Date();
+        const videoVisto = !!gdoVideoWatchedAt || videoConfermato;
+        // Lo stesso spostamento rivisto (il turno di prima e' andato a meta'): si riconferma.
+        if (motivoNoSposta === 'gia_spostato' && gdoAppuntamentoAt && sameInstant(result.spostaAt, gdoAppuntamentoAt)) {
+          bollaSpostamento = testoSpostamentoFatto({
+            nome: gdo.leads?.first_name ?? null, call: new Date(gdoAppuntamentoAt), fissatoIl: fissatoIlGdo ?? adesso,
+            videoVisto, videoLink: gdoVideoUrl,
+          });
+          spostamentoFatto = true;
+        } else {
+          const motivo: string | null = motivoNoSposta
+            ?? motivoDataNonValida(result.spostaAt, gdoAppuntamentoAt, adesso.getTime(), rangesSpostamento);
+          const secret = process.env.BOT_WEBHOOK_SECRET;
+          const risposta = motivo === null
+            ? secret
+              ? await inviaSpostamentoAlCrm(crmLeadId, result.spostaAt, secret)
+              : { ok: false as const, motivo: 'not_configured' }
+            : null;
+          if (risposta?.ok) {
+            const da = gdoAppuntamentoAt;
+            const a = new Date(result.spostaAt).toISOString();
+            await registraSpostamentoInChat(supabase, { conversationId, crmLeadId, da, a, now: adesso });
+            gdoAppuntamentoAt = a;
+            fissatoIlGdo = adesso;
+            gdoRecapForAt = a;
+            gdoRecapSentAt = adesso.toISOString();
+            gdoNoemiRemindedAt ??= adesso.toISOString();
+            bollaSpostamento = testoSpostamentoFatto({
+              nome: gdo.leads?.first_name ?? null, call: new Date(a), fissatoIl: adesso, videoVisto, videoLink: gdoVideoUrl,
+            });
+            spostamentoFatto = true;
+          } else {
+            const perche = motivo ?? (risposta && !risposta.ok ? risposta.motivo : 'sconosciuto');
+            await supabase.from('event_log').insert({
+              type: 'gdo_spostamento_non_fatto',
+              payload: { conversationId, crmLeadId, data: result.spostaAt, motivo: perche, status: risposta && !risposta.ok ? risposta.status ?? null : null } as never,
+              message: `[gdo] conv ${conversationId}: spostamento a ${result.spostaAt} non fatto (${perche}), parte la nota alle Conferme`,
+              level: risposta && !risposta.ok && risposta.status === undefined ? 'error' : 'info',
+            });
+            visibleReply = TESTO_SPOSTAMENTO_NON_FATTO;
+            // La data chiesta arriva alle Conferme come oggi: RICHIAMO sul canale solo-nota
+            // diventa "SPOSTAMENTO CHIESTO — ... a <data>". Un esito gia' scritto dal modello vince.
+            if (!result.outcome) {
+              result.outcome = 'RICHIAMO';
+              if (isoWithOffset(result.spostaAt.trim())) result.scheduledAt = result.spostaAt.trim();
+              else result.note = result.spostaAt.trim() || undefined;
+            }
+          }
+        }
+        if (spostamentoFatto) {
+          // La conferma la scrive il codice: un esito del modello nello stesso turno non parte.
+          visibleReply = '';
+          result.outcome = undefined;
+          result.scheduledAt = undefined;
+        }
+      }
+
       // Invia ogni a-capo come messaggio separato (più umano), con breve pausa.
-      let parts = splitMarioMessages(visibleReply);
+      // La conferma dello spostamento resta UNA bolla (va a capo dentro, come il recap).
+      let parts = bollaSpostamento ? [bollaSpostamento] : splitMarioMessages(visibleReply);
 
       // Riscaldamento: il turno dopo una domanda (la nostra ultima bolla la conteneva) e la
       // domanda di questo turno. Il testo del lead e' quello di tutti gli inbound del turno.
       const testoLeadTurno = idxTurno >= 0
         ? rows.slice(idxTurno).filter((m) => m.direction === 'in').map((m) => (m.body ?? '').trim()).filter(Boolean).join(' / ')
         : '';
-      const esitoTurno = !!result.outcome || result.appointmentFixed;
+      const esitoTurno = !!result.outcome || result.appointmentFixed || spostamentoFatto;
       const warmupAttivo = postino && !riscaldamentoInerte(motivoWarmup);
       const rispostaA = warmupAttivo && idxTurno >= 0 ? domandaPrecedente(rows, idxTurno) : null;
       const decisioneDomanda: DomandaDecisa | null = warmupAttivo
@@ -1359,7 +1469,7 @@ export async function drainMarioReplies(
 
       await supabase.from('event_log').insert({
         type: 'fenice_ai_reply',
-        payload: { conversationId, phone, appointmentFixed: fissatoNelTurno, appuntamentoScartato: motivoScarto, passToHuman: passaAPersona } as never,
+        payload: { conversationId, phone, appointmentFixed: fissatoNelTurno, appuntamentoScartato: motivoScarto, passToHuman: passaAPersona, ...(result.spostaAt !== undefined ? { spostaAt: result.spostaAt, spostamentoFatto } : {}) } as never,
         message: `Mario ha risposto a ${phone}`, level: 'info',
       });
 

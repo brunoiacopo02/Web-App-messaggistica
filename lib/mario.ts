@@ -39,6 +39,9 @@ export type MarioResult = {
   /** Argomento del tag `[SCHEDA:...]` che non è uno slug del catalogo: il testo è pulito,
    *  nessuna scheda viene inviata, ma il caso resta visibile nei log. */
   schedaNonValida?: string;
+  /** Lead GDO: giorno e ora nuovi per la call, dal tag `[SPOSTA|<ISO>]` (PO 28/10/2026).
+   *  Grezzo come l'ha scritto il modello: lo verifica `lib/gdo-spostamento.ts`. */
+  spostaAt?: string;
 };
 
 const ESITO_RE = /\[ESITO:(APPUNTAMENTO|RICHIAMO|SCARTO|INTERROTTO)\|([^\]]*)\]/i;
@@ -52,6 +55,8 @@ const SCHEDA_RE = /\[SCHEDA:([^\]]*)\]/gi;
  *  oggi non significa niente, ma se il modello lo ricopia dalla cronologia non deve
  *  arrivare al lead. Le domande le scrive il codice, vedi lib/gdo-warmup.ts. */
 const RISCALDAMENTO_RE = /\[RISCALDAMENTO:([0-3])\]/gi;
+/** Lo spostamento della call di un lead GDO (vedi lib/gdo-spostamento.ts). Globale: mai in chat. */
+const SPOSTA_RE = /\[SPOSTA\|([^\]]*)\]/gi;
 
 /** Rileva tag speciali, li rimuove dal testo visibile e ritorna flag + esito strutturato. */
 export function parseMarioReply(raw: string): MarioResult {
@@ -92,6 +97,8 @@ export function parseMarioReply(raw: string): MarioResult {
   const schedaRichiesta = schedaArg && isSlugProfessione(schedaArg) ? schedaArg : undefined;
   const schedaNonValida = schedaArg && !schedaRichiesta ? schedaArg : undefined;
 
+  const spostaAt = [...raw.matchAll(SPOSTA_RE)].map((m) => (m[1] ?? '').trim())[0];
+
   const visibleReply = sanitizeOutbound(
     raw
       .replace(ESITO_RE, '')
@@ -101,6 +108,7 @@ export function parseMarioReply(raw: string): MarioResult {
       .replace(NOTA_RE, '')
       .replace(SCHEDA_RE, '')
       .replace(RISCALDAMENTO_RE, '')
+      .replace(SPOSTA_RE, '')
       .trim(),
   );
 
@@ -116,6 +124,7 @@ export function parseMarioReply(raw: string): MarioResult {
     notaCrm,
     schedaRichiesta,
     schedaNonValida,
+    ...(spostaAt !== undefined ? { spostaAt } : {}),
   };
 }
 
