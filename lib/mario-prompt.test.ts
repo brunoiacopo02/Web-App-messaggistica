@@ -932,3 +932,20 @@ describe('passaggio a una persona solo su richiesta esplicita', () => {
     expect(blocco.replace(/mai "se ti convince", mai "se ti interessa"/, '')).not.toMatch(/se ti convince|se ti interessa/);
   });
 });
+
+// Bruno, 28/10/2026: l'offerta da 27-28€ che i lead citano è il Digital Step. Il bot
+// rispondeva "non mi risulta un'offerta del genere".
+describe('offerta da 27-28€ = Digital Step', () => {
+  const p = buildMarioSystem('Marta');
+  it('la riconosce come Digital Step, corso introduttivo, e fissa lo stesso', () => {
+    const inizio = p.indexOf("\"Ho visto l'offerta da 27 euro");
+    expect(inizio).toBeGreaterThan(-1);
+    const riga = p.slice(inizio, p.indexOf('\n', inizio));
+    expect(riga).toContain('è il Digital Step');
+    expect(riga).toContain('Non dire mai che non ti risulta');
+    expect(riga).toContain('corso introduttivo');
+    expect(riga).toMatch(/come quello gratuito da 10 ore/);
+    expect(riga).toMatch(/Non aggiungere prezzi/);
+    expect(riga).toMatch(/la fissi/);
+  });
+});
