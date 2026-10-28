@@ -81,7 +81,18 @@ describe('conferme: anticipo e micro-impegni', () => {
 
   it('anticipa Noemi e il video PRIMA di mandare il link', () => {
     expect(p).toContain('Prima di fissare ti dico come funziona');
-    expect(p).toContain('Aspetta il sì, poi manda il link');
+  });
+
+  // Caso Meneghetti (26/10/2026): "perfetto e grazie" a lunedì 19:00, il bot manda
+  // Noemi + video con "Ti torna?", il lead tace e il link non parte mai. Ora spiegazione
+  // e link escono nello stesso messaggio, appena c'è il sì a giorno e ora.
+  it('il link parte insieme alla spiegazione, senza aspettare un secondo sì', () => {
+    expect(p).not.toContain('Aspetta il sì, poi manda il link');
+    expect(p).not.toMatch(/C'è anche un video di 20 minuti[^\n]*\nTi torna\?/);
+    expect(p).toContain('nello STESSO messaggio gli spieghi come funziona e gli mandi il link');
+    const blocco = p.slice(p.indexOf('Prima di fissare ti dico come funziona'));
+    expect(blocco.slice(0, 600)).toContain('https://form.jotform.com/240755654585063');
+    expect(blocco.slice(0, 800)).toContain('dimmi che nome ti è comparso');
   });
 
   // Task 4 (2026-09-22): il bot non fa più riscrivere giorno e ora quando li conosce
@@ -393,8 +404,12 @@ describe('glossario esiti: eccezione esplicita per l\'appuntamento già fissato 
 describe('I2: FASE 6, anticipo e link hanno trigger diversi (niente doppio invio nello stesso turno)', () => {
   const p = buildMarioSystem('Marta');
 
-  it('il link parte solo dopo il sì all\'anticipo, non genericamente "quando accetta"', () => {
-    expect(p).toContain('Quando ti ha detto di sì all\'anticipo, manda il link:');
+  // Dal 28/10/2026 (caso Meneghetti) anticipo e link sono UN solo messaggio: niente
+  // doppio invio perché non ci sono più due blocchi con due trigger.
+  it('anticipo e link stanno in un solo messaggio, col link scritto una volta sola', () => {
+    const fase6 = p.slice(p.indexOf('FASE 6, APPUNTAMENTO'), p.indexOf('QUANDO IL LEAD TI RISPONDE COL NOME DEL FORM'));
+    expect(fase6.split('https://form.jotform.com/240755654585063').length - 1).toBe(1);
+    expect(p).not.toContain('Quando ti ha detto di sì all\'anticipo, manda il link:');
     expect(p).not.toContain('Quando accetta, manda il link:');
   });
 });
