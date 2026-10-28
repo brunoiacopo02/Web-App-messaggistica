@@ -620,8 +620,9 @@ describe('checkDataAppuntamento — finestra dei due giorni', () => {
   });
 
   // PO 24/10/2026: niente più rotazione alle 20, domani mattina è prenotabile.
-  it('lunedì alle 23:30 martedì mattina è dentro, anche alle 9', () => {
-    const lunSera = Date.parse('2026-10-26T23:30:00+01:00');
+  // Prima dello scatto delle 20:00 del form: martedì è ancora il primo giorno.
+  it('lunedì alle 19:30 martedì mattina è dentro, anche alle 9', () => {
+    const lunSera = Date.parse('2026-10-26T19:30:00+01:00');
     expect(checkDataAppuntamento('2026-10-27T10:00:00+01:00', lunSera, [])).toEqual({ ok: true });
     expect(checkDataAppuntamento('2026-10-27T09:00:00+01:00', lunSera, [])).toEqual({ ok: true });
   });
@@ -630,8 +631,8 @@ describe('checkDataAppuntamento — finestra dei due giorni', () => {
 // Il difetto di montaggio del 10/09: la finestra che il modello vede nel prompt e
 // quella che la guardia ricalcola sono due calcoli in due istanti. Allora l'ancora
 // ruotava alle 20:00 (il bot alle 19:45 proponeva "domani alle 20", il lead rispondeva
-// alle 20:10 e la call veniva scartata); dal 26/10/2026 ruota solo a mezzanotte, e lo
-// stesso difetto resta possibile a cavallo della mezzanotte.
+// alle 20:10 e la call veniva scartata); dal 26 al 28/10/2026 ruotava a mezzanotte, dal
+// 28/10/2026 di nuovo alle 20:00 come il form.
 describe('checkDataAppuntamento — la finestra viaggia col turno, non si ricalcola', () => {
   // Giovedì 10 settembre 2026. Alle 23:50 il prompt mostra venerdì 11 e sabato 12;
   // alle 00:10 di venerdì l'ancora è già ruotata e il calcolo dà sabato 12 e lunedì 14.

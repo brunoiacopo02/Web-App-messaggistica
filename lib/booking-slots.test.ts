@@ -36,37 +36,59 @@ describe('romeHour', () => {
   });
 });
 
-// Dal 26/10/2026 (PO 24/10) niente più rotazione alle 20: le Conferme chiamano la
-// mattina stessa, quindi anche alle 23 di lunedì il primo giorno resta martedì.
-describe('computeBookingDays senza rotazione alle 20:00', () => {
-  it('giovedì 19:00 → ven e sab', () => {
-    const { day1, day2 } = computeBookingDays(new Date('2026-06-25T17:00:00Z')); // Rome 19:00
+// Dalle 20:00 il form JotForm si comporta come se fosse il giorno dopo (Bruno,
+// 28/10/2026): il bot deve fare lo stesso, o la sera propone un giorno che il form non ha.
+describe('computeBookingDays con lo scatto delle 20:00 del form', () => {
+  it('giovedì 19:59 → ven e sab', () => {
+    const { day1, day2 } = computeBookingDays(new Date('2026-06-25T17:59:00Z'), []); // Rome 19:59
     expect(day1.date).toBe('2026-06-26'); // venerdì
     expect(day2.date).toBe('2026-06-27'); // sabato
   });
 
-  it('giovedì 20:00 non scivola più: ven e sab', () => {
-    const { day1, day2 } = computeBookingDays(new Date('2026-06-25T18:00:00Z')); // Rome 20:00
-    expect(day1.date).toBe('2026-06-26');
-    expect(day2.date).toBe('2026-06-27');
+  it('giovedì 20:00 scatta: sab e lun', () => {
+    const { day1, day2 } = computeBookingDays(new Date('2026-06-25T18:00:00Z'), []); // Rome 20:00
+    expect(day1.date).toBe('2026-06-27');
+    expect(day2.date).toBe('2026-06-29');
   });
 
-  it('lunedì 23:30 → martedì e mercoledì', () => {
-    const { day1, day2 } = computeBookingDays(new Date('2026-10-26T22:30:00Z')); // Rome 23:30 (+01:00)
-    expect(day1.date).toBe('2026-10-27');
-    expect(day2.date).toBe('2026-10-28');
+  // Caso Guaman: alle 21:12 di lunedì il form non offre più martedì.
+  it('lunedì 26/10 alle 21:12 → mercoledì e giovedì', () => {
+    const { day1, day2 } = computeBookingDays(new Date('2026-10-26T20:12:00Z'), []); // Rome 21:12 (+01:00)
+    expect(day1.date).toBe('2026-10-28');
+    expect(day2.date).toBe('2026-10-29');
   });
 
-  it('a mezzanotte la finestra ruota ancora: martedì 00:30 → mer e gio', () => {
-    const { day1, day2 } = computeBookingDays(new Date('2026-10-26T23:30:00Z')); // Rome 00:30
+  it('dopo mezzanotte resta uguale: martedì 00:30 → mer e gio', () => {
+    const { day1, day2 } = computeBookingDays(new Date('2026-10-26T23:30:00Z'), []); // Rome 00:30
     expect(day1.date).toBe('2026-10-28');
     expect(day2.date).toBe('2026-10-29');
   });
 
   it('sabato sera → lun e mar', () => {
-    const { day1, day2 } = computeBookingDays(new Date('2026-06-27T18:00:00Z')); // Rome 20:00
+    const { day1, day2 } = computeBookingDays(new Date('2026-06-27T18:00:00Z'), []); // Rome 20:00
     expect(day1.date).toBe('2026-06-29'); // lunedì
     expect(day2.date).toBe('2026-06-30'); // martedì
+  });
+
+  it('venerdì sera salta la domenica: lun e mar', () => {
+    const { day1, day2 } = computeBookingDays(new Date('2026-06-26T19:00:00Z'), []); // Rome 21:00
+    expect(day1.date).toBe('2026-06-29');
+    expect(day2.date).toBe('2026-06-30');
+  });
+});
+
+describe('bookingSlotsContext: solo ore piene e form che non fa scegliere', () => {
+  const ctx = bookingSlotsContext(new Date('2026-06-22T10:00:00+02:00'), { ranges: [] });
+  it("vieta le mezz'ore", () => {
+    expect(ctx).toContain('SOLO ORE PIENE');
+    expect(ctx).toContain('mai 19:30');
+  });
+  it('se il form non fa scegliere, nuovo orario e niente collega', () => {
+    expect(ctx).toContain('SE IL LEAD TI DICE CHE IL FORM NON GLI FA SCEGLIERE');
+    expect(ctx).toContain('non passarlo a un collega');
+  });
+  it('il primo giorno niente 09:00', () => {
+    expect(ctx).toContain('Il primo giorno (martedì 23/06/2026) il form parte dalle 10:00');
   });
 });
 
@@ -100,10 +122,10 @@ describe('bookingSlotsContext', () => {
 
 // Chiusura ferragosto 2026: 11-17 agosto compresi, si riapre martedì 18.
 describe('computeBookingDays con giorni chiusi', () => {
-  it('venerdì 7 alle 20 → sabato 8 e lunedì 10 (niente più rotazione)', () => {
+  it('venerdì 7 alle 20 → lunedì 10 e martedì 18 (scatto delle 20 del form)', () => {
     const r = computeBookingDays(new Date('2026-08-07T18:00:00Z')); // Rome 20:00
-    expect(r.day1.date).toBe('2026-08-08');
-    expect(r.day2.date).toBe('2026-08-10');
+    expect(r.day1.date).toBe('2026-08-10');
+    expect(r.day2.date).toBe('2026-08-18');
   });
 
   it('sabato 8 → lunedì 10 e martedì 18', () => {

@@ -1,4 +1,4 @@
-import { romeOffset } from './rome-time';
+import { romeHour, romeOffset } from './rome-time';
 import { bookingBlackout, isBookableDate, type BlackoutRange } from './booking-blackout';
 
 // Calcolo degli unici due giorni in cui Mario può fissare l'appuntamento:
@@ -97,13 +97,18 @@ export type BookingDays = {
 
 const toBookingDay = (v: Ymd): BookingDay => ({ label: labelIt(v), date: isoDate(v) });
 
+/** Ora (Europe/Rome) da cui il form di prenotazione si comporta come se fosse il giorno dopo. */
+export const ORA_SCATTO_FORM = 20;
+
 /** I due (e soli due) giorni prenotabili a partire da `now`: niente domeniche, niente giorni chiusi. */
 export function computeBookingDays(now: Date, ranges?: BlackoutRange[], pieni?: GiorniPieni): BookingDays {
   const chiusure = ranges ?? bookingBlackout(process.env.BOOKING_BLACKOUT);
-  // Niente più rotazione alle 20:00 (PO 24/10/2026): le Conferme chiamano la mattina
-  // stessa dalle 9, quindi anche a tarda sera domani resta il primo giorno, mattina
-  // compresa. La finestra ruota solo a mezzanotte.
-  const today = romeYmd(now);
+  // Dalle 20:00 (ora di Roma) si ragiona come se fosse già domani, perché così fa il
+  // form JotForm (Bruno, 28/10/2026): alle 21:12 di lunedì il form non offre più martedì
+  // ma mercoledì e giovedì. Il 24/10 la rotazione era stata tolta solo qui, il form
+  // ha continuato a ruotare, e la sera il bot proponeva un giorno che il form non aveva
+  // (caso Guaman). Prompt, guardia e link del form usano tutti questo calcolo.
+  const today = romeHour(now) >= ORA_SCATTO_FORM ? addDays(romeYmd(now), 1) : romeYmd(now);
 
   const s1 = nextBookable(today, chiusure, pieni);
   const s2 = nextBookable(s1.day, chiusure, pieni);
@@ -165,6 +170,17 @@ export const NOVE_SOLO_EMERGENZA =
   "Se il lead chiede le 9, \"la mattina presto\" o \"il prima possibile la mattina\", proponigli con garbo un orario dalle 10:00 in poi, oppure il pomeriggio o la sera fino alle 21, quello che si incastra meglio con la sua giornata. " +
   "Le 09:00 le accetti SOLO se, dopo la tua alternativa, il lead insiste che è l'unico momento in cui può fare la call: è un'emergenza, non un orario come gli altri.";
 
+/**
+ * Il form ha slot da 60 minuti: solo ore piene. Il prompt aveva un esempio "alle 19:30"
+ * e il modello proponeva mezz'ore che il lead poi non trovava sul form. E quando il form
+ * non gli fa scegliere un orario il bot insisteva o passava a una persona: qui si dice
+ * di tornare su un orario che il form ha davvero.
+ */
+export const ORE_PIENE_E_FORM = (primo: string) =>
+  "SOLO ORE PIENE: il form ha slot da un'ora, quindi proponi e accetti solo orari tipo 10:00, 11:00, 18:00, 19:00, mai le mezz'ore (mai 18:30, mai 19:30). Se il lead chiede una mezz'ora, proponigli l'ora piena prima o dopo. " +
+  `Il primo giorno (${primo}) il form parte dalle 10:00: prima delle 10 quel giorno non c'è nessuno slot. ` +
+  'SE IL LEAD TI DICE CHE IL FORM NON GLI FA SCEGLIERE un giorno o un orario: non insistere su quello e non passarlo a un collega. Il form mostra solo questi due giorni e solo gli orari ancora liberi: digli che quello non è più disponibile e proponigli tu un altro orario a ora piena dentro questi due giorni, da scegliere sul form.';
+
 const INTESTAZIONE = 'SLOT APPUNTAMENTO DISPONIBILI (la domenica non è mai disponibile, fuso Europe/Rome):';
 
 // Il modello usava questi giorni anche per "correggere" la data di una call che il
@@ -213,6 +229,7 @@ export function bookingSlotsContext(
       `Proponi SOLO ${day1.label}. Se serve dire perché, dì come stanno le cose: dopo quel giorno siamo chiusi per la settimana di ferragosto. È un fatto, non una leva di vendita: dillo semplicemente, senza spingere sulla fretta.`,
       `Solo se il lead dice che non può, proponi ${day2.label}, ${FASCIA}.`,
       NOVE_SOLO_EMERGENZA,
+      ORE_PIENE_E_FORM(day1.label),
       tag,
       AMBITO,
     ].join('\n');
@@ -228,6 +245,7 @@ export function bookingSlotsContext(
       UNO_ALLA_VOLTA(day1.label),
       `Puoi fissare l'appuntamento SOLO in uno di questi due giorni e dentro queste fasce orarie. Nessun altro giorno o orario è ammesso.`,
       NOVE_SOLO_EMERGENZA,
+      ORE_PIENE_E_FORM(day1.label),
       tag,
       AMBITO,
     ].join('\n');
@@ -241,6 +259,7 @@ export function bookingSlotsContext(
     UNO_ALLA_VOLTA(day1.label),
     `Puoi fissare l'appuntamento SOLO in uno di questi due giorni e dentro queste fasce orarie. Nessun altro giorno o orario è ammesso.`,
     NOVE_SOLO_EMERGENZA,
+    ORE_PIENE_E_FORM(day1.label),
     tag,
     AMBITO,
   ].join('\n');
