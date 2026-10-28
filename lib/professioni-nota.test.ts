@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { chiedeLaScheda, professioniContextNote, professioniVince, schedaDaInviare } from './professioni-nota';
+import { chiedeLaScheda, professioniContextNote, professioniVince, schedaDaInviare, schedaSubito } from './professioni-nota';
 
 describe('professioniContextNote', () => {
-  it('nomina il corso, la regola della scheda dopo l\'appuntamento e il tag', () => {
+  it('scheda non ancora partita: nomina il corso, il tag e il ripiego col video', () => {
     const n = professioniContextNote('video_editor');
     expect(n).toContain('Video Editor');
     expect(n).toContain('[SCHEDA:video_editor]');
-    expect(n).toMatch(/dopo/i);
+    expect(n).toContain("NON E' ANCORA PARTITA");
+    expect(n).toContain('insieme al video');
   });
   it('senza corso chiede quale e mostra gli slug', () => {
     expect(professioniContextNote(null)).toContain('social_media_manager');
@@ -108,13 +109,57 @@ describe('chiedeLaScheda', () => {
   });
 });
 
-describe('professioniContextNote con la richiesta appena fatta', () => {
-  it('dice "certo che te la mando, prima voglio capire meglio" e vieta di dire che non esiste', () => {
-    const n = professioniContextNote('copywriter', { appenaChiesta: true });
-    expect(n).toContain('HA APPENA CHIESTO LA SCHEDA');
-    expect(n).toContain('[SCHEDA:copywriter]');
+// PO 28/10/2026: nelle adv promettiamo la brochure subito. La scheda parte prima della
+// risposta di Mario; la nota gli dice che e' gia' sopra e di non ripeterla.
+describe('professioniContextNote con la scheda gia in chat', () => {
+  it('appena partita: non annunciarla, dagli un\'occhiata e prima domanda, niente "prima capisco meglio"', () => {
+    const n = professioniContextNote('copywriter', { schedaInviata: true, appenaInviata: true });
+    expect(n).toContain("APPENA ARRIVATA");
+    expect(n).toContain('Ecco la scheda del corso di Copywriter');
+    expect(n).toContain('prima domanda');
+    expect(n).not.toContain('prima vuoi capire');
+    expect(n).not.toContain('[SCHEDA:copywriter]');
+  });
+  it('partita in un turno precedente: se la richiede e\' sopra in chat, non si rimanda', () => {
+    const n = professioniContextNote('copywriter', { schedaInviata: true });
+    expect(n).toContain("L'HA GIA' RICEVUTA");
+    expect(n).toContain('sopra in chat');
+    expect(n).toContain('Non rimandarla');
+    expect(n).not.toContain('[SCHEDA:copywriter]');
   });
   it("la regola 'la scheda esiste' c'e' sempre", () => {
-    expect(professioniContextNote('copywriter')).toMatch(/non dire mai che non (c'e'|abbiamo)/i);
+    for (const opts of [undefined, { schedaInviata: true }, { schedaInviata: true, appenaInviata: true }]) {
+      expect(professioniContextNote('copywriter', opts)).toMatch(/non dire mai che non (c'e'|abbiamo)/i);
+    }
+    expect(professioniContextNote(null)).toMatch(/non dire mai che non (c'e'|abbiamo)/i);
+  });
+  it('senza corso: appena lo dice, la scheda col tag', () => {
+    const n = professioniContextNote(null);
+    expect(n).toContain('APPENA TI DICE IL CORSO');
+    expect(n).toContain('[SCHEDA:<slug>]');
+  });
+});
+
+describe('schedaSubito (PO 28/10/2026)', () => {
+  const LINK = 'Ciao, sono interessato alla professione di Copywriter e vorrei ricevere la scheda del corso';
+  const base = { vinceProfessioni: true, professione: 'copywriter' as string | null, schedaInviataAt: null as string | null, testiTurno: [LINK] };
+  it('frase del link sul funnel col corso: parte subito', () => {
+    expect(schedaSubito(base)).toBe('copywriter');
+  });
+  it('richiesta esplicita senza la frase: parte subito', () => {
+    expect(schedaSubito({ ...base, testiTurno: ['mi mandi il pdf?'] })).toBe('copywriter');
+  });
+  it('gia in chat: non riparte', () => {
+    expect(schedaSubito({ ...base, schedaInviataAt: '2026-10-28T10:00:00Z' })).toBeNull();
+  });
+  it('turno che non e del funnel (postino, lancio in corso): mai', () => {
+    expect(schedaSubito({ ...base, vinceProfessioni: false })).toBeNull();
+  });
+  it('corso sconosciuto o non valido: no (Mario chiede il corso e usa il tag)', () => {
+    expect(schedaSubito({ ...base, professione: null })).toBeNull();
+    expect(schedaSubito({ ...base, professione: 'boh' })).toBeNull();
+  });
+  it('messaggio qualsiasi a meta discorso: no', () => {
+    expect(schedaSubito({ ...base, testiTurno: ['lavoro in un negozio'] })).toBeNull();
   });
 });

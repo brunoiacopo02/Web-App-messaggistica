@@ -5,24 +5,36 @@ import { oraAppuntamento } from './gdo-context-note';
 /**
  * Nota di contesto per chi arriva dal funnel Professioni (spec §2). Sta nella parte
  * variabile del prompt: il manuale di Mario resta identico e la cache non si rompe.
+ *
+ * Nelle adv promettiamo la brochure subito (PO 28/10/2026): la scheda parte in automatico
+ * alla prima risposta, prima del testo di Mario (`schedaSubito`). `schedaInviata` dice se
+ * e' gia' in chat, `appenaInviata` se e' partita in questo turno, sopra la risposta.
  */
-export function professioniContextNote(slug: SlugProfessione | null, opts?: { appenaChiesta?: boolean }): string {
+export function professioniContextNote(
+  slug: SlugProfessione | null,
+  opts?: { schedaInviata?: boolean; appenaInviata?: boolean },
+): string {
   const corso = slug
     ? `Il corso che ha scelto e' ${nomeProfessione(slug)}.`
     : `Non sappiamo ancora quale corso: chiediglielo (falso bivio se e' indeciso). Slug possibili: ${PROFESSIONI.map((p) => p.slug).join(', ')}.`;
   const tag = slug ? `[SCHEDA:${slug}]` : '[SCHEDA:<slug>]';
+  const inviata = !!(opts?.schedaInviata || opts?.appenaInviata);
+  const flusso = 'Poi segui il flusso normale (situazione, famiglia, motivazioni, pitch con i prezzi, call, Noemi).';
   return [
     'CONTESTO FUNNEL PROFESSIONI: questo lead ci ha scritto per primo dalla pagina delle professioni e ha chiesto la scheda del corso.',
     corso,
-    "APERTURA: digli che gli mandi volentieri la scheda del corso e che prima gli fai qualche domanda per capire cosa gli serve. Poi segui il flusso normale (situazione, famiglia, motivazioni, pitch con i prezzi, call, Noemi).",
-    "LA SCHEDA ARRIVA DOPO L'APPUNTAMENTO: quando ha fissato, la scheda gli arriva in automatico insieme al video. Non mandarla prima e non promettere che arriva subito.",
-    `SE INSISTE per averla prima di fissare (es. "mi avevate detto che me la mandavate"): mandala insieme al pitch, prezzi compresi, e nello stesso messaggio proponi comunque la call. Per mandarla scrivi in fondo al messaggio il tag ${tag}.`,
-    `SE RIMANDA LA CALL PER GUARDARE PRIMA LA SCHEDA: mandala col tag ${tag} e prendi un impegno sul quando: deve averla vista entro domani, ci vogliono due minuti. Il quando lo dice lui (regola "PRIMA GUARDO IL CORSO").`,
-    `Il tag ${tag} lo usi al massimo una volta: se la scheda e' gia' partita non rimandarla.`,
+    ...(opts?.appenaInviata && slug
+      ? [`LA SCHEDA GLI E' APPENA ARRIVATA: e' partita in automatico qui sopra, prima del tuo messaggio (il PDF con "Ecco la scheda del corso di ${nomeProfessione(slug)} 👇"). Non dire che gliela mandi e non ripetere "ecco la scheda": in mezza riga digli di darci un'occhiata con calma e passa subito alla prima domanda per capire la sua situazione. ${flusso}`]
+      : inviata
+        ? [`LA SCHEDA L'HA GIA' RICEVUTA: e' sopra in chat. Se te la richiede (scheda, pdf, brochure, programma), digli che gliel'hai mandata qui sopra in chat e che la trova scorrendo un attimo, poi vai avanti. Non rimandarla e non usare il tag [SCHEDA:...]. ${flusso}`]
+        : [
+            slug
+              ? `LA SCHEDA NON E' ANCORA PARTITA: se te la chiede mandagliela subito scrivendo in fondo al messaggio il tag ${tag}, e nello stesso messaggio vai avanti con le domande. ${flusso}`
+              : `APPENA TI DICE IL CORSO mandagli subito la scheda scrivendo in fondo al messaggio il tag ${tag}, e nello stesso messaggio vai avanti con le domande. ${flusso}`,
+            `Il tag ${tag} lo usi al massimo una volta. Se fissa la call senza averla ancora ricevuta, gli arriva in automatico insieme al video.`,
+          ]),
+    `SE RIMANDA LA CALL PER GUARDARE PRIMA LA SCHEDA: prendi un impegno sul quando: deve averla vista entro domani, ci vogliono due minuti. Il quando lo dice lui (regola "PRIMA GUARDO IL CORSO").${inviata ? '' : ` Se non l'ha ancora ricevuta, mandala col tag ${tag}.`}`,
     "LA SCHEDA ESISTE SEMPRE: non dire mai che non c'e' o che non abbiamo una scheda, una brochure o un pdf da mandare.",
-    ...(opts?.appenaChiesta
-      ? [`IL LEAD HA APPENA CHIESTO LA SCHEDA (o il pdf, la brochure): rispondi che certo, gliela mandi, ma che prima vuoi capire meglio come mai si sta interessando a questa professione, cosi' poi gli dai le info nel dettaglio. Poi fai la domanda. Mai dire che non c'e'.`]
-      : []),
   ].join('\n');
 }
 
@@ -83,13 +95,30 @@ export function professioniVince(i: {
   return agenda + FINESTRA_CALL_GDO_SENZA_ORA_MS <= i.now;
 }
 
-// Conv 3292 (PO 15/10/2026, seconda prova): "me lo mandi ora?" + "il pdf intendo" e Mario,
-// coerente con il "non abbiamo una brochure" di un turno prima, rispondeva che il pdf non
-// c'era. Quando il lead la chiede dopo la frase del link, la nota dice a Mario di rispondere
-// "certo che te la mando, prima voglio capire meglio" (PO 15/10/2026).
+// Conv 3292 (PO 15/10/2026, seconda prova): "me lo mandi ora?" + "il pdf intendo" e Mario
+// rispondeva che il pdf non c'era. Dal 28/10/2026 la richiesta (come la frase del link) fa
+// partire la scheda subito, se non e' ancora in chat (`schedaSubito`).
 const RICHIESTA_SCHEDA = /\b(scheda|pdf|brou?chure|depliant|programma)\b/i;
 
 /** I messaggi del lead in questo turno chiedono la scheda? La frase del link non conta. */
 export function chiedeLaScheda(testi: readonly string[]): boolean {
   return testi.some((t) => !isMarkerProfessioni(t) && RICHIESTA_SCHEDA.test(t));
+}
+
+/**
+ * La scheda parte SUBITO, prima della risposta di Mario (PO 28/10/2026: nelle adv
+ * promettiamo la brochure subito)? Si' quando il turno e' del funnel (`professioniVince`,
+ * stesse condizioni di prima: mai nel postino ne' nel lancio in corso), il corso e' noto,
+ * la scheda non e' ancora in chat, e il lead in questo turno ha mandato la frase del link
+ * o l'ha chiesta. Una chat vecchia che non la chiede non se la vede arrivare a meta' discorso.
+ */
+export function schedaSubito(i: {
+  vinceProfessioni: boolean;
+  professione: string | null;
+  schedaInviataAt: string | null;
+  testiTurno: readonly string[];
+}): SlugProfessione | null {
+  if (!i.vinceProfessioni || i.schedaInviataAt || !isSlugProfessione(i.professione)) return null;
+  const vuole = i.testiTurno.some((t) => isMarkerProfessioni(t)) || chiedeLaScheda(i.testiTurno);
+  return vuole ? i.professione : null;
 }

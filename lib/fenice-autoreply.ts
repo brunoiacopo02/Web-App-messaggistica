@@ -33,9 +33,9 @@ import { getLancioSettings, type LancioSettings } from './lancio-settings';
 import { alertUnaVolta } from './alert-una-volta';
 import type { LancioInfo } from './lancio-crm';
 import { mittenteDiConversazione } from './mittente';
-import { chiedeLaScheda, professioniContextNote, professioniVince, schedaDaInviare } from './professioni-nota';
+import { professioniContextNote, professioniVince, schedaDaInviare, schedaSubito } from './professioni-nota';
 import { isSlugProfessione, PROVENIENZA_PROFESSIONI } from './professioni';
-import { inviaScheda } from './scheda-invio';
+import { inviaScheda, testoScheda } from './scheda-invio';
 import { fissatoIlDi } from './noemi-quando';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
@@ -352,6 +352,13 @@ const MAX_ROUNDS_PER_DRAIN = 5; // anti-runaway: round di accorpamento per esecu
  *  seguito, ma un turno costa modello + CRM + Twilio e il drain ha un lucchetto sopra. */
 const MAX_GIRI_LANCIO = 3;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/**
+ * Funnel Professioni (PO 28/10/2026): fra il PDF della scheda e il primo testo di Mario
+ * passano almeno questi millisecondi. Twilio spedisce un media scaricandolo prima dal nostro
+ * URL, un testo no: partiti a ridosso, il testo puo' arrivare al lead PRIMA del PDF che
+ * annuncia. Di solito il modello ci mette gia' di piu'; questo e' il pavimento.
+ */
+export const DISTACCO_SCHEDA_MS = 4000;
 /** Millisecondi di un `created_at`, 0 se manca o non si legge: serve solo a confrontare
  *  due righe della stessa cronologia, mai a decidere un orario. */
 const quando = (v: string | null | undefined): number => {
@@ -392,6 +399,7 @@ export async function drainMarioReplies(
   conversationId: number,
   phone: string,
   delayMs: () => number = marioDelayMs,
+  distaccoSchedaMs: number = DISTACCO_SCHEDA_MS,
 ): Promise<void> {
   // Lock: claim del turno. Se un'altra esecuzione sta già rispondendo, esci:
   // quel drain ricontrolla i messaggi e gestirà anche questo inbound.
@@ -980,14 +988,29 @@ export async function drainMarioReplies(
       // PROFESSIONI anche senza corso, riceve la sua nota (si somma alla dichiarazione IA del
       // primo contatto). Fuori dal lancio in corso e dalla call GDO ancora da fare
       // (`professioniVince`): su lancio chiuso o agenda passata la nota del funnel vince.
-      // Il lead chiede la scheda dopo la frase del link (conv 3292, seconda prova): Mario
-      // diceva "non abbiamo un pdf". La nota gli dice come rispondere (PO 15/10/2026):
-      // certo che te la mando, ma prima voglio capire meglio. Il quando resta a Mario.
+      // Nelle adv promettiamo la brochure subito (PO 28/10/2026): alla frase del link, o
+      // quando la chiede, la scheda parte PRIMA della risposta di Mario, una volta sola
+      // (CAS su `scheda_inviata_at` in `inviaScheda`). La nota poi gli dice che e' gia' sopra.
       const idxTurno = nextUnansweredInboundIndex(rows);
-      const chiedeScheda =vinceProfessioni && !schedaInviataAt && isSlugProfessione(professione) && idxTurno >= 0
-        && chiedeLaScheda(rows.slice(idxTurno).filter((m) => m.direction === 'in').map((m) => m.body ?? ''));
+      const slugSubito = schedaSubito({
+        vinceProfessioni, professione, schedaInviataAt,
+        testiTurno: idxTurno >= 0 ? rows.slice(idxTurno).filter((m) => m.direction === 'in').map((m) => m.body ?? '') : [],
+      });
+      let schedaAppenaInviata = false;
+      let schedaPartitaAlMs: number | null = null;
+      if (slugSubito) {
+        const esitoSubito = await inviaScheda(supabase, { conversationId, phone, from, slug: slugSubito, momento: 'subito' });
+        if (esitoSubito !== 'fallita') schedaInviataAt = new Date().toISOString();
+        if (esitoSubito === 'inviata') {
+          schedaAppenaInviata = true;
+          schedaPartitaAlMs = Date.now();
+          // La cronologia del modello e' stata letta prima: il PDF ci entra a mano, cosi'
+          // Mario vede che e' partito e non lo ripete.
+          history.push({ role: 'assistant', content: testoScheda(slugSubito) });
+        }
+      }
       const notaProfessioni = vinceProfessioni
-        ? [professioniContextNote(isSlugProfessione(professione) ? professione : null, { appenaChiesta: chiedeScheda }), notaPrimo].filter(Boolean).join('\n\n')
+        ? [professioniContextNote(isSlugProfessione(professione) ? professione : null, { schedaInviata: !!schedaInviataAt, appenaInviata: schedaAppenaInviata }), notaPrimo].filter(Boolean).join('\n\n')
         : null;
       // Postino: i promemoria del turno e, dopo il recap, la domanda di riscaldamento.
       // La nota tace nel turno del recap e in quello di Noemi: una cosa alla volta.
@@ -1187,6 +1210,11 @@ export async function drainMarioReplies(
         }
       }
       let recapUscito = false;
+      // La scheda partita in questo turno arriva al lead prima del testo che la segue.
+      if (schedaPartitaAlMs !== null && parts.length > 0) {
+        const attesa = distaccoSchedaMs - (Date.now() - schedaPartitaAlMs);
+        if (attesa > 0) await sleep(attesa);
+      }
       try {
         for (let i = 0; i < parts.length; i++) {
           if (i > 0) await sleep(Math.min(3000, 800 + parts[i].length * 25));
@@ -1211,8 +1239,9 @@ export async function drainMarioReplies(
           .eq('id', conversationId);
       }
 
-      // Scheda del corso (spec §3): dopo l'appuntamento esce col video, prima solo se Mario
-      // l'ha chiesta col tag. `inviaScheda` e' idempotente sulla colonna.
+      // Scheda del corso (spec §3) non ancora partita (di solito parte subito, qui sopra):
+      // dopo l'appuntamento esce col video, prima se Mario la chiede col tag. `inviaScheda`
+      // e' idempotente sulla colonna.
       if (result.schedaNonValida) {
         await supabase.from('event_log').insert({
           type: 'scheda_slug_non_valido',

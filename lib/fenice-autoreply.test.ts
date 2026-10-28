@@ -2760,22 +2760,90 @@ describe('drainMarioReplies — funnel Professioni: la scheda del corso (Task 7)
   });
   afterEach(() => { vi.unstubAllEnvs(); });
 
-  it('(a) appuntamento col video su chat col corso: la scheda parte dopo, una volta', async () => {
+  // PO 28/10/2026: nelle adv promettiamo la brochure subito. Alla frase del link la scheda
+  // parte PRIMA del testo di Mario, una volta sola.
+  it('(a) frase del link: la scheda parte subito, prima del testo, e non riparte col video', async () => {
     vi.mocked(generateMarioReply).mockResolvedValueOnce({
       visibleReply: `Perfetto, allora ci siamo\nNoemi ti chiama prima della call\n${VIDEO}`,
       appointmentFixed: true, passToHuman: false, videoWatched: false,
     });
     const { supabase, calls } = makeDrainSupabase(riga('copywriter'), [INGRESSO]);
 
-    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
 
     const media = conMedia();
     expect(media).toHaveLength(1);
     expect(media[0].mediaUrl).toEqual([PDF]);
-    // La scheda e' l'ultima bolla: esce dopo il blocco di conferma col video.
+    const invii = vi.mocked(sendFreeText).mock.calls.map((c) => c[0] as { body: string; mediaUrl?: string[] });
+    expect(invii[0].mediaUrl).toEqual([PDF]);
+    expect(invii[0].body).toBe('Ecco la scheda del corso di Copywriter 👇');
+    // Il video dell'appuntamento parte comunque, nelle bolle di Mario.
+    expect(invii.slice(1).some((a) => a.body.includes(VIDEO) && !a.mediaUrl)).toBe(true);
+    expect(calls.events.filter((e) => e.type === 'scheda_inviata')).toHaveLength(1);
+    expect(calls.events.find((e) => e.type === 'scheda_inviata')?.payload).toMatchObject({ slug: 'copywriter', momento: 'subito' });
+  }, 20_000);
+
+  it('(a2) frase del link: Mario vede la scheda in cronologia e la nota dice che e\' appena arrivata', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: "Dagli un'occhiata con calma\nIntanto dimmi, tu attualmente lavori?", appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+    const { supabase } = makeDrainSupabase(riga('copywriter'), [INGRESSO]);
+
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
+
+    const [history, opts] = vi.mocked(generateMarioReply).mock.calls[0] as [Array<{ role: string; content: string }>, { contextNote?: string }];
+    expect(history.at(-1)).toEqual({ role: 'assistant', content: 'Ecco la scheda del corso di Copywriter 👇' });
+    expect(opts.contextNote).toContain('APPENA ARRIVATA');
+    expect(opts.contextNote).not.toContain('prima vuoi capire');
+    const invii = vi.mocked(sendFreeText).mock.calls.map((c) => c[0] as { body: string; mediaUrl?: string[] });
+    expect(invii.map((a) => !!a.mediaUrl)).toEqual([true, false, false]);
+  }, 20_000);
+
+  it('(a3) il testo di Mario aspetta il distacco dopo il PDF', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Intanto dimmi, tu attualmente lavori?', appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+    const tempi: number[] = [];
+    vi.mocked(sendFreeText).mockImplementation(async () => { tempi.push(Date.now()); return { sid: 'SM_fake', status: 'queued' }; });
+    const { supabase } = makeDrainSupabase(riga('copywriter'), [INGRESSO]);
+
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 300);
+
+    expect(tempi).toHaveLength(2);
+    expect(tempi[1] - tempi[0]).toBeGreaterThanOrEqual(290);
+    vi.mocked(sendFreeText).mockImplementation(async () => ({ sid: 'SM_fake', status: 'queued' }));
+  }, 20_000);
+
+  it('(a4) scheda mai partita e appuntamento senza la frase del link: parte dopo il video, come ripiego', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: `Perfetto, allora ci siamo\nNoemi ti chiama prima della call\n${VIDEO}`,
+      appointmentFixed: true, passToHuman: false, videoWatched: false,
+    });
+    const { supabase, calls } = makeDrainSupabase(riga('copywriter'), [
+      { direction: 'in', body: 'si domani alle 15 va bene', template_sid: null, created_at: '2026-10-14T10:00:00Z' },
+    ]);
+
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
+
+    expect(conMedia()).toHaveLength(1);
     const ultima = vi.mocked(sendFreeText).mock.calls.at(-1)![0] as { mediaUrl?: string[] };
     expect(ultima.mediaUrl).toEqual([PDF]);
-    expect(calls.events.find((e) => e.type === 'scheda_inviata')?.payload).toMatchObject({ slug: 'copywriter', momento: 'post_appuntamento' });
+    expect(calls.events.find((e) => e.type === 'scheda_inviata')?.payload).toMatchObject({ momento: 'post_appuntamento' });
+  }, 20_000);
+
+  it('(a5) scheda gia in chat e appuntamento col video: niente seconda scheda, il video parte', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: `Perfetto, allora ci siamo\nNoemi ti chiama prima della call\n${VIDEO}`,
+      appointmentFixed: true, passToHuman: false, videoWatched: false,
+    });
+    const { supabase, calls } = makeDrainSupabase({ ...riga('copywriter'), scheda_inviata_at: '2026-10-14T09:59:00Z' }, [INGRESSO]);
+
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
+
+    expect(conMedia()).toHaveLength(0);
+    expect(calls.events.some((e) => e.type === 'scheda_inviata')).toBe(false);
+    const testi = vi.mocked(sendFreeText).mock.calls.map((c) => (c[0] as { body: string }).body);
+    expect(testi.some((t) => t.includes(VIDEO))).toBe(true);
   }, 20_000);
 
   it('(b) stessa risposta su chat senza professione: nessuna scheda', async () => {
@@ -2785,7 +2853,7 @@ describe('drainMarioReplies — funnel Professioni: la scheda del corso (Task 7)
     });
     const { supabase, calls } = makeDrainSupabase(riga(null), [INGRESSO]);
 
-    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
 
     expect(conMedia()).toHaveLength(0);
     expect(calls.events.some((e) => e.type === 'scheda_inviata')).toBe(false);
@@ -2796,13 +2864,16 @@ describe('drainMarioReplies — funnel Professioni: la scheda del corso (Task 7)
   it('(c) Mario chiede la scheda col tag prima dell\'appuntamento: PDF inviato, tag non nel testo', async () => {
     // Il mock sta al posto di generateMarioReply: restituisce quello che il parser vero
     // (lib/mario.ts, Task 5) produce da "...[SCHEDA:copywriter]" — tag tolto, slug a parte.
+    // Turno senza la frase del link: la scheda non e' partita subito, resta il tag.
     vi.mocked(generateMarioReply).mockResolvedValueOnce({
       visibleReply: 'Te la mando subito, intanto ti dico i prezzi\nTi va una call domani?',
       appointmentFixed: false, passToHuman: false, videoWatched: false, schedaRichiesta: 'copywriter',
     });
-    const { supabase, calls } = makeDrainSupabase(riga('copywriter'), [INGRESSO]);
+    const { supabase, calls } = makeDrainSupabase(riga('copywriter'), [
+      { direction: 'in', body: 'ok, dimmi pure', template_sid: null, created_at: '2026-10-14T10:00:00Z' },
+    ]);
 
-    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
 
     const media = conMedia();
     expect(media).toHaveLength(1);
@@ -2840,7 +2911,7 @@ ${VIDEO}`,
       });
       const { supabase, calls } = makeDrainSupabase({ ...riga('copywriter'), ...extra }, [INGRESSO]);
 
-      await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+      await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
 
       expect(conMedia()).toHaveLength(0);
       expect(calls.events.some((e) => e.type === 'scheda_inviata')).toBe(false);
@@ -2861,15 +2932,16 @@ ${VIDEO}`,
     });
     const { supabase } = makeDrainSupabase({ ...riga('copywriter'), ...CONV_3292 }, [INGRESSO]);
 
-    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
 
     const nota = (vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string }).contextNote ?? '';
     expect(nota).toContain('FUNNEL PROFESSIONI');
-    expect(nota).toContain('[SCHEDA:copywriter]');
+    expect(nota).toContain('APPENA ARRIVATA');
     expect(nota).not.toContain(NOTA_LANCIO_NIENTE_PASSAGGIO);
+    expect(conMedia()).toHaveLength(1);
   }, 20_000);
 
-  it('(i) lancio chiuso + agenda GDO passata (conv 3292): il tag [SCHEDA:copywriter] manda il PDF', async () => {
+  it('(i) lancio chiuso + agenda GDO passata (conv 3292): frase del link + brochure, il PDF parte subito una volta (anche col tag)', async () => {
     vi.mocked(generateMarioReply).mockResolvedValueOnce({
       visibleReply: 'Eccola, intanto ti dico i prezzi\nTi va una call domani?',
       appointmentFixed: false, passToHuman: false, videoWatched: false, schedaRichiesta: 'copywriter',
@@ -2878,19 +2950,19 @@ ${VIDEO}`,
       INGRESSO, { direction: 'in', body: 'mandami la brochure', template_sid: null, created_at: '2026-10-14T10:01:00Z' },
     ]);
 
-    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
 
     const media = conMedia();
     expect(media).toHaveLength(1);
     expect(media[0].mediaUrl).toEqual([PDF]);
-    expect(calls.events.find((e) => e.type === 'scheda_inviata')?.payload).toMatchObject({ slug: 'copywriter', momento: 'pre_appuntamento' });
+    expect(calls.events.find((e) => e.type === 'scheda_inviata')?.payload).toMatchObject({ slug: 'copywriter', momento: 'subito' });
   }, 20_000);
 
-  // Seconda prova di conv 3292: Mario non mette il tag e risponde "non abbiamo un pdf".
-  // Il PO (15/10) vuole "certo che te la mando, prima voglio capire meglio": il PDF non parte da solo.
-  it('(l) conv 3292: il lead chiede il pdf → la nota dice "certo, prima capisco meglio", nessun PDF senza tag', async () => {
+  // Seconda prova di conv 3292: il lead chiede il pdf a meta' discorso. Dal 28/10/2026
+  // (adv: brochure subito) la scheda parte subito, senza "prima voglio capire meglio".
+  it('(l) conv 3292: il lead chiede il pdf e non l\'ha ancora → parte subito, senza tag', async () => {
     vi.mocked(generateMarioReply).mockResolvedValueOnce({
-      visibleReply: "Certo che te la mando! Prima pero' dimmi, come mai ti interessa il copywriting?",
+      visibleReply: "Dagli un'occhiata con calma\nIntanto dimmi, come mai ti interessa il copywriting?",
       appointmentFixed: false, passToHuman: false, videoWatched: false,
     });
     const { supabase, calls } = makeDrainSupabase({ ...riga('copywriter'), ...CONV_3292 }, [
@@ -2900,27 +2972,33 @@ ${VIDEO}`,
       { direction: 'in', body: 'il pdf intendo', template_sid: null, created_at: '2026-10-14T10:01:05Z' },
     ]);
 
-    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
 
-    expect(conMedia()).toHaveLength(0);
-    expect(calls.events.some((e) => e.type === 'scheda_inviata')).toBe(false);
+    expect(conMedia()).toHaveLength(1);
+    expect(calls.events.find((e) => e.type === 'scheda_inviata')?.payload).toMatchObject({ momento: 'subito' });
     const nota = (vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string }).contextNote ?? '';
-    expect(nota).toContain('HA APPENA CHIESTO LA SCHEDA');
-    expect(nota).toContain('prima vuoi capire meglio');
+    expect(nota).toContain('APPENA ARRIVATA');
+    expect(nota).not.toContain('prima vuoi capire');
   }, 20_000);
 
-  it('(m) solo la frase del link: niente PDF senza tag (prima le domande)', async () => {
+  it('(l3) la richiede quando ce l\'ha gia: nessun reinvio, la nota dice che e\' sopra in chat', async () => {
     vi.mocked(generateMarioReply).mockResolvedValueOnce({
-      visibleReply: 'Te la mando volentieri, prima qualche domanda', appointmentFixed: false, passToHuman: false, videoWatched: false,
+      visibleReply: "Te l'ho mandata qui sopra, la trovi scorrendo un attimo", appointmentFixed: false, passToHuman: false, videoWatched: false,
     });
-    const { supabase, calls } = makeDrainSupabase({ ...riga('copywriter'), ...CONV_3292 }, [INGRESSO]);
+    const { supabase, calls } = makeDrainSupabase({ ...riga('copywriter'), scheda_inviata_at: '2026-10-14T10:00:10Z' }, [
+      INGRESSO,
+      { direction: 'out', body: 'Ecco la scheda del corso di Copywriter 👇', template_sid: null, created_at: '2026-10-14T10:00:10Z' },
+      { direction: 'out', body: 'Dimmi, tu attualmente lavori?', template_sid: null, created_at: '2026-10-14T10:00:30Z' },
+      { direction: 'in', body: 'mi rimandi il pdf?', template_sid: null, created_at: '2026-10-14T10:01:00Z' },
+    ]);
 
-    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
 
     expect(conMedia()).toHaveLength(0);
     expect(calls.events.some((e) => e.type === 'scheda_inviata')).toBe(false);
     const nota = (vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string }).contextNote ?? '';
-    expect(nota).not.toContain('HA APPENA CHIESTO LA SCHEDA');
+    expect(nota).toContain("L'HA GIA' RICEVUTA");
+    expect(nota).toContain("non dire mai che non c'e'");
   }, 20_000);
 
   it('(j) agenda GDO passata con video mai uscito: il funnel non rimanda il video del GDO', async () => {
@@ -2929,7 +3007,7 @@ ${VIDEO}`,
     });
     const { supabase, calls } = makeDrainSupabase({ ...riga('copywriter'), ...CONV_3292, gdo_video_sent_at: null }, [INGRESSO]);
 
-    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
 
     expect(calls.events.some((e) => e.type === 'gdo_video_sent')).toBe(false);
   }, 20_000);
@@ -2944,7 +3022,7 @@ ${VIDEO}`,
     });
     const { supabase, calls } = makeDrainSupabase({ ...riga('copywriter'), ...CONV_3292 }, [INGRESSO]);
 
-    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
 
     expect(sendOutcome).toHaveBeenCalledTimes(1);
     expect(vi.mocked(sendOutcome).mock.calls[0][3]).toEqual({ noteOnly: true });
@@ -2959,7 +3037,7 @@ ${VIDEO}`,
     });
     const { supabase } = makeDrainSupabase({ ...riga('copywriter'), ...CONV_3292 }, [INGRESSO]);
 
-    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
 
     expect(sendOutcome).toHaveBeenCalledTimes(1);
     expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'APPUNTAMENTO' });
@@ -2973,7 +3051,7 @@ ${VIDEO}`,
     });
     const { supabase } = makeDrainSupabase({ ...riga('copywriter'), ...CONV_3292 }, [INGRESSO]);
 
-    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
 
     expect(sendOutcome).toHaveBeenCalledTimes(1);
     expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'CONTATTO_UMANO' });
@@ -2988,7 +3066,7 @@ ${VIDEO}`,
     });
     const { supabase, calls } = makeDrainSupabase(riga('copywriter'), [INGRESSO]);
 
-    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
 
     expect(vi.mocked(sendOutcome).mock.calls[0][3]).toEqual({});
     expect(calls.finalStatusWrites).toEqual(['closed']);
@@ -3000,7 +3078,7 @@ ${VIDEO}`,
     });
     const { supabase } = makeDrainSupabase({ ...riga(null), crm_funnel: 'PROFESSIONI' }, [INGRESSO]);
 
-    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
 
     const nota = (vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string }).contextNote ?? '';
     expect(nota).toContain('FUNNEL PROFESSIONI');
@@ -3016,7 +3094,7 @@ ${VIDEO}`,
     });
     const { supabase, calls } = makeDrainSupabase({ ...riga(null), crm_funnel: 'PROFESSIONI' }, [INGRESSO]);
 
-    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
 
     expect(conMedia()).toHaveLength(1);
     expect(calls.convUpdates.some((u) => u.professione === 'copywriter')).toBe(true);
@@ -3028,7 +3106,7 @@ ${VIDEO}`,
     });
     const { supabase, calls } = makeDrainSupabase(riga('copywriter'), [INGRESSO]);
 
-    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
 
     expect(conMedia()).toHaveLength(1);
     expect(calls.convUpdates.some((u) => 'professione' in u)).toBe(false);
@@ -3038,9 +3116,11 @@ ${VIDEO}`,
     vi.mocked(generateMarioReply).mockResolvedValueOnce({
       visibleReply: 'Eccola', appointmentFixed: false, passToHuman: false, videoWatched: false, schedaNonValida: 'boh',
     });
-    const { supabase, calls } = makeDrainSupabase(riga('copywriter'), [INGRESSO]);
+    const { supabase, calls } = makeDrainSupabase(riga('copywriter'), [
+      { direction: 'in', body: 'ok, dimmi pure', template_sid: null, created_at: '2026-10-14T10:00:00Z' },
+    ]);
 
-    await drainMarioReplies(supabase, 70, '+391234567890', () => 0);
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
 
     expect(conMedia()).toHaveLength(0);
     expect(calls.events.some((e) => e.type === 'scheda_slug_non_valido')).toBe(true);

@@ -12,12 +12,12 @@ export function testoScheda(slug: SlugProfessione): string {
  * Manda la scheda PDF del corso, una volta sola per chat (spec §3). Il lucchetto e' un
  * compare-and-set su `scheda_inviata_at`: due drain in volo non la mandano due volte. Se
  * Twilio fallisce il lucchetto si rilascia e si logga; l'invio dopo l'appuntamento non viene
- * ritentato (la scheda resta mandabile solo se Mario la richiede di nuovo col tag);
+ * ritentato (la scheda resta mandabile se il lead la richiede o Mario usa il tag);
  * nessun ripiego su un altro numero.
  */
 export async function inviaScheda(
   supabase: Supa,
-  i: { conversationId: number; phone: string; from: string; slug: SlugProfessione; momento: 'pre_appuntamento' | 'post_appuntamento' },
+  i: { conversationId: number; phone: string; from: string; slug: SlugProfessione; momento: 'subito' | 'pre_appuntamento' | 'post_appuntamento' },
 ): Promise<'inviata' | 'gia_inviata' | 'fallita'> {
   const adesso = new Date().toISOString();
   const { data: prese } = await supabase.from('conversations')
