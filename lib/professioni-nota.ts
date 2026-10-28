@@ -98,7 +98,9 @@ export function professioniVince(i: {
 // Conv 3292 (PO 15/10/2026, seconda prova): "me lo mandi ora?" + "il pdf intendo" e Mario
 // rispondeva che il pdf non c'era. Dal 28/10/2026 la richiesta (come la frase del link) fa
 // partire la scheda subito, se non e' ancora in chat (`schedaSubito`).
-const RICHIESTA_SCHEDA = /\b(scheda|pdf|brou?chure|depliant|programma)\b/i;
+// "Programma" da solo no (PO 28/10/2026: "ho in programma di..." non e' una richiesta):
+// vale solo "programma del corso" o "programma dell'accademia".
+const RICHIESTA_SCHEDA = /\b(scheda|pdf|brou?chure|depliant|programma\s+(?:del\s+corso|dell['’]\s*accademia|della\s+accademia))\b/i;
 
 /** I messaggi del lead in questo turno chiedono la scheda? La frase del link non conta. */
 export function chiedeLaScheda(testi: readonly string[]): boolean {

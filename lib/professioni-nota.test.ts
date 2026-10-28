@@ -99,6 +99,12 @@ describe('chiedeLaScheda', () => {
     expect(chiedeLaScheda(['mi mandi la brochure?'])).toBe(true);
     expect(chiedeLaScheda(['e la scheda?'])).toBe(true);
     expect(chiedeLaScheda(['mi giri il programma del corso?'])).toBe(true);
+    expect(chiedeLaScheda(["mi mandi il programma dell'accademia?"])).toBe(true);
+    expect(chiedeLaScheda(['il programma dell’accademia?'])).toBe(true);
+  });
+  it('"programma" da solo no (PO 28/10/2026)', () => {
+    expect(chiedeLaScheda(['ho in programma di cambiare lavoro'])).toBe(false);
+    expect(chiedeLaScheda(['mi dici il programma?'])).toBe(false);
   });
   it("la frase del link da sola non conta: e' la prima richiesta, non l'insistenza", () => {
     expect(chiedeLaScheda(['Ciao, sono interessato alla professione di Copywriter e vorrei ricevere la scheda del corso'])).toBe(false);
