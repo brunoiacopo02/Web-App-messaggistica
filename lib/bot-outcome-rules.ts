@@ -284,6 +284,45 @@ export function checkDataAppuntamento(
   return { ok: true };
 }
 
+/**
+ * Il tag APPUNTAMENTO di questo turno verrà scartato dalla guardia? Stessa decisione di
+ * `sendOutcome` (prima `resolveOutcomeAction`, poi `checkDataAppuntamento` solo sul
+ * fissaggio vero), fatta PRIMA di mandare il testo al lead: se la data non passa, il
+ * lead non deve leggere «ci siamo» per una call che in agenda non entrerà.
+ * `null` = nessuno scarto (o non è un fissaggio).
+ */
+export function motivoScartoAppuntamento(input: {
+  current: BotOutcome | null;
+  outcome: BotOutcome | undefined;
+  date: string | undefined;
+  existingDate: string | null;
+  nowMs: number;
+  ranges: BlackoutRange[];
+  bookingDays?: readonly string[] | null;
+}): MotivoAppuntamentoNonFissabile | null {
+  if (input.outcome !== 'APPUNTAMENTO') return null;
+  const action = resolveOutcomeAction(
+    input.current,
+    { outcome: 'APPUNTAMENTO', date: input.date },
+    input.existingDate,
+    input.nowMs,
+  );
+  if (action.kind !== 'normal') return null;
+  const check = checkDataAppuntamento(input.date, input.nowMs, input.ranges, input.bookingDays);
+  return check.ok ? null : check.motivo;
+}
+
+/** Unisce più elenchi di giorni 'YYYY-MM-DD' senza doppioni (ordine di arrivo). */
+export function unisciGiorni(...liste: (readonly string[] | null | undefined)[]): string[] {
+  return [...new Set(liste.flatMap((l) => l ?? []))];
+}
+
+/** Il testo che il lead riceve al posto del «ci siamo» quando la data viene scartata:
+ *  niente conferma, e la segnalazione `conferma_senza_appuntamento` parte nello stesso
+ *  momento verso chi lo ricontatta. */
+export const TESTO_DATA_DA_VERIFICARE =
+  'Grazie! Su quel giorno e orario devo fare una verifica in agenda prima di confermartelo: ti ricontatta una collega per sistemarlo insieme';
+
 const DETTAGLIO_APPUNTAMENTO: Record<MotivoAppuntamentoNonFissabile, string> = {
   assente: 'il tag non portava nessuna data',
   illeggibile: 'la data non era leggibile',
@@ -310,6 +349,8 @@ export function buildAppuntamentoNonFissabileNote(input: {
   leadWords?: string;
   /** L'appuntamento che il lead HA GIÀ e che resta dov'è (ISO dal DB). */
   appuntamentoInAgenda?: string | null;
+  /** Il drain ha fermato il «ci siamo»: in chat la conferma NON è partita. */
+  confermaNonMandata?: boolean;
 }): string {
   const parole = paroleDelLead(input.leadWords);
   const citazione = parole ? ` Parole del lead: "${parole}".` : '';
@@ -350,8 +391,11 @@ export function buildAppuntamentoNonFissabileNote(input: {
   return (
     `APPUNTAMENTO NON FISSATO — il bot stava per fissare una call ma ` +
     `${DETTAGLIO_APPUNTAMENTO[input.motivo]}: in agenda non c'è niente.` +
-    `${dataRichiesta} Il lead potrebbe aver ricevuto una conferma in chat: va ` +
-    `ricontattato per concordare giorno e ora.${citazione}`
+    `${dataRichiesta}` +
+    (input.confermaNonMandata
+      ? ' In chat NON gli abbiamo confermato niente (gli abbiamo scritto che lo ricontatta una collega): va ricontattato per concordare giorno e ora.'
+      : ' Il lead potrebbe aver ricevuto una conferma in chat: va ricontattato per concordare giorno e ora.') +
+    citazione
   );
 }
 

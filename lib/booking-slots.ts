@@ -117,6 +117,35 @@ export function computeBookingDays(now: Date, ranges?: BlackoutRange[], pieni?: 
   };
 }
 
+/** Il link del form di prenotazione, come lo scrive il prompt. */
+const LINK_FORM = 'form.jotform.com/';
+
+/**
+ * I due giorni che il form offriva quando gli abbiamo mandato il link (l'ultimo partito
+ * in chat). Vuoto se il link non è mai partito.
+ *
+ * Serve alla guardia `fuori_finestra`: la data si concorda prima del link, ma il lead
+ * può compilare il form e risponderci un giorno dopo. Caso Comaschi (24-26/10/2026):
+ * sabato concorda lunedì 26 alle 18:30, compila lunedì alle 12:29, il bot gli scrive
+ * «ci siamo» e la guardia scarta la call perché lunedì ormai è "oggi". Una data che stava
+ * nella finestra quando è partito il link è una data concordata, non una che il bot si
+ * è inventato fuori finestra.
+ */
+export function giorniDelLinkForm(
+  msgs: readonly { direction: string; body: string | null; created_at: string }[],
+  ranges?: BlackoutRange[],
+): string[] {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.direction !== 'out' || !(m.body ?? '').includes(LINK_FORM)) continue;
+    const t = Date.parse(m.created_at);
+    if (Number.isNaN(t)) return [];
+    const { day1, day2 } = computeBookingDays(new Date(t), ranges);
+    return [day1.date, day2.date];
+  }
+  return [];
+}
+
 /**
  * Stessa fascia per entrambi i giorni (PO 24/10/2026): dalle Conferme che chiamano la
  * mattina stessa anche domani mattina è prenotabile. Le 9 restano un'opzione di

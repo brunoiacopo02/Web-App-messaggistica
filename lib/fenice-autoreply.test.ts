@@ -32,6 +32,16 @@ import { NOTA_LANCIO_NIENTE_PASSAGGIO } from './lancio-followup';
 import { sendFreeText } from './twilio';
 import { gdoVideoText } from './gdo-agenda';
 import { DOMANDA_1, DOMANDA_2 } from './gdo-warmup';
+import { TESTO_DATA_DA_VERIFICARE } from './bot-outcome-rules';
+import { computeBookingDays } from './booking-slots';
+import { romeOffset } from './rome-time';
+
+/** Il primo giorno prenotabile da adesso, alle 15:00 ora di Roma: una data che la
+ *  guardia accetta qualunque giorno girino i test. */
+function domaniAlle15(): string {
+  const { day1 } = computeBookingDays(new Date(), []);
+  return `${day1.date}T15:00:00${romeOffset(new Date(`${day1.date}T12:00:00Z`))}`;
+}
 
 describe('shouldAutoReply', () => {
   const ok = { toMatchesFenice: true, autoReplyOn: true, aiOwner: 'mario', aiStatus: 'active' };
@@ -3034,7 +3044,9 @@ ${VIDEO}`,
     vi.mocked(sendOutcome).mockClear();
     vi.mocked(generateMarioReply).mockResolvedValueOnce({
       visibleReply: 'Perfetto', appointmentFixed: true, passToHuman: false, videoWatched: false,
-      outcome: 'APPUNTAMENTO', scheduledAt: '2026-10-16T15:00:00+02:00',
+      // Una data buona (domani alle 15): con una data già passata il drain toglierebbe
+      // la conferma dal testo e chiederebbe la segnalazione subito (vedi sotto).
+      outcome: 'APPUNTAMENTO', scheduledAt: domaniAlle15(),
     });
     const { supabase } = makeDrainSupabase({ ...riga('copywriter'), ...CONV_3292 }, [INGRESSO]);
 
@@ -3043,6 +3055,26 @@ ${VIDEO}`,
     expect(sendOutcome).toHaveBeenCalledTimes(1);
     expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'APPUNTAMENTO' });
     expect(vi.mocked(sendOutcome).mock.calls[0][3]).toEqual({ notaSeRifiutato: true });
+  }, 20_000);
+
+  // Caso Comaschi, al contrario: se la data viene davvero scartata il lead NON deve
+  // leggere «ci siamo», e la segnalazione al CRM va chiesta subito.
+  it('(l-bis) data scartata: niente conferma al lead, segnalazione subito', async () => {
+    vi.mocked(sendOutcome).mockClear();
+    vi.mocked(sendFreeText).mockClear();
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Perfetto, allora ci siamo: la tua videochiamata è *lunedì 26 alle 03:00*',
+      appointmentFixed: true, passToHuman: false, videoWatched: false,
+      outcome: 'APPUNTAMENTO', scheduledAt: '2020-01-01T15:00:00+01:00',
+    });
+    const { supabase } = makeDrainSupabase({ ...riga('copywriter'), ...CONV_3292 }, [INGRESSO]);
+
+    await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
+
+    const testi = vi.mocked(sendFreeText).mock.calls.map((c) => (c[0] as { body: string }).body).join(' ');
+    expect(testi).not.toContain('ci siamo');
+    expect(testi).toContain(TESTO_DATA_DA_VERIFICARE);
+    expect(vi.mocked(sendOutcome).mock.calls[0][3]).toEqual({ notaSeRifiutato: true, segnalaSeDataScartata: true });
   }, 20_000);
 
   it('(l2) funnel che vince su agenda passata: il passaggio a una persona parte come CONTATTO_UMANO pieno', async () => {

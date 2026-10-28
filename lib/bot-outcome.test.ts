@@ -936,6 +936,28 @@ describe('sendOutcome — APPUNTAMENTO in un giorno o a un\'ora impossibili', ()
     expect(bodyInviato().outcome).toBe('NOTA');
   });
 
+  // Caso Comaschi (26/10/2026): il drain ha già tolto il «ci siamo» dal testo, quindi al
+  // CRM non deve arrivare la sola nota ma subito la segnalazione di chi aveva detto sì.
+  it('con segnalaSeDataScartata parte subito il CONTATTO_UMANO conferma_senza_appuntamento', async () => {
+    const { supabase, calls } = makeSupabase(attivo);
+    const res = await sendOutcome(
+      supabase, 1,
+      { outcome: 'APPUNTAMENTO', date: giornoUtile(2), leadWords: 'Noemi' },
+      { segnalaSeDataScartata: true },
+    );
+
+    const body = bodyInviato();
+    expect(body.outcome).toBe('CONTATTO_UMANO');
+    expect(body.motivo).toBe('conferma_senza_appuntamento');
+    expect(body.note).toContain('APPUNTAMENTO NON FISSATO');
+    expect(body.note).toContain('NON gli abbiamo confermato niente');
+    expect(res.keepOpen).toBe(true);
+    // La stessa riga di guardia del cron: niente seconda segnalazione 24h dopo.
+    const guardia = calls.events.find((e: { type: string }) => e.type === 'restituzione_bloccata_conferma_form');
+    expect(guardia).toBeDefined();
+    expect(guardia.payload.esito).toBe('inviato');
+  });
+
   it('la data scartata non arriva mai al CRM come data', async () => {
     const { supabase } = makeSupabase(attivo);
     const quando = giornoUtile(2);

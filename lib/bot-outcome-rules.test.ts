@@ -12,7 +12,10 @@ import {
   checkDataAppuntamento,
   buildAppuntamentoNonFissabileNote,
   isRifissaggioDopoCallPassata,
+  motivoScartoAppuntamento,
+  unisciGiorni,
 } from './bot-outcome-rules';
+import { giorniDelLinkForm } from './booking-slots';
 import { formatRomeDateTime } from './rome-time';
 import { crmDedupKey } from './note-dedup';
 
@@ -822,5 +825,57 @@ describe('buildAppuntamentoNonFissabileNote — la testa regge il dedup del CRM'
     });
     expect(testaCRM(n1)).toBe(testaCRM(n2));
     expect(testaCRM(n1)).toContain('SPOSTAMENTO NON REGISTRATO');
+  });
+});
+
+// Caso Comaschi: sabato 24/10 concorda lunedì 26 alle 18:30 e riceve il link, lunedì 26
+// alle 12:29 compila il form e il bot gli scrive «ci siamo». La finestra di lunedì è
+// martedì-mercoledì: senza i giorni del link la call usciva `fuori_finestra`.
+describe('motivoScartoAppuntamento — data concordata prima del link', () => {
+  const linkSabato = [
+    { direction: 'out', body: 'Perfetto! Clicca qui 👉 https://form.jotform.com/240755654585063', created_at: '2026-10-24T09:00:00Z' },
+    { direction: 'in', body: 'Noemi', created_at: '2026-10-26T11:29:00Z' },
+  ];
+  const lunedi1229 = Date.parse('2026-10-26T11:29:00Z');
+  const call = '2026-10-26T18:30:00+01:00';
+  const finestraDiLunedi = ['2026-10-27', '2026-10-28'];
+
+  it('senza i giorni del link la call di oggi è fuori finestra (il difetto)', () => {
+    expect(motivoScartoAppuntamento({
+      current: null, outcome: 'APPUNTAMENTO', date: call, existingDate: null,
+      nowMs: lunedi1229, ranges: [], bookingDays: finestraDiLunedi,
+    })).toBe('fuori_finestra');
+  });
+
+  it('coi giorni del link la call concordata passa anche se è oggi', () => {
+    const giorni = unisciGiorni(finestraDiLunedi, giorniDelLinkForm(linkSabato, []));
+    expect(giorni).toContain('2026-10-26');
+    expect(motivoScartoAppuntamento({
+      current: null, outcome: 'APPUNTAMENTO', date: call, existingDate: null,
+      nowMs: lunedi1229, ranges: [], bookingDays: giorni,
+    })).toBeNull();
+  });
+
+  it('una call già passata resta scartata', () => {
+    const giorni = unisciGiorni(finestraDiLunedi, giorniDelLinkForm(linkSabato, []));
+    expect(motivoScartoAppuntamento({
+      current: null, outcome: 'APPUNTAMENTO', date: '2026-10-26T10:00:00+01:00', existingDate: null,
+      nowMs: lunedi1229, ranges: [], bookingDays: giorni,
+    })).toBe('passato');
+  });
+
+  it('non è un fissaggio: nessuno scarto (RICHIAMO, spostamento di una call viva)', () => {
+    expect(motivoScartoAppuntamento({
+      current: null, outcome: 'RICHIAMO', date: call, existingDate: null,
+      nowMs: lunedi1229, ranges: [], bookingDays: finestraDiLunedi,
+    })).toBeNull();
+    expect(motivoScartoAppuntamento({
+      current: 'APPUNTAMENTO', outcome: 'APPUNTAMENTO', date: '2026-10-30T02:00:00+01:00',
+      existingDate: '2026-10-28T17:00:00Z', nowMs: lunedi1229, ranges: [], bookingDays: finestraDiLunedi,
+    })).toBeNull();
+  });
+
+  it('senza link in chat non aggiunge giorni', () => {
+    expect(giorniDelLinkForm([{ direction: 'out', body: 'ciao', created_at: '2026-10-24T09:00:00Z' }], [])).toEqual([]);
   });
 });

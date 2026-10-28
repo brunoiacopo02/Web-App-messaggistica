@@ -17,7 +17,9 @@ import { unknownFeniceLinks } from './outbound-sanitize';
 import { generateBotReport } from './bot-report';
 import { registraEsitoSenzaLeadId, sendOutcome, inviaNotaAlCrm } from './bot-outcome';
 import { stopDalCrmPerLead, vuolePassaggioAUmano } from './stop-crm';
-import { buildScriveDopoLaCallNote } from './bot-outcome-rules';
+import { buildScriveDopoLaCallNote, motivoScartoAppuntamento, TESTO_DATA_DA_VERIFICARE, unisciGiorni } from './bot-outcome-rules';
+import { giorniDelLinkForm } from './booking-slots';
+import { bookingBlackout } from './booking-blackout';
 import type { BotOutcome } from './bot-contract';
 import { personaForConversation, PERSONA_NAME, OPENING_ENV_KEYS } from './persona';
 import { confermaVideoVisto } from './video-visto';
@@ -1100,6 +1102,34 @@ export async function drainMarioReplies(
         appointmentFixed: result.appointmentFixed || result.outcome === 'APPUNTAMENTO',
       });
       const passaAPersona = result.passToHuman && !passaggioBloccato;
+      // I giorni che la guardia sulla data deve accettare: quelli che il modello ha visto
+      // in questo turno PIÙ quelli che il form offriva quando è partito il link. La data
+      // si concorda prima del link, il lead può compilarlo il giorno dopo (caso Comaschi).
+      // Senza i giorni del turno (chiamanti che non li conoscono) si resta a `undefined`:
+      // la guardia ricalcola la finestra di adesso, invece di vedere solo quella del link.
+      const giorniTurno = result.bookingDays && result.bookingDays.length > 0
+        ? unisciGiorni(result.bookingDays, giorniDelLinkForm(rows, bookingBlackout(process.env.BOOKING_BLACKOUT)))
+        : undefined;
+      // Il tag APPUNTAMENTO di questo turno verrà scartato? Si guarda PRIMA di mandare il
+      // testo: altrimenti il lead legge «ci siamo» per una call che in agenda non entra.
+      // Solo sui lead CRM nostri (il postino non fissa, e sugli adottati nessuno
+      // riceverebbe la segnalazione che il testo sostitutivo promette).
+      const motivoScarto = crmLeadId && !postino
+        ? motivoScartoAppuntamento({
+            current: esitoInPiedi,
+            outcome: result.outcome,
+            date: result.scheduledAt,
+            existingDate: dataInPiedi,
+            nowMs: Date.now(),
+            ranges: bookingBlackout(process.env.BOOKING_BLACKOUT),
+            bookingDays: giorniTurno,
+          })
+        : null;
+      const appuntamentoScartato = motivoScarto !== null;
+      if (appuntamentoScartato) visibleReply = TESTO_DATA_DA_VERIFICARE;
+      // Da qui in giù "fissato in questo turno" vale solo se la data passa la guardia: niente
+      // blocco Noemi + video e niente scheda per una call che non esiste.
+      const fissatoNelTurno = result.appointmentFixed && !appuntamentoScartato;
       if (passaggioBloccato) {
         await supabase.from('event_log').insert({
           type: 'lancio_passaggio_umano_ignorato',
@@ -1220,7 +1250,7 @@ export async function drainMarioReplies(
       // una seconda volta staccato da qualsiasi video. Il video già inviato in un turno
       // precedente è il segnale che il blocco è già stato mandato; se invece il link
       // esce proprio adesso, la cronologia non lo contiene ancora e la patch si applica.
-      if (result.appointmentFixed && !videoGiaInviato) {
+      if (fissatoNelTurno && !videoGiaInviato) {
         const block = ensureConfirmationBlock(parts, { extraVideoLinks: linkExtra });
         parts = block.parts;
         if (block.added.length > 0 || block.missingVideoLink) {
@@ -1281,7 +1311,7 @@ export async function drainMarioReplies(
         professione,
         schedaInviataAt,
         schedaRichiesta: result.schedaRichiesta,
-        appuntamentoConVideoOra: result.appointmentFixed && !videoGiaInviato && parts.some((p) => containsVideoLink(p, linkExtra)),
+        appuntamentoConVideoOra: fissatoNelTurno && !videoGiaInviato && parts.some((p) => containsVideoLink(p, linkExtra)),
       }) : null;
       if (scheda) {
         const esitoScheda = await inviaScheda(supabase, { conversationId, phone, from, ...scheda });
@@ -1328,7 +1358,7 @@ export async function drainMarioReplies(
 
       await supabase.from('event_log').insert({
         type: 'fenice_ai_reply',
-        payload: { conversationId, phone, appointmentFixed: result.appointmentFixed, passToHuman: passaAPersona } as never,
+        payload: { conversationId, phone, appointmentFixed: fissatoNelTurno, appuntamentoScartato: motivoScarto, passToHuman: passaAPersona } as never,
         message: `Mario ha risposto a ${phone}`, level: 'info',
       });
 
@@ -1492,8 +1522,11 @@ export async function drainMarioReplies(
             // guardia sulla data li usa al posto di ricalcolarli. A mezzanotte (ora di
             // Roma) l'ancora dei giorni ruota, e una call promessa poco prima veniva scartata dopo
             // essere già stata confermata al lead in chat.
-            bookingDays: result.bookingDays,
-          }, soloNota ? { noteOnly: true } : exPostino ? { notaSeRifiutato: true } : {});
+            // Più i giorni che il form offriva quando è partito il link: vedi `giorniTurno`.
+            bookingDays: giorniTurno,
+          }, soloNota
+            ? { noteOnly: true }
+            : { ...(exPostino ? { notaSeRifiutato: true } : {}), ...(appuntamentoScartato ? { segnalaSeDataScartata: true } : {}) });
           // Esito CRM: chiudiamo se il callback è andato a buon fine; altrimenti
           // restiamo 'active' (ritentabile). In ogni caso usciamo: i rami legacy
           // (booked/handed_off) non valgono per i lead CRM.
@@ -1537,7 +1570,7 @@ export async function drainMarioReplies(
               // Gli stessi due giorni che viaggiano verso `sendOutcome` qui sopra: la
               // guardia sulla data li vuole anche sugli adottati, o a mezzanotte l'ancora
               // ruota e la call appena promessa in chat risulta fuori finestra.
-              bookingDays: result.bookingDays,
+              bookingDays: giorniTurno,
             },
             { botOutcome: esitoInPiedi, botScheduledAt: dataInPiedi },
           );

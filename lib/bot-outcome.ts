@@ -526,6 +526,11 @@ export type SendOutcomeOpts = {
    * l'appuntamento va al GDO come NOTA e la chat resta aperta, invece di chiudersi in
    * silenzio. Vale solo per APPUNTAMENTO. */
   notaSeRifiutato?: boolean;
+  /** Solo dal drain, che ha GIÀ sostituito il «ci siamo» con `TESTO_DATA_DA_VERIFICARE`:
+   * se la guardia scarta la data di un fissaggio nuovo, al CRM parte subito la
+   * segnalazione `conferma_senza_appuntamento` (prima arrivava solo una nota, e la
+   * segnalazione la mandava il cron 24 ore dopo). */
+  segnalaSeDataScartata?: boolean;
 };
 
 /** Cosa si e' deciso di fare con un esito che al CRM non puo' partire. */
@@ -988,18 +993,46 @@ export async function sendOutcome(
       (row?.bot_outcome ?? null) === 'APPUNTAMENTO' && !rifissaDopoCallPassata
         ? row?.bot_scheduled_at ?? null
         : null;
+    const segnala = opts.segnalaSeDataScartata === true && !inAgenda;
     const note = buildAppuntamentoNonFissabileNote({
       motivo: appuntamentoCheck.motivo,
       dataScartata: args.date,
       leadWords: args.leadWords ?? args.note,
       appuntamentoInAgenda: inAgenda,
+      confermaNonMandata: segnala,
     });
     await supabase.from('event_log').insert({
       type: 'appuntamento_non_fissabile',
-      payload: { conversationId, crmLeadId, motivo: appuntamentoCheck.motivo, dataScartata: args.date ?? null, note } as never,
-      message: `[bot-fissatore] APPUNTAMENTO scartato (${appuntamentoCheck.motivo}) per lead ${crmLeadId}: inviato come nota`,
+      payload: { conversationId, crmLeadId, motivo: appuntamentoCheck.motivo, dataScartata: args.date ?? null, note, segnalato: segnala } as never,
+      message: `[bot-fissatore] APPUNTAMENTO scartato (${appuntamentoCheck.motivo}) per lead ${crmLeadId}: ${segnala ? 'segnalato subito come conferma senza appuntamento' : 'inviato come nota'}`,
       level: 'warn',
     });
+    if (segnala) {
+      // Il lead aveva detto sì (di solito ha anche compilato il form): è il caso
+      // `conferma_senza_appuntamento`, che il CRM mette in cima alla lista di chi ha il
+      // lead. La riga `restituzione_bloccata_conferma_form` è la stessa che scrive il
+      // cron quando la segnala lui: così non la rimanda una seconda volta 24h dopo e non
+      // restituisce il lead come chat interrotta.
+      const esito = await inviaContattoUmano(supabase, conversationId, crmLeadId, {
+        outcome: 'CONTATTO_UMANO',
+        note: args.leadWords ?? args.note,
+        motivoContattoUmano: 'conferma_senza_appuntamento',
+        notaContattoUmano: note,
+      }, secret, row?.wa_number ?? null, null);
+      await supabase.from('event_log').insert({
+        type: 'restituzione_bloccata_conferma_form',
+        payload: {
+          conversationId,
+          crmLeadId,
+          esito: esito.sent ? 'inviato' : 'fallito',
+          ...(esito.sent ? {} : { errore: esito.error ?? (esito.status ? `http_${esito.status}` : 'errore') }),
+          origine: 'data_scartata_nel_turno',
+        } as never,
+        message: `[bot-fissatore] conv ${conversationId}: data scartata nel turno, segnalazione conferma senza appuntamento ${esito.sent ? 'inviata' : 'fallita'}`,
+        level: esito.sent ? 'warn' : 'error',
+      });
+      return { ...esito, keepOpen: true };
+    }
     const esito = await inviaNotaAlCrm(supabase, conversationId, crmLeadId, note, args.report, secret);
     return { ...esito, keepOpen: true };
   }
