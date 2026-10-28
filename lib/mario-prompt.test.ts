@@ -904,3 +904,31 @@ describe('scheda Sviluppatore Web AI', () => {
     expect(p).not.toContain('Zanarella');
   });
 });
+
+// Analisi 27/10/2026: 12 richieste di contatto umano, 8 evitabili. Il prompt spingeva
+// il passaggio dopo due obiezioni e su qualsiasi "chiamata" (Perna, Fahmi): il bot ora
+// lo fa solo su richiesta esplicita di una persona, e sul formato risponde e fissa.
+describe('passaggio a una persona solo su richiesta esplicita', () => {
+  const p = buildMarioSystem('Marta');
+
+  it('due obiezioni non portano più a [PASSAGGIO_UMANO]', () => {
+    expect(p).not.toContain('Non insistere più di 2 volte sulla stessa obiezione, poi usa [PASSAGGIO_UMANO]');
+    expect(p).toMatch(/Non insistere più di 2 volte sulla stessa obiezione: poi chiudi[\s\S]{0,200}ESITO:INTERROTTO[\s\S]{0,120}ESITO:SCARTO/);
+  });
+
+  it('non offre il collega di sua iniziativa, nemmeno a "sei un bot?"', () => {
+    expect(p).not.toContain('ti passo un collega in carne e ossa');
+    expect(p).toContain('Non offrire tu di passarlo a un collega');
+  });
+
+  it('"possiamo fare una chiamata normale?" è una domanda sul formato: risponde e fissa', () => {
+    expect(p).toContain('NON È UNA RICHIESTA DI PASSAGGIO');
+    expect(p).toContain('"possiamo fare una chiamata normale?"');
+    expect(p).toMatch(/rispondi sul formato in una riga e fissa/);
+  });
+
+  it('nessun condizionale sulla chiusura nelle righe nuove', () => {
+    const blocco = p.slice(p.indexOf('NON È UNA RICHIESTA DI PASSAGGIO'), p.indexOf('SE IL LEAD TI DÀ UN SECONDO NUMERO'));
+    expect(blocco.replace(/mai "se ti convince", mai "se ti interessa"/, '')).not.toMatch(/se ti convince|se ti interessa/);
+  });
+});
