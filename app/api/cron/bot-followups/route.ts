@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendOutcome } from '@/lib/bot-outcome';
-import { decideFollowupAction, esitoMaiConsegnato, serveCronologia, ultimaAttivitaMs } from '@/lib/bot-followups';
+import { decideFollowupAction, esitoMaiConsegnato, serveCronologia, ultimaAttivitaMs, puoAverScrittoPrimaDellAvvio, scrittiSenzaRispostaPrimaDellAvvio, ARRUOLAMENTO_BUFFER_MS } from '@/lib/bot-followups';
 import { classifyInterrupted } from '@/lib/interrotto-note';
 import { buildConfermaPersaNote } from '@/lib/bot-outcome-rules';
 import { paroleDellaRichiesta } from '@/lib/contatti-umani';
@@ -293,7 +293,7 @@ export async function GET(req: NextRequest) {
       }, null);
 
       // phone non serve qui: sendOutcome fa solo callback CRM, non invia WhatsApp.
-      const action = decideFollowupAction({
+      let action = decideFollowupAction({
         nowMs: now,
         msgs: rows,
         seqSids,
@@ -307,6 +307,36 @@ export async function GET(req: NextRequest) {
         // guardia del modulo puro non deve dipendere dall'ordine dei blocchi qui.
         lancio: lancioInCorso(c),
       });
+
+      // Ci aveva scritto lui, prima dell'arruolamento, e nessuno gli aveva risposto: e' la
+      // chat adottata da `adotta-mai-risposti`, che scrive `ai_started_at = adesso` e lascia
+      // il suo messaggio fuori dalla finestra letta qui sopra. Non e' un "mai risposto":
+      // e' una conversazione interrotta, e torna ai GDO come INTERROTTO (con il suo
+      // messaggio nella cronologia del classificatore), non parcheggiata come NON_RISPOSTO.
+      //
+      // Si decide SOLO sul NON_RISPOSTO, cioe' alla stessa ora di sempre (fine sequenza dal
+      // riaggancio): spostare `ai_started_at` prima del suo messaggio avrebbe messo la chat
+      // sul Track B con un silenzio gia' oltre la resa, e il classificatore l'avrebbe
+      // restituita al giro successivo all'adozione, prima che il riaggancio potesse
+      // ricevere risposta. La query in piu' parte solo su queste chiusure, che sono rare.
+      let storia: MsgRow[] = rows;
+      if (action === 'non_risposto' && puoAverScrittoPrimaDellAvvio(c)) {
+        const { data: prima, error: errorePrima } = await supabase
+          .from('messages')
+          .select('direction, body, created_at, twilio_status, template_sid, is_template, twilio_error_code')
+          .eq('conversation_id', c.id)
+          .lt('created_at', new Date(Date.parse(c.ai_started_at) - ARRUOLAMENTO_BUFFER_MS).toISOString())
+          .order('created_at', { ascending: true })
+          .limit(200);
+        // Senza la lettura non si sa se ci aveva scritto: meglio rimandare di un giro che
+        // parcheggiare per sempre una persona che ci ha cercato.
+        if (errorePrima) continue;
+        const scritti = scrittiSenzaRispostaPrimaDellAvvio((prima ?? []) as MsgRow[]);
+        if (scritti.length > 0) {
+          action = 'interrotto_classify';
+          storia = [...scritti, ...rows];
+        }
+      }
 
       if (action === 'mai_consegnato') {
         // WhatsApp non ha consegnato niente: quasi sempre il numero non ha WhatsApp
@@ -347,7 +377,7 @@ export async function GET(req: NextRequest) {
         // `bot_outcome`, quindi senza guardia resterebbe idonea allo stesso ramo a ogni
         // giro del cron — e richiamerebbe una chiamata a pagamento a Claude senza
         // limite, per sempre, invece che una volta sola per conversazione.
-        const confermaForm = haConfermatoIlForm(rows);
+        const confermaForm = haConfermatoIlForm(storia);
         const giaTrattenuta = confermaForm ? await formGiaTrattenuto(supabase, c.id) : false;
         const azioneForm = decidiSuConfermaForm({ confermaForm, giaTrattenuta });
 
@@ -358,7 +388,7 @@ export async function GET(req: NextRequest) {
           continue;
         }
 
-        const history: MarioTurn[] = rows.slice(-40).map((r) => ({
+        const history: MarioTurn[] = storia.slice(-40).map((r) => ({
           role: r.direction === 'in' ? ('user' as const) : ('assistant' as const),
           content: r.body ?? '',
         }));
@@ -371,8 +401,8 @@ export async function GET(req: NextRequest) {
         if ((azioneForm === 'segnala_e_trattieni' || v.confermato) && c.crm_lead_id) {
           // Il messaggio con la richiesta vera (`motivoRichiesta`), non l'ultimo: in coda
           // CRM arrivavano "Grazie" e "Ne così" (analisi 27/10/2026).
-          const ultimoDelLead = paroleDellaRichiesta(rows)
-            ?? [...rows].reverse().find((r) => r.direction === 'in')?.body ?? undefined;
+          const ultimoDelLead = paroleDellaRichiesta(storia)
+            ?? [...storia].reverse().find((r) => r.direction === 'in')?.body ?? undefined;
           const r = await sendOutcome(supabase, c.id, {
             outcome: 'CONTATTO_UMANO',
             note: ultimoDelLead,
@@ -428,7 +458,7 @@ export async function GET(req: NextRequest) {
           const note = quando ? `${buildRichiamoRestituitoNote({ quando })} ${v.note}` : v.note;
           await sendOutcome(supabase, c.id, { outcome: 'INTERROTTO', note });
         }
-        report.push({ id: c.id, action, discard: v.discard });
+        report.push({ id: c.id, action, discard: v.discard, ...(storia !== rows ? { scrittoPrimaDellAvvio: true } : {}) });
       }
       // action === 'none': niente da fare
     } catch (e) {

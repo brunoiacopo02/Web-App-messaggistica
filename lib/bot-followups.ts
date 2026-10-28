@@ -175,6 +175,41 @@ export function decideFollowupAction(input: {
   return 'none';
 }
 
+/** Margine sull'arruolamento: lo stesso buffer di 5' con cui il cron legge la cronologia. */
+export const ARRUOLAMENTO_BUFFER_MS = 5 * 60_000;
+
+/**
+ * Il lead puo' averci scritto PRIMA dell'arruolamento? Si legge dalle colonne, senza
+ * toccare `messages`: c'e' un inbound, ed e' anteriore alla finestra che il cron legge.
+ *
+ * Serve al caso di `app/api/cron/adotta-mai-risposti`: quella rotta adotta chi ci ha
+ * scritto per primo e non ha mai avuto risposta, e scrive `ai_started_at = adesso`. Il
+ * messaggio del lead resta fuori dalla finestra, la cronologia del cron vede solo il
+ * riaggancio, e la chat cade sul Track A: a fine sequenza partiva NON_RISPOSTO (lead
+ * parcheggiato sul CRM, PO 19/10/2026) per persone che ci avevano scritto loro. Il
+ * 17/09/2026 sono state 22 su 90.
+ */
+export function puoAverScrittoPrimaDellAvvio(c: Pick<CronConvRow, 'ai_started_at' | 'last_inbound_at'>): boolean {
+  const avvio = ms(c.ai_started_at);
+  const inbound = ms(c.last_inbound_at);
+  return avvio !== null && inbound !== null && inbound < avvio - ARRUOLAMENTO_BUFFER_MS;
+}
+
+/**
+ * Dei messaggi anteriori all'arruolamento, quelli del lead rimasti senza risposta.
+ *
+ * Contano solo se prima dell'arruolamento NESSUNO gli aveva scritto: e' la chat "mai
+ * risposta" che il recupero adotta. Se un outbound c'era, quei messaggi appartengono a un
+ * giro precedente gia' chiuso (un lead riarruolato dal CRM) e la regola resta quella di
+ * sempre: per la classificazione conta solo cio' che e' successo da questo giro in poi.
+ * Misurato il 28/10/2026 su tutti i 3.135 NON_RISPOSTO con un inbound: questo caso sono
+ * esattamente le 22 chat del recupero, nessun'altra.
+ */
+export function scrittiSenzaRispostaPrimaDellAvvio<T extends { direction: string }>(prima: T[]): T[] {
+  if (prima.some((m) => m.direction === 'out')) return [];
+  return prima.filter((m) => m.direction === 'in');
+}
+
 /** Un messaggio con il codice d'errore Twilio: serve solo a scrivere la nota giusta. */
 export type MsgConErrore = MsgLite & { twilio_error_code?: number | null };
 

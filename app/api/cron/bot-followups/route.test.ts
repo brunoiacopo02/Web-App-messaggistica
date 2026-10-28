@@ -8,6 +8,7 @@ type Filtro = { m: string; args: unknown[] };
 type Chiamata = { table: string; op: 'select' | 'insert' | 'update'; arg: unknown; filtri: Filtro[] };
 const chiamate: Chiamata[] = [];
 type ConvFinta = {
+  last_inbound_at?: string | null;
   id: number; ai_status: string; crm_lead_id: string | null; bot_outcome: string | null;
   bot_followups_sent: number; gdo_agenda_at: string | null; lancio_slug: string | null; lancio_fase: string | null;
   ai_started_at: string | null; leads: { phone_e164: string | null } | null;
@@ -17,13 +18,17 @@ type Evento = { type: string; payload: Record<string, unknown>; created_at: stri
 const stato = {
   convs: [] as ConvFinta[],
   messaggi: [] as Riga[],
+  messaggiPrima: [] as Riga[],
   eventi: [] as Evento[],
 };
 
 function esegui(rec: Chiamata): { data: unknown; error: unknown } {
   if (rec.op !== 'select') return { data: null, error: null };
   if (rec.table === 'conversations') return { data: stato.convs, error: null };
-  if (rec.table === 'messages') return { data: stato.messaggi, error: null };
+  if (rec.table === 'messages') {
+    if (rec.filtri.some((f) => f.m === 'lt')) return { data: stato.messaggiPrima, error: null };
+    return { data: stato.messaggi, error: null };
+  }
   if (rec.table === 'event_log') {
     const tipo = rec.filtri.find((f) => f.m === 'eq' && f.args[0] === 'type')?.args[1];
     const contiene = rec.filtri.find((f) => f.m === 'contains')?.args[1] as Record<string, unknown> | undefined;
@@ -72,7 +77,7 @@ vi.mock('@/lib/interrotto-note', () => ({ classifyInterrupted: (...a: unknown[])
 // L'azione decisa si cambia per test; `esitoMaiConsegnato` resta quello vero.
 const azione = { valore: 'interrotto_classify' as string };
 vi.mock('@/lib/bot-followups', async (importOriginal) => ({
-  esitoMaiConsegnato: (await importOriginal<typeof import('@/lib/bot-followups')>()).esitoMaiConsegnato,
+  ...(await importOriginal<typeof import('@/lib/bot-followups')>()),
   decideFollowupAction: () => azione.valore,
   serveCronologia: () => true,
   ultimaAttivitaMs: () => 0,
@@ -130,6 +135,7 @@ beforeEach(() => {
   chiamate.length = 0;
   stato.convs = [conv()];
   stato.messaggi = CHAT_NORMALE;
+  stato.messaggiPrima = [];
   stato.eventi = [];
   sendOutcome.mockReset().mockResolvedValue({ sent: true, status: 200 });
   classifyInterrupted.mockClear();
@@ -245,5 +251,46 @@ describe('mai_consegnato — numero senza WhatsApp: torna a un GDO, mai scartato
   it('non chiama il classificatore a pagamento', async () => {
     await richiesta();
     expect(classifyInterrupted).not.toHaveBeenCalled();
+  });
+});
+
+describe(`adotta-mai-risposti — chi ci ha scritto per primo torna ai GDO come INTERROTTO, non parcheggiato`, () => {
+  const AVVIO = '2026-09-17T14:48:00Z';
+  const RIAGGANCIO = [out('Ciao, sono Marta di Fenice Academy: ci eravamo persi a metà discorso', '2026-09-17T14:48:01Z')];
+  const SUO_MESSAGGIO = inb('Ciao, vorrei info sul corso', '2026-09-15T17:08:00Z');
+
+  beforeEach(() => {
+    azione.valore = 'non_risposto';
+    stato.convs = [conv({ ai_started_at: AVVIO, last_inbound_at: SUO_MESSAGGIO.created_at })];
+    stato.messaggi = RIAGGANCIO;
+    stato.messaggiPrima = [SUO_MESSAGGIO];
+  });
+
+  it(`il suo messaggio era prima dell'avvio e nessuno gli aveva risposto: parte INTERROTTO, mai NON_RISPOSTO`, async () => {
+    await richiesta();
+    expect(esitoInviato('NON_RISPOSTO')).toBeUndefined();
+    expect(esitoInviato('INTERROTTO')?.note).toBe(NOTA_CLASSIFICATORE);
+    expect(sendOutcome).toHaveBeenCalledTimes(1);
+  });
+
+  it(`il classificatore vede anche il suo messaggio, non solo il riaggancio`, async () => {
+    await richiesta();
+    const storia = classifyInterrupted.mock.calls[0]?.[0] as Array<{ role: string; content: string }>;
+    expect(storia.map((t) => t.role)).toEqual(['user', 'assistant']);
+    expect(storia[0].content).toBe('Ciao, vorrei info sul corso');
+  });
+
+  it(`se prima dell'avvio qualcuno gli aveva gia' scritto (giro precedente): resta NON_RISPOSTO come oggi`, async () => {
+    stato.messaggiPrima = [out('Ciao, sono Mario!', '2026-09-01T10:00:00Z'), SUO_MESSAGGIO];
+    await richiesta();
+    expect(esitoInviato('NON_RISPOSTO')).toBeDefined();
+    expect(classifyInterrupted).not.toHaveBeenCalled();
+  });
+
+  it(`senza inbound prima dell'avvio non legge nemmeno i messaggi precedenti`, async () => {
+    stato.convs = [conv({ ai_started_at: AVVIO, last_inbound_at: null })];
+    await richiesta();
+    expect(esitoInviato('NON_RISPOSTO')).toBeDefined();
+    expect(chiamate.some((c) => c.table === 'messages' && c.filtri.some((f) => f.m === 'lt'))).toBe(false);
   });
 });

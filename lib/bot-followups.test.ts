@@ -5,6 +5,8 @@ import {
   ultimaAttivitaMs,
   ultimoMessaggioEInbound,
   esitoMaiConsegnato,
+  puoAverScrittoPrimaDellAvvio,
+  scrittiSenzaRispostaPrimaDellAvvio,
   type CronConvRow,
   type MsgConErrore,
 } from './bot-followups';
@@ -403,5 +405,27 @@ describe('esitoMaiConsegnato — numero senza WhatsApp: al GDO da chiamare, mai 
   it('i messaggi in entrata non contano', () => {
     const { note } = esitoMaiConsegnato([morto(63024), { ...inb(D), twilio_error_code: null }]);
     expect(note).toMatch(/1 messaggio/);
+  });
+});
+
+describe(`chat adottata da adotta-mai-risposti — il messaggio del lead prima dell'avvio conta`, () => {
+  const avvio = at(24 * H);
+  it(`inbound anteriore all'arruolamento (oltre il buffer di 5') → puo' averci scritto prima`, () => {
+    expect(puoAverScrittoPrimaDellAvvio({ ai_started_at: avvio, last_inbound_at: at(5 * D) })).toBe(true);
+  });
+  it(`inbound dentro la finestra o nel buffer → no (e' gia' Track B)`, () => {
+    expect(puoAverScrittoPrimaDellAvvio({ ai_started_at: avvio, last_inbound_at: at(2 * H) })).toBe(false);
+    expect(puoAverScrittoPrimaDellAvvio({ ai_started_at: avvio, last_inbound_at: at(24 * H + 60_000) })).toBe(false);
+  });
+  it(`senza inbound o senza avvio → no`, () => {
+    expect(puoAverScrittoPrimaDellAvvio({ ai_started_at: avvio, last_inbound_at: null })).toBe(false);
+    expect(puoAverScrittoPrimaDellAvvio({ ai_started_at: null, last_inbound_at: at(5 * D) })).toBe(false);
+  });
+  it(`mai nessun outbound prima dell'avvio → i suoi messaggi contano`, () => {
+    const prima = [inb(6 * D), inb(5 * D)];
+    expect(scrittiSenzaRispostaPrimaDellAvvio(prima)).toEqual(prima);
+  });
+  it(`un outbound prima dell'avvio (giro precedente, lead riarruolato) → non contano: resta NON_RISPOSTO`, () => {
+    expect(scrittiSenzaRispostaPrimaDellAvvio([out(10 * D, 'read'), inb(9 * D)])).toEqual([]);
   });
 });

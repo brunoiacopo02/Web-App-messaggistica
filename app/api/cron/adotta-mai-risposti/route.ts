@@ -183,6 +183,12 @@ export async function POST(req: NextRequest) {
       // discorso", sopra una risposta appena data. Sei di quelle persone hanno gia'
       // dimostrato di riscrivere nel vuoto. Nessuna riga tornata = l'ha presa
       // qualcun altro: si salta senza inviare, e non e' un fallimento.
+      //
+      // `ai_started_at = now` lascia il messaggio del lead FUORI dalla finestra dei cron:
+      // per la sequenza la chat e' un Track A che parte dal riaggancio. E' voluto (con il
+      // suo messaggio dentro, vecchio di giorni, la resa del Track B scatterebbe al giro
+      // dopo l'adozione), ma alla chiusura `bot-followups` lo rilegge e la restituisce
+      // come INTERROTTO, non come NON_RISPOSTO: vedi `puoAverScrittoPrimaDellAvvio`.
       const { data: adottate, error: adoptError } = await admin.from('conversations').update({
         ai_owner: 'mario', ai_status: 'active', ai_started_at: now, crm_funnel: provenienza,
       }).eq('id', c.id).is('ai_owner', null).select('id');
