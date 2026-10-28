@@ -824,25 +824,3 @@ describe('buildAppuntamentoNonFissabileNote — la testa regge il dedup del CRM'
     expect(testaCRM(n1)).toContain('SPOSTAMENTO NON REGISTRATO');
   });
 });
-
-// Le Conferme attaccano alle 9 solo da martedì 27/10/2026: lunedì 26 il mattino è chiuso.
-describe('checkDataAppuntamento: lunedì 26/10 mattina chiuso (temporaneo)', () => {
-  const SAB = Date.parse('2026-10-24T21:00:00+02:00');
-  it('lunedì 26/10 alle 11:00 è fuori fascia', () => {
-    expect(checkDataAppuntamento('2026-10-26T11:00:00+01:00', SAB, [])).toEqual({ ok: false, motivo: 'fuori_fascia' });
-  });
-  it('lunedì 26/10 alle 16:00 si può', () => {
-    expect(checkDataAppuntamento('2026-10-26T16:00:00+01:00', SAB, []).ok).toBe(true);
-  });
-  it('martedì 27/10 alle 11:00 si può', () => {
-    expect(checkDataAppuntamento('2026-10-27T11:00:00+01:00', SAB, []).ok).toBe(true);
-  });
-});
-
-describe('checkDataAppuntamento: confine delle 15 di lunedì 26/10', () => {
-  const SAB = Date.parse('2026-10-24T21:00:00+02:00');
-  it('14:59 rifiutato, 15:00 accettato', () => {
-    expect(checkDataAppuntamento('2026-10-26T14:59:00+01:00', SAB, [])).toEqual({ ok: false, motivo: 'fuori_fascia' });
-    expect(checkDataAppuntamento('2026-10-26T15:00:00+01:00', SAB, []).ok).toBe(true);
-  });
-});

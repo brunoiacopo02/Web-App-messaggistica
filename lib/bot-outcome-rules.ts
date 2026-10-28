@@ -1,7 +1,7 @@
 import type { BotOutcome } from './bot-contract';
 import { formatRomeDateTime, romeDayKey, romeHour, sameInstant } from './rome-time';
 import { isBookableDate, type BlackoutRange } from './booking-blackout';
-import { computeBookingDays, soloPomeriggio, ORA_MIN_PRIMA_DEL } from './booking-slots';
+import { computeBookingDays } from './booking-slots';
 
 export type OutcomeArgs = {
   outcome: BotOutcome;
@@ -263,8 +263,6 @@ export function checkDataAppuntamento(
 
   const ora = romeHour(quando);
   if (ora < APPUNTAMENTO_ORA_MIN || ora > APPUNTAMENTO_ORA_MAX) return { ok: false, motivo: 'fuori_fascia' };
-  // Temporaneo (vedi MATTINE_PRENOTABILI_DAL): lunedì 26/10 le Conferme attaccano alle 13.
-  if (soloPomeriggio(giorno) && ora < ORA_MIN_PRIMA_DEL) return { ok: false, motivo: 'fuori_fascia' };
 
   // La finestra è "domani + dopodomani": un appuntamento fuori di lì l'agenda vera non
   // lo regge. La regola stava solo nel prompt e il modello la violava: 32 call su 251
