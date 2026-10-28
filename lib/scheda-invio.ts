@@ -17,7 +17,7 @@ export function testoScheda(slug: SlugProfessione): string {
  */
 export async function inviaScheda(
   supabase: Supa,
-  i: { conversationId: number; phone: string; from: string; slug: SlugProfessione; momento: 'subito' | 'pre_appuntamento' | 'post_appuntamento' },
+  i: { conversationId: number; phone: string; from: string; slug: SlugProfessione; momento: 'subito' | 'pre_appuntamento' | 'post_appuntamento' | 'su_richiesta' },
 ): Promise<'inviata' | 'gia_inviata' | 'fallita'> {
   const adesso = new Date().toISOString();
   const { data: prese } = await supabase.from('conversations')

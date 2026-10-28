@@ -33,7 +33,7 @@ import { getLancioSettings, type LancioSettings } from './lancio-settings';
 import { alertUnaVolta } from './alert-una-volta';
 import type { LancioInfo } from './lancio-crm';
 import { mittenteDiConversazione } from './mittente';
-import { professioniContextNote, professioniVince, schedaDaInviare, schedaSubito } from './professioni-nota';
+import { brochureContextNote, professioniContextNote, professioniVince, richiestaSchedaFuoriFunnel, schedaDaInviare, schedaSubito } from './professioni-nota';
 import { isSlugProfessione, PROVENIENZA_PROFESSIONI } from './professioni';
 import { inviaScheda, testoScheda } from './scheda-invio';
 import { fissatoIlDi } from './noemi-quando';
@@ -1012,6 +1012,15 @@ export async function drainMarioReplies(
       const notaProfessioni = vinceProfessioni
         ? [professioniContextNote(isSlugProfessione(professione) ? professione : null, { schedaInviata: !!schedaInviataAt, appenaInviata: schedaAppenaInviata }), notaPrimo].filter(Boolean).join('\n\n')
         : null;
+      // Brochure su richiesta fuori dal funnel Professioni (PO 28/10/2026): solo se il lead
+      // la chiede (in questo turno o, pendente, poco prima), mai nel postino ne' nel lancio.
+      // La nota si somma a quella del turno; la scheda parte solo col tag di Mario, qui sotto.
+      const richiestaScheda = richiestaSchedaFuoriFunnel({
+        vinceProfessioni, postino, lancioSlug: lancio.lancio_slug, schedaInviataAt,
+        testiTurno: rows.slice(idxTurno).filter((m) => m.direction === 'in').map((m) => m.body ?? ''),
+        testiPrima: rows.slice(0, idxTurno).filter((m) => m.direction === 'in').map((m) => m.body ?? ''),
+      });
+      const notaBrochure = richiestaScheda ? brochureContextNote(richiestaScheda) : null;
       // Postino: i promemoria del turno e, dopo il recap, la domanda di riscaldamento.
       // La nota tace nel turno del recap e in quello di Noemi: una cosa alla volta.
       const noteGdo: GdoNoteInput | null = postino
@@ -1070,11 +1079,11 @@ export async function drainMarioReplies(
           : notaLancioCompleta
             ? { contextNote: notaLancioCompleta }
             : notaStudente
-            ? { contextNote: notaStudente }
+            ? { contextNote: [notaStudente, notaBrochure].filter(Boolean).join('\n\n') }
             : notaProfessioni
             ? { contextNote: notaProfessioni }
-            : notaPrimo
-              ? { contextNote: notaPrimo }
+            : notaPrimo || notaBrochure
+              ? { contextNote: [notaPrimo, notaBrochure].filter(Boolean).join('\n\n') }
               : {}),
       });
 
@@ -1277,6 +1286,13 @@ export async function drainMarioReplies(
             }
           }
         }
+      }
+      // Brochure su richiesta fuori dal funnel: parte solo col tag di Mario e solo nei turni
+      // con la richiesta accesa. `professione` NON si scrive: la chat diventerebbe del funnel
+      // (`professioniVince`) e prenderebbe il sollecito della scheda.
+      if (!vinceProfessioni && richiestaScheda === 'da_mandare' && result.schedaRichiesta && !schedaInviataAt) {
+        const esito = await inviaScheda(supabase, { conversationId, phone, from, slug: result.schedaRichiesta, momento: 'su_richiesta' });
+        if (esito === 'inviata') schedaInviataAt = new Date().toISOString();
       }
 
       if (videoInsiemeAllaRisposta) {

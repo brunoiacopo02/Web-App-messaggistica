@@ -3350,3 +3350,115 @@ describe('drainMarioReplies — riscaldamento del lead GDO dopo il recap', () =>
     expect(calls.convUpdates.some((u: any) => 'gdo_warmup_step' in u)).toBe(false);
   });
 });
+
+// PO 28/10/2026: ai lead degli altri funnel la brochure si manda solo se la chiedono, col
+// tag di Mario; mai in autonomia, mai nel postino o nel lancio, e la chat resta del suo funnel.
+describe('drainMarioReplies — brochure su richiesta fuori dal funnel Professioni', () => {
+  const BASE = 'https://bot.example.test';
+  const VIDEO = 'https://corso.feniceacademy.it/conferenza-bx';
+  const APERTURA: FakeMsgRow = { direction: 'out', body: 'Ciao, sono Mario di Fenice', template_sid: null, created_at: '2026-10-28T09:00:00Z' };
+  const msg = (direction: 'in' | 'out', body: string, min: number): FakeMsgRow => ({
+    direction, body, template_sid: null, created_at: new Date(Date.parse('2026-10-28T10:00:00Z') + min * 60_000).toISOString(),
+  });
+  const riga = (extra: Partial<ClaimedRow> = {}): ClaimedRow => ({
+    id: 80, ai_started_at: null, crm_lead_id: 'crm80', bot_outcome: null, professione: null, scheda_inviata_at: null,
+    crm_funnel: 'Evergreen', ...extra,
+  });
+  const conMedia = () => vi.mocked(sendFreeText).mock.calls
+    .map((c) => c[0] as { body: string; mediaUrl?: string[] })
+    .filter((a) => a.mediaUrl && a.mediaUrl.length > 0);
+  const nota = () => (vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string }).contextNote ?? '';
+  const risposta = (extra: Record<string, unknown> = {}) => ({
+    visibleReply: 'Certo, quale corso ti interessa?', appointmentFixed: false, passToHuman: false, videoWatched: false, ...extra,
+  });
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', BASE);
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(sendFreeText).mockClear();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('richiesta esplicita: nota accesa, nessun invio senza tag', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(risposta());
+    const { supabase, calls } = makeDrainSupabase(riga(), [APERTURA, msg('in', 'mi mandi la brochure?', 0)]);
+
+    await drainMarioReplies(supabase, 80, '+391234567890', () => 0, 0);
+
+    expect(nota()).toContain('RICHIESTA DELLA SCHEDA');
+    expect(nota()).toContain('LA SCHEDA ESISTE SEMPRE');
+    expect(nota()).not.toContain('FUNNEL PROFESSIONI');
+    expect(conMedia()).toHaveLength(0);
+    expect(calls.events.some((e) => e.type === 'scheda_inviata')).toBe(false);
+  }, 20_000);
+
+  it('senza richiesta: nessuna nota, e il tag da solo non manda niente', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(risposta({ schedaRichiesta: 'copywriter' }));
+    const { supabase, calls } = makeDrainSupabase(riga(), [APERTURA, msg('in', 'quanto costa?', 0)]);
+
+    await drainMarioReplies(supabase, 80, '+391234567890', () => 0, 0);
+
+    expect(nota()).not.toContain('RICHIESTA DELLA SCHEDA');
+    expect(conMedia()).toHaveLength(0);
+    expect(calls.events.some((e) => e.type === 'scheda_inviata')).toBe(false);
+  }, 20_000);
+
+  it('corso detto al turno dopo: nota ancora accesa, il tag manda la scheda una volta e professione resta vuota', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(risposta({
+      visibleReply: 'Eccola, intanto dimmi: tu attualmente lavori?', schedaRichiesta: 'sviluppatore_web_ai',
+    }));
+    const { supabase, calls } = makeDrainSupabase(riga(), [
+      APERTURA, msg('in', 'avete un pdf del corso?', 0), msg('out', 'Certo, quale corso ti interessa?', 1), msg('in', 'web developer', 2),
+    ]);
+
+    await drainMarioReplies(supabase, 80, '+391234567890', () => 0, 0);
+
+    expect(nota()).toContain('RICHIESTA DELLA SCHEDA');
+    const media = conMedia();
+    expect(media).toHaveLength(1);
+    expect(media[0].mediaUrl).toEqual([`${BASE}/schede/sviluppatore-web-ai.pdf`]);
+    expect(calls.events.filter((e) => e.type === 'scheda_inviata')).toHaveLength(1);
+    expect(calls.events.find((e) => e.type === 'scheda_inviata')?.payload).toMatchObject({ slug: 'sviluppatore_web_ai', momento: 'su_richiesta' });
+    expect(calls.convUpdates.some((u: any) => 'professione' in u)).toBe(false);
+  }, 20_000);
+
+  it('gia inviata: la nota dice che e\' sopra in chat e il tag non la rimanda', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(risposta({ schedaRichiesta: 'copywriter' }));
+    const { supabase, calls } = makeDrainSupabase(riga({ scheda_inviata_at: '2026-10-27T10:00:00Z' }), [
+      APERTURA, msg('in', 'me la rimandi la brochure?', 0),
+    ]);
+
+    await drainMarioReplies(supabase, 80, '+391234567890', () => 0, 0);
+
+    expect(nota()).toContain('sopra in chat');
+    expect(conMedia()).toHaveLength(0);
+    expect(calls.events.some((e) => e.type === 'scheda_inviata')).toBe(false);
+  }, 20_000);
+
+  it('postino e lancio (in corso o chiuso): niente nota della brochure e niente scheda, anche col tag', async () => {
+    const varianti: Array<Partial<ClaimedRow>> = [
+      {
+        gdo_agenda_at: new Date(Date.now() - 86_400_000).toISOString(),
+        gdo_appuntamento_at: new Date(Date.now() + 2 * 86_400_000).toISOString(),
+        gdo_video_url: VIDEO,
+      },
+      { lancio_slug: 'webdev-2026-10', lancio_fase: 'chiuso' },
+      { lancio_slug: 'webdev-2026-10', lancio_fase: 'attesa' },
+    ];
+    for (const extra of varianti) {
+      vi.mocked(sendFreeText).mockClear();
+      vi.mocked(generateMarioReply).mockReset();
+      vi.mocked(generateMarioReply).mockResolvedValue(risposta({ schedaRichiesta: 'copywriter' }));
+      const { supabase, calls } = makeDrainSupabase(riga(extra), [APERTURA, msg('in', 'mi mandi il programma del corso?', 0)]);
+
+      await drainMarioReplies(supabase, 80, '+391234567890', () => 0, 0);
+
+      for (const c of vi.mocked(generateMarioReply).mock.calls) {
+        expect((c[1] as { contextNote?: string }).contextNote ?? '').not.toContain('RICHIESTA DELLA SCHEDA');
+      }
+      expect(conMedia()).toHaveLength(0);
+      expect(calls.events.some((e) => e.type === 'scheda_inviata')).toBe(false);
+    }
+  }, 30_000);
+});

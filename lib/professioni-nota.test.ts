@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { chiedeLaScheda, professioniContextNote, professioniVince, schedaDaInviare, schedaSubito } from './professioni-nota';
+import { brochureContextNote, chiedeLaScheda, FINESTRA_RICHIESTA_SCHEDA, professioniContextNote, professioniVince, richiestaSchedaFuoriFunnel, schedaDaInviare, schedaSubito } from './professioni-nota';
 
 describe('professioniContextNote', () => {
   it('scheda non ancora partita: nomina il corso, il tag e il ripiego col video', () => {
@@ -161,5 +161,56 @@ describe('schedaSubito (PO 28/10/2026)', () => {
   });
   it('messaggio qualsiasi a meta discorso: no', () => {
     expect(schedaSubito({ ...base, testiTurno: ['lavoro in un negozio'] })).toBeNull();
+  });
+});
+
+describe('richiestaSchedaFuoriFunnel (brochure su richiesta, PO 28/10/2026)', () => {
+  const base = {
+    vinceProfessioni: false, postino: false, lancioSlug: null, schedaInviataAt: null,
+    testiTurno: ['mi mandi la brochure?'], testiPrima: [] as string[],
+  };
+  it('richiesta esplicita nel turno → da_mandare', () => {
+    expect(richiestaSchedaFuoriFunnel(base)).toBe('da_mandare');
+  });
+  it('senza richiesta → null', () => {
+    expect(richiestaSchedaFuoriFunnel({ ...base, testiTurno: ['quanto costa il corso?'] })).toBeNull();
+  });
+  it('corso detto al turno dopo: la richiesta resta pendente', () => {
+    expect(richiestaSchedaFuoriFunnel({ ...base, testiTurno: ['web developer'], testiPrima: ['ciao', 'avete un pdf del corso?'] })).toBe('da_mandare');
+  });
+  it('richiesta troppo indietro nella chat → null', () => {
+    const prima = ['avete un pdf?', ...Array.from({ length: FINESTRA_RICHIESTA_SCHEDA }, (_, k) => `messaggio ${k}`)];
+    expect(richiestaSchedaFuoriFunnel({ ...base, testiTurno: ['ok'], testiPrima: prima })).toBeNull();
+  });
+  it('gia\' inviata: gia_inviata solo se la richiede ora, mai da_mandare', () => {
+    expect(richiestaSchedaFuoriFunnel({ ...base, schedaInviataAt: 'x' })).toBe('gia_inviata');
+    expect(richiestaSchedaFuoriFunnel({ ...base, schedaInviataAt: 'x', testiTurno: ['web developer'], testiPrima: ['il pdf?'] })).toBeNull();
+  });
+  it('funnel Professioni, postino e lancio (in corso o chiuso) → null', () => {
+    expect(richiestaSchedaFuoriFunnel({ ...base, vinceProfessioni: true })).toBeNull();
+    expect(richiestaSchedaFuoriFunnel({ ...base, postino: true })).toBeNull();
+    expect(richiestaSchedaFuoriFunnel({ ...base, lancioSlug: 'webdev-2026-10' })).toBeNull();
+  });
+  it('la frase del link Professioni non conta come richiesta', () => {
+    expect(richiestaSchedaFuoriFunnel({ ...base, testiTurno: ['Ciao, vorrei ricevere la scheda del corso'] })).toBeNull();
+  });
+});
+
+describe('brochureContextNote', () => {
+  it('da mandare: esiste sempre, i sei corsi con slug, tag, call e PRIMA GUARDO IL CORSO', () => {
+    const n = brochureContextNote('da_mandare');
+    expect(n).toContain('LA SCHEDA ESISTE SEMPRE');
+    expect(n).toContain('Sviluppatore Web AI = sviluppatore_web_ai');
+    expect(n).toContain('Social Media Manager = social_media_manager');
+    expect(n).toContain('[SCHEDA:<slug>]');
+    expect(n).toContain('non sostituisce la call');
+    expect(n).toContain('PRIMA GUARDO IL CORSO');
+    expect(n).not.toContain('FUNNEL PROFESSIONI');
+  });
+  it('gia inviata: e\' sopra in chat, niente tag da usare', () => {
+    const n = brochureContextNote('gia_inviata');
+    expect(n).toContain('sopra in chat');
+    expect(n).toContain('Non rimandarla');
+    expect(n).not.toContain('<slug>');
   });
 });

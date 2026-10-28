@@ -122,3 +122,58 @@ export function schedaSubito(i: {
   const vuole = i.testiTurno.some((t) => isMarkerProfessioni(t)) || chiedeLaScheda(i.testiTurno);
   return vuole ? i.professione : null;
 }
+
+/**
+ * Quanti messaggi del lead PRIMA del turno tengono accesa una richiesta della scheda non
+ * ancora soddisfatta. Il caso tipico: "mi mandi la brochure?" → Mario chiede quale corso →
+ * "web developer" (nel turno dopo la parola scheda non c'e' piu'). Tre bastano a coprire la
+ * risposta sul corso anche se il lead scrive in piu' bolle, senza tenere la nota accesa
+ * per sempre su chi l'ha chiesta e poi ha cambiato discorso.
+ */
+export const FINESTRA_RICHIESTA_SCHEDA = 3;
+
+/**
+ * Brochure su richiesta FUORI dal funnel Professioni (PO 28/10/2026): ai lead degli altri
+ * funnel la scheda si manda solo se la chiedono, mai in autonomia, e senza toccare la presa
+ * dell'appuntamento. Mai nel turno del funnel (ha la sua nota), mai nel postino (chat del
+ * GDO), mai su una chat del lancio (in corso o chiuso: ha i suoi link).
+ * - 'da_mandare': non ancora in chat, richiesta in questo turno o negli ultimi
+ *   FINESTRA_RICHIESTA_SCHEDA messaggi del lead prima del turno (richiesta pendente);
+ * - 'gia_inviata': e' gia' sopra in chat e la richiede in questo turno.
+ * Non scrive mai `professione`: la chat resta del suo funnel (niente `professioniVince`,
+ * niente sollecito dedicato della scheda).
+ */
+export function richiestaSchedaFuoriFunnel(i: {
+  vinceProfessioni: boolean;
+  postino: boolean;
+  lancioSlug: string | null | undefined;
+  schedaInviataAt: string | null;
+  testiTurno: readonly string[];
+  testiPrima: readonly string[];
+}): 'da_mandare' | 'gia_inviata' | null {
+  if (i.vinceProfessioni || i.postino || i.lancioSlug) return null;
+  if (i.schedaInviataAt) return chiedeLaScheda(i.testiTurno) ? 'gia_inviata' : null;
+  const pendente = chiedeLaScheda(i.testiTurno) || chiedeLaScheda(i.testiPrima.slice(-FINESTRA_RICHIESTA_SCHEDA));
+  return pendente ? 'da_mandare' : null;
+}
+
+/** Nota variabile per la brochure su richiesta fuori dal funnel (manuale e cache intatti). */
+export function brochureContextNote(stato: 'da_mandare' | 'gia_inviata'): string {
+  const call = "La scheda non sostituisce la call e non la rimanda: nello stesso messaggio vai avanti col flusso verso la call, come sempre.";
+  if (stato === 'gia_inviata') {
+    return [
+      "RICHIESTA DELLA SCHEDA DEL CORSO: l'ha gia' ricevuta, e' sopra in chat. Digli che gliel'hai mandata qui sopra e che la trova scorrendo un attimo. Non rimandarla e non usare il tag [SCHEDA:...].",
+      call,
+      "Non dire mai che la scheda non c'e'.",
+    ].join('\n');
+  }
+  const corsi = PROFESSIONI.map((p) => `${p.nome} = ${p.slug}`).join(', ');
+  return [
+    "RICHIESTA DELLA SCHEDA DEL CORSO: il lead ha chiesto la scheda (brochure, pdf, programma) di un corso. LA SCHEDA ESISTE SEMPRE: non dire mai che non c'e' o che non abbiamo una scheda, una brochure o un pdf da mandare.",
+    `I corsi sono sei: ${corsi}.`,
+    "Se dalla chat non e' chiaro quale corso gli interessa, chiediglielo in una riga con l'elenco breve dei sei (falso bivio se e' indeciso). Se gliel'hai gia' chiesto e non ha ancora risposto, non insistere: gliela mandi quando te lo dice.",
+    "APPENA SAI IL CORSO mandagli la scheda scrivendo in fondo al messaggio il tag [SCHEDA:<slug>] con lo slug del corso. Il tag lo usi una volta sola.",
+    call,
+    'SE RIMANDA LA CALL PER GUARDARE PRIMA LA SCHEDA: prendi un impegno sul quando: deve averla vista entro domani, ci vogliono due minuti. Il quando lo dice lui (regola "PRIMA GUARDO IL CORSO").',
+  ].join('\n');
+}
