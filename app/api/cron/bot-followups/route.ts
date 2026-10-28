@@ -4,6 +4,7 @@ import { sendOutcome } from '@/lib/bot-outcome';
 import { decideFollowupAction, esitoMaiConsegnato, serveCronologia, ultimaAttivitaMs } from '@/lib/bot-followups';
 import { classifyInterrupted } from '@/lib/interrotto-note';
 import { buildConfermaPersaNote } from '@/lib/bot-outcome-rules';
+import { paroleDellaRichiesta } from '@/lib/contatti-umani';
 import { buildRichiamoRestituitoNote } from '@/lib/richiamo-fasce';
 import { haConfermatoIlForm, decidiSuConfermaForm } from '@/lib/conferma-form';
 import type { MarioTurn } from '@/lib/mario';
@@ -368,7 +369,10 @@ export async function GET(req: NextRequest) {
         // ogni giro), ma deve dire la verità su cosa è arrivato al CRM.
         let invioContatto: { esito: 'inviato' | 'fallito' | 'senza_lead'; errore?: string } = { esito: 'senza_lead' };
         if ((azioneForm === 'segnala_e_trattieni' || v.confermato) && c.crm_lead_id) {
-          const ultimoDelLead = [...rows].reverse().find((r) => r.direction === 'in')?.body ?? undefined;
+          // Il messaggio con la richiesta vera (`motivoRichiesta`), non l'ultimo: in coda
+          // CRM arrivavano "Grazie" e "Ne così" (analisi 27/10/2026).
+          const ultimoDelLead = paroleDellaRichiesta(rows)
+            ?? [...rows].reverse().find((r) => r.direction === 'in')?.body ?? undefined;
           const r = await sendOutcome(supabase, c.id, {
             outcome: 'CONTATTO_UMANO',
             note: ultimoDelLead,

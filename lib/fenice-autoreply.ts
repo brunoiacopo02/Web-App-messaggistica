@@ -19,6 +19,7 @@ import { registraEsitoSenzaLeadId, sendOutcome, inviaNotaAlCrm } from './bot-out
 import { stopDalCrmPerLead, vuolePassaggioAUmano } from './stop-crm';
 import { buildScriveDopoLaCallNote, motivoScartoAppuntamento, TESTO_DATA_DA_VERIFICARE, unisciGiorni } from './bot-outcome-rules';
 import { giorniDelLinkForm } from './booking-slots';
+import { paroleDellaRichiesta } from './contatti-umani';
 import { bookingBlackout } from './booking-blackout';
 import type { BotOutcome } from './bot-contract';
 import { personaForConversation, PERSONA_NAME, OPENING_ENV_KEYS } from './persona';
@@ -1586,7 +1587,10 @@ export async function drainMarioReplies(
         // Le parole che mandiamo sono quelle del lead, prese dall'ultimo turno della
         // cronologia — una parafrasi del modello cambierebbe il senso della richiesta.
         if (crmLeadId) {
-          const ultimoDelLead = [...history].reverse().find((t) => t.role === 'user')?.content;
+          // Il messaggio con la richiesta vera (`motivoRichiesta`), non l'ultimo: nelle
+          // chat vere l'ultimo è spesso "Grazie" o "ok" e in coda CRM non dice niente.
+          const ultimoDelLead = paroleDellaRichiesta(rows)
+            ?? [...history].reverse().find((t) => t.role === 'user')?.content;
           const esito = await sendOutcome(supabase, conversationId, {
             outcome: 'CONTATTO_UMANO',
             note: ultimoDelLead,
@@ -1608,7 +1612,8 @@ export async function drainMarioReplies(
         // dice niente. L'errore non si propaga: se la colonna non c'e' ancora (migration
         // 20260825000001 non applicata) il passaggio a una persona avviene lo stesso.
         {
-          const ultimoDelLead = [...history].reverse().find((t) => t.role === 'user')?.content ?? null;
+          const ultimoDelLead = paroleDellaRichiesta(rows)
+            ?? [...history].reverse().find((t) => t.role === 'user')?.content ?? null;
           const { error: errHandoff } = await supabase.from('conversations')
             .update({ handed_off_at: new Date().toISOString(), handed_off_reason: ultimoDelLead })
             .eq('id', conversationId);

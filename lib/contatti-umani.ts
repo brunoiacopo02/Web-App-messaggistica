@@ -111,6 +111,21 @@ export function motivoRichiesta(messaggi: MessaggioIn[]): Motivo {
   return { richiestoIl: scelto.created_at, parole, categoria: categoriaDi(parole) };
 }
 
+/**
+ * Le parole del lead da mandare al CRM con un `CONTATTO_UMANO`, dalla cronologia della
+ * chat (in e out, ordine qualsiasi): il messaggio con la richiesta vera, non l'ultimo.
+ * Analisi 27/10/2026: in coda arrivavano "Grazie" e "Ne così". `undefined` se il lead
+ * non ha mai scritto niente di leggibile.
+ */
+export function paroleDellaRichiesta(
+  msgs: readonly { direction: string; body: string | null; created_at: string }[],
+): string | undefined {
+  const { parole } = motivoRichiesta(
+    msgs.filter((m) => m.direction === 'in').map((m) => ({ body: m.body, created_at: m.created_at })),
+  );
+  return parole || undefined;
+}
+
 // --- Contratto v1.5: quello che il CRM si aspetta insieme alla richiesta ------------
 
 /** Le categorie che il CRM riconosce. Un valore che non riconosce diventa `altro` da

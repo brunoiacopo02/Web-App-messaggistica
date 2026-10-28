@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { motivoRichiesta, CATEGORIE, type MessaggioIn, categoriaPerCrm, disponibilitaDalTesto } from './contatti-umani';
+import { motivoRichiesta, CATEGORIE, type MessaggioIn, categoriaPerCrm, disponibilitaDalTesto, paroleDellaRichiesta } from './contatti-umani';
 
 const m = (body: string, created_at: string): MessaggioIn => ({ body, created_at });
 
@@ -172,5 +172,23 @@ describe('disponibilitaDalTesto', () => {
     expect(disponibilitaDalTesto('Mi puoi chiamare?')).toBeNull();
     expect(disponibilitaDalTesto('')).toBeNull();
     expect(disponibilitaDalTesto(null)).toBeNull();
+  });
+});
+
+// Analisi 27/10/2026: in coda CRM arrivavano "Grazie" e "Ne così" perché si mandava
+// l'ultimo messaggio del lead, non quello con la richiesta.
+describe('paroleDellaRichiesta', () => {
+  it('prende il messaggio con la richiesta, non il "Grazie" finale', () => {
+    const msgs = [
+      { direction: 'out', body: 'Ciao, sono Marta', created_at: '2026-10-26T10:00:00Z' },
+      { direction: 'in', body: 'Mi potete chiamare domani dopo le 18?', created_at: '2026-10-26T10:01:00Z' },
+      { direction: 'out', body: 'Certo, ti faccio richiamare da una collega', created_at: '2026-10-26T10:02:00Z' },
+      { direction: 'in', body: 'Grazie', created_at: '2026-10-26T10:03:00Z' },
+    ];
+    expect(paroleDellaRichiesta(msgs)).toBe('Mi potete chiamare domani dopo le 18?');
+  });
+
+  it('ignora i messaggi del bot e torna undefined se il lead non ha scritto', () => {
+    expect(paroleDellaRichiesta([{ direction: 'out', body: 'chiamami', created_at: '2026-10-26T10:00:00Z' }])).toBeUndefined();
   });
 });
