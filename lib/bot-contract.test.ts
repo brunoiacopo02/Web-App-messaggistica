@@ -16,6 +16,13 @@ describe('isoWithOffset', () => {
 });
 
 describe('parseIntakePayload', () => {
+  it('codaMarketing: solo true vale (PO 29/10/2026)', () => {
+    const b = { leadId: 'u1', phone: '3331234567', companyId: 'fenice' };
+    expect(parseIntakePayload({ ...b, codaMarketing: true })).toMatchObject({ ok: true, value: { codaMarketing: true } });
+    expect(parseIntakePayload({ ...b, codaMarketing: 'true' })).toMatchObject({ ok: true, value: { codaMarketing: false } });
+    expect(parseIntakePayload(b)).toMatchObject({ ok: true, value: { codaMarketing: false } });
+  });
+
   const base = { leadId: 'u1', name: 'Mario', phone: '333 123 4567', email: null, funnel: 'badanti', companyId: 'fenice' };
   it('accetta payload valido', () => {
     const r = parseIntakePayload(base);
@@ -167,6 +174,7 @@ describe('parseSendAgendaPayload', () => {
         lancio: null,
         riscaldamento: false,
         numeroBot: 1,
+        codaMarketing: false,
         variant: { lavora: true, haFamiglia: false, offertaDelMese: false },
       },
     });

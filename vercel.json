@@ -10,6 +10,10 @@
       "schedule": "*/30 5-21 * * *"
     },
     {
+      "path": "/api/cron/qualita-numeri",
+      "schedule": "10 5-20/3 * * *"
+    },
+    {
       "path": "/api/cron/lead-analysis",
       "schedule": "0 * * * *"
     },

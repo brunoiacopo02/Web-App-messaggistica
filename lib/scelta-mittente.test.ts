@@ -4,7 +4,7 @@ vi.mock('./spedibilita', () => ({ spedibileDa: vi.fn(async (sid: string) => ({ o
 vi.mock('./bot2-tetto', async (orig) => ({ ...(await orig<typeof import('./bot2-tetto')>()), chatNateOggi: vi.fn(async () => 0) }));
 vi.mock('./tetti-numeri', async (orig) => ({ ...(await orig<typeof import('./tetti-numeri')>()), getTettiNumeri: vi.fn() }));
 
-import { scegliMittenteNuovo, sidAperturaMario } from './scelta-mittente';
+import { scegliMittenteNuovo, sidAperturaMario, conCodaMarketing } from './scelta-mittente';
 import { spedibileDa } from './spedibilita';
 import { chatNateOggi } from './bot2-tetto';
 import { getTettiNumeri, parseTettiNumeri } from './tetti-numeri';
@@ -86,13 +86,30 @@ describe('scegliMittenteNuovo', () => {
     expect(vi.mocked(chatNateOggi).mock.calls.map((c) => c[1])).toEqual([ELIXIR]);
   });
 
-  it('tutti pieni: 3199, e un evento info per numero', async () => {
+  it('tutti pieni: trabocco sul secondario meno carico, mai il 3199 (PO 29/10/2026)', async () => {
     tetti({ [ELIXIR]: 150, [N8061]: 150 });
-    vi.mocked(chatNateOggi).mockResolvedValue(150);
+    vi.mocked(chatNateOggi).mockImplementation(async (_s, n) => (n === ELIXIR ? 160 : 150));
     const { s, eventi } = supa();
     const r = await scegli(s);
-    expect(r).toMatchObject({ from: P, secondario: false, motivo: 'nessun_candidato' });
+    expect(r).toMatchObject({ from: N8061, secondario: true, motivo: 'scelto' });
     expect(eventi.filter((e) => e.type === 'mittente_tetto')).toHaveLength(2);
+    expect(eventi.filter((e) => e.type === 'mittente_trabocco')).toHaveLength(1);
+  });
+
+  it('trabocco: un numero a riposo (tetto 0) non prende mai il trabocco', async () => {
+    tetti({ [ELIXIR]: 10, [N8061]: 0 });
+    vi.mocked(chatNateOggi).mockResolvedValue(10);
+    const r = await scegli(supa().s);
+    expect(r).toMatchObject({ from: ELIXIR, secondario: true });
+    expect(vi.mocked(chatNateOggi).mock.calls.map((c) => c[1])).toEqual([ELIXIR]);
+  });
+
+  it('trabocco: un numero pieno ma non spedibile resta fuori, si torna al 3199', async () => {
+    tetti({ [ELIXIR]: 10 });
+    vi.mocked(chatNateOggi).mockResolvedValue(10);
+    vi.mocked(spedibileDa).mockResolvedValue({ ok: false, motivo: 'template_bloccato', sidTradotto: 'HX_A', errore: 'x' } as any);
+    const r = await scegli(supa().s);
+    expect(r).toMatchObject({ from: P, motivo: 'nessun_candidato' });
   });
 
   // Review Focus 1: elixir prima che Meta approvi i template.
@@ -192,7 +209,8 @@ describe('scegliMittenteNuovo', () => {
     vi.mocked(chatNateOggi).mockResolvedValue(150);
     const { s, eventi } = supa({ conteggioRotto: true });
     const r = await scegli(s);
-    expect(r.from).toBe(P);
+    // Pieno ma unico secondario spedibile: prende il trabocco (PO 29/10/2026).
+    expect(r.from).toBe(ELIXIR);
     expect(eventi.filter((e) => e.type === 'mittente_tetto')).toHaveLength(0);
   });
 
@@ -292,11 +310,11 @@ describe('scegliMittenteNuovo con includiPrimario (PO 23/10/2026: il 3199 torna 
     expect(r).toMatchObject({ from: ELIXIR, secondario: true });
   });
 
-  it('primario pieno: non e candidato, ma resta il ripiego se tutti sono fuori', async () => {
+  it('primario pieno e secondari pieni: trabocco sul secondario, non sul primario', async () => {
     tetti({ [P]: 10, [ELIXIR]: 10 });
     vi.mocked(chatNateOggi).mockResolvedValue(10);
     const r = await scegli(supa().s, { includiPrimario: true });
-    expect(r).toMatchObject({ from: P, secondario: false, motivo: 'nessun_candidato' });
+    expect(r).toMatchObject({ from: ELIXIR, secondario: true, motivo: 'scelto' });
   });
 
   it('conteggio del primario fallito: primario fuori dal giro, si sceglie fra i secondari', async () => {
@@ -304,5 +322,49 @@ describe('scegliMittenteNuovo con includiPrimario (PO 23/10/2026: il 3199 torna 
     vi.mocked(chatNateOggi).mockImplementation(async (_s, n) => (n === P ? null : 40));
     const r = await scegli(supa().s, { includiPrimario: true });
     expect(r).toMatchObject({ from: ELIXIR, secondario: true });
+  });
+});
+
+describe('scegliMittenteNuovo con la coda marketing (PO 29/10/2026)', () => {
+  it('mai il primario, anche se ha un tetto e meno chat', async () => {
+    tetti({ [P]: 100000, [ELIXIR]: 100000, [N8061]: 100000 });
+    vi.mocked(chatNateOggi).mockImplementation(async (_s, n) => (n === P ? 0 : 50));
+    const { s, eventi } = supa();
+    const r = await scegli(s, { includiPrimario: true, codaMarketing: true });
+    expect(r).toMatchObject({ from: ELIXIR, secondario: true });
+    expect(eventi.filter((e) => e.type === 'mittente_coda_marketing')).toHaveLength(1);
+  });
+
+  it('divide alla pari: 30 lead della coda fanno 10 per numero, anche con chat diverse', async () => {
+    tetti({ [P]: 100000, [ELIXIR]: 100000, [N8061]: 100000, [N0047]: 100000 });
+    vi.mocked(chatNateOggi).mockImplementation(async (_s, n) => (n === ELIXIR ? 5 : n === N8061 ? 40 : 80));
+    const { s, eventi } = supa();
+    for (let k = 0; k < 30; k++) await scegli(s, { includiPrimario: true, codaMarketing: true });
+    const per = (n: string) => eventi.filter((e) => e.type === 'mittente_coda_marketing' && e.payload.numero === n).length;
+    expect([per(ELIXIR), per(N8061), per(N0047), per(P)]).toEqual([10, 10, 10, 0]);
+  });
+
+  it('dal contesto della richiesta (conCodaMarketing), senza argomento', async () => {
+    tetti({ [P]: 100000, [ELIXIR]: 100000 });
+    vi.mocked(chatNateOggi).mockImplementation(async (_s, n) => (n === P ? 0 : 50));
+    const r = await conCodaMarketing(true, () => scegli(supa().s, { includiPrimario: true }));
+    expect(r.from).toBe(ELIXIR);
+    const fuori = await scegli(supa().s, { includiPrimario: true });
+    expect(fuori.from).toBe(P);
+  });
+
+  it('nessun secondario utilizzabile: nasce sul primario con un warn', async () => {
+    tetti({ [P]: 100000 });
+    const { s, eventi } = supa();
+    const r = await scegli(s, { includiPrimario: true, codaMarketing: true });
+    expect(r).toMatchObject({ from: P, motivo: 'nessun_candidato' });
+    expect(eventi.find((e) => e.type === 'mittente_coda_marketing_sul_primario')?.level).toBe('warn');
+  });
+
+  it('un lead ordinario non scrive la riga della coda', async () => {
+    tetti({ [ELIXIR]: 100000 });
+    const { s, eventi } = supa();
+    await scegli(s);
+    expect(eventi.filter((e) => e.type === 'mittente_coda_marketing')).toHaveLength(0);
   });
 });

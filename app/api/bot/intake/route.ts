@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { verifySignature } from '@/lib/bot-hmac';
 import { parseIntakePayload } from '@/lib/bot-contract';
 import { enrollLeadIntoMario } from '@/lib/fenice-enroll';
+import { conCodaMarketing } from '@/lib/scelta-mittente';
 import { toE164 } from '@/lib/phone';
 import { LANCIO_SLUG } from '@/lib/lancio-fase';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -108,7 +109,9 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const res = await enrollLeadIntoMario(supabase, {
+    // Coda marketing (PO 29/10/2026): il segnale arriva alla scelta del numero dal
+    // contesto della richiesta, senza toccare l'arruolamento.
+    const res = await conCodaMarketing(p.codaMarketing === true, () => enrollLeadIntoMario(supabase, {
       phone,
       firstName: p.name,
       email: p.email,
@@ -117,7 +120,7 @@ export async function POST(req: NextRequest) {
       lancio: p.lancio ?? null,
       riscaldamento: p.riscaldamento === true,
       numeroBot: p.numeroBot === 2 ? 2 : 1,
-    });
+    }));
     await supabase.from('event_log').insert({
       type: 'bot_intake',
       payload: { crmLeadId: p.leadId, conversationId: res.conversationId, ok: res.ok } as never,

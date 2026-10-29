@@ -5,7 +5,8 @@
  *
  * Regola: fra i secondari con tetto > 0 (app_settings.tetti_numeri), che oggi non
  * l'hanno ancora raggiunto e da cui TUTTI i template richiesti sono spedibili, si
- * prende quello con meno chat nate oggi. Nessuno = il numero storico.
+ * prende quello con meno chat nate oggi. Tutti al tetto = il meno carico di loro
+ * (trabocco, PO 29/10/2026). Nessuno spedibile = il numero storico.
  *
  * `ignoraTetti` (lancio_sender='secondario') salta il conteggio e il tetto > 0, ma
  * non il riposo: un numero a tetto 0 resta escluso anche li'.
@@ -19,6 +20,7 @@
  * possono sforare il tetto di qualche unita'. Accettato: il tetto protegge la
  * qualita' del numero, non un contratto.
  */
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { getSupabaseAdmin } from './supabase/admin';
 import { numeroPrimario, numeriSecondari } from './mittente';
 import { getTettiNumeri, tettoDi } from './tetti-numeri';
@@ -48,6 +50,63 @@ export type SceltaMittente = {
 
 async function log(supabase: Supa, type: string, level: 'info' | 'warn', payload: Record<string, unknown>, message: string) {
   await supabase.from('event_log').insert({ type, level, payload: payload as never, message }).then(() => undefined, () => undefined);
+}
+
+/**
+ * Lead della coda marketing (PO 29/10/2026): 20 al giorno PER NUMERO sui numeri
+ * delle aperture a freddo, mai dal 3199. Il CRM ne manda 30 la mattina e 30 il
+ * pomeriggio (contratto: `codaMarketing: true` nel push); qui si dividono alla
+ * pari: vince il numero con meno lead della coda oggi, poi quello con meno chat.
+ *
+ * Il segnale viaggia nel contesto della richiesta di intake invece che come
+ * argomento, cosi' `fenice-enroll.ts` non cambia: la rotta di intake avvolge
+ * l'arruolamento in `conCodaMarketing`.
+ */
+const contestoCodaMarketing = new AsyncLocalStorage<boolean>();
+
+export function conCodaMarketing<T>(attivo: boolean, fn: () => Promise<T>): Promise<T> {
+  return attivo ? contestoCodaMarketing.run(true, fn) : fn();
+}
+
+export function inCodaMarketing(): boolean {
+  return contestoCodaMarketing.getStore() === true;
+}
+
+/** Riga di event_log scritta a ogni lead della coda marketing assegnato a un numero. */
+export const EVENTO_CODA_MARKETING = 'mittente_coda_marketing';
+
+/** Quanti lead della coda marketing sono andati oggi su quel numero. null = conteggio fallito. */
+async function codaMarketingOggi(supabase: Supa, numero: string, adesso?: Date): Promise<number | null> {
+  try {
+    const { count, error } = await supabase
+      .from('event_log')
+      .select('id', { count: 'exact', head: true })
+      .eq('type', EVENTO_CODA_MARKETING)
+      .eq('payload->>numero', numero)
+      .gte('created_at', inizioGiornataRoma(adesso));
+    if (error || count === null || count === undefined) return null;
+    return count;
+  } catch {
+    return null;
+  }
+}
+
+/** Una riga al giorno per numero di quel tipo (stessa guardia di `mittente_tetto`). */
+async function logUnaVoltaAlGiorno(
+  supabase: Supa, type: string, payload: { numero: string } & Record<string, unknown>, message: string, adesso?: Date,
+) {
+  try {
+    const { count, error } = await supabase
+      .from('event_log')
+      .select('id', { count: 'exact', head: true })
+      .eq('type', type)
+      .eq('payload->>numero', payload.numero)
+      .gte('created_at', inizioGiornataRoma(adesso));
+    if (error || count === null || count === undefined || count > 0) return;
+  } catch {
+    return;
+  }
+  await log(supabase, type, 'info', payload, message);
 }
 
 /**
@@ -113,8 +172,11 @@ export async function scegliMittenteNuovo(
      * le aperture di Mario: il lancio vuole un secondario apposta e non lo passa.
      */
     includiPrimario?: boolean;
+    /** Lead della coda marketing; assente = lo dice il contesto (`conCodaMarketing`). */
+    codaMarketing?: boolean;
   },
 ): Promise<SceltaMittente> {
+  const codaMarketing = i.codaMarketing ?? inCodaMarketing();
   const primario = numeroPrimario();
   if (!primario) throw new Error('TWILIO_WHATSAPP_NUMBER_FENICE non configurato');
   const base = { chiave: i.chiave, crmLeadId: i.crmLeadId ?? null };
@@ -142,8 +204,11 @@ export async function scegliMittenteNuovo(
 
   const scartati: Scarto[] = [];
   const candidati: { numero: string; oggi: number }[] = [];
+  // Secondari spedibili ma gia' al tetto di oggi: il trabocco, se nessun altro e' libero.
+  const pieni: { numero: string; oggi: number }[] = [];
   for (const numero of secondari) {
     let oggi = 0;
+    let pieno = false;
     const tetto = tettoDi(tetti, numero);
     if (tetto <= 0) { scartati.push({ numero, motivo: 'tetto_zero' }); continue; }
     if (!i.ignoraTetti) {
@@ -159,7 +224,7 @@ export async function scegliMittenteNuovo(
       if (n >= tetto) {
         scartati.push({ numero, motivo: 'tetto_raggiunto', oggi: n, tetto });
         await logTettoUnaVoltaAlGiorno(supabase, { ...base, numero, oggi: n, tetto }, i.adesso);
-        continue;
+        pieno = true;
       }
       oggi = n;
     }
@@ -184,13 +249,14 @@ export async function scegliMittenteNuovo(
         `[numeri] ${numero} escluso: ${bloccato.motivo} (${bloccato.errore ?? 'senza dettaglio'})`);
       continue;
     }
-    candidati.push({ numero, oggi });
+    (pieno ? pieni : candidati).push({ numero, oggi });
   }
 
   // Il primario in coda alla lista: a parita' di chat passa davanti un secondario.
   // Non serve verificarne i template ne' le credenziali: e' gia' il ripiego di tutti.
   // Conteggio fallito o tetto pieno = fuori dal giro, ma resta il ripiego qui sotto.
-  if (i.includiPrimario && !i.ignoraTetti) {
+  // I lead della coda marketing non nascono MAI sul primario (PO 29/10/2026).
+  if (i.includiPrimario && !i.ignoraTetti && !codaMarketing) {
     const tettoP = tettoDi(tetti, primario);
     if (tettoP > 0) {
       const n = await chatNateOggi(supabase as never, primario, i.adesso);
@@ -198,12 +264,42 @@ export async function scegliMittenteNuovo(
     }
   }
 
-  if (candidati.length === 0) return alPrimario('nessun_candidato', scartati);
+  // Trabocco (PO 29/10/2026): se tutti i secondari spedibili sono al tetto, il lead va
+  // al meno carico di loro, NON al 3199. Il 3199 resta il ripiego solo quando nessun
+  // secondario puo' proprio spedire (riposo, credenziali, template, conteggio rotto).
+  if (candidati.length === 0 && pieni.length > 0) {
+    pieni.sort((a, b) => a.oggi - b.oggi);
+    const scelto = pieni[0];
+    await logUnaVoltaAlGiorno(supabase, 'mittente_trabocco', { ...base, numero: scelto.numero, oggi: scelto.oggi },
+      `[numeri] tutti i secondari al tetto: ${scelto.numero} prende il trabocco (${scelto.oggi} chat oggi)`, i.adesso);
+    candidati.push(scelto);
+  }
+
+  if (candidati.length === 0) {
+    if (codaMarketing) {
+      await log(supabase, 'mittente_coda_marketing_sul_primario', 'warn', { ...base },
+        `[numeri] lead della coda marketing senza un secondario utilizzabile: nasce sul numero storico`);
+    }
+    return alPrimario('nessun_candidato', scartati);
+  }
+
+  // Coda marketing: prima la parita' dei lead della coda di oggi, poi le chat. Un
+  // conteggio fallito vale 0: si divide un po' peggio, ma il lead parte.
+  const mkt = new Map<string, number>();
+  if (codaMarketing && candidati.length > 1) {
+    for (const c of candidati) mkt.set(c.numero, (await codaMarketingOggi(supabase, c.numero, i.adesso)) ?? 0);
+  }
+
   // Meno chat oggi vince; a parita' resta l'ordine della lista (sort stabile). Con
   // `ignoraTetti` ogni `oggi` resta 0 per tutti (il conteggio non si fa): vince il
   // primo secondario non a riposo e spedibile nell'ordine della lista, senza
   // bilanciamento.
-  candidati.sort((a, b) => a.oggi - b.oggi);
-  if (candidati[0].numero === primario) return alPrimario('scelto', scartati);
-  return { from: candidati[0].numero, secondario: true, scartati, motivo: 'scelto' };
+  candidati.sort((a, b) => ((mkt.get(a.numero) ?? 0) - (mkt.get(b.numero) ?? 0)) || (a.oggi - b.oggi));
+  const vincitore = candidati[0].numero;
+  if (codaMarketing && vincitore !== primario) {
+    await log(supabase, EVENTO_CODA_MARKETING, 'info', { ...base, numero: vincitore },
+      `[numeri] lead della coda marketing su ${vincitore}`);
+  }
+  if (vincitore === primario) return alPrimario('scelto', scartati);
+  return { from: vincitore, secondario: true, scartati, motivo: 'scelto' };
 }

@@ -33,6 +33,12 @@ export interface BotIntakePayload {
    * `numeroBot: 2` non forza piu' il numero a riposo.
    */
   numeroBot?: 1 | 2;
+  /**
+   * Lead della coda marketing del CRM (PO 29/10/2026). Il bot lo apre come un lead
+   * qualunque, ma dai soli numeri delle aperture a freddo (mai il 3199) e dividendo
+   * alla pari i lead della coda fra quei numeri. Vedi lib/scelta-mittente.ts.
+   */
+  codaMarketing?: boolean;
 }
 
 /** Come e' arrivato il lead del lancio: dalla lista AC 132 o dal pulsante della live. */
@@ -194,6 +200,8 @@ export function parseIntakePayload(
       // Solo un 2 esplicito manda al numero nuovo. Qualunque altra cosa — 1,
       // assente, illeggibile — vale il numero storico, che regge il volume.
       numeroBot: o.numeroBot === 2 ? 2 : 1,
+      // Solo `true` vale: assente o sporco = lead ordinario.
+      codaMarketing: o.codaMarketing === true,
     },
   };
 }
