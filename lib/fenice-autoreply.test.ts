@@ -358,7 +358,16 @@ type ClaimedRow = {
   scheda_inviata_at?: string | null;
   crm_funnel?: string | null;
 };
-type FakeMsgRow = { direction: string; body: string; template_sid: string | null; created_at: string };
+type FakeMsgRow = { direction: string; body: string; template_sid: string | null; created_at: string; id?: number };
+
+/** Microsecondi da un timestamp ISO, come li confronta Postgres (Date di JS si ferma ai ms). */
+function microDi(iso: string): bigint {
+  const m = /^(.*?)(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})$/.exec(iso);
+  if (!m) return BigInt(Date.parse(iso)) * BigInt(1000);
+  const base = BigInt(Date.parse(`${m[1]}${m[3]}`));
+  const frazione = BigInt(((m[2] ?? '') + '000000').slice(0, 6));
+  return base * BigInt(1000) + frazione;
+}
 
 /**
  * Fake del client Supabase per drainMarioReplies: simula il claim CAS sul lucchetto
@@ -367,7 +376,9 @@ type FakeMsgRow = { direction: string; body: string; template_sid: string | null
  * rilascio del lucchetto.
  */
 function makeDrainSupabase(claimedRow: ClaimedRow, initialRows: FakeMsgRow[]) {
-  const messagesRows = [...initialRows];
+  let prossimoId = 1;
+  const messagesRows: FakeMsgRow[] = initialRows.map((r) => ({ ...r, id: r.id ?? prossimoId++ }));
+  prossimoId = Math.max(prossimoId, ...messagesRows.map((r) => (r.id ?? 0) + 1));
   const calls = { events: [] as any[], finalStatusWrites: [] as string[], messageInserts: [] as any[], lockReleases: [] as any[], convUpdates: [] as any[] };
 
   const supabase: any = {
@@ -430,17 +441,26 @@ function makeDrainSupabase(claimedRow: ClaimedRow, initialRows: FakeMsgRow[]) {
       if (table === 'messages') {
         return {
           select() {
+            // `gt` e `eq('direction')` filtrano davvero: e' la query "il lead scrive ancora?".
+            // created_at si confronta in microsecondi, come fa Postgres.
+            const filtri: ((r: FakeMsgRow) => boolean)[] = [];
             const stub: any = {
-              eq() { return stub; },
+              eq(col: string, val: unknown) { if (col === 'direction') filtri.push((r) => r.direction === val); return stub; },
               order() { return stub; },
               limit() { return stub; },
               gte() { return stub; },
-              then(resolve: any) { resolve({ data: messagesRows }); },
+              gt(col: string, val: any) {
+                filtri.push((r) => col === 'created_at'
+                  ? microDi(r.created_at) > microDi(String(val))
+                  : Number((r as any)[col]) > Number(val));
+                return stub;
+              },
+              then(resolve: any) { resolve({ data: messagesRows.filter((r) => filtri.every((f) => f(r))) }); },
             };
             return stub;
           },
           insert(payload: any) {
-            messagesRows.push({ direction: 'out', body: payload.body, template_sid: null, created_at: new Date().toISOString() });
+            messagesRows.push({ direction: payload.direction ?? 'out', body: payload.body, template_sid: null, created_at: new Date().toISOString(), id: prossimoId++ });
             calls.messageInserts.push(payload);
             return Promise.resolve({ data: null });
           },
@@ -3357,6 +3377,38 @@ describe('drainMarioReplies — riscaldamento del lead GDO dopo il recap (domand
     expect(calls.convUpdates.some((u: any) => u.gdo_warmup_step === 3 && u.gdo_warmup_closed_at)).toBe(true);
     // Mai un esito: al CRM va solo la nota.
     expect(vi.mocked(sendOutcome)).not.toHaveBeenCalled();
+  });
+
+  it('created_at coi microsecondi (29/10): il messaggio gia\' letto non conta come "il lead scrive ancora", la domanda 2 parte', async () => {
+    const quandoLead = new Date(Date.now() - 60_000).toISOString().replace('Z', '361+00:00'); // .mmm361 come nel DB
+    const { supabase, calls } = makeDrainSupabase(
+      postino({ gdo_warmup_step: 1 }),
+      [RECAP, fuori(`Perfetto!\n\n${DOMANDA_1}`), { direction: 'in', body: 'voglio cambiare lavoro, sono stufa', template_sid: null, created_at: quandoLead }],
+    );
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Ti capisco benissimo.'));
+
+    await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+    expect(calls.messageInserts.map((m: any) => m.body)).toEqual([`Ti capisco benissimo.\n\n${DOMANDA_2}`]);
+    expect(stepScritti(calls)).toEqual([2]);
+    expect(calls.events.find((e: any) => e.type === 'gdo_warmup_nota')?.payload.domanda).toBe('inviata_2');
+  });
+
+  it('il lead scrive ancora mentre il turno gira: la domanda aspetta, nel log "lead_scrive_ancora"', async () => {
+    const { supabase, calls, messagesRows } = makeDrainSupabase(
+      postino({ gdo_warmup_step: 1 }),
+      [RECAP, fuori(`Perfetto!\n\n${DOMANDA_1}`), dentro('voglio cambiare lavoro')],
+    );
+    vi.mocked(generateMarioReply).mockImplementationOnce(async () => {
+      messagesRows.push({ direction: 'in', body: 'e poi sono in naspi', template_sid: null, created_at: new Date().toISOString(), id: 999 });
+      return reply('Ti capisco benissimo.') as never;
+    });
+
+    await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+    expect(calls.messageInserts[0].body).toBe('Ti capisco benissimo.');
+    expect(calls.events.find((e: any) => e.type === 'gdo_warmup_nota')?.payload.domanda).toBe('lead_scrive_ancora');
+    expect(calls.events.some((e: any) => e.type === 'gdo_warmup_domanda_inviata')).toBe(false);
   });
 
   it('il lead non risponde alla domanda 1 ("ok"): niente nota, la domanda 1 non si ripete, si passa alla 2', async () => {

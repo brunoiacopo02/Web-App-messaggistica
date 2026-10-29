@@ -230,7 +230,7 @@ export function canSendOutcome(g: { crmLeadId: string | null; aiStatus: string |
 
 type MsgRow = { direction: string; body: string };
 // Riga del drain: come MsgRow ma con il template per derivare la persona (Mario/Marta).
-type DrainMsgRow = MsgRow & { template_sid: string | null; created_at: string };
+type DrainMsgRow = MsgRow & { template_sid: string | null; created_at: string; id?: number | null };
 
 /** SID dei template "Marta" (aperture A/B + sequenza + riaggancio) dalle env.
  *  Env assenti ⇒ set vuoto ⇒ persona sempre Mario (comportamento identico a oggi). */
@@ -423,16 +423,33 @@ async function rispostaRiscaldamentoGiaNotata(supabase: Supa, conversationId: nu
   }
 }
 
+/**
+ * L'id dell'ultimo messaggio del lead che il turno ha visto, o null. Si confronta l'ID e
+ * non l'orario: `created_at` nel DB ha i microsecondi e un Date JS solo i millisecondi,
+ * quindi "created_at > ultimo orario visto" ritrovava sempre lo stesso messaggio e il
+ * riscaldamento credeva che il lead scrivesse ancora (domande ferme dal deploy 30e21a4,
+ * 29/10/2026).
+ */
+export function ultimoInboundId(righe: readonly { direction: string; id?: number | string | null }[]): number | null {
+  let max: number | null = null;
+  for (const m of righe) {
+    if (m.direction !== 'in' || m.id === null || m.id === undefined) continue;
+    const n = Number(m.id);
+    if (Number.isFinite(n) && (max === null || n > max)) max = n;
+  }
+  return max;
+}
+
 /** E' arrivato un messaggio del lead dopo l'ultimo che il turno ha visto? (lead che scrive ancora) */
-async function inboundArrivatoDopo(supabase: Supa, conversationId: number, sogliaMs: number): Promise<boolean> {
-  if (!sogliaMs) return false;
+async function inboundArrivatoDopo(supabase: Supa, conversationId: number, ultimoId: number | null): Promise<boolean> {
+  if (ultimoId === null) return false;
   try {
     const { data } = await supabase
       .from('messages')
       .select('id')
       .eq('conversation_id', conversationId)
       .eq('direction', 'in')
-      .gt('created_at', new Date(sogliaMs).toISOString())
+      .gt('id', ultimoId)
       .limit(1);
     return (data ?? []).length > 0;
   } catch {
@@ -631,7 +648,7 @@ export async function drainMarioReplies(
   async function loadHistory(): Promise<DrainMsgRow[]> {
     let q = supabase
       .from('messages')
-      .select('direction, body, template_sid, created_at')
+      .select('id, direction, body, template_sid, created_at')
       .eq('conversation_id', conversationId)
       .order('created_at', { ascending: true })
       .limit(200);
@@ -1376,7 +1393,7 @@ export async function drainMarioReplies(
       let bollaDomanda: string | null = null;
       let leadScriveAncora = false;
       if (decisioneDomanda?.domanda) {
-        leadScriveAncora = await inboundArrivatoDopo(supabase, conversationId, ultimoInboundAt(rows));
+        leadScriveAncora = await inboundArrivatoDopo(supabase, conversationId, ultimoInboundId(rows));
         if (!leadScriveAncora) {
           const accodata = accodaDomanda(parts, decisioneDomanda.domanda.testo);
           parts = accodata.parts;
@@ -1606,10 +1623,10 @@ export async function drainMarioReplies(
       // rompere il turno: la risposta e' gia' uscita.
       if (motivoWarmup) {
         try {
-          const domanda = decisioneDomanda?.domanda
-            ? (domandaUscita ? `inviata_${decisioneDomanda.domanda.step}` : 'non_uscita')
-            : leadScriveAncora && decisioneDomanda?.domanda
-              ? 'lead_scrive_ancora'
+          const domanda = leadScriveAncora && decisioneDomanda?.domanda
+            ? 'lead_scrive_ancora'
+            : decisioneDomanda?.domanda
+              ? (domandaUscita ? `inviata_${decisioneDomanda.domanda.step}` : 'non_uscita')
               : (decisioneDomanda?.salto ?? motivoWarmup);
           await supabase.from('event_log').insert({
             type: 'gdo_warmup_nota',
