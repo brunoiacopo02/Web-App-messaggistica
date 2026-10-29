@@ -8,8 +8,8 @@
 // Stesso impianto della v2 (oggetto dichiarato = promemoria di un appuntamento, UTILITY),
 // senza nessun invito a spostare, disdire o cambiare.
 //
-// Il template va creato con lo STESSO nome su tutti e due gli account Twilio: il secondo
-// numero ritrova il gemello per nome (vedi app/api/admin/secondo-numero).
+// Il template va creato con lo STESSO nome su tutti gli account Twilio: gli altri
+// numeri ritrovano il gemello per nome (vedi app/api/admin/secondo-numero).
 //
 // Uso:
 //   node --env-file=.env.local scripts/create-reminder-3h-v3.mjs           (prova, non invia)
@@ -19,10 +19,15 @@ const BODY = 'Promemoria appuntamento: ciao {{1}}, la tua videocall con Fenice A
 
 if (/spost|disdi|annull|cambia/i.test(BODY)) throw new Error('il testo contiene ancora un invito a spostare');
 
+// --solo=<label> crea il template su un account solo (es. quando gli altri ce l'hanno gia').
+const solo = process.argv.find((x) => x.startsWith('--solo='))?.slice(7) ?? null;
 const ACCOUNTS = [
   { label: 'primario', sid: process.env.TWILIO_ACCOUNT_SID, tok: process.env.TWILIO_AUTH_TOKEN },
   { label: 'secondo', sid: process.env.TWILIO_ACCOUNT_SID_2, tok: process.env.TWILIO_AUTH_TOKEN_2 },
-];
+  // Terzo account (elixir, numeri 0047): ha la v2, quindi serve anche la v3, o il T-3h dai
+  // suoi numeri non trova il gemello per nome.
+  { label: 'terzo', sid: process.env.TWILIO_ACCOUNT_SID_3, tok: process.env.TWILIO_AUTH_TOKEN_3 },
+].filter((a) => !solo || a.label === solo);
 const invia = process.argv.includes('--invia');
 
 console.log(`nome:  ${NAME}\ntesto: ${BODY}\n`);
@@ -59,4 +64,4 @@ for (const a of ACCOUNTS) {
 }
 
 console.log('\nLa categoria vera la decide Meta: prima di cambiare REMINDER_3H_TEMPLATE_SID su Vercel');
-console.log('verificare che su TUTTI E DUE gli account sia approved + UTILITY.');
+console.log('verificare che su TUTTI gli account sia approved + UTILITY.');
