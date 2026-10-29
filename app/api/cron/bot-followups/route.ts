@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendOutcome } from '@/lib/bot-outcome';
-import { decideFollowupAction, esitoMaiConsegnato, serveCronologia, ultimaAttivitaMs, puoAverScrittoPrimaDellAvvio, scrittiSenzaRispostaPrimaDellAvvio, ARRUOLAMENTO_BUFFER_MS } from '@/lib/bot-followups';
+import { decideFollowupAction, esitoMaiConsegnato, postinoGdo, serveCronologia, ultimaAttivitaMs, puoAverScrittoPrimaDellAvvio, scrittiSenzaRispostaPrimaDellAvvio, ARRUOLAMENTO_BUFFER_MS } from '@/lib/bot-followups';
 import { classifyInterrupted } from '@/lib/interrotto-note';
 import { buildConfermaPersaNote } from '@/lib/bot-outcome-rules';
 import { paroleDellaRichiesta } from '@/lib/contatti-umani';
@@ -110,7 +110,7 @@ export async function GET(req: NextRequest) {
   for (let from = 0; ; from += 1000) {
     const { data, error } = await supabase
       .from('conversations')
-      .select('id, ai_status, ai_lock_at, ai_started_at, created_at, last_message_at, last_inbound_at, crm_lead_id, bot_outcome, bot_followups_sent, gdo_agenda_at, lancio_slug, lancio_fase, leads(phone_e164)')
+      .select('id, ai_status, ai_lock_at, ai_started_at, created_at, last_message_at, last_inbound_at, crm_lead_id, bot_outcome, bot_followups_sent, gdo_agenda_at, gdo_appuntamento_at, lancio_slug, lancio_fase, leads(phone_e164)')
       .not('crm_lead_id', 'is', null)
       .in('ai_status', ['active', 'replying', 'handed_off', 'booked'])
       // Fermo manuale dal pannello: fuori dal giro del cron per intero — niente
@@ -214,7 +214,8 @@ export async function GET(req: NextRequest) {
       // 2a. Lead di un GDO (modalità postino): il re-drive sopra vale — il bot resta
       // il canale della chat — ma da qui in poi no. L'appuntamento è già preso, il
       // lead non è nostro: niente watchdog, niente chiusure, niente classificazione.
-      if (c.gdo_agenda_at) {
+      // Solo se l'agenda e' arrivata dopo l'ultimo arruolamento di Mario: vedi `postinoGdo`.
+      if (postinoGdo(c, now)) {
         report.push({ id: c.id, action: 'gdo_postino_skip' });
         continue;
       }
@@ -302,7 +303,7 @@ export async function GET(req: NextRequest) {
         botOutcome: c.bot_outcome,
         sequenceEnabled,
         nudgesSent: (c.bot_followups_sent as number | null) ?? 0,
-        gdoPostino: c.gdo_agenda_at != null,
+        gdoPostino: postinoGdo(c, now),
         // Oggi ridondante (il blocco 2a-bis ha gia' fatto `continue`), e resta: la
         // guardia del modulo puro non deve dipendere dall'ordine dei blocchi qui.
         lancio: lancioInCorso(c),

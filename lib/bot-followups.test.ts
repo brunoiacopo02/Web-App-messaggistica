@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   decideFollowupAction,
   serveCronologia,
+  postinoGdo,
   ultimaAttivitaMs,
   ultimoMessaggioEInbound,
   esitoMaiConsegnato,
@@ -427,5 +428,27 @@ describe(`chat adottata da adotta-mai-risposti — il messaggio del lead prima d
   });
   it(`un outbound prima dell'avvio (giro precedente, lead riarruolato) → non contano: resta NON_RISPOSTO`, () => {
     expect(scrittiSenzaRispostaPrimaDellAvvio([out(10 * D, 'read'), inb(9 * D)])).toEqual([]);
+  });
+});
+
+describe('postinoGdo — agenda vecchia di un altro giro', () => {
+  it('agenda arrivata con l arruolamento (postino) → del GDO', () => {
+    expect(postinoGdo(conv({ ai_started_at: at(2 * D), gdo_agenda_at: at(2 * D) }), NOW)).toBe(true);
+  });
+  it('agenda arrivata dopo l arruolamento di Mario → del GDO', () => {
+    expect(postinoGdo(conv({ ai_started_at: at(10 * D), gdo_agenda_at: at(2 * D) }), NOW)).toBe(true);
+  });
+  it('Mario ha ripreso la chat dopo l agenda → non piu postino', () => {
+    expect(postinoGdo(conv({ ai_started_at: at(2 * D), gdo_agenda_at: at(30 * D) }), NOW)).toBe(false);
+  });
+  it('call del GDO ancora da fare → resta del GDO anche se Mario e arrivato dopo', () => {
+    const futura = new Date(NOW + D).toISOString();
+    expect(postinoGdo(conv({ ai_started_at: at(2 * D), gdo_agenda_at: at(30 * D), gdo_appuntamento_at: futura }), NOW)).toBe(true);
+  });
+  it('senza agenda → mai postino', () => {
+    expect(postinoGdo(conv(), NOW)).toBe(false);
+  });
+  it('agenda vecchia: la chat torna classificabile (cronologia caricata dopo la soglia)', () => {
+    expect(serveCronologia(conv({ ai_started_at: at(3 * D), created_at: at(40 * D), gdo_agenda_at: at(30 * D) }), NOW)).toBe(true);
   });
 });

@@ -25,6 +25,8 @@ export type CronConvRow = {
   last_inbound_at: string | null;
   bot_outcome: string | null;
   gdo_agenda_at: string | null;
+  /** Data della call fissata dal GDO (postino). Assente = non letta, vale come nulla. */
+  gdo_appuntamento_at?: string | null;
   lancio_slug?: string | null;
   lancio_fase?: string | null;
 };
@@ -60,6 +62,27 @@ export function ultimaAttivitaMs(c: CronConvRow, nowMs: number): number {
 }
 
 /**
+ * La chat e' ancora del GDO (il bot fa solo il postino)?
+ *
+ * `gdo_agenda_at` lo scrive l'agenda del GDO e nessuno lo cancella. Se dopo il CRM ci
+ * manda la stessa persona come lead NOSTRO (arruolamento di Mario, che riscrive
+ * `ai_started_at`), il vecchio timbro teneva la chat in modalita' postino per sempre:
+ * nessuna classificazione, nessun esito, lead fermo sul bot (60 chat al 29/10/2026,
+ * dal 01/08). Quindi conta solo un'agenda arrivata DOPO l'ultimo arruolamento (le due
+ * date le scrive insieme `enrollGdoLeadAsPostino`; 1' di margine).
+ *
+ * Una call del GDO ancora da fare vince comunque: la chat resta sua.
+ */
+export function postinoGdo(c: Pick<CronConvRow, 'gdo_agenda_at' | 'ai_started_at' | 'gdo_appuntamento_at'>, nowMs: number): boolean {
+  const agenda = ms(c.gdo_agenda_at);
+  if (agenda === null) return false;
+  const call = ms(c.gdo_appuntamento_at);
+  if (call !== null && call > nowMs) return true;
+  const avvio = ms(c.ai_started_at);
+  return avvio === null || avvio <= agenda + 60_000;
+}
+
+/**
  * Serve caricare la cronologia messaggi di questa conversazione?
  *
  * Il cron `bot-followups` la caricava per tutte: 2.310 conversazioni, una query a
@@ -89,7 +112,7 @@ export function serveCronologia(c: CronConvRow, nowMs: number): boolean {
   // 2. Da qui in poi si decide solo di classificare, e queste tre categorie non si
   //    classificano mai: l'esito del lead di un GDO non è nostro, un esito già dato è
   //    terminale, e i watchdog leggono soltanto l'ultima attività.
-  if (c.gdo_agenda_at) return false;
+  if (postinoGdo(c, nowMs)) return false;
   if (c.bot_outcome) return false;
   if (!guidataDalBot) return false;
 
