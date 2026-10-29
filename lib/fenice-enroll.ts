@@ -84,6 +84,37 @@ export function apreSopraChatViva(g: {
 }
 
 /**
+ * Pure: l'esito scritto sulla chat va azzerato da questo arruolamento?
+ *
+ * Il CRM tiene piu' lead per lo stesso numero, noi una chat per numero. Quando il CRM
+ * reimporta la persona con un leadId NUOVO, l'arruolamento cade sulla chat vecchia, che
+ * si porta dietro l'esito del lead di prima (NON_RISPOSTO, INTERROTTO, DA_SCARTARE...).
+ * Fino al 29/10/2026 restava li': `bot-followups` vedeva `bot_outcome` pieno, richiudeva
+ * la chat come "gia' esitata" e al lead nuovo non arrivava mai nessun esito. Restava NEW
+ * sul bot nel CRM per sempre (186 lead persi contati il 28/10). Il ramo del lancio lo
+ * azzerava gia' (`lancioFields`).
+ *
+ * Si azzera solo se:
+ * - c'e' un leadId nuovo E la chat ne aveva gia' uno DIVERSO: il ritento dello stesso
+ *   lead non deve cancellare l'esito che quel lead ha gia' avuto;
+ * - l'esito non e' APPUNTAMENTO: e' terminale assoluto (regola del progetto), e su quella
+ *   riga leggono anche i promemoria pre-call. Il gemello di chi ha gia' la call resta
+ *   un doppione da chiudere lato CRM, non un lead da rifissare.
+ */
+export function azzeraEsitoPerLeadNuovo(g: {
+  crmLeadIdPrima: string | null;
+  crmLeadIdNuovo: string | null;
+  botOutcome: string | null;
+}): boolean {
+  if (!g.botOutcome || g.botOutcome === 'APPUNTAMENTO') return false;
+  if (!g.crmLeadIdNuovo || !g.crmLeadIdPrima) return false;
+  return g.crmLeadIdPrima !== g.crmLeadIdNuovo;
+}
+
+/** I campi da scrivere quando `azzeraEsitoPerLeadNuovo` dice si'. */
+const ESITO_AZZERATO = { bot_outcome: null, bot_outcome_at: null, bot_scheduled_at: null } as const;
+
+/**
  * Arruola un lead nel flusso di Mario: crea/aggiorna lead+conversazione, invia il
  * template di apertura, e marca la conversazione come gestita da Mario (active).
  * Se `crmLeadId` è presente, tagga la conversazione per il callback al CRM.
@@ -132,6 +163,10 @@ export async function enrollLeadIntoMario(
   // Non si lascia cadere un'apertura sopra una conversazione gia' avviata: il lead
   // vedrebbe il bot ricominciare da capo. Si prende comunque in carico il lead per il
   // CRM, cosi' da parte loro non risulta fermo.
+  // Esito del lead precedente sulla stessa chat: va via se il CRM ci manda un leadId
+  // nuovo (vedi `azzeraEsitoPerLeadNuovo`). Calcolato nel blocco qui sotto, che e' l'unico
+  // a leggere la riga; se la lettura fallisce resta false e non si tocca niente.
+  let azzeraEsito = false;
   {
     // Se una delle due letture non si sa com'è andata, l'apertura PARTE: un lead che
     // resta muto per sempre è peggio di un'apertura di troppo.
@@ -145,10 +180,16 @@ export async function enrollLeadIntoMario(
     // mai scritti: preso in carico sulla carta, muto nei fatti. Per questo l'errore
     // della select si controlla: "non lo so" non è "è nullo", e nel dubbio si apre.
     const { data: convRow, error: erroreConv } = await supabase
-      .from('conversations').select('ai_owner, ai_status, crm_lead_id').eq('id', conversationId).single();
+      .from('conversations').select('ai_owner, ai_status, crm_lead_id, bot_outcome').eq('id', conversationId).single();
     const { count: partiti } = await supabase
       .from('messages').select('id', { count: 'exact', head: true })
       .eq('conversation_id', conversationId).eq('direction', 'out').not('twilio_sid', 'is', null);
+    const riga = convRow as { crm_lead_id?: string | null; bot_outcome?: string | null } | null;
+    azzeraEsito = !erroreConv && azzeraEsitoPerLeadNuovo({
+      crmLeadIdPrima: riga?.crm_lead_id ?? null,
+      crmLeadIdNuovo: args.crmLeadId ?? null,
+      botOutcome: riga?.bot_outcome ?? null,
+    });
     if (!erroreConv && apreSopraChatViva({
       aiOwner: convRow?.ai_owner ?? null,
       aiStatus: convRow?.ai_status ?? null,
@@ -160,6 +201,7 @@ export async function enrollLeadIntoMario(
       const patch = {
         ...(args.crmLeadId ? { crm_lead_id: args.crmLeadId } : {}),
         ...(args.crmFunnel ? { crm_funnel: args.crmFunnel } : {}),
+        ...(azzeraEsito ? ESITO_AZZERATO : {}),
       };
       if (Object.keys(patch).length > 0) {
         await supabase.from('conversations').update(patch).eq('id', conversationId);
@@ -184,6 +226,9 @@ export async function enrollLeadIntoMario(
     // Stessa regola del ramo guardia qui sopra. `crm_lead_id` invece resta come prima:
     // e' proprio il campo che questo arruolamento porta.
     ...(args.crmFunnel ? { crm_funnel: args.crmFunnel } : {}),
+    // Lead nuovo del CRM su una chat che aveva l'esito di un altro lead: senza azzerarlo
+    // il cron richiude la chat come gia' esitata e il lead nuovo resta senza esito.
+    ...(azzeraEsito ? ESITO_AZZERATO : {}),
   };
 
   // Apertura differita: nel cuore della notte i template aprono peggio (-10pt

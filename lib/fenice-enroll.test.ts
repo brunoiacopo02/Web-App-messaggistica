@@ -14,7 +14,7 @@ vi.mock('./scelta-mittente', () => ({
   sidAperturaMario: vi.fn(() => ['HX_OPEN']),
 }));
 
-import { apreSopraChatViva, enrollGdoLeadAsPostino, enrollLeadIntoMario } from './fenice-enroll';
+import { apreSopraChatViva, azzeraEsitoPerLeadNuovo, enrollGdoLeadAsPostino, enrollLeadIntoMario } from './fenice-enroll';
 import { findOrCreateLeadConversation, sendTemplateAndLog } from './messaging';
 import { getLancioSettings } from './lancio-settings';
 import { lancioBenvenutoText } from './lancio-fase';
@@ -1532,5 +1532,82 @@ describe('enrollLeadIntoMario — ramo lancio dopo la live (PO 25/09)', () => {
     const lancio = calls.updates.find((u) => u.lancio_fase === 'chiuso');
     // L'ingresso di allora resta: non si riscrive.
     expect('lancio_ingresso' in lancio).toBe(false);
+  });
+});
+
+describe('azzeraEsitoPerLeadNuovo — lead reimportato su una chat vecchia', () => {
+  it('leadId nuovo su chat con esito di un altro lead → si azzera', () => {
+    expect(azzeraEsitoPerLeadNuovo({ crmLeadIdPrima: 'OLD', crmLeadIdNuovo: 'NEW', botOutcome: 'NON_RISPOSTO' })).toBe(true);
+    expect(azzeraEsitoPerLeadNuovo({ crmLeadIdPrima: 'OLD', crmLeadIdNuovo: 'NEW', botOutcome: 'INTERROTTO' })).toBe(true);
+    expect(azzeraEsitoPerLeadNuovo({ crmLeadIdPrima: 'OLD', crmLeadIdNuovo: 'NEW', botOutcome: 'DA_SCARTARE' })).toBe(true);
+    expect(azzeraEsitoPerLeadNuovo({ crmLeadIdPrima: 'OLD', crmLeadIdNuovo: 'NEW', botOutcome: 'RICHIAMO' })).toBe(true);
+  });
+  it('APPUNTAMENTO e\' terminale: mai azzerato', () => {
+    expect(azzeraEsitoPerLeadNuovo({ crmLeadIdPrima: 'OLD', crmLeadIdNuovo: 'NEW', botOutcome: 'APPUNTAMENTO' })).toBe(false);
+  });
+  it('stesso leadId (ritento del CRM) → l\'esito resta', () => {
+    expect(azzeraEsitoPerLeadNuovo({ crmLeadIdPrima: 'L1', crmLeadIdNuovo: 'L1', botOutcome: 'NON_RISPOSTO' })).toBe(false);
+  });
+  it('senza esito, senza leadId nuovo o su chat mai legata al CRM → niente', () => {
+    expect(azzeraEsitoPerLeadNuovo({ crmLeadIdPrima: 'OLD', crmLeadIdNuovo: 'NEW', botOutcome: null })).toBe(false);
+    expect(azzeraEsitoPerLeadNuovo({ crmLeadIdPrima: 'OLD', crmLeadIdNuovo: null, botOutcome: 'NON_RISPOSTO' })).toBe(false);
+    expect(azzeraEsitoPerLeadNuovo({ crmLeadIdPrima: null, crmLeadIdNuovo: 'NEW', botOutcome: 'NON_RISPOSTO' })).toBe(false);
+  });
+});
+
+describe('enrollLeadIntoMario — reimport con leadId nuovo sulla stessa chat', () => {
+  const chatVecchia = (bot_outcome: string | null, ai_status: string | null = 'closed') =>
+    ({ convRow: { ai_owner: 'mario', ai_status, crm_lead_id: 'LEAD-VECCHIO', bot_outcome } as never, outboundCount: 1 });
+
+  it('in fascia: l\'update porta il leadId nuovo e azzera esito, data e appuntamento', async () => {
+    vi.setSystemTime(MEZZOGIORNO);
+    const { supabase, calls } = makeSupabase(0, false, chatVecchia('NON_RISPOSTO'));
+    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000101', crmLeadId: 'LEAD-NUOVO' });
+    expect(res).toMatchObject({ ok: true });
+    expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+    expect(calls.updates.at(-1)).toMatchObject({
+      crm_lead_id: 'LEAD-NUOVO', ai_status: 'active', bot_outcome: null, bot_outcome_at: null, bot_scheduled_at: null,
+    });
+  });
+
+  it('nel cuore della notte (differita): azzera lo stesso', async () => {
+    vi.setSystemTime(NOTTE_FONDA);
+    const { supabase, calls } = makeSupabase(0, false, chatVecchia('INTERROTTO'));
+    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000102', crmLeadId: 'LEAD-NUOVO' });
+    expect(res).toMatchObject({ deferred: true });
+    expect(calls.updates.at(-1)).toMatchObject({ crm_lead_id: 'LEAD-NUOVO', bot_outcome: null });
+  });
+
+  it('chat viva (apertura saltata): il leadId nuovo arriva con l\'esito azzerato', async () => {
+    vi.setSystemTime(MEZZOGIORNO);
+    const { supabase, calls } = makeSupabase(0, false, chatVecchia('NON_RISPOSTO', 'active'));
+    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000103', crmLeadId: 'LEAD-NUOVO' });
+    expect(res).toMatchObject({ aperturaSaltata: true });
+    expect(calls.updates.at(-1)).toMatchObject({ crm_lead_id: 'LEAD-NUOVO', bot_outcome: null, bot_outcome_at: null });
+  });
+
+  it('APPUNTAMENTO sulla chat: nessun update tocca l\'esito', async () => {
+    vi.setSystemTime(MEZZOGIORNO);
+    const { supabase, calls } = makeSupabase(0, false, chatVecchia('APPUNTAMENTO'));
+    await enrollLeadIntoMario(supabase, { phone: '+393330000104', crmLeadId: 'LEAD-NUOVO' });
+    for (const u of calls.updates) {
+      expect(u).not.toHaveProperty('bot_outcome');
+      expect(u).not.toHaveProperty('bot_scheduled_at');
+    }
+  });
+
+  it('stesso leadId: nessun update tocca l\'esito', async () => {
+    vi.setSystemTime(MEZZOGIORNO);
+    const { supabase, calls } = makeSupabase(0, false,
+      { convRow: { ai_owner: 'mario', ai_status: 'closed', crm_lead_id: 'LEAD-1', bot_outcome: 'NON_RISPOSTO' } as never, outboundCount: 1 });
+    await enrollLeadIntoMario(supabase, { phone: '+393330000105', crmLeadId: 'LEAD-1' });
+    for (const u of calls.updates) expect(u).not.toHaveProperty('bot_outcome');
+  });
+
+  it('lettura della chat fallita: nel dubbio non si azzera niente', async () => {
+    vi.setSystemTime(MEZZOGIORNO);
+    const { supabase, calls } = makeSupabase(0, false, { ...chatVecchia('NON_RISPOSTO'), convErrore: true });
+    await enrollLeadIntoMario(supabase, { phone: '+393330000106', crmLeadId: 'LEAD-NUOVO' });
+    for (const u of calls.updates) expect(u).not.toHaveProperty('bot_outcome');
   });
 });
