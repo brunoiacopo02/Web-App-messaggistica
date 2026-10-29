@@ -4,6 +4,7 @@ const sendFreeTextMock = vi.fn();
 vi.mock('./twilio', () => ({ sendFreeText: (...a: unknown[]) => sendFreeTextMock(...a) }));
 
 import { claimRecap, inviaRecapDopoData } from './gdo-recap-send';
+import { DOMANDA_1 } from './gdo-warmup';
 
 /**
  * Finto client: una riga di `conversations` in memoria. L'update applica davvero i
@@ -168,6 +169,38 @@ describe('inviaRecapDopoData', () => {
     expect(sendFreeTextMock.mock.calls[0][0].to).toBe('+393331112233');
     expect(inseriti.messages).toHaveLength(1);
     expect(inseriti.event_log.map((e) => e.type)).toEqual(['gdo_recap_sent']);
+  });
+
+  it('riscaldamento acceso e call lontana: la domanda 1 parte in coda al recap e il passo va a 1', async () => {
+    vi.stubEnv('GDO_WARMUP_ENABLED', '1');
+    const conv: Record<string, any> = { ...baseConv(), gdo_warmup_step: null };
+    const { supabase, inseriti } = makeDb(conv);
+    expect(await inviaRecapDopoData(supabase, 7, 'registrato', NOW)).toBe('senza-video');
+    const body = sendFreeTextMock.mock.calls[0][0].body as string;
+    expect(body).toContain('qui sopra');
+    expect(body.endsWith(`\n\n${DOMANDA_1}`)).toBe(true);
+    expect(inseriti.messages[0].body).toBe(body);
+    expect(conv.gdo_warmup_step).toBe(1);
+    expect(inseriti.event_log.map((e) => e.type)).toEqual(['gdo_warmup_domanda_inviata', 'gdo_recap_sent']);
+    expect(inseriti.event_log[0].payload).toMatchObject({ step: 1, nelRecap: true });
+  });
+
+  it('niente domanda col recap: riscaldamento spento, gia\' iniziato, call a meno di 3 ore, annullamento', async () => {
+    const casi: Array<[Record<string, any>, Record<string, string>]> = [
+      [{}, {}],
+      [{ gdo_warmup_step: 1 }, { GDO_WARMUP_ENABLED: '1' }],
+      [{ gdo_appuntamento_at: '2026-10-22T12:00:00.000Z' }, { GDO_WARMUP_ENABLED: '1' }],
+    ];
+    for (const [over, env] of casi) {
+      sendFreeTextMock.mockClear();
+      for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v);
+      const conv: Record<string, any> = { ...baseConv(), gdo_warmup_step: null, ...over };
+      const { supabase, inseriti } = makeDb(conv);
+      await inviaRecapDopoData(supabase, 7, 'registrato', NOW);
+      const body = sendFreeTextMock.mock.calls[0]?.[0]?.body as string | undefined;
+      if (body) expect(body).not.toContain(DOMANDA_1);
+      expect(inseriti.event_log.some((e) => e.type === 'gdo_warmup_domanda_inviata')).toBe(false);
+    }
   });
 
   it('spostato con recap precedente → testo di spostamento, promemoria Noemi non toccato', async () => {

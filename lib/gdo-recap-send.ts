@@ -7,6 +7,7 @@
 import { decideGdoRecap, gdoRecapText, gdoSpostamentoText, type RecapOccasione, type RecapTipo } from './gdo-recap';
 import { mittenteDiConversazione } from './mittente';
 import { fissatoIlDi } from './noemi-quando';
+import { DOMANDA_1, domandaNelRecap } from './gdo-warmup';
 import { sendFreeText } from './twilio';
 
 type Supa = {
@@ -136,7 +137,7 @@ export async function inviaRecapDopoData(
   try {
     const { data: conv, error } = await supabase
       .from('conversations')
-      .select('id, bot_outcome, gdo_agenda_at, gdo_appuntamento_set_at, gdo_appuntamento_at, gdo_video_url, gdo_video_sent_at, gdo_recap_for_at, gdo_recap_sent_at, gdo_noemi_reminded_at, ai_paused_at, cancel_requested_at, last_inbound_at, wa_number, leads(phone_e164, first_name)')
+      .select('id, bot_outcome, gdo_agenda_at, gdo_appuntamento_set_at, gdo_appuntamento_at, gdo_video_url, gdo_video_sent_at, gdo_recap_for_at, gdo_recap_sent_at, gdo_noemi_reminded_at, gdo_warmup_step, ai_paused_at, cancel_requested_at, last_inbound_at, wa_number, leads(phone_e164, first_name)')
       .eq('id', conversationId)
       .single();
     if (error || !conv) return null;
@@ -167,9 +168,20 @@ export async function inviaRecapDopoData(
 
     const nome = conv.leads?.first_name ?? null;
     const call = new Date(appuntamentoAt);
-    const body = tipo === 'spostamento'
+    const testoRecap = tipo === 'spostamento'
       ? gdoSpostamentoText({ nome, call })
       : gdoRecapText({ nome, call, videoLink: null, fissatoIl: fissatoIlRecap(occasione, conv, nowMs) });
+    // La domanda 1 del riscaldamento in coda al recap, dopo una riga vuota (lib/gdo-warmup.ts).
+    const conDomanda = domandaNelRecap({
+      enabled: process.env.GDO_WARMUP_ENABLED === '1',
+      tipo,
+      step: conv.gdo_warmup_step ?? null,
+      appuntamentoAt,
+      cancelRequested: !!conv.cancel_requested_at,
+      aiPaused: !!conv.ai_paused_at,
+      nowMs,
+    });
+    const body = conDomanda ? `${testoRecap}\n\n${DOMANDA_1}` : testoRecap;
     const sent = await sendFreeText({ to: phone, body, from: mittenteDiConversazione(conv) });
 
     // Da qui il messaggio è partito: la presa NON si rilascia più, il recap non deve uscire
@@ -185,9 +197,26 @@ export async function inviaRecapDopoData(
     await supabase.from('conversations')
       .update({ last_message_at: new Date().toISOString() })
       .eq('id', conversationId);
+    if (conDomanda) {
+      // Il passo avanza come quando la domanda esce in un turno: il prossimo messaggio del
+      // lead e' la risposta alla domanda 1.
+      const { error: erroreStep } = await supabase.from('conversations')
+        .update({ gdo_warmup_step: 1 })
+        .eq('id', conversationId);
+      await supabase.from('event_log').insert({
+        type: erroreStep ? 'gdo_warmup_step_non_scritto' : 'gdo_warmup_domanda_inviata',
+        payload: (erroreStep
+          ? { conversationId, da: conv.gdo_warmup_step ?? null, a: 1, errore: erroreStep.message, nelRecap: true }
+          : { conversationId, step: 1, nelRecap: true }) as never,
+        message: erroreStep
+          ? `[gdo] conv ${conversationId}: domanda 1 partita col recap ma passo NON scritto — ${erroreStep.message}`
+          : `[gdo] conv ${conversationId}: domanda 1 del riscaldamento inviata in coda al recap`,
+        level: erroreStep ? 'warn' : 'info',
+      });
+    }
     await supabase.from('event_log').insert({
       type: 'gdo_recap_sent',
-      payload: { conversationId, tipo, occasione } as never,
+      payload: { conversationId, tipo, occasione, ...(conDomanda ? { domanda1: true } : {}) } as never,
       message: `[gdo] conv ${conversationId}: recap (${tipo}) mandato dopo la data del CRM`,
       level: 'info',
     });

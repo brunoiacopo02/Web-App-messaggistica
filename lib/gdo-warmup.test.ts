@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  accodaDomanda, decideCon, decidiDomanda, DOMANDA_1, DOMANDA_2, domandaInAttesa, eRispostaDaNotare, motivoRiscaldamento,
+  accodaDomanda, decideCon, decidiDomanda, domandaNelRecap, notaDomandaGiaFatta, DOMANDA_1, DOMANDA_2, domandaInAttesa, eRispostaDaNotare, motivoRiscaldamento,
   notaRisposta, parlaDAltro, parlaDiDisdireOSpostare, riscaldamentoInerte, segnaleBrutto, type TurnoRiscaldamento,
 } from './gdo-warmup';
 
@@ -175,6 +175,31 @@ describe('domandaInAttesa', () => {
     expect(parlaDAltro('Non funziona, mi esce ancora anche da Chrome')).toBe(true);
     expect(eRispostaDaNotare({ testo: 'Non funziona, mi esce ancora anche da Chrome', esito: false, passaggio: false, soloPresaDAtto: false, soloConfermaVideo: false })).toBe(false);
     expect(decidiDomanda('in_prompt', 1, turno({ fuoriTema: true }))).toEqual({ domanda: null, salto: 'fuori_tema' });
+  });
+});
+
+describe('anticipo e domande doppie (PO 29/10/2026)', () => {
+  it('senza recap ma col video gia\' mandato le domande possono partire', () => {
+    expect(motivoRiscaldamento({ ...base, recapForAt: null })).toBe('no_recap');
+    expect(motivoRiscaldamento({ ...base, recapForAt: null, videoSentAt: '2026-10-21T09:00:00+02:00' })).toBe('in_prompt');
+  });
+  it('domandaNelRecap: solo a riscaldamento non iniziato, call oltre 3 ore, mai su spostamento/annullamento/pausa', () => {
+    const ok = { enabled: true, tipo: 'senza-video', step: null, appuntamentoAt: CALL, cancelRequested: false, aiPaused: false, nowMs: NOW };
+    expect(domandaNelRecap(ok)).toBe(true);
+    expect(domandaNelRecap({ ...ok, step: 0 })).toBe(true);
+    expect(domandaNelRecap({ ...ok, enabled: false })).toBe(false);
+    expect(domandaNelRecap({ ...ok, step: 1 })).toBe(false);
+    expect(domandaNelRecap({ ...ok, tipo: 'spostamento' })).toBe(false);
+    expect(domandaNelRecap({ ...ok, cancelRequested: true })).toBe(false);
+    expect(domandaNelRecap({ ...ok, aiPaused: true })).toBe(false);
+    expect(domandaNelRecap({ ...ok, appuntamentoAt: new Date(NOW + 2 * 3600_000).toISOString() })).toBe(false);
+    expect(domandaNelRecap({ ...ok, appuntamentoAt: null })).toBe(false);
+  });
+  it('la nota al modello vieta solo di rifare la domanda del riscaldamento, non le altre', () => {
+    expect(notaDomandaGiaFatta(1)).toContain('perché adesso');
+    expect(notaDomandaGiaFatta(2)).toContain('decide da solo');
+    expect(notaDomandaGiaFatta(1)).toContain('Non rifarla');
+    expect(notaDomandaGiaFatta(1)).toContain('il video');
   });
 });
 

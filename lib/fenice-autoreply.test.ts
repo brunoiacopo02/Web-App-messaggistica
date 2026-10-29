@@ -3394,6 +3394,23 @@ describe('drainMarioReplies — riscaldamento del lead GDO dopo il recap (domand
     expect(calls.events.find((e: any) => e.type === 'gdo_warmup_nota')?.payload.domanda).toBe('inviata_2');
   });
 
+  it('domanda in attesa: il modello sa che non deve rifarla (nota nel contesto), senza domanda in attesa no', async () => {
+    const { supabase } = makeDrainSupabase(
+      postino({ gdo_warmup_step: 1 }),
+      [RECAP, fuori(`Perfetto!\n\n${DOMANDA_1}`), dentro('ok')],
+    );
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Perfetto!'));
+    await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+    const nota = (vi.mocked(generateMarioReply).mock.calls.at(-1)?.[1] as any)?.contextNote as string;
+    expect(nota).toContain('RISCALDAMENTO: al lead è già arrivata la domanda su cosa vuole ottenere');
+
+    const { supabase: s2 } = makeDrainSupabase(postino(), [RECAP, RISPOSTA]);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Perfetto!'));
+    await drainMarioReplies(s2, 92, '+391234567890', () => 0);
+    const nota2 = (vi.mocked(generateMarioReply).mock.calls.at(-1)?.[1] as any)?.contextNote as string | undefined;
+    expect(nota2 ?? '').not.toContain('RISCALDAMENTO:');
+  });
+
   it('il lead scrive ancora mentre il turno gira: la domanda aspetta, nel log "lead_scrive_ancora"', async () => {
     const { supabase, calls, messagesRows } = makeDrainSupabase(
       postino({ gdo_warmup_step: 1 }),

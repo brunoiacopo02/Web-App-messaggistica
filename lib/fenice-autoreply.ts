@@ -3,7 +3,7 @@ import { generateMarioReply, type MarioTurn } from './mario';
 import { datePiene, tettoGiornaliero } from './booking-capienza';
 import { gdoContextNote, serveNoemi, type GdoNoteInput } from './gdo-context-note';
 import {
-  accodaDomanda, decidiDomanda, domandaInAttesa, eRispostaDaNotare, motivoRiscaldamento, notaRisposta,
+  accodaDomanda, decidiDomanda, domandaInAttesa, eRispostaDaNotare, motivoRiscaldamento, notaDomandaGiaFatta, notaRisposta,
   parlaDAltro, parlaDiDisdireOSpostare, riscaldamentoInerte, RISCALDAMENTO_CHIUSO, type DomandaDecisa,
 } from './gdo-warmup';
 import { gdoVideoText } from './gdo-agenda';
@@ -1125,6 +1125,7 @@ export async function drainMarioReplies(
             cancelRequested: !!gdo.cancel_requested_at,
             step: gdoWarmupStep,
             recapForAt: gdoRecapForAt,
+            videoSentAt: gdoVideoSentAt,
             recapInQuestoTurno: recapTipo === 'completo',
             appuntamentoAt: gdoAppuntamentoAt,
             serveNoemi: noteGdo ? serveNoemi(noteGdo) : false,
@@ -1132,6 +1133,15 @@ export async function drainMarioReplies(
           })
         : null;
       const stepWarmupTurno = gdoWarmupStep;
+      // La domanda del riscaldamento ancora in attesa di risposta (anche se il modello l'ha
+      // riformulata nel turno di mezzo). Si calcola PRIMA del modello: se c'e', il modello
+      // sa che non deve rifarla. Se la risposta e' gia' arrivata al CRM non si rinota.
+      const warmupAttivo = postino && !riscaldamentoInerte(motivoWarmup);
+      const giaNotata = warmupAttivo && idxTurno >= 0 && (gdoWarmupStep === 1 || gdoWarmupStep === 2)
+        ? await rispostaRiscaldamentoGiaNotata(supabase, conversationId, gdoWarmupStep)
+        : false;
+      const attesa = warmupAttivo && idxTurno >= 0 ? domandaInAttesa(rows, idxTurno, gdoWarmupStep, giaNotata) : null;
+      const notaWarmup = attesa ? notaDomandaGiaFatta(attesa.step) : null;
       // Spostamento della call fatto dal bot (PO 28/10/2026, lib/gdo-spostamento.ts): sul
       // postino (lead GDO) e, dal 29/10, sulle call fissate dal bot; una volta sola, se le
       // Conferme non hanno ancora esitato il lead. Le due letture (evento "gia' spostato",
@@ -1179,7 +1189,7 @@ export async function drainMarioReplies(
         // nota e' un'altra, la dichiarazione IA: un postino ha sempre ricevuto l'agenda,
         // quindi i due casi non si incontrano mai.
         ...(noteGdo
-          ? { contextNote: [gdoContextNote(noteGdo), notaSposta].filter(Boolean).join('\n\n') }
+          ? { contextNote: [gdoContextNote(noteGdo), notaSposta, notaWarmup].filter(Boolean).join('\n\n') }
           : notaLancioCompleta
             ? { contextNote: [notaLancioCompleta, notaSpostaBot].filter(Boolean).join('\n\n') }
             : notaStudente
@@ -1279,7 +1289,7 @@ export async function drainMarioReplies(
               botScheduledAt: botScheduledAt,
               gdoAppuntamentoAt: gdoAppuntamentoAt,
               fissatoIl: fissatoIlGdo,
-            }), notaSposta].filter(Boolean).join('\n\n'),
+            }), notaSposta, notaWarmup].filter(Boolean).join('\n\n'),
           });
           // Fail-safe: una rigenerazione vuota non vale meno di zero, vale come un
           // fallimento — si manda comunque la prima risposta, il lead non resta muto.
@@ -1383,13 +1393,6 @@ export async function drainMarioReplies(
         ? rows.slice(idxTurno).filter((m) => m.direction === 'in').map((m) => (m.body ?? '').trim()).filter(Boolean).join(' / ')
         : '';
       const esitoTurno = !!result.outcome || result.appointmentFixed || spostamentoFatto;
-      const warmupAttivo = postino && !riscaldamentoInerte(motivoWarmup);
-      // La domanda ancora in attesa di risposta (anche se il modello l'ha riformulata nel
-      // turno di mezzo). Se la risposta e' gia' arrivata al CRM non si rinota.
-      const giaNotata = warmupAttivo && idxTurno >= 0 && (gdoWarmupStep === 1 || gdoWarmupStep === 2)
-        ? await rispostaRiscaldamentoGiaNotata(supabase, conversationId, gdoWarmupStep)
-        : false;
-      const attesa = warmupAttivo && idxTurno >= 0 ? domandaInAttesa(rows, idxTurno, gdoWarmupStep, giaNotata) : null;
       // Arrivato a ridosso della domanda: il lead stava ancora scrivendo. Non e' la risposta
       // a questa domanda; se la domanda era la 2, e' il seguito della risposta alla 1.
       const rispostaA = attesa && !attesa.continuazione ? attesa.step : null;

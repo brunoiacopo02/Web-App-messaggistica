@@ -43,8 +43,10 @@ export interface RiscaldamentoInput {
   enabled: boolean;
   /** `gdo_warmup_step`: null = mai iniziato, 1-2 = domanda inviata, 3 = chiuso. */
   step: number | null;
-  /** `gdo_recap_for_at`: senza recap mandato non si parte. */
+  /** `gdo_recap_for_at`: senza recap (e senza video) non si parte. */
   recapForAt: string | null;
+  /** `gdo_video_sent_at`: il lead ha gia' ricevuto video e data anche senza recap. Default null. */
+  videoSentAt?: string | null;
   /** Il recap esce proprio in questo turno: le domande partono dal prossimo. */
   recapInQuestoTurno: boolean;
   /** Ora della call fissata dal GDO. */
@@ -81,7 +83,9 @@ export function motivoRiscaldamento(i: MotivoRiscaldamentoInput): MotivoRiscalda
   if (i.postino === false) return 'non_postino';
   if (i.cancelRequested) return 'cancel';
   if ((i.step ?? 0) >= RISCALDAMENTO_CHIUSO) return 'chiuso';
-  if (!i.recapForAt) return 'no_recap';
+  // Senza recap si parte lo stesso se il video (con la data) e' gia' arrivato (PO 29/10/2026:
+  // 7 chat su 10 ferme per "no_recap" avevano il video ma il recap non era mai uscito).
+  if (!i.recapForAt && !i.videoSentAt) return 'no_recap';
   if (i.recapInQuestoTurno) return 'recap_turno';
   if (i.serveNoemi) return 'noemi';
   const callMs = i.appuntamentoAt ? Date.parse(i.appuntamentoAt) : NaN;
@@ -156,6 +160,46 @@ export function accodaDomanda(parts: readonly string[], domanda: string): { part
   if (parts.some((p) => p.includes(domanda))) return { parts: [...parts], bolla: null }; // mai due volte
   const bolla = `${ultima}\n\n${domanda}`;
   return { parts: [...parts.slice(0, -1), bolla], bolla };
+}
+
+/**
+ * La domanda 1 puo' partire in coda al recap mandato quando il CRM ci da' la data (PO
+ * 29/10/2026, "anticipare le domande"): di solito la sera prima, mentre oggi il lead
+ * riscrive spesso solo a meno di 3 ore dalla call e il riscaldamento salta (11 chat su 11
+ * ferme per "meno_3h" avevano avuto il recap circa 24 ore prima). Stesse esclusioni del
+ * turno: interruttore, chat in pausa o con annullamento, riscaldamento gia' iniziato, call
+ * a meno di 3 ore; mai sul recap di uno spostamento.
+ */
+export function domandaNelRecap(i: {
+  enabled: boolean;
+  tipo: string;
+  step: number | null;
+  appuntamentoAt: string | null;
+  cancelRequested: boolean;
+  aiPaused: boolean;
+  nowMs: number;
+}): boolean {
+  if (!i.enabled || i.cancelRequested || i.aiPaused) return false;
+  if (i.tipo === 'spostamento') return false;
+  if ((i.step ?? 0) !== 0) return false;
+  const call = i.appuntamentoAt ? Date.parse(i.appuntamentoAt) : NaN;
+  return Number.isFinite(call) && call - i.nowMs >= MIN_ANTICIPO_MS;
+}
+
+/**
+ * Nota al modello quando una domanda del riscaldamento e' in attesa di risposta: non
+ * rifarla a parole sue (conv 26100 e 28813, 29/10/2026). Riguarda SOLO le due domande del
+ * riscaldamento: tutto il resto (video, orario, conferma) il modello lo chiede come sempre.
+ */
+export function notaDomandaGiaFatta(step: 1 | 2): string {
+  const tema = step === 1
+    ? 'cosa vuole ottenere con il percorso e perché adesso'
+    : 'il costo (1.000-3.000 euro, anche a rate) e se decide da solo o con qualcuno';
+  return (
+    `RISCALDAMENTO: al lead è già arrivata la domanda su ${tema}. Non rifarla e non farne una ` +
+    'simile con parole tue: se ti risponde, prendi atto in una frase e vai avanti. ' +
+    'Le altre domande che ti servono (il video, l\'orario, la conferma della call) falle come sempre.'
+  );
 }
 
 type RigaChat = { direction: string; body: string | null; created_at?: string };
