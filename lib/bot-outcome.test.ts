@@ -97,6 +97,9 @@ async function eventoLockedGiaScritto(convRow: any, conversationId: number, args
 
 beforeEach(() => {
   vi.stubEnv('BOT_WEBHOOK_SECRET', 'test-secret');
+  // Il giudice delle disdette ha i suoi test (bot-outcome-giudice.test.ts): qui si
+  // collauda il comportamento di sempre, quindi lo si spegne.
+  vi.stubEnv('GIUDICE_DISDETTE_ENABLED', '0');
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, text: async () => '' })));
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });

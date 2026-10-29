@@ -14,6 +14,7 @@ import {
   resolveOutcomeAction,
 } from './bot-outcome-rules';
 import { bookingBlackout } from './booking-blackout';
+import { contestoGiudiceDaDb, giudicaDisdetta, giudiceDisdetteAcceso, type GiudizioDisdetta } from './giudice-disdetta';
 import { sameInstant } from './rome-time';
 import { categoriaPerCrm, disponibilitaDalTesto, motivoRichiesta } from './contatti-umani';
 import { noteFingerprint, divergiChiaveDaNotePrecedenti, type NotaCrmPrecedente } from './note-dedup';
@@ -269,6 +270,94 @@ async function marcaDisdetta(supabase: Supa, conversationId: number, crmLeadId: 
     message: `[bot-fissatore] il lead ${crmLeadId ?? `della conv ${conversationId}`} ha chiesto di annullare/spostare: automatismi spenti su questa chat`,
     level: 'info',
   });
+}
+
+/** Tempo massimo del giudice nel percorso del drain: oltre, si fa come prima. */
+const GIUDICE_TIMEOUT_DRAIN_MS = 30_000;
+
+/**
+ * Giudice delle disdette sui lead dei GDO (contratto v1.10, `DISDETTA_VERIFICATA`).
+ *
+ * Chiama il giudice (`lib/giudice-disdetta.ts`) sulla chat fino ad adesso; se il verdetto
+ * è `disdetta_vera` chiede al CRM di scartare il lead dalle Conferme. Ritorna
+ * `scartato: true` solo quando il lead risulta scartato per questa disdetta (appena
+ * scartato, o già scartato da un invio precedente): allora la nota DISDETTA non parte.
+ * Non lancia mai: ogni errore vale "non scartato" e il chiamante manda la nota di sempre.
+ *
+ * Ogni volta che il giudice viene chiamato scrive un evento `giudice_disdetta`
+ * (verdetto, categoria, citazione, durata, token, risposta del CRM) per l'audit. Con
+ * l'interruttore spento (`GIUDICE_DISDETTE_ENABLED='0'`) il giudice non viene chiamato.
+ */
+async function provaScartoDisdetta(
+  supabase: Supa,
+  conversationId: number,
+  crmLeadId: string,
+  secret: string,
+): Promise<{ scartato: boolean; status?: number }> {
+  if (!giudiceDisdetteAcceso()) return { scartato: false };
+  const t0 = Date.now();
+  let giudizio: GiudizioDisdetta | null = null;
+  let errore: string | null = null;
+  let crm: { status?: number; corpo?: Record<string, unknown>; errore?: string } | null = null;
+  let scartato = false;
+  try {
+    const { messaggi, fatti } = await contestoGiudiceDaDb(supabase, conversationId);
+    giudizio = await giudicaDisdetta(messaggi, fatti, { timeoutMs: GIUDICE_TIMEOUT_DRAIN_MS });
+    if (giudizio.verdetto === 'disdetta_vera') {
+      const rawBody = JSON.stringify({
+        leadId: crmLeadId,
+        outcome: 'DISDETTA_VERIFICATA',
+        note: giudizio.citazione,
+        disdetta: { categoria: giudizio.categoria, citazione: giudizio.citazione, motivo: giudizio.motivo },
+      });
+      const url = process.env.CRM_OUTCOME_URL ?? DEFAULT_CRM_URL;
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-bot-signature': signPayload(rawBody, secret) },
+          body: rawBody,
+          signal: AbortSignal.timeout(15_000),
+        });
+        const corpo = res.ok ? await leggiCorpoJson(res) : undefined;
+        crm = { status: res.status, ...(corpo ? { corpo } : { errore: res.ok ? undefined : (await res.text().catch(() => '')).slice(0, 300) }) };
+        scartato = res.ok && (corpo?.discarded === true || corpo?.skipped === 'gia_scartato_disdetta');
+        if (scartato) await marcaDisdetta(supabase, conversationId, crmLeadId, 'DA_SCARTARE');
+      } catch (e) {
+        crm = { errore: e instanceof Error ? e.message : 'errore' };
+      }
+    }
+  } catch (e) {
+    errore = e instanceof Error ? e.message : String(e);
+  }
+  try {
+    await supabase.from('event_log').insert({
+      type: 'giudice_disdetta',
+      payload: {
+        conversationId,
+        crmLeadId,
+        verdetto: giudizio?.verdetto ?? null,
+        verdettoModello: giudizio?.verdettoModello ?? null,
+        categoria: giudizio?.categoria ?? null,
+        citazione: giudizio?.citazione ?? null,
+        motivo: giudizio?.motivo ?? null,
+        guardia: giudizio?.guardia ?? [],
+        modello: giudizio?.modello ?? null,
+        token: giudizio?.token ?? null,
+        msGiudice: giudizio?.ms ?? null,
+        msTotale: Date.now() - t0,
+        errore,
+        crm,
+        scartato,
+      } as never,
+      message: errore
+        ? `[giudice] conv ${conversationId}: errore (${errore}) — nota DISDETTA come prima`
+        : `[giudice] conv ${conversationId}: ${giudizio?.verdetto}${scartato ? ' → scartato dalle Conferme' : giudizio?.verdetto === 'disdetta_vera' ? ' ma il CRM non ha scartato → nota DISDETTA' : ' → nota DISDETTA come prima'}`,
+      level: errore || (giudizio?.verdetto === 'disdetta_vera' && !scartato) ? 'warn' : 'info',
+    });
+  } catch {
+    // solo audit: un insert fallito non cambia la decisione
+  }
+  return { scartato, ...(crm?.status ? { status: crm.status } : {}) };
 }
 
 /**
@@ -717,6 +806,14 @@ export async function sendOutcome(
     // appuntamento. `gdo_appuntamento_at` è la data che ci manda il CRM
     // (POST /api/appointment-set) ed è l'unica che abbiamo per quei lead.
     const dataNota = row?.bot_scheduled_at ?? row?.gdo_appuntamento_at ?? null;
+    // Il giudice delle disdette (PO 28/10/2026): solo qui, dove nasce la nota DISDETTA sui
+    // lead dei GDO. Se la disdetta è vera il CRM scarta il lead dalle Conferme e la nota
+    // non serve più; in ogni altro caso (dubbio, errore, timeout, CRM che non scarta) si
+    // prosegue esattamente come prima.
+    if (args.outcome === 'DA_SCARTARE') {
+      const scarto = await provaScartoDisdetta(supabase, conversationId, crmLeadId, secret);
+      if (scarto.scartato) return { sent: true, status: scarto.status };
+    }
     return sendCrmNoteOnly(supabase, conversationId, crmLeadId, args, dataNota, secret);
   }
 
