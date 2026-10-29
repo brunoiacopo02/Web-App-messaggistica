@@ -49,6 +49,19 @@ describe('guardie', () => {
   it("l'ultimo turno sono i messaggi del lead dopo l'ultimo nostro", () => {
     expect(ultimoTurnoLead(chat, adesso)).toEqual(['Ho fatto le mie valutazioni,', 'non mi interessa più. Annullate la chiamata']);
   });
+  it("salta la risposta del bot gia' partita: il turno resta quello del lead", () => {
+    const conRisposta: MessaggioChat[] = [
+      ...chat,
+      { direction: 'out', body: 'Va bene, nessun problema', created_at: '2026-10-27T10:10:50Z' },
+    ];
+    expect(ultimoTurnoLead(conRisposta, adesso)).toEqual(['Ho fatto le mie valutazioni,', 'non mi interessa più. Annullate la chiamata']);
+    const spostamento: MessaggioChat[] = [
+      ...chat.slice(0, 3),
+      { direction: 'in', body: 'oggi non riesco, annullate', created_at: '2026-10-27T10:10:00Z' },
+      { direction: 'out', body: 'Ok, lo segnalo', created_at: '2026-10-27T10:10:20Z' },
+    ];
+    expect(applicaGuardie({ verdetto: 'disdetta_vera', citazione: 'annullate' }, spostamento, adesso).guardia).toContain('segnale_giorno');
+  });
   it('riconosce i segnali di spostamento', () => {
     expect(segnaliDiDubbio(['non posso unirmi all\'appuntamento delle 15. Annullo tutto'])).toContain('orario');
     expect(segnaliDiDubbio(['Ok ma oggi noemi? Non riesco sai'])).toEqual(expect.arrayContaining(['giorno', 'chiamata_noemi', 'domanda']));

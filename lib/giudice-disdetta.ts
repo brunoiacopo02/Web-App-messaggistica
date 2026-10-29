@@ -180,12 +180,20 @@ export function costruisciInputGiudice(messaggi: MessaggioChat[], fatti: FattiGi
   return righe.join('\n');
 }
 
-/** I messaggi del lead dell'ultimo turno: quelli dopo l'ultimo messaggio nostro. */
+/**
+ * I messaggi del lead dell'ultimo turno: il blocco di messaggi del lead più recente.
+ * In produzione il giudice viene chiamato DOPO che la risposta del bot a quel turno è già
+ * partita (e il collaudo taglia all'ora della nota, che segue la risposta): i nostri
+ * messaggi in coda si saltano, altrimenti il turno risulta vuoto e la guardia sui segnali
+ * di spostamento non vede niente.
+ */
 export function ultimoTurnoLead(messaggi: MessaggioChat[], adessoIso: string): string[] {
   const adessoMs = Date.parse(adessoIso);
   const prima = messaggi.filter((m) => Date.parse(m.created_at) <= adessoMs);
+  let fine = prima.length - 1;
+  while (fine >= 0 && prima[fine].direction !== 'in') fine--;
   const out: string[] = [];
-  for (let i = prima.length - 1; i >= 0; i--) {
+  for (let i = fine; i >= 0; i--) {
     if (prima[i].direction !== 'in') break;
     const b = (prima[i].body ?? '').trim();
     if (b) out.unshift(b);
