@@ -1528,6 +1528,27 @@ describe('sendOutcome — il corpo della risposta 2xx viene esposto (restituzion
   });
 });
 
+describe('sendOutcome — `letto` sul NON_RISPOSTO (contratto v1.11)', () => {
+  const corpoInviato = async (args: Parameters<typeof sendOutcome>[2]) => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, text: async () => '' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { supabase } = makeSupabase({ crm_lead_id: 'crm1', bot_outcome: null, bot_scheduled_at: null });
+    await sendOutcome(supabase, 1, args);
+    const init = (fetchMock.mock.calls[0] as unknown[])[1] as { body: string };
+    return JSON.parse(init.body) as Record<string, unknown>;
+  };
+
+  it('NON_RISPOSTO porta letto true o false', async () => {
+    expect((await corpoInviato({ outcome: 'NON_RISPOSTO', note: 'x', letto: true })).letto).toBe(true);
+    expect((await corpoInviato({ outcome: 'NON_RISPOSTO', note: 'x', letto: false })).letto).toBe(false);
+  });
+
+  it('senza il dato, o su un altro esito, il campo non parte', async () => {
+    expect('letto' in (await corpoInviato({ outcome: 'NON_RISPOSTO', note: 'x' }))).toBe(false);
+    expect('letto' in (await corpoInviato({ outcome: 'INTERROTTO', note: 'x', letto: true }))).toBe(false);
+  });
+});
+
 /** Un giorno ISO fra N giorni da adesso: come `FRA_TRE_GIORNI` più sopra, ma con un
  *  offset scelto dal chiamante, per posizionare la data in una fascia precisa. */
 function isoFraGiorni(n: number): string {

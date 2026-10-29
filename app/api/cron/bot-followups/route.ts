@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendOutcome } from '@/lib/bot-outcome';
 import { caricaContesto as caricaContestoSollecito, decidiChiusura } from '@/lib/sollecito-parcheggio';
-import { decideFollowupAction, esitoMaiConsegnato, postinoGdo, serveCronologia, ultimaAttivitaMs, puoAverScrittoPrimaDellAvvio, scrittiSenzaRispostaPrimaDellAvvio, ARRUOLAMENTO_BUFFER_MS } from '@/lib/bot-followups';
+import { decideFollowupAction, esitoMaiConsegnato, haLettoUnNostroMessaggio, postinoGdo, serveCronologia, ultimaAttivitaMs, puoAverScrittoPrimaDellAvvio, scrittiSenzaRispostaPrimaDellAvvio, ARRUOLAMENTO_BUFFER_MS } from '@/lib/bot-followups';
 import { classifyInterrupted } from '@/lib/interrotto-note';
 import { buildConfermaPersaNote } from '@/lib/bot-outcome-rules';
 import { paroleDellaRichiesta } from '@/lib/contatti-umani';
@@ -374,6 +374,9 @@ export async function GET(req: NextRequest) {
           // soglia vera è SEQUENCE_END_DAYS (24h dal primo messaggio dal 02/10/2026,
           // prima 4 giorni).
           note: `Sequenza completa: ${nDelivered} messaggi consegnati, mai una risposta. Da provare a voce.`,
+          // Contratto v1.11 (PO 29/10/2026): chi ha letto e non ha risposto il CRM lo dà ai
+          // GDO invece di parcheggiarlo.
+          letto: haLettoUnNostroMessaggio(rows),
         });
         report.push({ id: c.id, action });
       } else if (action === 'interrotto_classify') {

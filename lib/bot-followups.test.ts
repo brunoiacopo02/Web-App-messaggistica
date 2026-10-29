@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  haLettoUnNostroMessaggio,
   decideFollowupAction,
   serveCronologia,
   postinoGdo,
@@ -450,5 +451,21 @@ describe('postinoGdo — agenda vecchia di un altro giro', () => {
   });
   it('agenda vecchia: la chat torna classificabile (cronologia caricata dopo la soglia)', () => {
     expect(serveCronologia(conv({ ai_started_at: at(3 * D), created_at: at(40 * D), gdo_agenda_at: at(30 * D) }), NOW)).toBe(true);
+  });
+});
+
+describe('haLettoUnNostroMessaggio (contratto v1.11, PO 29/10/2026)', () => {
+  it('vero se almeno un nostro messaggio ha le spunte blu', () => {
+    expect(haLettoUnNostroMessaggio([
+      { direction: 'out', twilio_status: 'delivered' },
+      { direction: 'out', twilio_status: 'read' },
+    ])).toBe(true);
+  });
+  it('falso se consegnato ma mai letto, o se non c\'è niente', () => {
+    expect(haLettoUnNostroMessaggio([{ direction: 'out', twilio_status: 'delivered' }])).toBe(false);
+    expect(haLettoUnNostroMessaggio([])).toBe(false);
+  });
+  it('un messaggio del lead "read" non conta: conta solo il nostro', () => {
+    expect(haLettoUnNostroMessaggio([{ direction: 'in', twilio_status: 'read' }])).toBe(false);
   });
 });

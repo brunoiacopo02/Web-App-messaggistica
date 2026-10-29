@@ -268,3 +268,13 @@ export function esitoMaiConsegnato(msgs: MsgConErrore[]): { outcome: 'NON_RISPOS
     : `WhatsApp mai consegnato (${quanti} inviati, nessuno arrivato). Il numero può essere valido: chiamare a voce.`;
   return { outcome: 'NON_RISPOSTO', note };
 }
+
+/**
+ * Il lead ha letto almeno un nostro messaggio (spunte blu: `twilio_status = 'read'`)?
+ * Viaggia come `letto` nel NON_RISPOSTO (contratto v1.11, PO 29/10/2026): chi ha letto e
+ * non ha risposto il CRM non lo parcheggia più, lo dà ai GDO. `read_at` non c'entra: lo
+ * scrive il pannello quando un operatore legge i messaggi del lead.
+ */
+export function haLettoUnNostroMessaggio(msgs: { direction: string; twilio_status?: string | null }[]): boolean {
+  return msgs.some((m) => m.direction === 'out' && m.twilio_status === 'read');
+}

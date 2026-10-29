@@ -553,6 +553,9 @@ export type SendOutcomeArgs = {
    *  `note` e `discardReason` sono la sintesi del modello, cioè una parafrasi — le
    *  Conferme hanno chiesto anche le parole vere. */
   leadWords?: string;
+  /** Solo per `NON_RISPOSTO` (contratto v1.11): il lead ha letto almeno un nostro
+   *  messaggio. Va nel corpo al CRM, che con `true` lo dà ai GDO invece di parcheggiarlo. */
+  letto?: boolean;
   /** Solo per `CONTATTO_UMANO`: la categoria da mandare al CRM al posto di quella
    *  dedotta dalle parole del lead. Serve ai casi che non nascono da una richiesta —
    *  la risposta dopo il terzo tentativo di chiamata, che le regole leggerebbero come
@@ -1175,6 +1178,7 @@ export async function sendOutcome(
         ...(periodo ? { periodo } : args.date ? { date: args.date } : {}),
         ...(args.note ? { note: args.note } : {}),
         ...(args.discardReason ? { discardReason: args.discardReason } : {}),
+        ...(args.outcome === 'NON_RISPOSTO' && typeof args.letto === 'boolean' ? { letto: args.letto } : {}),
         // `omitReportFromCrmBody`: solo per non duplicare il report nel corpo della
         // richiesta quando l'ha già portato una POST precedente (vedi il ramo
         // `restituisci` delle tre fasce RICHIAMO). Non tocca `bot_report`: quella

@@ -155,6 +155,9 @@ export interface BotOutcomeBody {
    *  Conferme, che sono le sole competenti su un lead già fissato (13 su 66 finivano
    *  così). Assente, mai null, se non c'è un appuntamento. */
   info?: { sintesi?: string; disponibilita?: string; telefonoPreferito?: string; urgenza?: string; argomenti?: string[]; appuntamento?: string };
+  /** NON_RISPOSTO (v1.11, PO 29/10/2026): il lead ha letto almeno un nostro messaggio.
+   *  Con `true` il CRM non lo parcheggia, lo dà ai GDO. Assente = come prima. */
+  letto?: boolean;
 }
 
 const OUTCOMES: BotOutcome[] = ['APPUNTAMENTO', 'DA_SCARTARE', 'RICHIAMO', 'NON_RISPOSTO', 'INTERROTTO', 'NOTA', 'CONTATTO_UMANO'];
