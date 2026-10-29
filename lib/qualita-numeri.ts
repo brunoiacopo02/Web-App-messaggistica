@@ -9,8 +9,10 @@
  *   si allunga di altri 3 giorni.
  * - Mai fermare l'ultimo numero del giro: se resterebbero zero numeri aperti, si
  *   scrive un warn e il numero resta acceso (lo decide una persona).
- * - Il 3199 (primario) rientra nelle aperture solo dopo 7 giorni HIGH di fila, con
- *   tetto 30. Se poi scende sotto HIGH, esce subito.
+ * - Il 3199 (primario) rientra a gradini (PO 29/10/2026 sera): dopo 4 giorni HIGH
+ *   di fila apre con tetto 30; dopo altri 4 giorni HIGH di fila torna a regime, alla
+ *   pari con gli altri (100000 = nessun limite). Se scende sotto HIGH in qualunque
+ *   momento esce subito e si riparte da capo.
  *
  * Stato in `app_settings.qualita_numeri_stato` (storico per giorno = la lettura
  * peggiore del giorno, pause in corso). I numeri a tetto 0 messi a mano (non in
@@ -36,11 +38,16 @@ export type StatoQualita = {
   storico: Record<string, Record<string, Qualita>>;
   /** numero → pausa in corso */
   pause: Record<string, { fino: string; tettoPrima: number; dal: string }>;
+  /** Il 3199 in rientro: a 30 dal giorno `dal`, in attesa dei 4 giorni HIGH per tornare a regime. */
+  primario?: { fase: 'trenta'; dal: string } | null;
 };
 
 export const GIORNI_PAUSA = 3;
-export const GIORNI_HIGH_PER_RIENTRO = 7;
+/** Giorni HIGH di fila per ogni gradino del rientro del 3199 (PO 29/10/2026 sera). */
+export const GIORNI_HIGH_PER_RIENTRO = 4;
 export const TETTO_RIENTRO_PRIMARIO = 30;
+/** A regime = come gli altri numeri: nessun limite (PO: 100000 vuol dire senza tetto). */
+export const TETTO_PIENO = 100000;
 const GIORNI_STORICO = 21;
 const KEY_STATO = 'qualita_numeri_stato';
 const KEY_TETTI = 'tetti_numeri';
@@ -82,6 +89,7 @@ export type Azione =
   | { tipo: 'pausa_allungata'; numero: string; qualita: Qualita; fino: string }
   | { tipo: 'ripresa'; numero: string; tetto: number }
   | { tipo: 'rientro_primario'; numero: string; tetto: number }
+  | { tipo: 'regime_primario'; numero: string; tetto: number }
   | { tipo: 'uscita_primario'; numero: string; qualita: Qualita };
 
 /**
@@ -102,6 +110,7 @@ export function decidi(args: {
   const stato: StatoQualita = {
     storico: structuredClone(args.stato.storico ?? {}),
     pause: structuredClone(args.stato.pause ?? {}),
+    primario: args.stato.primario ? { ...args.stato.primario } : null,
   };
   // I tetti si scrivono con le chiavi come le trovo (con o senza `whatsapp:`).
   const tetti: Record<string, number> = { ...args.tetti };
@@ -154,21 +163,33 @@ export function decidi(args: {
     azioni.push({ tipo: 'pausa', numero: num, qualita: q, fino, tettoPrima: tetto });
   }
 
-  // 4. Il 3199: esce se scende, rientra a 30 dopo 7 giorni HIGH di fila.
+  // 4. Il 3199: esce se scende; rientra a 30 dopo 4 giorni HIGH di fila, a regime
+  //    dopo altri 4 giorni HIGH di fila.
   const qP = qOggi(primario);
   const tettoP = tettoDi(primario);
+  const giorniP = stato.storico[primario] ?? {};
+  const tuttiHigh = (ultimo: string, n: number) => {
+    for (let k = 0; k < n; k++) if (giorniP[piuGiorni(ultimo, -k)] !== 'HIGH') return false;
+    return true;
+  };
   if (tettoP > 0 && (qP === 'MEDIUM' || qP === 'LOW')) {
     delete tetti[chiaveDi(primario)];
+    stato.primario = null;
     azioni.push({ tipo: 'uscita_primario', numero: primario, qualita: qP });
   } else if (tettoP === 0) {
-    const giorni = stato.storico[primario] ?? {};
-    let fila = true;
-    for (let k = 0; k < GIORNI_HIGH_PER_RIENTRO; k++) {
-      if (giorni[piuGiorni(oggi, -k)] !== 'HIGH') { fila = false; break; }
-    }
-    if (fila) {
+    stato.primario = null;
+    if (tuttiHigh(oggi, GIORNI_HIGH_PER_RIENTRO)) {
       tetti[chiaveDi(primario)] = TETTO_RIENTRO_PRIMARIO;
+      stato.primario = { fase: 'trenta', dal: oggi };
       azioni.push({ tipo: 'rientro_primario', numero: primario, tetto: TETTO_RIENTRO_PRIMARIO });
+    }
+  } else if (stato.primario?.fase === 'trenta') {
+    // Altri 4 giorni HIGH, contati dal giorno dopo il rientro a 30.
+    const fine = piuGiorni(stato.primario.dal, GIORNI_HIGH_PER_RIENTRO);
+    if (oggi >= fine && tuttiHigh(fine, GIORNI_HIGH_PER_RIENTRO)) {
+      tetti[chiaveDi(primario)] = TETTO_PIENO;
+      stato.primario = null;
+      azioni.push({ tipo: 'regime_primario', numero: primario, tetto: TETTO_PIENO });
     }
   }
 
@@ -228,7 +249,9 @@ export async function eseguiControlloQualita(supabase: Supa, adesso: Date = new 
 
   // In modalita' "off" lo storico si aggiorna (serve per il conto dei 7 giorni), le
   // pause e i tetti no.
-  const statoDaScrivere: StatoQualita = auto ? r.stato : { storico: r.stato.storico, pause: statoPrima.pause ?? {} };
+  const statoDaScrivere: StatoQualita = auto
+    ? r.stato
+    : { storico: r.stato.storico, pause: statoPrima.pause ?? {}, primario: statoPrima.primario ?? null };
   await supabase.from('app_settings').upsert({ key: KEY_STATO, value: statoDaScrivere as never, updated_at: adesso.toISOString() });
   const cambiaTetti = auto && JSON.stringify(r.tetti) !== JSON.stringify(tetti);
   if (cambiaTetti) {

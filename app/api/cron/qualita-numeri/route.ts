@@ -9,7 +9,8 @@ export const maxDuration = 60;
 /**
  * Controllo della qualita' dei numeri (PO 29/10/2026): legge il rating Meta dei
  * numeri del bot, ferma per 3 giorni un numero del giro sceso sotto HIGH, lo fa
- * ripartire quando torna HIGH, rimette il 3199 nel giro a 30 dopo 7 giorni HIGH.
+ * ripartire quando torna HIGH, rimette il 3199 nel giro a 30 dopo 4 giorni HIGH
+ * di fila e a regime dopo altri 4.
  * Le regole stanno in lib/qualita-numeri.ts. `QUALITA_NUMERI_AUTO=off` = solo lettura.
  */
 function authorized(req: NextRequest): boolean {
