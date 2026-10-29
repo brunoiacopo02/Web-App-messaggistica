@@ -3,8 +3,8 @@ import { generateMarioReply, type MarioTurn } from './mario';
 import { datePiene, tettoGiornaliero } from './booking-capienza';
 import { gdoContextNote, serveNoemi, type GdoNoteInput } from './gdo-context-note';
 import {
-  accodaDomanda, decidiDomanda, domandaPrecedente, eRispostaDaNotare, motivoRiscaldamento, notaRisposta,
-  parlaDiDisdireOSpostare, riscaldamentoInerte, RISCALDAMENTO_CHIUSO, type DomandaDecisa,
+  accodaDomanda, decidiDomanda, domandaInAttesa, eRispostaDaNotare, motivoRiscaldamento, notaRisposta,
+  parlaDAltro, parlaDiDisdireOSpostare, riscaldamentoInerte, RISCALDAMENTO_CHIUSO, type DomandaDecisa,
 } from './gdo-warmup';
 import { gdoVideoText } from './gdo-agenda';
 import { decideGdoRecap, gdoRecapText } from './gdo-recap';
@@ -403,6 +403,41 @@ export function ultimoInboundAt(righe: readonly DrainMsgRow[]): number {
  *  ovunque sia finito rispetto alla bolla. */
 export function indiceInboundDopo(righe: readonly DrainMsgRow[], soglia: number): number {
   return righe.findIndex((m) => m.direction === 'in' && quando(m.created_at) > soglia);
+}
+
+/** La risposta alla domanda `step` del riscaldamento e' gia' arrivata al CRM? (indice su type) */
+async function rispostaRiscaldamentoGiaNotata(supabase: Supa, conversationId: number, step: number): Promise<boolean> {
+  try {
+    const { data } = await supabase
+      .from('event_log')
+      .select('id')
+      .eq('type', 'gdo_warmup_risposta_nota')
+      .eq('payload->>conversationId', String(conversationId))
+      .eq('payload->>step', String(step))
+      .eq('payload->>inviata', 'true')
+      .is('payload->>continua', null)
+      .limit(1);
+    return (data ?? []).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** E' arrivato un messaggio del lead dopo l'ultimo che il turno ha visto? (lead che scrive ancora) */
+async function inboundArrivatoDopo(supabase: Supa, conversationId: number, sogliaMs: number): Promise<boolean> {
+  if (!sogliaMs) return false;
+  try {
+    const { data } = await supabase
+      .from('messages')
+      .select('id')
+      .eq('conversation_id', conversationId)
+      .eq('direction', 'in')
+      .gt('created_at', new Date(sogliaMs).toISOString())
+      .limit(1);
+    return (data ?? []).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -1309,7 +1344,19 @@ export async function drainMarioReplies(
         : '';
       const esitoTurno = !!result.outcome || result.appointmentFixed || spostamentoFatto;
       const warmupAttivo = postino && !riscaldamentoInerte(motivoWarmup);
-      const rispostaA = warmupAttivo && idxTurno >= 0 ? domandaPrecedente(rows, idxTurno) : null;
+      // La domanda ancora in attesa di risposta (anche se il modello l'ha riformulata nel
+      // turno di mezzo). Se la risposta e' gia' arrivata al CRM non si rinota.
+      const giaNotata = warmupAttivo && idxTurno >= 0 && (gdoWarmupStep === 1 || gdoWarmupStep === 2)
+        ? await rispostaRiscaldamentoGiaNotata(supabase, conversationId, gdoWarmupStep)
+        : false;
+      const attesa = warmupAttivo && idxTurno >= 0 ? domandaInAttesa(rows, idxTurno, gdoWarmupStep, giaNotata) : null;
+      // Arrivato a ridosso della domanda: il lead stava ancora scrivendo. Non e' la risposta
+      // a questa domanda; se la domanda era la 2, e' il seguito della risposta alla 1.
+      const rispostaA = attesa && !attesa.continuazione ? attesa.step : null;
+      const seguitoDi: 1 | null = attesa?.continuazione && attesa.step === 2 ? 1 : null;
+      const turnoFuoriTema = parlaDAltro(testoLeadTurno);
+      const turnoPresaDAtto = isSoloPresaDAtto(testoLeadTurno);
+      const turnoSoloVideo = confermaVideoVisto(testoLeadTurno) && testoLeadTurno.split(/\s+/).filter(Boolean).length <= 3;
       const decisioneDomanda: DomandaDecisa | null = warmupAttivo
         ? decidiDomanda(motivoWarmup, gdoWarmupStep, {
             esito: esitoTurno,
@@ -1319,14 +1366,22 @@ export async function drainMarioReplies(
             fallback: passaggioBloccato,
             videoInUscita: videoInsiemeAllaRisposta,
             rispostaModello: visibleReply,
+            fuoriTema: turnoFuoriTema,
+            continuazione: !!attesa?.continuazione,
           })
         : null;
       // La domanda va in fondo all'ultima bolla della risposta, mai in una bolla sua.
+      // Se intanto il lead ha scritto ancora (sta mandando piu' bolle), la domanda aspetta
+      // il turno dopo: prima finisce di scrivere lui (conv 28813).
       let bollaDomanda: string | null = null;
+      let leadScriveAncora = false;
       if (decisioneDomanda?.domanda) {
-        const accodata = accodaDomanda(parts, decisioneDomanda.domanda.testo);
-        parts = accodata.parts;
-        bollaDomanda = accodata.bolla;
+        leadScriveAncora = await inboundArrivatoDopo(supabase, conversationId, ultimoInboundAt(rows));
+        if (!leadScriveAncora) {
+          const accodata = accodaDomanda(parts, decisioneDomanda.domanda.testo);
+          parts = accodata.parts;
+          bollaDomanda = accodata.bolla;
+        }
       }
 
       // Il video esce in coda alla risposta, come ultima bolla: prima si risponde a
@@ -1509,39 +1564,43 @@ export async function drainMarioReplies(
       // Riscaldamento, il turno dopo una domanda: le parole del lead vanno SUBITO al CRM
       // come nota (mai un esito, mai un cambio di stato). Il messaggio al lead e' gia'
       // partito: un errore qui non deve mai propagarsi.
-      if (rispostaA && crmLeadId) {
-        const daNotare = eRispostaDaNotare({
-          testo: testoLeadTurno,
-          esito: esitoTurno,
-          passaggio: result.passToHuman,
-          soloPresaDAtto: isSoloPresaDAtto(testoLeadTurno),
-          soloConfermaVideo: confermaVideoVisto(testoLeadTurno) && testoLeadTurno.split(/\s+/).filter(Boolean).length <= 3,
-        });
-        if (daNotare) {
-          const { nota, alert } = notaRisposta(rispostaA, testoLeadTurno);
-          try {
-            const secret = process.env.BOT_WEBHOOK_SECRET;
-            const esitoNota = secret
-              ? await inviaNotaAlCrm(supabase, conversationId, crmLeadId, nota, undefined, secret)
-              : { sent: false, error: 'not_configured' };
-            const errore = esitoNota.sent ? null : (esitoNota.error ?? esitoNota.status ?? null);
-            await supabase.from('event_log').insert({
-              type: 'gdo_warmup_risposta_nota',
-              payload: { conversationId, step: rispostaA, alert, inviata: esitoNota.sent, error: errore } as never,
-              message: `[gdo] conv ${conversationId}: risposta alla domanda ${rispostaA} del riscaldamento${alert ? ' (⚠️)' : ''} ${esitoNota.sent ? 'inviata al CRM' : `NON inviata (${errore})`}`,
-              level: esitoNota.sent ? 'info' : 'error',
-            });
-          } catch (err) {
-            const m = err instanceof Error ? err.message : 'errore';
-            await supabase.from('event_log').insert({
-              type: 'gdo_warmup_risposta_nota',
-              payload: { conversationId, step: rispostaA, alert, inviata: false, error: m } as never,
-              message: `[gdo] conv ${conversationId}: eccezione inviando la risposta alla domanda ${rispostaA} del riscaldamento — ${m}`,
-              level: 'error',
-            });
-          }
+      const notaRiscaldamento = async (step: 1 | 2, opts: { continua?: boolean } = {}): Promise<boolean> => {
+        if (!crmLeadId) return false;
+        const { nota, alert } = notaRisposta(step, testoLeadTurno, opts);
+        const extra = opts.continua ? { continua: true } : {};
+        try {
+          const secret = process.env.BOT_WEBHOOK_SECRET;
+          const esitoNota = secret
+            ? await inviaNotaAlCrm(supabase, conversationId, crmLeadId, nota, undefined, secret)
+            : { sent: false, error: 'not_configured' };
+          const errore = esitoNota.sent ? null : (esitoNota.error ?? esitoNota.status ?? null);
+          await supabase.from('event_log').insert({
+            type: 'gdo_warmup_risposta_nota',
+            payload: { conversationId, step, alert, inviata: esitoNota.sent, error: errore, ...extra } as never,
+            message: `[gdo] conv ${conversationId}: ${opts.continua ? 'seguito della ' : ''}risposta alla domanda ${step} del riscaldamento${alert ? ' (⚠️)' : ''} ${esitoNota.sent ? 'inviata al CRM' : `NON inviata (${errore})`}`,
+            level: esitoNota.sent ? 'info' : 'error',
+          });
+          return esitoNota.sent;
+        } catch (err) {
+          const m = err instanceof Error ? err.message : 'errore';
+          await supabase.from('event_log').insert({
+            type: 'gdo_warmup_risposta_nota',
+            payload: { conversationId, step, alert, inviata: false, error: m, ...extra } as never,
+            message: `[gdo] conv ${conversationId}: eccezione inviando la risposta alla domanda ${step} del riscaldamento — ${m}`,
+            level: 'error',
+          });
+          return false;
         }
-      }
+      };
+      const daNotare = eRispostaDaNotare({
+        testo: testoLeadTurno,
+        esito: esitoTurno,
+        passaggio: result.passToHuman,
+        soloPresaDAtto: turnoPresaDAtto,
+        soloConfermaVideo: turnoSoloVideo,
+      });
+      if (rispostaA && daNotare) await notaRiscaldamento(rispostaA);
+      if (seguitoDi && daNotare) await notaRiscaldamento(seguitoDi, { continua: true });
 
       // Diagnostica del riscaldamento: perche' la domanda parte o salta. Non deve mai
       // rompere il turno: la risposta e' gia' uscita.
@@ -1549,10 +1608,12 @@ export async function drainMarioReplies(
         try {
           const domanda = decisioneDomanda?.domanda
             ? (domandaUscita ? `inviata_${decisioneDomanda.domanda.step}` : 'non_uscita')
-            : (decisioneDomanda?.salto ?? motivoWarmup);
+            : leadScriveAncora && decisioneDomanda?.domanda
+              ? 'lead_scrive_ancora'
+              : (decisioneDomanda?.salto ?? motivoWarmup);
           await supabase.from('event_log').insert({
             type: 'gdo_warmup_nota',
-            payload: { conversationId, step: stepWarmupTurno, motivo: motivoWarmup, domanda, rispostaA } as never,
+            payload: { conversationId, step: stepWarmupTurno, motivo: motivoWarmup, domanda, rispostaA, ...(attesa?.continuazione ? { continuazione: true } : {}) } as never,
             message: `[gdo] conv ${conversationId}: riscaldamento passo ${stepWarmupTurno ?? 0}, motivo ${motivoWarmup}, domanda ${domanda}`,
             level: 'info',
           });
@@ -1561,11 +1622,15 @@ export async function drainMarioReplies(
         }
       }
 
-      // Il passo: avanza alla domanda appena uscita; dopo la domanda 2 il primo turno del
-      // lead chiude (risposta o no, la domanda non si ripete). Un errore non si propaga.
+      // Il passo: avanza alla domanda appena uscita; dopo la domanda 2 il primo turno vero
+      // del lead chiude (risposta o no, la domanda non si ripete). Non chiudono il turno
+      // scritto a ridosso della domanda, quello fuori tema (problema del video…) e il solo
+      // "ok"/"fatto": la domanda 2 resta in attesa per i turni dopo. Un errore non si propaga.
+      const attesaDomanda2Resta = attesa?.step === 2
+        && (attesa.continuazione || turnoFuoriTema || turnoPresaDAtto || turnoSoloVideo);
       const passoNuovo = domandaUscita && decisioneDomanda?.domanda
         ? decisioneDomanda.domanda.step
-        : warmupAttivo && (gdoWarmupStep ?? 0) === 2
+        : warmupAttivo && (gdoWarmupStep ?? 0) === 2 && !attesaDomanda2Resta
           ? RISCALDAMENTO_CHIUSO
           : null;
       if (domandaUscita && decisioneDomanda?.domanda) {

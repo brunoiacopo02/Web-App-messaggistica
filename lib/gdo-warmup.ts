@@ -110,6 +110,10 @@ export interface TurnoRiscaldamento {
   videoInUscita: boolean;
   /** La risposta del modello che parte (gia' pulita dai tag). */
   rispostaModello: string;
+  /** Il lead parla d'altro (problema tecnico): la domanda di prima resta in attesa. Default false. */
+  fuoriTema?: boolean;
+  /** Il messaggio e' arrivato a ridosso della domanda di prima: il lead stava ancora scrivendo. Default false. */
+  continuazione?: boolean;
 }
 
 export type DomandaDecisa =
@@ -128,6 +132,8 @@ export function decidiDomanda(motivo: MotivoRiscaldamento | null, step: number |
   if (t.esito) return { domanda: null, salto: 'esito' };
   if (t.passaggio) return { domanda: null, salto: 'passaggio' };
   if (t.disdettaOSpostamento) return { domanda: null, salto: 'disdetta_spostamento' };
+  if (t.continuazione) return { domanda: null, salto: 'continuazione' };
+  if (t.fuoriTema) return { domanda: null, salto: 'fuori_tema' };
   if (t.spiegaNoemi) return { domanda: null, salto: 'noemi' };
   if (t.fallback) return { domanda: null, salto: 'fallback' };
   if (t.videoInUscita) return { domanda: null, salto: 'video_in_uscita' };
@@ -152,19 +158,61 @@ export function accodaDomanda(parts: readonly string[], domanda: string): { part
   return { parts: [...parts.slice(0, -1), bolla], bolla };
 }
 
-type RigaChat = { direction: string; body: string | null };
+type RigaChat = { direction: string; body: string | null; created_at?: string };
 
 /**
- * Quale domanda c'era nel nostro ultimo messaggio prima del turno del lead (`idxTurno` =
- * primo inbound non risposto): 1, 2 o null. E' "il turno dopo una domanda inviata".
+ * Sotto questo tempo dalla bolla con la domanda il messaggio del lead NON e' la risposta:
+ * lo stava gia' scrivendo prima di leggerla (conv 28813, 29/10/2026: la seconda bolla
+ * della risposta alla domanda 1 arriva 1,4 secondi dopo la domanda 2 e finiva nella nota
+ * "budget e chi decide", mentre la risposta vera arrivava due minuti dopo e si perdeva).
  */
-export function domandaPrecedente(rows: readonly RigaChat[], idxTurno: number): 1 | 2 | null {
+export const FINESTRA_CONTINUAZIONE_MS = 30_000;
+
+/** Turni del lead entro cui una domanda resta in attesa di risposta (contando quello attuale). */
+export const MAX_TURNI_RISPOSTA = 3;
+
+export type DomandaInAttesa = {
+  /** La domanda a cui il turno del lead puo' rispondere. */
+  step: 1 | 2;
+  /** Il messaggio e' arrivato a ridosso della domanda: e' il seguito del discorso di prima. */
+  continuazione: boolean;
+};
+
+/**
+ * La domanda del riscaldamento ancora in attesa di risposta all'inizio del turno del lead
+ * (`idxTurno` = primo inbound non risposto), o null.
+ *
+ * Prima (fino al 29/10/2026) valeva solo se la domanda stava nella NOSTRA ULTIMA bolla:
+ * quando il modello rifaceva la domanda con parole sue (conv 26100) la bolla dopo non la
+ * conteneva piu' e la risposta vera si perdeva. Ora la domanda resta in attesa finche':
+ * - il passo e' ancora quello della domanda (`step` 1 o 2);
+ * - la risposta non e' gia' stata girata al CRM (`giaNotata`);
+ * - non sono passati piu' di MAX_TURNI_RISPOSTA turni del lead dalla domanda.
+ */
+export function domandaInAttesa(
+  rows: readonly RigaChat[],
+  idxTurno: number,
+  step: number | null,
+  giaNotata: boolean,
+): DomandaInAttesa | null {
+  if (step !== 1 && step !== 2) return null;
+  if (giaNotata || idxTurno < 0 || idxTurno >= rows.length) return null;
+  const testo = step === 2 ? DOMANDA_2 : DOMANDA_1;
+  let turni = 1; // il turno attuale
   for (let i = idxTurno - 1; i >= 0; i--) {
-    if (rows[i].direction !== 'out') continue;
-    const body = rows[i].body ?? '';
-    if (body.includes(DOMANDA_2)) return 2;
-    if (body.includes(DOMANDA_1)) return 1;
-    return null;
+    const r = rows[i];
+    if (r.direction === 'out') {
+      if (!(r.body ?? '').includes(testo)) continue;
+      const tDomanda = Date.parse(r.created_at ?? '');
+      const tLead = Date.parse(rows[idxTurno].created_at ?? '');
+      const continuazione = Number.isFinite(tDomanda) && Number.isFinite(tLead) && tLead - tDomanda < FINESTRA_CONTINUAZIONE_MS;
+      return { step, continuazione };
+    }
+    // Inizio di un turno del lead (un suo messaggio subito dopo un nostro).
+    if (i > 0 && rows[i - 1].direction === 'out') {
+      turni++;
+      if (turni > MAX_TURNI_RISPOSTA) return null;
+    }
   }
   return null;
 }
@@ -200,16 +248,71 @@ export function segnaleBrutto(testo: string): boolean {
   return SEGNALI_BRUTTI.some((re) => re.test(t));
 }
 
+/**
+ * Il messaggio parla d'altro: un problema tecnico (video, link, banner, browser…), non
+ * la risposta alla domanda (conv 29034, 29/10/2026: «Non funziona, mi esce ancora anche
+ * da Chrome» era finito nella nota "obiettivo e perche' adesso"). Si guarda solo un
+ * messaggio corto e senza parole da risposta: chi risponde e cita il video resta una
+ * risposta. In quel turno la domanda resta in attesa e la successiva non parte.
+ */
+const TECNICO =
+  /\b(video|link|banner|bunner|chrome|safari|browser|app|account|errore|schermata|pagina|wifi|non funziona\w*|non si apre|non (si )?carica|non (riesco a |posso )?(vedere|vederlo|aprire|aprirlo|entrare|accedere))\b/;
+const PAROLE_DA_RISPOSTA =
+  /\b(vorrei|voglio|lavor\w*|cambiare|obiettiv\w*|futuro|perche|decid\w*|soldi|euro|rate|budget|insieme|moglie|marito|fidanzat\w*|famiglia|genitori|madre|padre|mamma|papa)\b/;
+const MAX_PAROLE_FUORI_TEMA = 25;
+
+export function parlaDAltro(testo: string): boolean {
+  const t = normalizza(testo);
+  if (!t || !TECNICO.test(t)) return false;
+  if (t.split(' ').length > MAX_PAROLE_FUORI_TEMA) return false;
+  return !PAROLE_DA_RISPOSTA.test(t);
+}
+
+/**
+ * Con chi decide il lead, se non decide da solo (PO 29/10/2026: "⚠️ Decide con: moglie"
+ * nella nota alle Conferme). Solo l'avviso: nessun altro cambiamento di flusso.
+ */
+const DECIDE_CON: readonly { chi: string; re: RegExp }[] = [
+  { chi: 'moglie', re: /\bmoglie\b/ },
+  { chi: 'marito', re: /\bmarito\b/ },
+  { chi: 'fidanzato/a', re: /\bfidanzat[oaie]\b/ },
+  { chi: 'compagno/a', re: /\b(mio|mia|il mio|la mia) compagn[oa]\b/ },
+  { chi: 'ragazzo/a', re: /\b(mio|mia|il mio|la mia) ragazz[oa]\b/ },
+  { chi: 'madre', re: /\b(madre|mamma)\b/ },
+  { chi: 'padre', re: /\b(padre|papa|babbo)\b/ },
+  { chi: 'genitori', re: /\bgenitori\b/ },
+  { chi: 'famiglia', re: /\b(famiglia|familiari)\b/ },
+  { chi: 'fratello/sorella', re: /\b(mio fratello|mia sorella)\b/ },
+  { chi: 'socio', re: /\b(mio socio|mia socia)\b/ },
+];
+/** "ne parlo con…", "devo sentire…", "insieme a…" senza un nome della lista sopra. */
+const DECIDE_CON_GENERICO =
+  /\b(ne (devo )?parl\w* con|devo (sentire|chiedere|confrontarmi|parlarne)|insieme a|insieme con|con qualcuno|non decido da sol[oa])\b/;
+
+export function decideCon(testo: string): string[] {
+  const t = normalizza(testo);
+  if (!t) return [];
+  const chi = DECIDE_CON.filter((d) => d.re.test(t)).map((d) => d.chi);
+  if (chi.length > 0) return chi;
+  return DECIDE_CON_GENERICO.test(t) ? ['qualcun altro'] : [];
+}
+
 /** Lunghezza massima delle parole del lead nella nota: oltre si taglia con "…". */
 const MAX_TESTO_NOTA = 600;
 
-/** La nota al CRM con le parole del lead, e se ha il ⚠️. */
-export function notaRisposta(domanda: 1 | 2, testoLead: string): { nota: string; alert: boolean } {
+/**
+ * La nota al CRM con le parole del lead, e se ha il ⚠️. Se il lead decide con qualcun
+ * altro la nota comincia con "⚠️ Decide con: …". `continua`: il seguito della risposta
+ * alla domanda, arrivato a ridosso della domanda dopo.
+ */
+export function notaRisposta(domanda: 1 | 2, testoLead: string, opts: { continua?: boolean } = {}): { nota: string; alert: boolean } {
   const pulito = testoLead.replace(/\s+/g, ' ').trim();
   const testo = pulito.length > MAX_TESTO_NOTA ? `${pulito.slice(0, MAX_TESTO_NOTA - 1)}…` : pulito;
-  const alert = segnaleBrutto(pulito);
-  const titolo = domanda === 1 ? 'obiettivo e perché adesso' : 'budget e chi decide';
-  return { nota: `${alert ? '⚠️ ' : ''}Riscaldamento – ${titolo}: «${testo}»`, alert };
+  const conChi = decideCon(pulito);
+  const brutto = segnaleBrutto(pulito);
+  const titolo = (domanda === 1 ? 'obiettivo e perché adesso' : 'budget e chi decide') + (opts.continua ? ' (continua)' : '');
+  const avviso = conChi.length > 0 ? `⚠️ Decide con: ${conChi.join(', ')} — ` : brutto ? '⚠️ ' : '';
+  return { nota: `${avviso}Riscaldamento – ${titolo}: «${testo}»`, alert: brutto || conChi.length > 0 };
 }
 
 /**
@@ -226,5 +329,6 @@ export function eRispostaDaNotare(i: {
 }): boolean {
   if (!i.testo.trim()) return false;
   if (i.esito || i.passaggio || i.soloPresaDAtto || i.soloConfermaVideo) return false;
+  if (parlaDAltro(i.testo)) return false;
   return !parlaDiDisdireOSpostare(i.testo);
 }

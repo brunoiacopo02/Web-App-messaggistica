@@ -3350,7 +3350,7 @@ describe('drainMarioReplies — riscaldamento del lead GDO dopo il recap (domand
     await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
 
     expect(vi.mocked(inviaNotaAlCrm).mock.calls[0][3])
-      .toBe('⚠️ Riscaldamento – budget e chi decide: «eh non ho soldi, devo chiedere a mia moglie»');
+      .toBe('⚠️ Decide con: moglie — Riscaldamento – budget e chi decide: «eh non ho soldi, devo chiedere a mia moglie»');
     expect(calls.events.find((e: any) => e.type === 'gdo_warmup_risposta_nota')?.payload)
       .toMatchObject({ step: 2, alert: true });
     expect(calls.messageInserts.map((m: any) => m.body)).toEqual(['Ci sta, ne parlate con calma in videochiamata.']);

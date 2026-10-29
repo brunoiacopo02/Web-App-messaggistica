@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  accodaDomanda, decidiDomanda, DOMANDA_1, DOMANDA_2, domandaPrecedente, eRispostaDaNotare, motivoRiscaldamento,
-  notaRisposta, parlaDiDisdireOSpostare, riscaldamentoInerte, segnaleBrutto, type TurnoRiscaldamento,
+  accodaDomanda, decideCon, decidiDomanda, DOMANDA_1, DOMANDA_2, domandaInAttesa, eRispostaDaNotare, motivoRiscaldamento,
+  notaRisposta, parlaDAltro, parlaDiDisdireOSpostare, riscaldamentoInerte, segnaleBrutto, type TurnoRiscaldamento,
 } from './gdo-warmup';
 
 const NOW = Date.parse('2026-10-21T12:00:00+02:00');
@@ -110,21 +110,100 @@ describe('accodaDomanda: nella stessa bolla, mai una bolla in più', () => {
   });
 });
 
-describe('domandaPrecedente', () => {
-  const out = (body: string) => ({ direction: 'out', body });
-  const inn = (body: string) => ({ direction: 'in', body });
-  it('la nostra ultima bolla prima del turno aveva la domanda 1 → 1', () => {
-    expect(domandaPrecedente([out('recap'), inn('ok'), out(`Bene!\n\n${DOMANDA_1}`), inn('voglio cambiare lavoro')], 3)).toBe(1);
+describe('domandaInAttesa', () => {
+  const T0 = Date.parse('2026-10-29T07:00:00Z');
+  const at = (sec: number) => new Date(T0 + sec * 1000).toISOString();
+  const out = (body: string, sec: number) => ({ direction: 'out', body, created_at: at(sec) });
+  const inn = (body: string, sec: number) => ({ direction: 'in', body, created_at: at(sec) });
+
+  it('la nostra ultima bolla aveva la domanda 1 → 1', () => {
+    const rows = [out('recap', 0), inn('ok', 60), out(`Bene!\n\n${DOMANDA_1}`, 70), inn('voglio cambiare lavoro', 200)];
+    expect(domandaInAttesa(rows, 3, 1, false)).toEqual({ step: 1, continuazione: false });
   });
   it('domanda 2 → 2', () => {
-    expect(domandaPrecedente([out(`Grazie!\n\n${DOMANDA_2}`), inn('decido io')], 1)).toBe(2);
+    expect(domandaInAttesa([out(`Grazie!\n\n${DOMANDA_2}`, 0), inn('decido io', 120)], 1, 2, false)).toEqual({ step: 2, continuazione: false });
   });
-  it('domanda in una bolla più vecchia: non è il turno dopo', () => {
-    expect(domandaPrecedente([out(`x\n\n${DOMANDA_1}`), inn('a'), out('altro'), inn('b')], 3)).toBeNull();
+  it('passo che non e\' 1 o 2, risposta gia\' notata, nessun outbound → null', () => {
+    const rows = [out(`x\n\n${DOMANDA_1}`, 0), inn('a', 100)];
+    expect(domandaInAttesa(rows, 1, null, false)).toBeNull();
+    expect(domandaInAttesa(rows, 1, 3, false)).toBeNull();
+    expect(domandaInAttesa(rows, 1, 1, true)).toBeNull();
+    expect(domandaInAttesa([inn('ciao', 0)], 0, 1, false)).toBeNull();
   });
-  it('nessun outbound prima → null', () => {
-    expect(domandaPrecedente([inn('ciao')], 0)).toBeNull();
+  it('oltre 3 turni del lead la domanda non e\' piu\' in attesa', () => {
+    const rows = [out(`x\n\n${DOMANDA_1}`, 0), inn('a', 100), out('b', 110), inn('c', 200), out('d', 210), inn('e', 300), out('f', 310), inn('g', 400)];
+    expect(domandaInAttesa(rows, 5, 1, false)).toEqual({ step: 1, continuazione: false }); // terzo turno
+    expect(domandaInAttesa(rows, 7, 1, false)).toBeNull(); // quarto turno
   });
+
+  it('conv 26100: il modello rifa la domanda a parole sue, la risposta vera resta della domanda 1', () => {
+    const rows = [
+      out(`Ok allora facciamo una cosa più semplice…\n\n${DOMANDA_1}`, 0),
+      inn('Ok', 35),
+      out('Dai Pier, dimmi pure: cosa ti piacerebbe ottenere con un percorso digitale, e perché hai deciso di muoverti proprio adesso?', 47),
+      inn('Come dicevo al tuo collega, considerando che oggi si lavoro molto da remoto trovando sbocchi, vorrei capire se fa al caso mio', 124),
+    ];
+    expect(domandaInAttesa(rows, 3, 1, false)).toEqual({ step: 1, continuazione: false });
+  });
+
+  it('conv 28813: la seconda bolla della risposta 1 arriva a ridosso della domanda 2 → seguito, non risposta', () => {
+    const rows = [
+      out(`Perfetto Giulia…\n\n${DOMANDA_1}`, 0),
+      inn('Guarda in realtà è molto semplice, vorrei capire il mondo digitale…', 117),
+      out(`Ti capisco benissimo…\n\n${DOMANDA_2}`, 130),
+      inn('Proprio adesso perché sono in naspi e ho del tempo da dedicarci', 131),
+    ];
+    expect(domandaInAttesa(rows, 3, 2, false)).toEqual({ step: 2, continuazione: true });
+    // La risposta vera, due minuti dopo, e dopo una domanda del modello: e' della domanda 2.
+    const dopo = [
+      ...rows,
+      out('Ah ok, quindi hai anche un po\' di respiro…', 143),
+      out('Decidi tu da sola o ne parli con qualcuno prima?', 145),
+      inn('Parlo sempre con qualcuno prima non decido da sola', 293),
+    ];
+    expect(domandaInAttesa(dopo, 6, 2, false)).toEqual({ step: 2, continuazione: false });
+    expect(notaRisposta(2, 'Parlo sempre con qualcuno prima non decido da sola').nota)
+      .toBe('⚠️ Decide con: qualcun altro — Riscaldamento – budget e chi decide: «Parlo sempre con qualcuno prima non decido da sola»');
+  });
+
+  it('conv 29034: il problema del video non e\' la risposta alla domanda 1', () => {
+    const rows = [
+      out(`Ciao Denise, prova così…\n\n${DOMANDA_1}`, 0),
+      inn('Non funziona, mi esce ancora anche da Chrome', 123),
+    ];
+    expect(domandaInAttesa(rows, 1, 1, false)).toEqual({ step: 1, continuazione: false });
+    expect(parlaDAltro('Non funziona, mi esce ancora anche da Chrome')).toBe(true);
+    expect(eRispostaDaNotare({ testo: 'Non funziona, mi esce ancora anche da Chrome', esito: false, passaggio: false, soloPresaDAtto: false, soloConfermaVideo: false })).toBe(false);
+    expect(decidiDomanda('in_prompt', 1, turno({ fuoriTema: true }))).toEqual({ domanda: null, salto: 'fuori_tema' });
+  });
+});
+
+describe('parlaDAltro', () => {
+  it.each([
+    'Non funziona, mi esce ancora anche da Chrome',
+    'Un bunner / Dice riattiva il tuo account',
+    'il link non si apre',
+    'non riesco a vedere il video',
+  ])('"%s" → fuori tema', (t) => expect(parlaDAltro(t)).toBe(true));
+  it.each([
+    'ho visto il video e vorrei lavorare da remoto',
+    'voglio cambiare lavoro perché sono stufa',
+    'decido io',
+    'non so ancora precisamente cosa voglio ottenere',
+  ])('"%s" → e\' una risposta', (t) => expect(parlaDAltro(t)).toBe(false));
+});
+
+describe('decideCon', () => {
+  it.each([
+    ['Essendo sposato e avendo 2 bambini, ovviamente ne devo comunque discutere con mia moglie', ['moglie']],
+    ['devo sentire sia dal mio fidanzato che da mia madre', ['fidanzato/a', 'madre']],
+    ['ne parlo con mio marito', ['marito']],
+    ['decido con i miei genitori', ['genitori']],
+    ['Grazie delle informazioni — Ne parlo domani.', []],
+    ['ne parlo con un amico', ['qualcun altro']],
+    ['No no deciso io', []],
+    ['decido io', []],
+  ])('"%s" → %j', (t, atteso) => expect(decideCon(t)).toEqual(atteso));
 });
 
 describe('notaRisposta: la nota al CRM', () => {
@@ -135,10 +214,21 @@ describe('notaRisposta: la nota al CRM', () => {
     });
   });
   it('domanda 2 con segnale brutto → ⚠️ in testa', () => {
-    expect(notaRisposta(2, 'Non ho soldi, devo chiedere a mia moglie')).toEqual({
-      nota: '⚠️ Riscaldamento – budget e chi decide: «Non ho soldi, devo chiedere a mia moglie»',
+    expect(notaRisposta(2, 'Non ho soldi, sono disoccupato')).toEqual({
+      nota: '⚠️ Riscaldamento – budget e chi decide: «Non ho soldi, sono disoccupato»',
       alert: true,
     });
+  });
+  it('decide con qualcuno → "⚠️ Decide con: …" in testa (vince sul ⚠️ semplice)', () => {
+    expect(notaRisposta(2, 'Non ho soldi, devo chiedere a mia moglie')).toEqual({
+      nota: '⚠️ Decide con: moglie — Riscaldamento – budget e chi decide: «Non ho soldi, devo chiedere a mia moglie»',
+      alert: true,
+    });
+    expect(notaRisposta(2, 'devo sentire sia dal mio fidanzato che da mia madre').nota)
+      .toBe('⚠️ Decide con: fidanzato/a, madre — Riscaldamento – budget e chi decide: «devo sentire sia dal mio fidanzato che da mia madre»');
+  });
+  it('seguito della risposta 1 → "(continua)"', () => {
+    expect(notaRisposta(1, 'sono in naspi', { continua: true }).nota).toBe('Riscaldamento – obiettivo e perché adesso (continua): «sono in naspi»');
   });
   it('testo lunghissimo tagliato', () => {
     const { nota } = notaRisposta(1, 'a'.repeat(2000));
