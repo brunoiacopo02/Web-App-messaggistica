@@ -14,7 +14,8 @@ import { giornoRoma, oraRoma, romeDayKey, romeHour, romeMinute, sameInstant } fr
  * spostato col bot». Fino al 25/09 il bot spostava le SUE call (in media +1 giorno, e i
  * lead si presentavano come gli altri); il 25/09 lo abbiamo fermato perché spostava anche
  * call già confermate con un tutor in calendario. Qui si sposta solo:
- * - sui lead dei GDO (postino), mai sulle call fissate dal bot stesso;
+ * - sui lead dei GDO (postino) e, dal 29/10/2026 (PO), anche sulle call fissate dal bot
+ *   stesso, con le stesse regole e la stessa nota: `origine` le tiene distinte negli eventi;
  * - una volta sola;
  * - nei prossimi 3 giorni lavorativi, dalle 10 alle 21 (le 9 solo se il lead insiste);
  * - se le Conferme non hanno ancora esitato il lead (confermato = venditore in calendario).
@@ -58,10 +59,39 @@ export function giorniSpostamento(now: Date, ranges: BlackoutRange[]): string[] 
   return giorni.filter((g) => isBookableDate(g, ranges));
 }
 
+/**
+ * Di chi è la call che si sposta. `gdo`: lead di un GDO, bot postino (28/10/2026).
+ * `bot`: call fissata dal bot (`bot_outcome = APPUNTAMENTO`, PO 29/10/2026). Va in ogni
+ * evento (`gdo_spostamento_bot`, `gdo_spostamento_non_fatto`): la misura del 4/11 e
+ * dell'11/11 si fa solo sui lead GDO. Una chat postino che ha anche un APPUNTAMENTO del
+ * bot non ha un'origine sicura (quale data vale?) e resta fuori: `null`.
+ */
+export type OrigineSpostamento = 'gdo' | 'bot';
+
+export function origineSpostamento(i: { postino: boolean; botOutcome: string | null }): OrigineSpostamento | null {
+  const delBot = i.botOutcome === 'APPUNTAMENTO';
+  if (i.postino) return delBot ? null : 'gdo';
+  return delBot ? 'bot' : null;
+}
+
+/**
+ * La data della call fissata dal bot. `bot_scheduled_at` è la nostra; `gdo_appuntamento_at`
+ * su queste chat lo scrive solo il CRM (`appointment-set`) quando le Conferme spostano la
+ * call. Se le due date sono diverse la call l'ha già mossa qualcun altro: non si sposta
+ * (`cambiata`), decide chi l'ha in mano.
+ */
+export function dataCallDelBot(
+  botScheduledAt: string | null,
+  gdoAppuntamentoAt: string | null,
+): { at: string | null; cambiata: boolean } {
+  if (!botScheduledAt) return { at: null, cambiata: false };
+  return { at: botScheduledAt, cambiata: !!gdoAppuntamentoAt && !sameInstant(botScheduledAt, gdoAppuntamentoAt) };
+}
+
 export type MotivoNonSpostabile =
   | 'spento'
   | 'non_postino'
-  | 'call_del_bot'
+  | 'data_cambiata_dal_crm'
   | 'senza_data'
   | 'call_vicina_o_passata'
   | 'gia_spostato'
@@ -72,9 +102,11 @@ export type MotivoNonSpostabile =
 /** La chat può offrire lo spostamento? `null` = sì. Non guarda la data nuova. */
 export function motivoNonSpostabile(i: {
   enabled: boolean;
-  postino: boolean;
-  botOutcome: string | null;
+  /** `null`: né lead GDO né call del bot (vedi `origineSpostamento`). */
+  origine: OrigineSpostamento | null;
   appuntamentoAt: string | null;
+  /** Solo call del bot: la data l'ha già cambiata il CRM (`dataCallDelBot`). */
+  dataCambiata?: boolean;
   giaSpostato: boolean;
   /** Dalla copia locale dello stato CRM (`crm_lead_status`), se c'è. */
   confermeOutcome?: string | null;
@@ -83,9 +115,8 @@ export function motivoNonSpostabile(i: {
   nowMs: number;
 }): MotivoNonSpostabile | null {
   if (!i.enabled) return 'spento';
-  if (!i.postino) return 'non_postino';
-  // Le call fissate dal bot restano com'erano: lì vale la regola del 25/09.
-  if (i.botOutcome === 'APPUNTAMENTO') return 'call_del_bot';
+  if (!i.origine) return 'non_postino';
+  if (i.dataCambiata) return 'data_cambiata_dal_crm';
   if (!i.appuntamentoAt || Number.isNaN(Date.parse(i.appuntamentoAt))) return 'senza_data';
   if (Date.parse(i.appuntamentoAt) - i.nowMs < ANTICIPO_MIN_MS) return 'call_vicina_o_passata';
   if (i.giaSpostato) return 'gia_spostato';
@@ -178,3 +209,20 @@ export function testoSpostamentoFatto(i: {
 /** Il testo che parte quando lo spostamento non si è potuto fare: la data va alle Conferme. */
 export const TESTO_SPOSTAMENTO_NON_FATTO =
   'Ho segnato il giorno e l\'ora che mi hai detto. Per confermare il nuovo orario ti chiama Noemi, una nostra collega: rispondi, sono 5 minuti.';
+
+const LINK_VIDEO_RE = /https?:\/\/corso\.feniceacademy\.it\/conferenza-[A-Za-z0-9_-]+/g;
+
+/**
+ * L'ultimo link del video uscito in chat (call fissate dal bot, che non hanno
+ * `gdo_video_url`): serve alla riga del video nella conferma dello spostamento.
+ * Senza link la conferma dice «te l'ho mandato qui sopra».
+ */
+export function ultimoLinkVideo(rows: { direction: string; body?: string | null }[]): string | null {
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i];
+    if (r.direction !== 'out' || !r.body) continue;
+    const trovati = r.body.match(LINK_VIDEO_RE);
+    if (trovati && trovati.length > 0) return trovati[trovati.length - 1];
+  }
+  return null;
+}

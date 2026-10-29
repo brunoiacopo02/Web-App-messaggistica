@@ -60,3 +60,26 @@ il bot torna esattamente al comportamento del 25/09.
 
 Riscaldamento (gdo-warmup), le 9 solo in emergenza, il tono del resto del bot, le regole
 intoccabili, il comportamento sulle call fissate dal bot.
+
+## Aggiornamento 29/10/2026: anche le call fissate dal bot
+
+Decisione del PO (Bruno), 29/10/2026. Lo stesso flusso vale anche per le call che ha
+fissato il bot (`bot_outcome = APPUNTAMENTO`, chat non postino): stesse condizioni (3 giorni
+lavorativi, 10-21, una volta sola, lead non già esitato dalle Conferme), stesso blocco nel
+prompt (in coda alla nota del turno, qualunque sia), stessa conferma, stessa nota "Spostato
+dal bot" nel CRM. Il tono assertivo resta solo dentro il blocco.
+
+- `origineSpostamento`: `gdo` sul postino, `bot` sull'APPUNTAMENTO del bot. Una chat postino
+  che ha anche un APPUNTAMENTO del bot resta fuori (quale data vale non è sicuro).
+- La data della call del bot è `bot_scheduled_at`. Se `gdo_appuntamento_at` (lo scrive solo
+  il CRM quando le Conferme spostano) è diversa, la call l'ha già mossa qualcun altro: niente
+  blocco (`data_cambiata_dal_crm`).
+- Sì del CRM: cambia solo `bot_scheduled_at` (più `gdo_appuntamento_at` se c'era, per tenerle
+  uguali) e `cancel_requested_at` = null. `bot_outcome` resta APPUNTAMENTO: la regola
+  "APPUNTAMENTO terminale" protegge l'esito, e lo spostamento non lo tocca mai. I campi di
+  recap e Noemi del GDO non si toccano. I promemoria T-24h/T-3h leggono `bot_scheduled_at`.
+- No del CRM: la nota "SPOSTAMENTO CHIESTO" di sempre (RICHIAMO → NOTA sul lead fissato).
+- Video nella conferma: l'ultimo link `conferenza-*` uscito in chat.
+- Monitoraggio: `origine` (`gdo` | `bot`) nel payload di `gdo_spostamento_bot` e
+  `gdo_spostamento_non_fatto`; nel CRM `origine` nei metadata di `BOT_APPOINTMENT_RESCHEDULED`.
+  Gli eventi del 28-29/10 senza `origine` sono tutti lead GDO.

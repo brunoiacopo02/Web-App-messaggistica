@@ -3753,7 +3753,7 @@ describe('drainMarioReplies — il bot sposta la call del lead GDO (PO 28/10/202
     expect(contesto()).not.toContain('SPOSTAMENTO DELLA CALL');
   });
 
-  it('call fissata dal bot, o interruttore spento: niente blocco nel prompt', async () => {
+  it('chat postino con anche un APPUNTAMENTO del bot (origine incerta), o interruttore spento: niente blocco nel prompt', async () => {
     const a = makeDrainSupabase(postino({ bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: CALL }), [RECAP, SPOSTA]);
     vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('ok'));
     await drainMarioReplies(a.supabase, 92, '+391234567890', () => 0);
@@ -3764,6 +3764,86 @@ describe('drainMarioReplies — il bot sposta la call del lead GDO (PO 28/10/202
     const b = makeDrainSupabase(postino(), [RECAP, SPOSTA]);
     vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('ok'));
     await drainMarioReplies(b.supabase, 92, '+391234567890', () => 0);
+    expect(contesto()).not.toContain('SPOSTAMENTO DELLA CALL');
+  });
+});
+
+describe('drainMarioReplies — il bot sposta anche le call che ha fissato lui (PO 29/10/2026)', () => {
+  const VIDEO = 'https://corso.feniceacademy.it/conferenza-dx';
+  const fra = (ms: number) => new Date(Date.now() + ms).toISOString();
+  const CALL = fra(2 * 24 * 3600_000);
+  const FATTO: FakeMsgRow = { direction: 'out', body: `Ci siamo! Guarda il video prima 👉 ${VIDEO}`, template_sid: null, created_at: fra(-26 * 3600_000) };
+  const SPOSTA: FakeMsgRow = { direction: 'in', body: 'non ce la faccio, possiamo spostare?', template_sid: null, created_at: fra(-60_000) };
+  const reply = (visibleReply: string, over: Record<string, unknown> = {}) => ({
+    visibleReply, appointmentFixed: false, passToHuman: false, videoWatched: false, ...over,
+  });
+  const delBot = (over: Partial<ClaimedRow> = {}): ClaimedRow => ({
+    id: 93, ai_started_at: null, crm_lead_id: 'bot7', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: CALL,
+    gdo_agenda_at: null, gdo_video_url: null, gdo_video_sent_at: null, gdo_noemi_reminded_at: null,
+    gdo_appuntamento_at: null, gdo_recap_for_at: null, gdo_warmup_step: null, leads: { first_name: 'Sara' },
+    ...over,
+  });
+  const giorno = giorniSpostamento(new Date(), [])[1];
+  const NUOVA = `${giorno}T18:00:00${romeOffset(new Date(`${giorno}T12:00:00Z`))}`;
+  const contesto = () => vi.mocked(generateMarioReply).mock.calls[0][1]?.contextNote ?? '';
+  const fetchCrm = (status: number, corpo: unknown) =>
+    vi.fn(async () => new Response(JSON.stringify(corpo), { status }));
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.stubEnv('BOT_WEBHOOK_SECRET', 'segreto');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(sendOutcome).mockClear();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
+
+  it('sì del CRM: stessa conferma del flusso GDO, cambia bot_scheduled_at, esito invariato, evento con origine bot', async () => {
+    const f = fetchCrm(200, { ok: true, rescheduled: true });
+    vi.stubGlobal('fetch', f);
+    const { supabase, calls } = makeDrainSupabase(delBot(), [FATTO, SPOSTA]);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('', { spostaAt: NUOVA }));
+
+    await drainMarioReplies(supabase, 93, '+391234567890', () => 0);
+
+    expect(contesto()).toContain('SPOSTAMENTO DELLA CALL');
+    expect(JSON.parse((f.mock.calls[0] as any)[1].body)).toEqual({ leadId: 'bot7', outcome: 'SPOSTAMENTO', date: NUOVA });
+    const bolle = calls.messageInserts.map((m: any) => m.body);
+    expect(bolle).toHaveLength(1);
+    expect(bolle[0]).toMatch(/^Fatto Sara, la tua videochiamata ora è \*/);
+    expect(bolle[0]).toContain(VIDEO);
+    const agg = calls.convUpdates.find((u: any) => 'bot_scheduled_at' in u);
+    expect(agg).toMatchObject({ bot_scheduled_at: new Date(NUOVA).toISOString(), cancel_requested_at: null });
+    expect(agg).not.toHaveProperty('gdo_appuntamento_at');
+    expect(agg).not.toHaveProperty('bot_outcome');
+    expect(calls.convUpdates.some((u: any) => 'gdo_recap_for_at' in u || 'gdo_noemi_reminded_at' in u)).toBe(false);
+    expect(calls.events.find((e: any) => e.type === 'gdo_spostamento_bot')?.payload).toMatchObject({ conversationId: 93, crmLeadId: 'bot7', origine: 'bot' });
+    expect(sendOutcome).not.toHaveBeenCalled();
+  });
+
+  it('il CRM dice no: ripiego e la nota SPOSTAMENTO CHIESTO di oggi (RICHIAMO sull\'APPUNTAMENTO), evento con origine bot', async () => {
+    vi.stubGlobal('fetch', fetchCrm(409, { error: 'spostamento_rifiutato', motivo: 'confermato' }));
+    const { supabase, calls } = makeDrainSupabase(delBot(), [FATTO, SPOSTA]);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('', { spostaAt: NUOVA }));
+
+    await drainMarioReplies(supabase, 93, '+391234567890', () => 0);
+
+    expect(calls.messageInserts.map((m: any) => m.body)).toEqual([TESTO_SPOSTAMENTO_NON_FATTO]);
+    expect(calls.events.find((e: any) => e.type === 'gdo_spostamento_non_fatto')?.payload).toMatchObject({ origine: 'bot', motivo: 'confermato' });
+    expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'RICHIAMO', date: NUOVA });
+    expect(calls.convUpdates.some((u: any) => 'bot_scheduled_at' in u)).toBe(false);
+  });
+
+  it('call del bot gia\' spostata dalle Conferme (date diverse): niente blocco nel prompt', async () => {
+    const { supabase } = makeDrainSupabase(delBot({ gdo_appuntamento_at: fra(3 * 24 * 3600_000) }), [FATTO, SPOSTA]);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('ok'));
+    await drainMarioReplies(supabase, 93, '+391234567890', () => 0);
+    expect(contesto()).not.toContain('SPOSTAMENTO DELLA CALL');
+  });
+
+  it('chat senza appuntamento: niente blocco nel prompt', async () => {
+    const { supabase } = makeDrainSupabase(delBot({ bot_outcome: null, bot_scheduled_at: null }), [FATTO, SPOSTA]);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('ok'));
+    await drainMarioReplies(supabase, 93, '+391234567890', () => 0);
     expect(contesto()).not.toContain('SPOSTAMENTO DELLA CALL');
   });
 });

@@ -44,13 +44,16 @@ import { isSlugProfessione, PROVENIENZA_PROFESSIONI } from './professioni';
 import { inviaScheda, testoScheda } from './scheda-invio';
 import { fissatoIlDi } from './noemi-quando';
 import {
+  dataCallDelBot,
   giorniSpostamento,
   motivoDataNonValida,
   motivoNonSpostabile,
   notaSpostamentoPrompt,
+  origineSpostamento,
   spostamentoAbilitato,
   testoSpostamentoFatto,
   TESTO_SPOSTAMENTO_NON_FATTO,
+  ultimoLinkVideo,
   type MotivoNonSpostabile,
 } from './gdo-spostamento';
 import { giaSpostatoDalBot, inviaSpostamentoAlCrm, registraSpostamentoInChat, statoCrmLocale } from './gdo-spostamento-send';
@@ -514,7 +517,8 @@ export async function drainMarioReplies(
   const startedAt = (claimed as { ai_started_at: string | null }).ai_started_at;
   const crmLeadId = (claimed as { crm_lead_id: string | null }).crm_lead_id;
   const esitoInPiedi = (claimed as { bot_outcome?: BotOutcome | null }).bot_outcome ?? null;
-  const dataInPiedi = (claimed as { bot_scheduled_at?: string | null }).bot_scheduled_at ?? null;
+  // `let`: lo spostamento di una call del bot (lib/gdo-spostamento.ts) la porta alla data nuova.
+  let dataInPiedi = (claimed as { bot_scheduled_at?: string | null }).bot_scheduled_at ?? null;
   // Funnel Professioni: il corso scelto e se la scheda e' gia' partita. `let` perche' un
   // giro successivo dello stesso drain non deve riprovare l'invio (inviaScheda e' comunque
   // idempotente sulla colonna) e perche' il corso scelto da Mario col tag, su una chat
@@ -1128,16 +1132,21 @@ export async function drainMarioReplies(
           })
         : null;
       const stepWarmupTurno = gdoWarmupStep;
-      // Spostamento della call fatto dal bot (PO 28/10/2026, lib/gdo-spostamento.ts): solo
-      // sul postino, una volta sola, se le Conferme non hanno ancora esitato il lead. Le due
-      // letture (evento "gia' spostato", stato CRM locale) si pagano solo quando il resto
-      // e' gia' in regola. Il blocco nel prompt c'e' solo se lo spostamento si puo' fare.
+      // Spostamento della call fatto dal bot (PO 28/10/2026, lib/gdo-spostamento.ts): sul
+      // postino (lead GDO) e, dal 29/10, sulle call fissate dal bot; una volta sola, se le
+      // Conferme non hanno ancora esitato il lead. Le due letture (evento "gia' spostato",
+      // stato CRM locale) si pagano solo quando il resto e' gia' in regola. Il blocco nel
+      // prompt c'e' solo se lo spostamento si puo' fare.
       const rangesSpostamento = bookingBlackout(process.env.BOOKING_BLACKOUT);
+      const origineSposta = crmLeadId ? origineSpostamento({ postino, botOutcome: esitoInPiedi }) : null;
+      const callDelBot = origineSposta === 'bot' ? dataCallDelBot(dataInPiedi, gdoAppuntamentoAt) : null;
+      // La call che si sposta: quella del GDO o quella fissata dal bot.
+      const callSpostabileAt = callDelBot ? callDelBot.at : gdoAppuntamentoAt;
       const baseSpostamento = {
         enabled: spostamentoAbilitato(process.env.GDO_SPOSTAMENTO_BOT_ENABLED),
-        postino: postino && !!crmLeadId,
-        botOutcome: esitoInPiedi,
-        appuntamentoAt: gdoAppuntamentoAt,
+        origine: origineSposta,
+        appuntamentoAt: callSpostabileAt,
+        dataCambiata: callDelBot?.cambiata ?? false,
         nowMs: Date.now(),
       };
       let motivoNoSposta: MotivoNonSpostabile | null = motivoNonSpostabile({ ...baseSpostamento, giaSpostato: false });
@@ -1155,9 +1164,12 @@ export async function drainMarioReplies(
         });
       }
       const giorniSposta = giorniSpostamento(new Date(), rangesSpostamento);
-      const notaSposta = motivoNoSposta === null && giorniSposta.length > 0 && gdoAppuntamentoAt
-        ? notaSpostamentoPrompt({ giorni: giorniSposta, callAt: new Date(gdoAppuntamentoAt) })
+      const notaSposta = motivoNoSposta === null && giorniSposta.length > 0 && callSpostabileAt
+        ? notaSpostamentoPrompt({ giorni: giorniSposta, callAt: new Date(callSpostabileAt) })
         : null;
+      // Sulle call del bot il blocco va in coda alla nota del turno, qualunque sia; sul
+      // postino sta gia' in coda alla nota GDO (qui sotto).
+      const notaSpostaBot = origineSposta === 'bot' ? notaSposta : null;
       const result = await generateMarioReply(history, {
         personaName: PERSONA_NAME[persona],
         giorniPieni,
@@ -1169,13 +1181,13 @@ export async function drainMarioReplies(
         ...(noteGdo
           ? { contextNote: [gdoContextNote(noteGdo), notaSposta].filter(Boolean).join('\n\n') }
           : notaLancioCompleta
-            ? { contextNote: notaLancioCompleta }
+            ? { contextNote: [notaLancioCompleta, notaSpostaBot].filter(Boolean).join('\n\n') }
             : notaStudente
-            ? { contextNote: [notaStudente, notaBrochure].filter(Boolean).join('\n\n') }
+            ? { contextNote: [notaStudente, notaBrochure, notaSpostaBot].filter(Boolean).join('\n\n') }
             : notaProfessioni
-            ? { contextNote: notaProfessioni }
-            : notaPrimo || notaBrochure
-              ? { contextNote: [notaPrimo, notaBrochure].filter(Boolean).join('\n\n') }
+            ? { contextNote: [notaProfessioni, notaSpostaBot].filter(Boolean).join('\n\n') }
+            : notaPrimo || notaBrochure || notaSpostaBot
+              ? { contextNote: [notaPrimo, notaBrochure, notaSpostaBot].filter(Boolean).join('\n\n') }
               : {}),
       });
 
@@ -1292,19 +1304,22 @@ export async function drainMarioReplies(
       // sulla nota SPOSTAMENTO CHIESTO di sempre (esito RICHIAMO sul canale solo-nota).
       let spostamentoFatto = false;
       let bollaSpostamento: string | null = null;
-      if (postino && crmLeadId && result.spostaAt !== undefined) {
+      if (origineSposta && crmLeadId && result.spostaAt !== undefined) {
         const adesso = new Date();
         const videoVisto = !!gdoVideoWatchedAt || videoConfermato;
+        // Il video della chat: quello del GDO o, sulle call del bot, l'ultimo link uscito.
+        const videoLinkSposta = origineSposta === 'bot' ? ultimoLinkVideo(rows) : gdoVideoUrl;
         // Lo stesso spostamento rivisto (il turno di prima e' andato a meta'): si riconferma.
-        if (motivoNoSposta === 'gia_spostato' && gdoAppuntamentoAt && sameInstant(result.spostaAt, gdoAppuntamentoAt)) {
+        if (motivoNoSposta === 'gia_spostato' && callSpostabileAt && sameInstant(result.spostaAt, callSpostabileAt)) {
           bollaSpostamento = testoSpostamentoFatto({
-            nome: gdo.leads?.first_name ?? null, call: new Date(gdoAppuntamentoAt), fissatoIl: fissatoIlGdo ?? adesso,
-            videoVisto, videoLink: gdoVideoUrl,
+            nome: gdo.leads?.first_name ?? null, call: new Date(callSpostabileAt),
+            fissatoIl: origineSposta === 'gdo' ? fissatoIlGdo ?? adesso : adesso,
+            videoVisto, videoLink: videoLinkSposta,
           });
           spostamentoFatto = true;
         } else {
           const motivo: string | null = motivoNoSposta
-            ?? motivoDataNonValida(result.spostaAt, gdoAppuntamentoAt, adesso.getTime(), rangesSpostamento);
+            ?? motivoDataNonValida(result.spostaAt, callSpostabileAt, adesso.getTime(), rangesSpostamento);
           const secret = process.env.BOT_WEBHOOK_SECRET;
           const risposta = motivo === null
             ? secret
@@ -1312,24 +1327,32 @@ export async function drainMarioReplies(
               : { ok: false as const, motivo: 'not_configured' }
             : null;
           if (risposta?.ok) {
-            const da = gdoAppuntamentoAt;
+            const da = callSpostabileAt;
             const a = new Date(result.spostaAt).toISOString();
-            await registraSpostamentoInChat(supabase, { conversationId, crmLeadId, da, a, now: adesso });
-            gdoAppuntamentoAt = a;
-            fissatoIlGdo = adesso;
-            gdoRecapForAt = a;
-            gdoRecapSentAt = adesso.toISOString();
-            gdoNoemiRemindedAt ??= adesso.toISOString();
+            await registraSpostamentoInChat(supabase, {
+              conversationId, crmLeadId, da, a, now: adesso, origine: origineSposta, allineaGdo: !!gdoAppuntamentoAt,
+            });
+            if (origineSposta === 'bot') {
+              // Call del bot: l'esito resta APPUNTAMENTO, cambia solo la data nostra.
+              dataInPiedi = a;
+              if (gdoAppuntamentoAt) gdoAppuntamentoAt = a;
+            } else {
+              gdoAppuntamentoAt = a;
+              fissatoIlGdo = adesso;
+              gdoRecapForAt = a;
+              gdoRecapSentAt = adesso.toISOString();
+              gdoNoemiRemindedAt ??= adesso.toISOString();
+            }
             bollaSpostamento = testoSpostamentoFatto({
-              nome: gdo.leads?.first_name ?? null, call: new Date(a), fissatoIl: adesso, videoVisto, videoLink: gdoVideoUrl,
+              nome: gdo.leads?.first_name ?? null, call: new Date(a), fissatoIl: adesso, videoVisto, videoLink: videoLinkSposta,
             });
             spostamentoFatto = true;
           } else {
             const perche = motivo ?? (risposta && !risposta.ok ? risposta.motivo : 'sconosciuto');
             await supabase.from('event_log').insert({
               type: 'gdo_spostamento_non_fatto',
-              payload: { conversationId, crmLeadId, data: result.spostaAt, motivo: perche, status: risposta && !risposta.ok ? risposta.status ?? null : null } as never,
-              message: `[gdo] conv ${conversationId}: spostamento a ${result.spostaAt} non fatto (${perche}), parte la nota alle Conferme`,
+              payload: { conversationId, crmLeadId, origine: origineSposta, data: result.spostaAt, motivo: perche, status: risposta && !risposta.ok ? risposta.status ?? null : null } as never,
+              message: `[${origineSposta}] conv ${conversationId}: spostamento a ${result.spostaAt} non fatto (${perche}), parte la nota alle Conferme`,
               level: risposta && !risposta.ok && risposta.status === undefined ? 'error' : 'info',
             });
             visibleReply = TESTO_SPOSTAMENTO_NON_FATTO;

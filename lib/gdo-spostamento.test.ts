@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  elencoGiorni, giorniSpostamento, motivoDataNonValida, motivoNonSpostabile, notaSpostamentoPrompt,
-  spostamentoAbilitato, testoSpostamentoFatto,
+  dataCallDelBot, elencoGiorni, giorniSpostamento, motivoDataNonValida, motivoNonSpostabile, notaSpostamentoPrompt,
+  origineSpostamento, spostamentoAbilitato, testoSpostamentoFatto, ultimoLinkVideo,
 } from './gdo-spostamento';
 import { inviaSpostamentoAlCrm } from './gdo-spostamento-send';
 import { parseMarioReply } from './mario';
@@ -32,13 +32,17 @@ describe('giorni dello spostamento', () => {
 
 describe('quando la chat può offrire lo spostamento', () => {
   const base = {
-    enabled: true, postino: true, botOutcome: null, appuntamentoAt: CALL, giaSpostato: false, nowMs: MER_15.getTime(),
+    enabled: true, origine: 'gdo' as const, appuntamentoAt: CALL, giaSpostato: false, nowMs: MER_15.getTime(),
   };
   it('lead GDO con call futura: sì', () => expect(motivoNonSpostabile(base)).toBeNull());
+  it('call fissata dal bot con call futura: sì (PO 29/10/2026)', () =>
+    expect(motivoNonSpostabile({ ...base, origine: 'bot' })).toBeNull());
   it('i no', () => {
     expect(motivoNonSpostabile({ ...base, enabled: false })).toBe('spento');
-    expect(motivoNonSpostabile({ ...base, postino: false })).toBe('non_postino');
-    expect(motivoNonSpostabile({ ...base, botOutcome: 'APPUNTAMENTO' })).toBe('call_del_bot');
+    expect(motivoNonSpostabile({ ...base, origine: null })).toBe('non_postino');
+    expect(motivoNonSpostabile({ ...base, origine: 'bot', dataCambiata: true })).toBe('data_cambiata_dal_crm');
+    expect(motivoNonSpostabile({ ...base, origine: 'bot', giaSpostato: true })).toBe('gia_spostato');
+    expect(motivoNonSpostabile({ ...base, origine: 'bot', confermeOutcome: 'confermato' })).toBe('esito_conferme');
     expect(motivoNonSpostabile({ ...base, appuntamentoAt: null })).toBe('senza_data');
     expect(motivoNonSpostabile({ ...base, appuntamentoAt: '2026-10-28T14:20:00Z' })).toBe('call_vicina_o_passata');
     expect(motivoNonSpostabile({ ...base, giaSpostato: true })).toBe('gia_spostato');
@@ -123,5 +127,32 @@ describe('invio al CRM', () => {
   it('rete giù: ok false, non lancia', async () => {
     const f = vi.fn(async () => { throw new Error('boom'); });
     expect(await inviaSpostamentoAlCrm('L1', '2026-10-30T18:00:00+01:00', 's', f as unknown as typeof fetch)).toEqual({ ok: false, motivo: 'boom' });
+  });
+});
+
+describe('origine dello spostamento (PO 29/10/2026)', () => {
+  it('postino = lead GDO, APPUNTAMENTO del bot = call del bot', () => {
+    expect(origineSpostamento({ postino: true, botOutcome: null })).toBe('gdo');
+    expect(origineSpostamento({ postino: true, botOutcome: 'RICHIAMO' })).toBe('gdo');
+    expect(origineSpostamento({ postino: false, botOutcome: 'APPUNTAMENTO' })).toBe('bot');
+  });
+  it('nessuna call da spostare, o origine incerta: null', () => {
+    expect(origineSpostamento({ postino: false, botOutcome: null })).toBeNull();
+    expect(origineSpostamento({ postino: false, botOutcome: 'RICHIAMO' })).toBeNull();
+    expect(origineSpostamento({ postino: true, botOutcome: 'APPUNTAMENTO' })).toBeNull();
+  });
+  it('data della call del bot: bot_scheduled_at, salvo che il CRM l\'abbia cambiata', () => {
+    expect(dataCallDelBot(CALL, null)).toEqual({ at: CALL, cambiata: false });
+    expect(dataCallDelBot(CALL, '2026-10-29T18:00:00+01:00')).toEqual({ at: CALL, cambiata: false });
+    expect(dataCallDelBot(CALL, '2026-10-30T18:00:00+01:00')).toEqual({ at: CALL, cambiata: true });
+    expect(dataCallDelBot(null, null)).toEqual({ at: null, cambiata: false });
+  });
+  it('ultimo link del video uscito in chat', () => {
+    expect(ultimoLinkVideo([
+      { direction: 'out', body: 'guarda https://corso.feniceacademy.it/conferenza-bx prima' },
+      { direction: 'in', body: 'https://corso.feniceacademy.it/conferenza-zz' },
+      { direction: 'out', body: 'ok a domani' },
+    ])).toBe('https://corso.feniceacademy.it/conferenza-bx');
+    expect(ultimoLinkVideo([{ direction: 'out', body: 'niente link' }])).toBeNull();
   });
 });

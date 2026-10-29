@@ -1,4 +1,5 @@
 import { signPayload } from './bot-hmac';
+import type { OrigineSpostamento } from './gdo-spostamento';
 
 /**
  * L'I/O dello spostamento della call di un lead GDO (regole in `gdo-spostamento.ts`):
@@ -92,32 +93,52 @@ export async function inviaSpostamentoAlCrm(
  * recap usano la data nuova. Il recap lo vale già la conferma che mandiamo noi
  * (`gdo_recap_for_at`), e Noemi è spiegata lì dentro. `cancel_requested_at` torna nullo:
  * la data nuova è concordata, gli automatismi devono ripartire.
+ *
+ * Call fissata dal bot (`origine: 'bot'`, PO 29/10/2026): la data nostra è
+ * `bot_scheduled_at` (la leggono promemoria T-24h/T-3h, slot e note dei turni dopo);
+ * `bot_outcome` resta APPUNTAMENTO. `gdo_appuntamento_at` si allinea solo se c'era già
+ * (l'aveva scritto il CRM con la stessa data), così le due date restano uguali e la
+ * chat non sembra "spostata dal CRM". I campi del recap e di Noemi del GDO non si toccano.
  */
 export async function registraSpostamentoInChat(
   supabase: Supa,
-  i: { conversationId: number; crmLeadId: string; da: string | null; a: string; now: Date },
+  i: {
+    conversationId: number;
+    crmLeadId: string;
+    da: string | null;
+    a: string;
+    now: Date;
+    origine: OrigineSpostamento;
+    /** Solo `origine: 'bot'`: la chat aveva già `gdo_appuntamento_at`. */
+    allineaGdo?: boolean;
+  },
 ): Promise<string | null> {
   const at = new Date(i.a).toISOString();
   const ora = i.now.toISOString();
+  const campi = i.origine === 'bot'
+    ? { bot_scheduled_at: at, cancel_requested_at: null, ...(i.allineaGdo ? { gdo_appuntamento_at: at } : {}) }
+    : {
+        gdo_appuntamento_at: at,
+        gdo_appuntamento_set_at: ora,
+        gdo_recap_for_at: at,
+        gdo_recap_sent_at: ora,
+        cancel_requested_at: null,
+      };
   const { error } = await supabase
     .from('conversations')
-    .update({
-      gdo_appuntamento_at: at,
-      gdo_appuntamento_set_at: ora,
-      gdo_recap_for_at: at,
-      gdo_recap_sent_at: ora,
-      cancel_requested_at: null,
-    })
+    .update(campi)
     .eq('id', i.conversationId);
-  await supabase
-    .from('conversations')
-    .update({ gdo_noemi_reminded_at: ora })
-    .eq('id', i.conversationId)
-    .is('gdo_noemi_reminded_at', null);
+  if (i.origine === 'gdo') {
+    await supabase
+      .from('conversations')
+      .update({ gdo_noemi_reminded_at: ora })
+      .eq('id', i.conversationId)
+      .is('gdo_noemi_reminded_at', null);
+  }
   await supabase.from('event_log').insert({
     type: EVENTO_SPOSTAMENTO,
-    payload: { conversationId: i.conversationId, crmLeadId: i.crmLeadId, da: i.da, a: at, chatAggiornata: !error } as never,
-    message: `[gdo] conv ${i.conversationId}: call spostata dal bot da ${i.da ?? '?'} a ${at}${error ? ` (chat NON aggiornata: ${error.message})` : ''}`,
+    payload: { conversationId: i.conversationId, crmLeadId: i.crmLeadId, origine: i.origine, da: i.da, a: at, chatAggiornata: !error } as never,
+    message: `[${i.origine}] conv ${i.conversationId}: call ${i.origine === 'bot' ? 'del bot ' : ''}spostata dal bot da ${i.da ?? '?'} a ${at}${error ? ` (chat NON aggiornata: ${error.message})` : ''}`,
     level: error ? 'error' : 'info',
   });
   return error ? error.message : null;
