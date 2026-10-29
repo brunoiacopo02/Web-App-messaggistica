@@ -167,6 +167,8 @@ export async function enrollLeadIntoMario(
   // nuovo (vedi `azzeraEsitoPerLeadNuovo`). Calcolato nel blocco qui sotto, che e' l'unico
   // a leggere la riga; se la lettura fallisce resta false e non si tocca niente.
   let azzeraEsito = false;
+  // Il leadId del CRM gia' scritto sulla chat; `undefined` = lettura fallita, non si sa.
+  let crmLeadIdPrima: string | null | undefined;
   {
     // Se una delle due letture non si sa com'è andata, l'apertura PARTE: un lead che
     // resta muto per sempre è peggio di un'apertura di troppo.
@@ -185,6 +187,7 @@ export async function enrollLeadIntoMario(
       .from('messages').select('id', { count: 'exact', head: true })
       .eq('conversation_id', conversationId).eq('direction', 'out').not('twilio_sid', 'is', null);
     const riga = convRow as { crm_lead_id?: string | null; bot_outcome?: string | null } | null;
+    crmLeadIdPrima = erroreConv ? undefined : (riga?.crm_lead_id ?? null);
     azzeraEsito = !erroreConv && azzeraEsitoPerLeadNuovo({
       crmLeadIdPrima: riga?.crm_lead_id ?? null,
       crmLeadIdNuovo: args.crmLeadId ?? null,
@@ -265,9 +268,34 @@ export async function enrollLeadIntoMario(
   // riceve la sua apertura come sempre.
   const guardia = args.crmLeadId ? await apertutaDaFermare(supabase, conversationId) : null;
   if (guardia) {
+    // Stessa persona, leadId NUOVO: l'apertura non riparte, ma la chat passa al lead
+    // nuovo. Fino al 29/10/2026 qui non si scriveva niente: rispondevamo al CRM
+    // `leadIdCorrente` = il nuovo, ma gli esiti continuavano a partire sotto il vecchio
+    // e il lead nuovo restava fermo sul bot per sempre (153 casi in 45 giorni). E' la
+    // stessa regola del ramo "chat viva" qui sopra: l'ultimo leadId vince.
+    const leadNuovo = crmLeadIdPrima !== undefined && args.crmLeadId != null && crmLeadIdPrima !== args.crmLeadId;
+    if (leadNuovo) {
+      await supabase.from('conversations').update({
+        crm_lead_id: args.crmLeadId,
+        ...(args.crmFunnel ? { crm_funnel: args.crmFunnel } : {}),
+        ...(azzeraEsito ? ESITO_AZZERATO : {}),
+      }).eq('id', conversationId);
+      // Chat chiusa con l'esito del lead di prima: senza riaprirla nessun cron la
+      // classificherebbe, e il lead nuovo resterebbe senza esito come prima del fix.
+      // Una chat booked/handed_off resta a chi ce l'ha in mano.
+      if (azzeraEsito) {
+        await supabase.from('conversations')
+          .update({ ai_status: 'active' })
+          .eq('id', conversationId)
+          .or('ai_status.is.null,ai_status.eq.closed');
+      }
+    }
     await supabase.from('event_log').insert({
       type: 'fenice_enroll_duplicato',
-      payload: { phone: args.phone, conversationId, crmLeadId: args.crmLeadId, motivo: guardia } as never,
+      payload: {
+        phone: args.phone, conversationId, crmLeadId: args.crmLeadId, motivo: guardia,
+        ...(leadNuovo ? { leadIdPrecedente: crmLeadIdPrima, esitoAzzerato: azzeraEsito } : {}),
+      } as never,
       message: `Intake ripetuto per lead ${args.crmLeadId}: ${guardia}, nessun reinvio`,
       level: 'info',
     });

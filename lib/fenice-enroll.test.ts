@@ -589,7 +589,7 @@ describe('enrollGdoLeadAsPostino — arruolamento in modalità postino', () => {
  * Fake Supabase che sa anche leggere: serve alla guardia anti-doppione, che prima di
  * inviare guarda il crm_lead_id della conv e se un outbound è già partito di recente.
  */
-function makeSupabaseLeggibile(opts: { crmLeadId?: string | null; outboundRecenti?: number; /** Righe in uscita recenti FALLITE (senza `twilio_sid`): il `.not('twilio_sid','is',null)` della guardia le scarta. */ outboundFalliti?: number; lastInboundAt?: string | null; benvenutiUltimaOra?: number; /** Lo stato del lancio gia' scritto sulla riga (ri-arruolamento). */ lancioRow?: { lancio_slug: string | null; lancio_fase: string | null; lancio_benvenuto_at?: string | null } }) {
+function makeSupabaseLeggibile(opts: { crmLeadId?: string | null; outboundRecenti?: number; /** Righe in uscita recenti FALLITE (senza `twilio_sid`): il `.not('twilio_sid','is',null)` della guardia le scarta. */ outboundFalliti?: number; lastInboundAt?: string | null; benvenutiUltimaOra?: number; /** Esito gia' scritto sulla chat (lead di prima). */ botOutcome?: string | null; /** Lo stato del lancio gia' scritto sulla riga (ri-arruolamento). */ lancioRow?: { lancio_slug: string | null; lancio_fase: string | null; lancio_benvenuto_at?: string | null } }) {
   const calls = { updates: [] as any[], events: [] as any[] };
   const supabase: any = {
     from(table: string) {
@@ -601,7 +601,7 @@ function makeSupabaseLeggibile(opts: { crmLeadId?: string | null; outboundRecent
             return chain;
           },
           select(colonne?: string) {
-            const riga = { ai_owner: null, ai_status: null, crm_lead_id: opts.crmLeadId ?? null, last_inbound_at: opts.lastInboundAt ?? null };
+            const riga = { ai_owner: null, ai_status: null, crm_lead_id: opts.crmLeadId ?? null, last_inbound_at: opts.lastInboundAt ?? null, bot_outcome: opts.botOutcome ?? null };
             // `single()` è la lettura della guardia `apreSopraChatViva`: qui la chat non
             // è di Mario, quindi quella guardia non scatta e resta in scena l'anti-doppione.
             // La `maybeSingle()` che chiede `lancio_slug` è invece la rilettura dello
@@ -1609,5 +1609,41 @@ describe('enrollLeadIntoMario — reimport con leadId nuovo sulla stessa chat', 
     const { supabase, calls } = makeSupabase(0, false, { ...chatVecchia('NON_RISPOSTO'), convErrore: true });
     await enrollLeadIntoMario(supabase, { phone: '+393330000106', crmLeadId: 'LEAD-NUOVO' });
     for (const u of calls.updates) expect(u).not.toHaveProperty('bot_outcome');
+  });
+});
+
+describe('enrollLeadIntoMario — apertura doppia fermata con un leadId nuovo', () => {
+  it('la chat passa al lead nuovo anche se l apertura non riparte', async () => {
+    vi.setSystemTime(MEZZOGIORNO);
+    const { supabase, calls } = makeSupabaseLeggibile({ crmLeadId: 'LEAD-VECCHIO', outboundRecenti: 1 });
+    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000201', crmLeadId: 'LEAD-NUOVO', crmFunnel: 'CORSO 10 ORE' });
+    expect(res).toMatchObject({ ok: true, duplicato: true });
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+    expect(calls.updates).toEqual([{ crm_lead_id: 'LEAD-NUOVO', crm_funnel: 'CORSO 10 ORE' }]);
+    expect(calls.events.at(-1).payload).toMatchObject({ leadIdPrecedente: 'LEAD-VECCHIO', esitoAzzerato: false });
+  });
+
+  it('chat con l esito del lead di prima: esito azzerato e chat riaperta se chiusa', async () => {
+    vi.setSystemTime(MEZZOGIORNO);
+    const treGiorniFa = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const { supabase, calls } = makeSupabaseLeggibile({ crmLeadId: 'LEAD-VECCHIO', lastInboundAt: treGiorniFa, botOutcome: 'INTERROTTO' });
+    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000202', crmLeadId: 'LEAD-NUOVO' });
+    expect(res).toMatchObject({ duplicato: true });
+    expect(calls.updates[0]).toEqual({ crm_lead_id: 'LEAD-NUOVO', bot_outcome: null, bot_outcome_at: null, bot_scheduled_at: null });
+    expect(calls.updates[1]).toEqual({ ai_status: 'active' });
+  });
+
+  it('APPUNTAMENTO sulla chat: il leadId passa, l esito resta e la chat non si riapre', async () => {
+    vi.setSystemTime(MEZZOGIORNO);
+    const { supabase, calls } = makeSupabaseLeggibile({ crmLeadId: 'LEAD-VECCHIO', outboundRecenti: 1, botOutcome: 'APPUNTAMENTO' });
+    await enrollLeadIntoMario(supabase, { phone: '+393330000203', crmLeadId: 'LEAD-NUOVO' });
+    expect(calls.updates).toEqual([{ crm_lead_id: 'LEAD-NUOVO' }]);
+  });
+
+  it('stesso leadId (ritento vero): nessuna scrittura sulla chat', async () => {
+    vi.setSystemTime(MEZZOGIORNO);
+    const { supabase, calls } = makeSupabaseLeggibile({ crmLeadId: 'LEAD-1', outboundRecenti: 1, botOutcome: 'NON_RISPOSTO' });
+    await enrollLeadIntoMario(supabase, { phone: '+393330000204', crmLeadId: 'LEAD-1' });
+    expect(calls.updates).toEqual([]);
   });
 });
