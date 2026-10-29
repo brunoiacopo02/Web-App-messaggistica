@@ -33,6 +33,7 @@ import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
 import { mittenteDiConversazione } from '@/lib/mittente';
 import { formatRomeDateTime } from '@/lib/rome-time';
+import { caricaContesto, decidiInvio, sidPerConversazione } from '@/lib/sollecito-parcheggio';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -181,6 +182,10 @@ export async function GET(req: NextRequest) {
     });
   };
   const newOpeningEnabled = process.env.NEW_OPENING_ENABLED === '1';
+  // Sollecito prima del parcheggio (PO 29/10/2026): null = spento, tutto come prima.
+  const sollecito = await caricaContesto(supabase, now);
+  const sollecitoSaltati: Record<string, number> = {};
+  let sollecitiInviati = 0;
 
   // Tutte le conv CRM attive, con paginazione (>1000 possibili a regime 50/g).
   const convs: any[] = [];
@@ -392,6 +397,45 @@ export async function GET(req: NextRequest) {
               }
             }
           }
+        } else if (sollecito && persona === 'marta' && (action.kind === 'wait' || action.kind === 'non_risposto')) {
+          // Sollecito prima del parcheggio: un solo template, dallo stesso numero
+          // dell'apertura, 20-30h dopo, in fascia. Il NON_RISPOSTO lo aspetta
+          // (bot-followups, `decidiChiusura`).
+          const d = decidiInvio({ nowMs: now, msgs, sids: sollecito.sids });
+          if (!d.invia) { skipped++; continue; }
+          const idoneo = await sollecito.idoneo(from);
+          if (!idoneo.ok) {
+            sollecitoSaltati[idoneo.motivo] = (sollecitoSaltati[idoneo.motivo] ?? 0) + 1;
+            skipped++;
+            continue;
+          }
+          const sid = sidPerConversazione(sollecito.sids, c.id as number) as string;
+          sent++;
+          const res = await sendSequenceTemplate(
+            supabase, c.id, phone, sid, 'Sollecito prima del parcheggio', from, { '1': templateName(firstName) },
+          );
+          const t0 = firstOutboundAtMs(msgs) ?? now;
+          const payload = {
+            conversationId: c.id,
+            crmLeadId: c.crm_lead_id ?? null,
+            numero: from ?? null,
+            sid,
+            oreDallApertura: Math.round(((now - t0) / H) * 10) / 10,
+            aperturaLetta: msgs.some((m) => m.direction === 'out' && m.twilio_status === 'read'),
+          };
+          if (res.ok) {
+            sollecito.contaInvio(from as string);
+            sollecitiInviati++;
+            await supabase.from('event_log').insert({
+              type: 'sollecito_inviato', level: 'info', payload: payload as never,
+              message: `[sollecito] conv ${c.id}: sollecito inviato da ${from} ${payload.oreDallApertura}h dopo l'apertura`,
+            });
+          } else if (!res.capped) {
+            await supabase.from('event_log').insert({
+              type: 'sollecito_fallito', level: 'warn', payload: { ...payload, error: res.error ?? null } as never,
+              message: `[sollecito] conv ${c.id}: sollecito non partito (${res.error ?? 'errore'})`,
+            });
+          }
         } else {
           // discard_dead / non_risposto li gestisce bot-followups; wait = niente.
           skipped++;
@@ -463,7 +507,7 @@ export async function GET(req: NextRequest) {
 
   await supabase.from('event_log').insert({
     type: 'sequence_run',
-    payload: { sent, skipped, trackA, trackB } as never,
+    payload: { sent, skipped, trackA, trackB, ...(sollecito ? { sollecitiInviati, sollecitoSaltati } : {}) } as never,
     message: `[sequenza] run: ${sent} invii, ${skipped} skip (A=${trackA}, B=${trackB})`,
     level: 'info',
   });

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendOutcome } from '@/lib/bot-outcome';
+import { caricaContesto as caricaContestoSollecito, decidiChiusura } from '@/lib/sollecito-parcheggio';
 import { decideFollowupAction, esitoMaiConsegnato, postinoGdo, serveCronologia, ultimaAttivitaMs, puoAverScrittoPrimaDellAvvio, scrittiSenzaRispostaPrimaDellAvvio, ARRUOLAMENTO_BUFFER_MS } from '@/lib/bot-followups';
 import { classifyInterrupted } from '@/lib/interrotto-note';
 import { buildConfermaPersaNote } from '@/lib/bot-outcome-rules';
@@ -103,6 +104,8 @@ export async function GET(req: NextRequest) {
     process.env.SEQ_TEMPLATE_SID_3,
     process.env.SEQ_TEMPLATE_SID_4,
   ].filter((s): s is string => Boolean(s));
+  // Sollecito prima del parcheggio (PO 29/10/2026): null = spento, NON_RISPOSTO a 24h come prima.
+  const sollecito = await caricaContestoSollecito(supabase, now);
 
   // Conversazioni CRM-linked non chiuse, paginate (capienza 50 lead/giorno →
   // il vecchio .limit(500) non basta più).
@@ -110,7 +113,7 @@ export async function GET(req: NextRequest) {
   for (let from = 0; ; from += 1000) {
     const { data, error } = await supabase
       .from('conversations')
-      .select('id, ai_status, ai_lock_at, ai_started_at, created_at, last_message_at, last_inbound_at, crm_lead_id, bot_outcome, bot_followups_sent, gdo_agenda_at, gdo_appuntamento_at, lancio_slug, lancio_fase, leads(phone_e164)')
+      .select('id, ai_status, ai_lock_at, ai_started_at, created_at, last_message_at, last_inbound_at, crm_lead_id, bot_outcome, bot_followups_sent, gdo_agenda_at, gdo_appuntamento_at, lancio_slug, lancio_fase, wa_number, leads(phone_e164)')
       .not('crm_lead_id', 'is', null)
       .in('ai_status', ['active', 'replying', 'handed_off', 'booked'])
       // Fermo manuale dal pannello: fuori dal giro del cron per intero — niente
@@ -336,6 +339,18 @@ export async function GET(req: NextRequest) {
         if (scritti.length > 0) {
           action = 'interrotto_classify';
           storia = [...scritti, ...rows];
+        }
+      }
+
+      // Il NON_RISPOSTO aspetta il sollecito (fino a 30h dall'apertura) e poi 24h la
+      // risposta. Numero non idoneo (3199, pausa qualita', non HIGH, tetto del giorno)
+      // = si chiude subito, come prima.
+      if (action === 'non_risposto' && sollecito) {
+        const puo = await sollecito.idoneo(c.wa_number as string | null);
+        const d = decidiChiusura({ nowMs: now, msgs: rows, sids: sollecito.sids, puoRicevere: puo.ok });
+        if (d === 'aspetta') {
+          report.push({ id: c.id, action: 'attesa_sollecito' });
+          continue;
         }
       }
 

@@ -14,5 +14,11 @@ export function sidSbloccati(): string[] {
     const v = (process.env[k] ?? '').trim();
     if (v) sbloccati.push(v);
   }
+  // Sollecito prima del parcheggio (PO 29/10/2026): chiesto UTILITY a Meta, ma Bruno lo
+  // manda anche se torna MARKETING. Il SID in env e' gia' la decisione; l'invio resta
+  // comunque sotto l'interruttore `app_settings.sollecito_parcheggio`.
+  for (const v of (process.env.SOLLECITO_PARCHEGGIO_SID ?? '').split(',')) {
+    if (v.trim()) sbloccati.push(v.trim());
+  }
   return sbloccati;
 }

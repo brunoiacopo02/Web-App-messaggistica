@@ -29,6 +29,7 @@ import { getLancioSettings } from '@/lib/lancio-settings';
 import { pushLeadEntrante } from '@/lib/lead-entrante';
 import { segnaProfessione } from '@/lib/professione-chat';
 import { eNumeroDelBot } from '@/lib/mittente';
+import { segnaRispostaDopoSollecito } from '@/lib/sollecito-parcheggio';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -220,6 +221,9 @@ export async function POST(req: NextRequest) {
       type: 'twilio_inbound', payload: { sid: params.MessageSid, from: phone },
       message: `Inbound ricevuto da ${phone}`, level: 'info',
     });
+
+    // Misura del sollecito prima del parcheggio: la prima risposta dopo il sollecito.
+    await segnaRispostaDopoSollecito(supabase, conversationId);
 
     // Auto-risposta Mario (solo numeri del bot + lead arruolato + switch ON).
     // "Del bot" e non "Fenice": dai numeri secondari partono conversazioni intere, e chi
