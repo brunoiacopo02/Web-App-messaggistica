@@ -65,6 +65,37 @@ export function dueReminder(scheduledAtMs: number, nowMs: number, sent: Reminder
   return null;
 }
 
+/**
+ * I promemoria gia' partiti PER LA DATA ATTUALE della call, chat per chat.
+ *
+ * Fino al 30/10/2026 un promemoria valeva per tutta la chat: se il bot spostava la call
+ * (lib/gdo-spostamento.ts, anche sulle call fissate da lui dal 29/10) il T-24h e il T-3h
+ * della data vecchia bastavano a non mandare quelli della data nuova (chat 29775: entrambi
+ * partiti per giovedi' 30, call spostata a martedi' 3/11, nessun promemoria per il 3).
+ * Ora un promemoria conta solo se e' partito DOPO l'ultimo spostamento fatto dal bot
+ * (`spostataAlMs`: istante dell'evento `gdo_spostamento_bot`). Senza spostamenti, come prima.
+ */
+export function promemoriaGiaInviati(
+  msgs: readonly { conversation_id: number; template_sid: string | null; created_at?: string | null }[],
+  sids: { r24: readonly string[]; r3: string },
+  spostataAlMs: ReadonlyMap<number, number>,
+): Map<number, ReminderKind[]> {
+  const out = new Map<number, ReminderKind[]>();
+  for (const m of msgs) {
+    const kind: ReminderKind | null =
+      m.template_sid && sids.r24.includes(m.template_sid) ? 'r24' : m.template_sid === sids.r3 ? 'r3' : null;
+    if (!kind) continue;
+    const spostata = spostataAlMs.get(m.conversation_id);
+    const inviatoMs = m.created_at ? Date.parse(m.created_at) : NaN;
+    // Partito prima dello spostamento: era per la data vecchia, non conta.
+    if (spostata !== undefined && Number.isFinite(inviatoMs) && inviatoMs < spostata) continue;
+    const list = out.get(m.conversation_id) ?? [];
+    list.push(kind);
+    out.set(m.conversation_id, list);
+  }
+  return out;
+}
+
 const romeWeekdayFmt = new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', weekday: 'long' });
 
 /** Etichetta leggibile dello slot: "oggi"/"domani"/nome del giorno + orario HH:MM. */

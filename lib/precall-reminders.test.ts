@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   reminderTargets, dueReminder, slotLabel, pickReminder24Template,
   decideGdoReminder24, gdoReminderVars, gdoReminderText, type GdoReminder24Input,
-  gdoReminder24Raggiungibile,
+  gdoReminder24Raggiungibile, promemoriaGiaInviati,
 } from './precall-reminders';
 
 const at = (iso: string) => new Date(iso).getTime();
@@ -340,5 +340,34 @@ describe('fissatoIl: la call spostata conta dallo spostamento, non dall agenda',
     };
     expect(decideGdoReminder24(b)).toBe('template');
     expect(decideGdoReminder24({ ...b, gdoAgendaAt: new Date(NOW - 8 * H).toISOString() })).toBeNull();
+  });
+});
+
+describe('promemoriaGiaInviati: dopo uno spostamento del bot ripartono T-24h e T-3h (chat 29775)', () => {
+  const sids = { r24: ['HX24', 'HX24NOVIDEO'], r3: 'HX3' };
+  const msgs = [
+    { conversation_id: 29775, template_sid: 'HX24', created_at: '2026-10-29T09:30:34Z' },
+    { conversation_id: 29775, template_sid: 'HX3', created_at: '2026-10-30T07:30:35Z' },
+    { conversation_id: 1, template_sid: 'HX24NOVIDEO', created_at: '2026-10-29T09:00:00Z' },
+    { conversation_id: 1, template_sid: 'HXALTRO', created_at: '2026-10-29T09:00:00Z' },
+  ];
+
+  it('senza spostamenti: come prima, un promemoria vale per la chat', () => {
+    const m = promemoriaGiaInviati(msgs, sids, new Map());
+    expect(m.get(29775)).toEqual(['r24', 'r3']);
+    expect(m.get(1)).toEqual(['r24']);
+  });
+
+  it('spostata dopo i due promemoria: per la data nuova non ne risulta nessuno', () => {
+    const m = promemoriaGiaInviati(msgs, sids, new Map([[29775, Date.parse('2026-10-30T08:04:55Z')]]));
+    expect(m.get(29775)).toBeUndefined();
+    expect(m.get(1)).toEqual(['r24']);
+    expect(dueReminder(Date.parse('2026-11-03T10:00:00Z'), Date.parse('2026-11-02T10:00:00Z'), m.get(29775) ?? [])).toBe('r24');
+  });
+
+  it('un promemoria partito dopo lo spostamento conta', () => {
+    const conDopo = [...msgs, { conversation_id: 29775, template_sid: 'HX24', created_at: '2026-11-02T10:00:00Z' }];
+    const m = promemoriaGiaInviati(conDopo, sids, new Map([[29775, Date.parse('2026-10-30T08:04:55Z')]]));
+    expect(m.get(29775)).toEqual(['r24']);
   });
 });

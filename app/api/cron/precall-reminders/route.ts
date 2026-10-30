@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendTemplateAndLog } from '@/lib/messaging';
 import {
-  dueReminder, slotLabel, pickReminder24Template, type ReminderKind,
+  dueReminder, slotLabel, pickReminder24Template, promemoriaGiaInviati,
   decideGdoReminder24, gdoReminderVars, gdoReminderText,
 } from '@/lib/precall-reminders';
 import { claimPromemoriaGdo, rilasciaPromemoriaGdo } from '@/lib/gdo-reminder24-claim';
@@ -12,6 +12,7 @@ import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
 import { mittenteDiConversazione } from '@/lib/mittente';
 import { fissatoIlDi } from '@/lib/noemi-quando';
+import { EVENTO_SPOSTAMENTO } from '@/lib/gdo-spostamento-send';
 import {
   decideSollecitoRichiamo, sollecitoRichiamoText, conversazioniParcheggiate,
   claimSollecitoRichiamo, rilasciaSollecitoRichiamo, ESITO_PARCHEGGIATO,
@@ -153,20 +154,37 @@ async function promemoriaBot(supabase: Supa, now: number): Promise<EsitoRamo> {
     const r24Sids = [sid24, ...(novideoSid ? [novideoSid] : [])];
     const { data: sentMsgs } = await supabase
       .from('messages')
-      .select('conversation_id, template_sid')
+      .select('conversation_id, template_sid, created_at')
       .in('conversation_id', convIds)
       .in('template_sid', [...r24Sids, sid3])
       .not('twilio_status', 'in', '(failed,undelivered)');
 
-    const sentByConv = new Map<number, ReminderKind[]>();
-    for (const m of (sentMsgs ?? []) as any[]) {
-      const kind: ReminderKind | null =
-        r24Sids.includes(m.template_sid) ? 'r24' : m.template_sid === sid3 ? 'r3' : null;
-      if (!kind) continue;
-      const list = sentByConv.get(m.conversation_id) ?? [];
-      list.push(kind);
-      sentByConv.set(m.conversation_id, list);
+    // Call spostate dal bot: i promemoria partiti prima dello spostamento erano per la
+    // data vecchia e non contano (vedi `promemoriaGiaInviati`). Una lettura fallita lascia
+    // tutto come prima: meglio un promemoria in meno che due per la stessa data.
+    const spostataAlMs = new Map<number, number>();
+    try {
+      const { data: spostamenti, error: errSpost } = await supabase
+        .from('event_log')
+        .select('created_at, payload')
+        .eq('type', EVENTO_SPOSTAMENTO)
+        .in('payload->>conversationId', convIds.map(String));
+      if (!errSpost) {
+        for (const e of (spostamenti ?? []) as { created_at: string; payload: { conversationId?: number | string } | null }[]) {
+          const id = Number(e.payload?.conversationId);
+          const ms = Date.parse(e.created_at);
+          if (!Number.isFinite(id) || !Number.isFinite(ms)) continue;
+          spostataAlMs.set(id, Math.max(spostataAlMs.get(id) ?? 0, ms));
+        }
+      }
+    } catch {
+      // vedi sopra
     }
+    const sentByConv = promemoriaGiaInviati(
+      (sentMsgs ?? []) as { conversation_id: number; template_sid: string | null; created_at?: string | null }[],
+      { r24: r24Sids, r3: sid3 },
+      spostataAlMs,
+    );
 
     for (const c of convs) {
       const phone = c.leads?.phone_e164 as string | undefined;
