@@ -198,8 +198,45 @@ export function notaDomandaGiaFatta(step: 1 | 2): string {
   return (
     `RISCALDAMENTO: al lead è già arrivata la domanda su ${tema}. Non rifarla e non farne una ` +
     'simile con parole tue: se ti risponde, prendi atto in una frase e vai avanti. ' +
+    'Se risponde solo con "ok", un pollice o un\'emoji, va bene così: non chiedergli di rispondere ' +
+    'e non insistere, quella domanda è chiusa. ' +
     'Le altre domande che ti servono (il video, l\'orario, la conferma della call) falle come sempre.'
   );
+}
+
+/**
+ * Le frasi con cui il modello rifa' la domanda del riscaldamento a parole sue: per la 1
+ * l'obiettivo e il "perche' adesso", per la 2 chi decide e la cifra. Si guardano SOLO le
+ * frasi che chiedono qualcosa (con "?" o "mi serve una risposta").
+ */
+const RIFA_DOMANDA: Record<1 | 2, RegExp> = {
+  1: /\b(cosa (vuoi|vorresti) ottenere|qual e il tuo obiettivo|perche (proprio )?(adesso|ora))\b/,
+  2: /\b(decid\w* (tu|da sol\w*)|da sol[oa] o|ti confronti con|insieme a qualcuno|con chi decid\w*|1 ?000|3 ?000)\b/,
+};
+const CHIEDE = /\?|mi serve una risposta/;
+
+/**
+ * Guardia dopo il modello (conv 29566, 30/10/2026): il lead risponde «👍» alla domanda 2 e
+ * il modello, nonostante la nota, scrive «Fausto, mi serve una risposta su questo: decidi
+ * da solo o ti confronti con qualcuno…?». Una domanda non si ripete MAI: si tolgono le
+ * frasi che la rifanno. Se non resta niente la risposta e' vuota e non parte nulla (a un
+ * pollice non serve rispondere). Torna il testo e se qualcosa e' stato tolto.
+ */
+export function togliDomandaRifatta(risposta: string, step: 1 | 2): { testo: string; tolta: boolean } {
+  let tolta = false;
+  const righe = risposta.split('\n').map((riga) => {
+    // Frasi: si spezza dopo . ! ? seguiti da spazio, tenendo la punteggiatura.
+    const frasi = riga.match(/[^.!?]+[.!?]*\s*/g) ?? [riga];
+    const tenute = frasi.filter((f) => {
+      const n = normalizza(f);
+      const viaQuesta = CHIEDE.test(f.toLowerCase()) && RIFA_DOMANDA[step].test(n);
+      if (viaQuesta) tolta = true;
+      return !viaQuesta;
+    });
+    return tenute.join('').trim();
+  });
+  if (!tolta) return { testo: risposta, tolta: false };
+  return { testo: righe.filter((r) => r.length > 0).join('\n'), tolta: true };
 }
 
 type RigaChat = { direction: string; body: string | null; created_at?: string };
@@ -264,9 +301,16 @@ export function domandaInAttesa(
 const normalizza = (s: string): string =>
   s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 
-/** Il lead parla di disdire o spostare la call: in quel turno niente domande e niente nota. */
+/**
+ * Il lead parla di disdire o spostare la call: in quel turno niente domande e niente nota.
+ * Dal 30/10/2026 anche anticipare, cancellare e "non sono interessato": «È possibile
+ * anticipare la chiamata alle 20?» (conv 29335) e «le chiedo di cancellare
+ * l'appuntamento» (conv 29874) finivano nella nota come risposta alle domande.
+ * "anticip" solo come verbo (anticipare, anticipiamo…): "un anticipo" o "in anticipo"
+ * possono essere una risposta sul budget.
+ */
 const DISDETTA_SPOSTAMENTO =
-  /\b(spost\w*|rimand\w*|rinvi\w*|annull\w*|disdi\w*|disdett\w*|non posso (venire|esserci|partecipare|farla|farcela)|non ci sono|imprevist\w*)\b/;
+  /\b(spost\w*|rimand\w*|rinvi\w*|annull\w*|disdi\w*|disdett\w*|anticipar\w*|anticipiam\w*|cancell\w*|non sono (piu )?interessat\w*|non posso (venire|esserci|partecipare|farla|farcela)|non ci sono|imprevist\w*)\b/;
 
 export function parlaDiDisdireOSpostare(testo: string): boolean {
   return DISDETTA_SPOSTAMENTO.test(normalizza(testo));
@@ -274,12 +318,13 @@ export function parlaDiDisdireOSpostare(testo: string): boolean {
 
 /**
  * Segnali brutti nella risposta: la nota comincia con ⚠️. Lista piccola e chiara, a parole
- * intere sul testo minuscolo e senza accenti: soldi (anche "non ho soldi"), non posso
- * permettermi, costa, non mi interessa, non ricordo, curiosità, devo chiedere a.
+ * intere sul testo minuscolo e senza accenti: soldi (ma non "avrei anche dei soldi in
+ * piu'", vedi `parlaDiSoldiInNegativo`), non posso permettermi, non posso acquistare o
+ * comprare, costa, non mi interessa, non ricordo, curiosità, devo chiedere a.
  */
 export const SEGNALI_BRUTTI: readonly RegExp[] = [
-  /\bsoldi\b/,
   /\bnon (posso|me lo posso|me la posso) permetter\w*\b/,
+  /\bnon (posso|potrei|riesco a|riuscirei a) (acquistar\w*|comprar\w*)\b/,
   /\bcosta\b/,
   /\bnon mi interessa\b/,
   /\bnon (mi )?ricordo\b/,
@@ -287,9 +332,26 @@ export const SEGNALI_BRUTTI: readonly RegExp[] = [
   /\bdevo chiedere a\b/,
 ];
 
+/** Soldi detti in negativo: "non ho soldi", "pochi soldi", "i soldi sono un problema". */
+const SOLDI_NEGATIVI =
+  /\b(non (ho|abbiamo|avrei|ci sono|li ho)( \w+){0,2} soldi|senza soldi|pochi soldi|poco soldi|soldi non (ci sono|li ho|bastano|abbiamo)|soldi (sono|e) (un |il )?problema|problema (dei|di) soldi|questione di soldi|mancano (i )?soldi)\b/;
+/** Soldi detti in positivo: "avrei anche dei soldi in più", "i soldi ci sono", "ho dei soldi da parte". */
+const SOLDI_POSITIVI =
+  /(^|\s)(?<!non )(ho|avrei|abbiamo|avremmo|avro|avremo)( \w+){0,3} soldi\b|\bsoldi (ci sono|li ho|non sono un problema|non e un problema)\b/;
+
+/**
+ * "soldi" e' un segnale brutto solo in negativo o detto senza contesto ("e i soldi?"):
+ * fino al 30/10/2026 bastava la parola, e «avrei anche dei soldi in più» prendeva il ⚠️.
+ */
+export function parlaDiSoldiInNegativo(t: string): boolean {
+  if (!/\bsoldi\b/.test(t)) return false;
+  if (SOLDI_NEGATIVI.test(t)) return true;
+  return !SOLDI_POSITIVI.test(t);
+}
+
 export function segnaleBrutto(testo: string): boolean {
   const t = normalizza(testo);
-  return SEGNALI_BRUTTI.some((re) => re.test(t));
+  return parlaDiSoldiInNegativo(t) || SEGNALI_BRUTTI.some((re) => re.test(t));
 }
 
 /**
@@ -333,12 +395,35 @@ const DECIDE_CON: readonly { chi: string; re: RegExp }[] = [
 const DECIDE_CON_GENERICO =
   /\b(ne (devo )?parl\w* con|devo (sentire|chiedere|confrontarmi|parlarne)|insieme a|insieme con|con qualcuno|non decido da sol[oa])\b/;
 
+/**
+ * "insieme" da solo (PO 30/10/2026: «Si decide sempre insieme» non accendeva l'avviso):
+ * vale se la frase parla di decidere/scegliere/valutare, o se e' una risposta corta
+ * ("Insieme", "insieme ovviamente"). Non vale "mettere insieme" (i soldi, le ore…).
+ */
+const INSIEME_DECIDE = /\b(decid\w*|decis\w*|scegli\w*|scelt\w*|valut\w*)\b/;
+const MAX_PAROLE_INSIEME = 4;
+
+function decideInsieme(t: string): boolean {
+  if (!/\binsieme\b/.test(t) || /\bmett\w* insieme\b/.test(t)) return false;
+  return INSIEME_DECIDE.test(t) || t.split(' ').length <= MAX_PAROLE_INSIEME;
+}
+
 export function decideCon(testo: string): string[] {
   const t = normalizza(testo);
   if (!t) return [];
   const chi = DECIDE_CON.filter((d) => d.re.test(t)).map((d) => d.chi);
   if (chi.length > 0) return chi;
-  return DECIDE_CON_GENERICO.test(t) ? ['qualcun altro'] : [];
+  return DECIDE_CON_GENERICO.test(t) || decideInsieme(t) ? ['qualcun altro'] : [];
+}
+
+/**
+ * Il testo del lead da girare al CRM: quello del turno PIU' i messaggi arrivati mentre il
+ * turno girava (conv 28998, 30/10/2026: «Fatto» e 20 secondi dopo «Comunque la risposta
+ * alla domanda è semplice: guadagnare di più…». Il turno vedeva solo «Fatto», niente nota;
+ * il messaggio vero finiva sotto la nostra bolla e nessun turno lo rileggeva piu').
+ */
+export function testoRispostaCompleto(testoTurno: string, arrivatiDurante: readonly string[]): string {
+  return [testoTurno, ...arrivatiDurante.map((t) => t.trim())].filter((t) => t.trim()).join(' / ');
 }
 
 /** Lunghezza massima delle parole del lead nella nota: oltre si taglia con "…". */

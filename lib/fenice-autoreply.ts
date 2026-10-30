@@ -4,7 +4,8 @@ import { datePiene, tettoGiornaliero } from './booking-capienza';
 import { gdoContextNote, serveNoemi, type GdoNoteInput } from './gdo-context-note';
 import {
   accodaDomanda, decidiDomanda, domandaInAttesa, eRispostaDaNotare, motivoRiscaldamento, notaDomandaGiaFatta, notaRisposta,
-  parlaDAltro, parlaDiDisdireOSpostare, riscaldamentoInerte, RISCALDAMENTO_CHIUSO, type DomandaDecisa,
+  parlaDAltro, parlaDiDisdireOSpostare, riscaldamentoInerte, RISCALDAMENTO_CHIUSO, testoRispostaCompleto, togliDomandaRifatta,
+  type DomandaDecisa,
 } from './gdo-warmup';
 import { gdoVideoText } from './gdo-agenda';
 import { decideGdoRecap, gdoRecapText } from './gdo-recap';
@@ -441,6 +442,28 @@ export function ultimoInboundId(righe: readonly { direction: string; id?: number
     if (Number.isFinite(n) && (max === null || n > max)) max = n;
   }
   return max;
+}
+
+/**
+ * I messaggi del lead arrivati dopo l'ultimo che il turno ha visto, in ordine. Servono alla
+ * nota del riscaldamento: un messaggio arrivato mentre il turno girava finisce in cronologia
+ * SOTTO la nostra bolla e nessun turno lo rilegge piu' (conv 28998). Nel dubbio, nessuno.
+ */
+async function inboundArrivatiDopo(supabase: Supa, conversationId: number, ultimoId: number | null): Promise<string[]> {
+  if (ultimoId === null) return [];
+  try {
+    const { data } = await supabase
+      .from('messages')
+      .select('id, body')
+      .eq('conversation_id', conversationId)
+      .eq('direction', 'in')
+      .gt('id', ultimoId)
+      .order('id', { ascending: true })
+      .limit(10);
+    return ((data ?? []) as { body: string | null }[]).map((m) => (m.body ?? '').trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
 }
 
 /** E' arrivato un messaggio del lead dopo l'ultimo che il turno ha visto? (lead che scrive ancora) */
@@ -1383,6 +1406,21 @@ export async function drainMarioReplies(
         }
       }
 
+      // Riscaldamento: la domanda in attesa non si rifa' MAI, nemmeno se il lead ha
+      // risposto con un pollice (conv 29566). Le frasi del modello che la rifanno vanno via.
+      if (attesa && !bollaSpostamento && visibleReply) {
+        const pulita = togliDomandaRifatta(visibleReply, attesa.step);
+        if (pulita.tolta) {
+          await supabase.from('event_log').insert({
+            type: 'gdo_warmup_domanda_rifatta_tolta',
+            payload: { conversationId, step: attesa.step, prima: visibleReply.slice(0, 300), dopo: pulita.testo.slice(0, 300) } as never,
+            message: `[gdo] conv ${conversationId}: il modello rifaceva la domanda ${attesa.step} del riscaldamento, frase tolta`,
+            level: 'info',
+          });
+          visibleReply = pulita.testo;
+        }
+      }
+
       // Invia ogni a-capo come messaggio separato (più umano), con breve pausa.
       // La conferma dello spostamento resta UNA bolla (va a capo dentro, come il recap).
       let parts = bollaSpostamento ? [bollaSpostamento] : splitMarioMessages(visibleReply);
@@ -1607,9 +1645,9 @@ export async function drainMarioReplies(
       // Riscaldamento, il turno dopo una domanda: le parole del lead vanno SUBITO al CRM
       // come nota (mai un esito, mai un cambio di stato). Il messaggio al lead e' gia'
       // partito: un errore qui non deve mai propagarsi.
-      const notaRiscaldamento = async (step: 1 | 2, opts: { continua?: boolean } = {}): Promise<boolean> => {
+      const notaRiscaldamento = async (step: 1 | 2, opts: { continua?: boolean; testo?: string } = {}): Promise<boolean> => {
         if (!crmLeadId) return false;
-        const { nota, alert } = notaRisposta(step, testoLeadTurno, opts);
+        const { nota, alert } = notaRisposta(step, opts.testo ?? testoLeadTurno, { continua: opts.continua });
         const extra = opts.continua ? { continua: true } : {};
         try {
           const secret = process.env.BOT_WEBHOOK_SECRET;
@@ -1635,15 +1673,26 @@ export async function drainMarioReplies(
           return false;
         }
       };
+      // I messaggi arrivati mentre il turno girava (dopo la nostra bolla in cronologia):
+      // nessun turno li rileggerebbe, quindi contano per la nota di QUESTO turno (conv 28998:
+      // «Fatto» e 20 secondi dopo la risposta vera). Letti solo se una domanda e' in attesa.
+      const arrivatiDurante = rispostaA || seguitoDi
+        ? await inboundArrivatiDopo(supabase, conversationId, ultimoInboundId(rows))
+        : [];
+      const testoNota = testoRispostaCompleto(testoLeadTurno, arrivatiDurante);
+      const notaPresaDAtto = arrivatiDurante.length > 0 ? isSoloPresaDAtto(testoNota) : turnoPresaDAtto;
+      const notaSoloVideo = arrivatiDurante.length > 0
+        ? confermaVideoVisto(testoNota) && testoNota.split(/\s+/).filter(Boolean).length <= 3
+        : turnoSoloVideo;
       const daNotare = eRispostaDaNotare({
-        testo: testoLeadTurno,
+        testo: testoNota,
         esito: esitoTurno,
         passaggio: result.passToHuman,
-        soloPresaDAtto: turnoPresaDAtto,
-        soloConfermaVideo: turnoSoloVideo,
+        soloPresaDAtto: notaPresaDAtto,
+        soloConfermaVideo: notaSoloVideo,
       });
-      if (rispostaA && daNotare) await notaRiscaldamento(rispostaA);
-      if (seguitoDi && daNotare) await notaRiscaldamento(seguitoDi, { continua: true });
+      if (rispostaA && daNotare) await notaRiscaldamento(rispostaA, { testo: testoNota });
+      if (seguitoDi && daNotare) await notaRiscaldamento(seguitoDi, { continua: true, testo: testoNota });
 
       // Diagnostica del riscaldamento: perche' la domanda parte o salta. Non deve mai
       // rompere il turno: la risposta e' gia' uscita.
@@ -1670,7 +1719,7 @@ export async function drainMarioReplies(
       // scritto a ridosso della domanda, quello fuori tema (problema del video…) e il solo
       // "ok"/"fatto": la domanda 2 resta in attesa per i turni dopo. Un errore non si propaga.
       const attesaDomanda2Resta = attesa?.step === 2
-        && (attesa.continuazione || turnoFuoriTema || turnoPresaDAtto || turnoSoloVideo);
+        && (attesa.continuazione || turnoFuoriTema || notaPresaDAtto || notaSoloVideo);
       const passoNuovo = domandaUscita && decisioneDomanda?.domanda
         ? decisioneDomanda.domanda.step
         : warmupAttivo && (gdoWarmupStep ?? 0) === 2 && !attesaDomanda2Resta

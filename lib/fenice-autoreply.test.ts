@@ -3428,6 +3428,39 @@ describe('drainMarioReplies — riscaldamento del lead GDO dopo il recap (domand
     expect(calls.events.some((e: any) => e.type === 'gdo_warmup_domanda_inviata')).toBe(false);
   });
 
+  it('«Fatto» e la risposta vera arriva mentre il turno gira (conv 28998): la nota la contiene', async () => {
+    const { supabase, calls, messagesRows } = makeDrainSupabase(
+      postino({ gdo_warmup_step: 1 }),
+      [RECAP, fuori(`Perfetto!\n\n${DOMANDA_1}`), dentro('Fatto')],
+    );
+    vi.mocked(generateMarioReply).mockImplementationOnce(async () => {
+      messagesRows.push({ direction: 'in', body: 'Comunque la risposta alla domanda è semplice: guadagnare di più', template_sid: null, created_at: new Date().toISOString(), id: 999 });
+      return reply('Perfetto, grazie!') as never;
+    });
+
+    await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+    expect(vi.mocked(inviaNotaAlCrm)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(inviaNotaAlCrm).mock.calls[0][3])
+      .toBe('Riscaldamento – obiettivo e perché adesso: «Fatto / Comunque la risposta alla domanda è semplice: guadagnare di più»');
+  });
+
+  it('il lead risponde 👍 alla domanda 2 e il modello la rifà (conv 29566): la frase non parte', async () => {
+    const { supabase, calls } = makeDrainSupabase(
+      postino({ gdo_warmup_step: 2 }),
+      [RECAP, fuori(`Grazie!\n\n${DOMANDA_2}`), dentro('👍')],
+    );
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(
+      reply('Luca, mi serve una risposta su questo: decidi da solo o ti confronti con qualcuno prima di partire col percorso?'),
+    );
+
+    await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+    expect(calls.messageInserts).toEqual([]);
+    expect(calls.events.find((e: any) => e.type === 'gdo_warmup_domanda_rifatta_tolta')?.payload).toMatchObject({ step: 2 });
+    expect(vi.mocked(inviaNotaAlCrm)).not.toHaveBeenCalled();
+  });
+
   it('il lead non risponde alla domanda 1 ("ok"): niente nota, la domanda 1 non si ripete, si passa alla 2', async () => {
     const { supabase, calls } = makeDrainSupabase(
       postino({ gdo_warmup_step: 1 }),

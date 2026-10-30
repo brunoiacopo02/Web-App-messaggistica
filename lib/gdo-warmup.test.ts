@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   accodaDomanda, decideCon, decidiDomanda, domandaNelRecap, notaDomandaGiaFatta, DOMANDA_1, DOMANDA_2, domandaInAttesa, eRispostaDaNotare, motivoRiscaldamento,
-  notaRisposta, parlaDAltro, parlaDiDisdireOSpostare, riscaldamentoInerte, segnaleBrutto, type TurnoRiscaldamento,
+  notaRisposta, parlaDAltro, parlaDiDisdireOSpostare, riscaldamentoInerte, segnaleBrutto, testoRispostaCompleto, togliDomandaRifatta, type TurnoRiscaldamento,
 } from './gdo-warmup';
 
 const NOW = Date.parse('2026-10-21T12:00:00+02:00');
@@ -296,4 +296,71 @@ describe('eRispostaDaNotare', () => {
   ] as const)('%s → no', (_, over) => {
     expect(eRispostaDaNotare({ ...r, ...over })).toBe(false);
   });
+});
+
+describe('difetti del 30/10/2026', () => {
+  it.each([
+    ['Si decide sempre insieme', ['qualcun altro']],
+    ['Insieme', ['qualcun altro']],
+    ['insieme ovviamente', ['qualcun altro']],
+    ['la scelta la facciamo insieme in famiglia', ['famiglia']],
+    ['valutiamo insieme', ['qualcun altro']],
+  ])('1. "insieme" da solo: "%s" → %j', (t, atteso) => expect(decideCon(t)).toEqual(atteso));
+  it.each([
+    'devo mettere insieme i soldi per il corso ma decido io',
+    'vorrei un lavoro dove stare insieme alla mia gente di più e guadagnare meglio',
+    'decido io',
+  ])('1. niente falso positivo: "%s"', (t) => expect(decideCon(t)).toEqual([]));
+
+  it.each(['non posso acquistare adesso', 'Purtroppo non posso comprare il corso', 'non riesco a comprarlo'])(
+    '2. "%s" → ⚠️', (t) => expect(segnaleBrutto(t)).toBe(true),
+  );
+
+  it.each([
+    'È possibile anticipare la chiamata alle 20?',
+    "le chiedo di cancellare l'appuntamento",
+    'non sono interessato',
+    'Non sono più interessata',
+    'possiamo anticiparla?',
+  ])('3. "%s" → disdire/spostare, non risposta', (t) => {
+    expect(parlaDiDisdireOSpostare(t)).toBe(true);
+    expect(eRispostaDaNotare({ testo: t, esito: false, passaggio: false, soloPresaDAtto: false, soloConfermaVideo: false })).toBe(false);
+  });
+  it.each(['posso dare un anticipo e poi a rate', 'pago in anticipo'])('3. "%s" resta una risposta', (t) => {
+    expect(parlaDiDisdireOSpostare(t)).toBe(false);
+  });
+
+  it('4. la risposta arrivata durante il turno entra nella nota', () => {
+    const testo = testoRispostaCompleto('Fatto', ['Comunque la risposta alla domanda è semplice: guadagnare di più nel breve periodo']);
+    expect(testo).toBe('Fatto / Comunque la risposta alla domanda è semplice: guadagnare di più nel breve periodo');
+    expect(eRispostaDaNotare({ testo, esito: false, passaggio: false, soloPresaDAtto: false, soloConfermaVideo: false })).toBe(true);
+    expect(testoRispostaCompleto('ok', [])).toBe('ok');
+    expect(testoRispostaCompleto('', ['  ', 'voglio cambiare'])).toBe('voglio cambiare');
+  });
+
+  it('5. la nota al modello dice di non insistere su ok/emoji', () => {
+    expect(notaDomandaGiaFatta(2)).toContain('non chiedergli di rispondere');
+  });
+  it('5. la domanda 2 rifatta dal modello si toglie (conv 29566)', () => {
+    const r = togliDomandaRifatta('Fausto, mi serve una risposta su questo: decidi da solo o ti confronti con qualcuno prima di partire col percorso?', 2);
+    expect(r).toEqual({ testo: '', tolta: true });
+  });
+  it('5. si toglie solo la frase che rifà la domanda', () => {
+    const r = togliDomandaRifatta('Perfetto, a lunedì allora! Ma alla call decidi tu o insieme a qualcuno?', 2);
+    expect(r).toEqual({ testo: 'Perfetto, a lunedì allora!', tolta: true });
+    const r1 = togliDomandaRifatta('Grazie! E cosa vorresti ottenere con il percorso?\nCi sentiamo lunedì.', 1);
+    expect(r1).toEqual({ testo: 'Grazie!\nCi sentiamo lunedì.', tolta: true });
+  });
+  it('5. una risposta normale resta intatta', () => {
+    const t = 'Perfetto Fausto, ci sentiamo lunedì 🙂 Hai già visto il video?';
+    expect(togliDomandaRifatta(t, 2)).toEqual({ testo: t, tolta: false });
+    expect(togliDomandaRifatta('Il percorso costa da 1.000 a 3.000 euro, come ti dicevo.', 2).tolta).toBe(false);
+  });
+
+  it.each(['avrei anche dei soldi in più', 'i soldi ci sono', 'ho dei soldi da parte', 'i soldi non sono un problema'])(
+    '6. "%s" → niente ⚠️', (t) => expect(segnaleBrutto(t)).toBe(false),
+  );
+  it.each(['non ho soldi', 'non ho abbastanza soldi', 'ho pochi soldi', 'i soldi sono un problema', 'e i soldi?', 'soldi non ne ho'])(
+    '6. "%s" → ⚠️', (t) => expect(segnaleBrutto(t)).toBe(true),
+  );
 });
