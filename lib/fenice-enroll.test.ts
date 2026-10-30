@@ -1664,7 +1664,7 @@ describe('riapreChatFerma — chat ferma con un lead nuovo (30/10/2026)', () => 
   const NOW = Date.parse('2026-10-30T10:00:00Z');
   const base = {
     crmLeadIdPrima: 'LEAD-VECCHIO', crmLeadIdNuovo: 'LEAD-NUOVO', aiStatus: 'active', botOutcome: null,
-    aiPausedAt: null, postino: false, lancio: false, ultimoMessaggioMs: NOW - 35 * 24 * 3600_000, nowMs: NOW,
+    aiPausedAt: null, callGdoFutura: false, lancio: false, ultimoMessaggioMs: NOW - 35 * 24 * 3600_000, nowMs: NOW,
   };
 
   it('chat active zitta da settimane, lead nuovo → riparte', () => {
@@ -1688,7 +1688,7 @@ describe('riapreChatFerma — chat ferma con un lead nuovo (30/10/2026)', () => 
     expect(riapreChatFerma({ ...base, aiStatus: 'booked' })).toBe(false);
     expect(riapreChatFerma({ ...base, aiStatus: 'handed_off' })).toBe(false);
     expect(riapreChatFerma({ ...base, aiPausedAt: '2026-10-01T00:00:00Z' })).toBe(false);
-    expect(riapreChatFerma({ ...base, postino: true })).toBe(false);
+    expect(riapreChatFerma({ ...base, callGdoFutura: true })).toBe(false);
     expect(riapreChatFerma({ ...base, lancio: true })).toBe(false);
   });
 });
@@ -1711,6 +1711,29 @@ describe('enrollLeadIntoMario — chat ferma da oltre 96h con un lead nuovo (buc
     const tipi = calls.events.map((e: any) => e.type);
     expect(tipi).toContain('fenice_enroll_chat_ferma_ripresa');
     expect(tipi).not.toContain('apertura_saltata_chat_in_corso');
+  });
+
+  it('A: vecchia chat postino di un GDO (agenda di settembre, call passata) → riparte anche lei', async () => {
+    vi.setSystemTime(MEZZOGIORNO);
+    const { supabase, calls } = makeSupabase(0, false, {
+      convRow: { ai_owner: 'mario', ai_status: 'active', crm_lead_id: 'LEAD-VECCHIO', gdo_appuntamento_at: '2026-06-30T16:00:00Z' } as never,
+      outboundCount: 3, ultimoMessaggioAt: settimaneFa(),
+    });
+    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000306', crmLeadId: 'LEAD-NUOVO' });
+    expect(res).not.toHaveProperty('aperturaSaltata');
+    expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+    expect(calls.updates.at(-1)).toMatchObject({ gdo_agenda_at: null, crm_lead_id: 'LEAD-NUOVO' });
+  });
+
+  it('A: call del GDO ancora da fare → nessuna ripresa, apertura saltata come prima', async () => {
+    vi.setSystemTime(MEZZOGIORNO);
+    const { supabase } = makeSupabase(0, false, {
+      convRow: { ai_owner: 'mario', ai_status: 'active', crm_lead_id: 'LEAD-VECCHIO', gdo_appuntamento_at: '2026-07-20T16:00:00Z' } as never,
+      outboundCount: 3, ultimoMessaggioAt: settimaneFa(),
+    });
+    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000307', crmLeadId: 'LEAD-NUOVO' });
+    expect(res).toMatchObject({ aperturaSaltata: true });
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
   });
 
   it('A: stessa chat ma con un messaggio di 2 giorni fa → resta apertura_saltata come prima', async () => {

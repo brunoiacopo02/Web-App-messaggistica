@@ -16,7 +16,6 @@ import { mittenteDiConversazione, numeroPrimario } from './mittente';
 import { mittenteBenvenutoLancio } from './lancio-mittente';
 import { scegliMittenteNuovo, sidAperturaMario } from './scelta-mittente';
 import { HANDOFF_VERGINI, HANDOFF_CRM_NON_DEL_BOT } from './lancio-vergini';
-import { postinoGdo } from './bot-followups';
 import { lancioInCorso } from './lancio-fase';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
@@ -128,6 +127,9 @@ export const CHAT_FERMA_MS = 96 * 60 * 60 * 1000;
  * `crm_lead_id` spostato sul lead nuovo e basta. Ma la chat era ferma da settimane
  * (chat 17134: zitta dal 25/09, trattenuta dalla conferma del form), nessun cron la
  * classificava piu' e il lead nuovo restava NEW sul bot per sempre (19 chat al 30/10).
+ * 18 su 19 erano vecchie chat "postino" di un GDO (agenda di agosto-settembre, call gia'
+ * passata o mai saputa): `bot-followups` le salta come postino (l'agenda e' piu' recente
+ * dell'ultimo arruolamento, che non e' mai ripartito), quindi nemmeno l'esito arrivava.
  *
  * Si riparte (apertura per il lead nuovo, esito azzerato, `ai_started_at` = adesso) solo se:
  * - il leadId e' NUOVO e diverso da quello gia' sulla chat (un ritento dello stesso lead
@@ -135,8 +137,9 @@ export const CHAT_FERMA_MS = 96 * 60 * 60 * 1000;
  * - nessun messaggio, in nessuna direzione, da oltre 96h: chi ci sta parlando non deve
  *   sentirsi dire "ciao" da capo, ed e' il motivo per cui le guardie esistono;
  * - la chat non e' in mano a qualcun altro: niente APPUNTAMENTO (terminale), niente
- *   booked/handed_off, niente fermo manuale, niente call del GDO ancora valida, niente
- *   lancio in corso.
+ *   booked/handed_off, niente fermo manuale, niente call del GDO ancora da fare (una
+ *   vecchia agenda GDO con la call passata o senza data non conta: il CRM ci ha appena
+ *   dato il lead nuovo), niente lancio in corso.
  */
 export function riapreChatFerma(g: {
   crmLeadIdPrima: string | null | undefined;
@@ -144,8 +147,8 @@ export function riapreChatFerma(g: {
   aiStatus: string | null;
   botOutcome: string | null;
   aiPausedAt: string | null;
-  /** La chat e' ancora del GDO (`postinoGdo`). */
-  postino: boolean;
+  /** La call fissata dal GDO (`gdo_appuntamento_at`) e' ancora da fare. */
+  callGdoFutura: boolean;
   /** Lancio Web Dev AI in corso (`lancioInCorso`). */
   lancio: boolean;
   /** Ultimo messaggio della chat in ms, null = nessun messaggio o lettura fallita. */
@@ -155,7 +158,7 @@ export function riapreChatFerma(g: {
   if (!g.crmLeadIdNuovo || !g.crmLeadIdPrima || g.crmLeadIdPrima === g.crmLeadIdNuovo) return false;
   if (g.botOutcome === 'APPUNTAMENTO') return false;
   if (g.aiStatus === 'booked' || g.aiStatus === 'handed_off') return false;
-  if (g.aiPausedAt || g.postino || g.lancio) return false;
+  if (g.aiPausedAt || g.callGdoFutura || g.lancio) return false;
   if (g.ultimoMessaggioMs === null) return false;
   return g.nowMs - g.ultimoMessaggioMs > CHAT_FERMA_MS;
 }
@@ -235,15 +238,15 @@ export async function enrollLeadIntoMario(
     // della select si controlla: "non lo so" non è "è nullo", e nel dubbio si apre.
     const { data: convRow, error: erroreConv } = await supabase
       .from('conversations')
-      .select('ai_owner, ai_status, crm_lead_id, bot_outcome, ai_paused_at, gdo_agenda_at, gdo_appuntamento_at, ai_started_at, lancio_slug, lancio_fase')
+      .select('ai_owner, ai_status, crm_lead_id, bot_outcome, ai_paused_at, gdo_appuntamento_at, lancio_slug, lancio_fase')
       .eq('id', conversationId).single();
     const { count: partiti } = await supabase
       .from('messages').select('id', { count: 'exact', head: true })
       .eq('conversation_id', conversationId).eq('direction', 'out').not('twilio_sid', 'is', null);
     const riga = convRow as {
       crm_lead_id?: string | null; bot_outcome?: string | null; ai_status?: string | null;
-      ai_paused_at?: string | null; gdo_agenda_at?: string | null; gdo_appuntamento_at?: string | null;
-      ai_started_at?: string | null; lancio_slug?: string | null; lancio_fase?: string | null;
+      ai_paused_at?: string | null; gdo_appuntamento_at?: string | null;
+      lancio_slug?: string | null; lancio_fase?: string | null;
     } | null;
     crmLeadIdPrima = erroreConv ? undefined : (riga?.crm_lead_id ?? null);
     azzeraEsito = !erroreConv && azzeraEsitoPerLeadNuovo({
@@ -260,11 +263,7 @@ export async function enrollLeadIntoMario(
       aiStatus: riga?.ai_status ?? null,
       botOutcome: riga?.bot_outcome ?? null,
       aiPausedAt: riga?.ai_paused_at ?? null,
-      postino: postinoGdo({
-        gdo_agenda_at: riga?.gdo_agenda_at ?? null,
-        ai_started_at: riga?.ai_started_at ?? null,
-        gdo_appuntamento_at: riga?.gdo_appuntamento_at ?? null,
-      }, nowMs),
+      callGdoFutura: !!riga?.gdo_appuntamento_at && Date.parse(riga.gdo_appuntamento_at) > nowMs,
       lancio: lancioInCorso(riga ?? {}),
       nowMs,
     };
@@ -328,6 +327,12 @@ export async function enrollLeadIntoMario(
     // Lead nuovo del CRM su una chat che aveva l'esito di un altro lead: senza azzerarlo
     // il cron richiude la chat come gia' esitata e il lead nuovo resta senza esito.
     ...(azzeraEsito ? ESITO_AZZERATO : {}),
+    // Chat ferma ripresa per il lead nuovo: una vecchia agenda del GDO (call passata o mai
+    // saputa, `riapreChatFerma` esclude quella ancora da fare) apparteneva al lead di prima.
+    // Lasciata li', la chat resterebbe "postino" per sempre: niente apertura differita
+    // (sequence-touches salta chi ha `gdo_agenda_at`) e il drain risponderebbe da postino
+    // parlando di una call che non c'e' piu'.
+    ...(chatFerma ? { gdo_agenda_at: null } : {}),
   };
 
   // Apertura differita: nel cuore della notte i template aprono peggio (-10pt
