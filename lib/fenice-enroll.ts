@@ -16,6 +16,8 @@ import { mittenteDiConversazione, numeroPrimario } from './mittente';
 import { mittenteBenvenutoLancio } from './lancio-mittente';
 import { scegliMittenteNuovo, sidAperturaMario } from './scelta-mittente';
 import { HANDOFF_VERGINI, HANDOFF_CRM_NON_DEL_BOT } from './lancio-vergini';
+import { postinoGdo } from './bot-followups';
+import { lancioInCorso } from './lancio-fase';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -111,6 +113,53 @@ export function azzeraEsitoPerLeadNuovo(g: {
   return g.crmLeadIdPrima !== g.crmLeadIdNuovo;
 }
 
+/** Oltre questo silenzio (nessun messaggio, ne' nostro ne' del lead) la chat e' ferma:
+ *  e' la stessa soglia della resa (`TRACKB_GIVEUP_H`, 96h), oltre la quale nessuno fissa piu'. */
+export const CHAT_FERMA_MS = 96 * 60 * 60 * 1000;
+
+/**
+ * Pure: questo arruolamento deve riprendere da capo una chat ferma, invece di saltare
+ * l'apertura?
+ *
+ * Il caso (30/10/2026): il CRM reimporta la persona con un leadId NUOVO e la chat del
+ * lead vecchio e' ancora 'active', o e' chiusa ma il lead aveva scritto negli ultimi 7
+ * giorni. Le due guardie anti-doppione (`apreSopraChatViva` e `conversazione_viva` di
+ * `apertutaDaFermare`) la scambiavano per una conversazione in corso: apertura saltata,
+ * `crm_lead_id` spostato sul lead nuovo e basta. Ma la chat era ferma da settimane
+ * (chat 17134: zitta dal 25/09, trattenuta dalla conferma del form), nessun cron la
+ * classificava piu' e il lead nuovo restava NEW sul bot per sempre (19 chat al 30/10).
+ *
+ * Si riparte (apertura per il lead nuovo, esito azzerato, `ai_started_at` = adesso) solo se:
+ * - il leadId e' NUOVO e diverso da quello gia' sulla chat (un ritento dello stesso lead
+ *   non riapre niente);
+ * - nessun messaggio, in nessuna direzione, da oltre 96h: chi ci sta parlando non deve
+ *   sentirsi dire "ciao" da capo, ed e' il motivo per cui le guardie esistono;
+ * - la chat non e' in mano a qualcun altro: niente APPUNTAMENTO (terminale), niente
+ *   booked/handed_off, niente fermo manuale, niente call del GDO ancora valida, niente
+ *   lancio in corso.
+ */
+export function riapreChatFerma(g: {
+  crmLeadIdPrima: string | null | undefined;
+  crmLeadIdNuovo: string | null;
+  aiStatus: string | null;
+  botOutcome: string | null;
+  aiPausedAt: string | null;
+  /** La chat e' ancora del GDO (`postinoGdo`). */
+  postino: boolean;
+  /** Lancio Web Dev AI in corso (`lancioInCorso`). */
+  lancio: boolean;
+  /** Ultimo messaggio della chat in ms, null = nessun messaggio o lettura fallita. */
+  ultimoMessaggioMs: number | null;
+  nowMs: number;
+}): boolean {
+  if (!g.crmLeadIdNuovo || !g.crmLeadIdPrima || g.crmLeadIdPrima === g.crmLeadIdNuovo) return false;
+  if (g.botOutcome === 'APPUNTAMENTO') return false;
+  if (g.aiStatus === 'booked' || g.aiStatus === 'handed_off') return false;
+  if (g.aiPausedAt || g.postino || g.lancio) return false;
+  if (g.ultimoMessaggioMs === null) return false;
+  return g.nowMs - g.ultimoMessaggioMs > CHAT_FERMA_MS;
+}
+
 /** I campi da scrivere quando `azzeraEsitoPerLeadNuovo` dice si'. */
 const ESITO_AZZERATO = { bot_outcome: null, bot_outcome_at: null, bot_scheduled_at: null } as const;
 
@@ -169,6 +218,9 @@ export async function enrollLeadIntoMario(
   let azzeraEsito = false;
   // Il leadId del CRM gia' scritto sulla chat; `undefined` = lettura fallita, non si sa.
   let crmLeadIdPrima: string | null | undefined;
+  // Chat ferma da oltre 96h con un leadId nuovo: le guardie anti-doppione non valgono
+  // (vedi `riapreChatFerma`).
+  let chatFerma = false;
   {
     // Se una delle due letture non si sa com'è andata, l'apertura PARTE: un lead che
     // resta muto per sempre è peggio di un'apertura di troppo.
@@ -182,18 +234,62 @@ export async function enrollLeadIntoMario(
     // mai scritti: preso in carico sulla carta, muto nei fatti. Per questo l'errore
     // della select si controlla: "non lo so" non è "è nullo", e nel dubbio si apre.
     const { data: convRow, error: erroreConv } = await supabase
-      .from('conversations').select('ai_owner, ai_status, crm_lead_id, bot_outcome').eq('id', conversationId).single();
+      .from('conversations')
+      .select('ai_owner, ai_status, crm_lead_id, bot_outcome, ai_paused_at, gdo_agenda_at, gdo_appuntamento_at, ai_started_at, lancio_slug, lancio_fase')
+      .eq('id', conversationId).single();
     const { count: partiti } = await supabase
       .from('messages').select('id', { count: 'exact', head: true })
       .eq('conversation_id', conversationId).eq('direction', 'out').not('twilio_sid', 'is', null);
-    const riga = convRow as { crm_lead_id?: string | null; bot_outcome?: string | null } | null;
+    const riga = convRow as {
+      crm_lead_id?: string | null; bot_outcome?: string | null; ai_status?: string | null;
+      ai_paused_at?: string | null; gdo_agenda_at?: string | null; gdo_appuntamento_at?: string | null;
+      ai_started_at?: string | null; lancio_slug?: string | null; lancio_fase?: string | null;
+    } | null;
     crmLeadIdPrima = erroreConv ? undefined : (riga?.crm_lead_id ?? null);
     azzeraEsito = !erroreConv && azzeraEsitoPerLeadNuovo({
       crmLeadIdPrima: riga?.crm_lead_id ?? null,
       crmLeadIdNuovo: args.crmLeadId ?? null,
       botOutcome: riga?.bot_outcome ?? null,
     });
-    if (!erroreConv && apreSopraChatViva({
+    // Chat ferma da oltre 96h con un lead nuovo: si riparte da capo (vedi `riapreChatFerma`).
+    // L'ultimo messaggio si legge solo quando il resto delle condizioni c'e' gia'.
+    const nowMs = Date.now();
+    const condizioniFerma = {
+      crmLeadIdPrima,
+      crmLeadIdNuovo: args.crmLeadId ?? null,
+      aiStatus: riga?.ai_status ?? null,
+      botOutcome: riga?.bot_outcome ?? null,
+      aiPausedAt: riga?.ai_paused_at ?? null,
+      postino: postinoGdo({
+        gdo_agenda_at: riga?.gdo_agenda_at ?? null,
+        ai_started_at: riga?.ai_started_at ?? null,
+        gdo_appuntamento_at: riga?.gdo_appuntamento_at ?? null,
+      }, nowMs),
+      lancio: lancioInCorso(riga ?? {}),
+      nowMs,
+    };
+    if (!erroreConv && riapreChatFerma({ ...condizioniFerma, ultimoMessaggioMs: 0 })) {
+      const { data: ultimo, error: erroreUltimo } = await supabase
+        .from('messages').select('created_at')
+        .eq('conversation_id', conversationId)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      const at = (ultimo as { created_at: string }[] | null)?.[0]?.created_at;
+      chatFerma = !erroreUltimo && riapreChatFerma({ ...condizioniFerma, ultimoMessaggioMs: at ? Date.parse(at) : null });
+    }
+    if (chatFerma) {
+      await supabase.from('event_log').insert({
+        type: 'fenice_enroll_chat_ferma_ripresa',
+        payload: {
+          phone: args.phone, conversationId, crmLeadId: args.crmLeadId ?? null,
+          leadIdPrecedente: crmLeadIdPrima ?? null, aiStatusPrima: riga?.ai_status ?? null,
+          esitoPrima: riga?.bot_outcome ?? null,
+        } as never,
+        message: `[bot-fissatore] conv ${conversationId}: chat ferma da oltre 96h, riparte per il lead nuovo ${args.crmLeadId}`,
+        level: 'info',
+      });
+    }
+    if (!erroreConv && !chatFerma && apreSopraChatViva({
       aiOwner: convRow?.ai_owner ?? null,
       aiStatus: convRow?.ai_status ?? null,
       crmLeadId: (convRow as { crm_lead_id?: string | null } | null)?.crm_lead_id ?? null,
@@ -266,7 +362,7 @@ export async function enrollLeadIntoMario(
   // stessa ragione non serve la loro `personKey`: è lo stesso numero, quindi è già la
   // stessa chat. La persona che torna dopo giorni ha l'ultimo outbound fuori finestra e
   // riceve la sua apertura come sempre.
-  const guardia = args.crmLeadId ? await apertutaDaFermare(supabase, conversationId) : null;
+  const guardia = args.crmLeadId && !chatFerma ? await apertutaDaFermare(supabase, conversationId) : null;
   if (guardia) {
     // Stessa persona, leadId NUOVO: l'apertura non riparte, ma la chat passa al lead
     // nuovo. Fino al 29/10/2026 qui non si scriveva niente: rispondevamo al CRM

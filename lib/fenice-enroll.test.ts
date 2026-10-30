@@ -14,7 +14,7 @@ vi.mock('./scelta-mittente', () => ({
   sidAperturaMario: vi.fn(() => ['HX_OPEN']),
 }));
 
-import { apreSopraChatViva, azzeraEsitoPerLeadNuovo, enrollGdoLeadAsPostino, enrollLeadIntoMario } from './fenice-enroll';
+import { apreSopraChatViva, azzeraEsitoPerLeadNuovo, enrollGdoLeadAsPostino, enrollLeadIntoMario, riapreChatFerma, CHAT_FERMA_MS } from './fenice-enroll';
 import { findOrCreateLeadConversation, sendTemplateAndLog } from './messaging';
 import { getLancioSettings } from './lancio-settings';
 import { lancioBenvenutoText } from './lancio-fase';
@@ -40,6 +40,8 @@ function makeSupabase(
     lancioRow?: { lancio_slug: string | null; lancio_fase: string | null; lancio_benvenuto_at?: string | null };
     /** La rilettura dello stato del lancio va in errore: "non lo so", non "non c'e'". */
     lancioErrore?: boolean;
+    /** L'ultimo messaggio della chat (la lettura di `riapreChatFerma`). Assente = nessuno. */
+    ultimoMessaggioAt?: string;
   } = {},
 ) {
   const calls = { updates: [] as any[], events: [] as any[], conteggi: 0 };
@@ -87,7 +89,12 @@ function makeSupabase(
         // nessuna riga, un numero su tutte le conversazioni) e il conteggio degli
         // outbound già partiti della guardia `apreSopraChatViva` (`head: true`, senza
         // finestra). Le ultime due si distinguono proprio dal `gte`.
-        const chain: any = { eq: () => chain, gte: () => chain, not: () => chain, limit: async () => ({ data: [] }) };
+        let ordinata = false;
+        const chain: any = {
+          eq: () => chain, gte: () => chain, not: () => chain,
+          order: () => { ordinata = true; return chain; },
+          limit: async () => ({ data: ordinata && guardia.ultimoMessaggioAt ? [{ created_at: guardia.ultimoMessaggioAt }] : [] }),
+        };
         return {
           select: (_colonne: string, opzioni?: { head?: boolean }) => {
             if (!opzioni?.head) return chain;
@@ -589,7 +596,7 @@ describe('enrollGdoLeadAsPostino — arruolamento in modalità postino', () => {
  * Fake Supabase che sa anche leggere: serve alla guardia anti-doppione, che prima di
  * inviare guarda il crm_lead_id della conv e se un outbound è già partito di recente.
  */
-function makeSupabaseLeggibile(opts: { crmLeadId?: string | null; outboundRecenti?: number; /** Righe in uscita recenti FALLITE (senza `twilio_sid`): il `.not('twilio_sid','is',null)` della guardia le scarta. */ outboundFalliti?: number; lastInboundAt?: string | null; benvenutiUltimaOra?: number; /** Esito gia' scritto sulla chat (lead di prima). */ botOutcome?: string | null; /** Lo stato del lancio gia' scritto sulla riga (ri-arruolamento). */ lancioRow?: { lancio_slug: string | null; lancio_fase: string | null; lancio_benvenuto_at?: string | null } }) {
+function makeSupabaseLeggibile(opts: { crmLeadId?: string | null; outboundRecenti?: number; /** Righe in uscita recenti FALLITE (senza `twilio_sid`): il `.not('twilio_sid','is',null)` della guardia le scarta. */ outboundFalliti?: number; lastInboundAt?: string | null; benvenutiUltimaOra?: number; /** Esito gia' scritto sulla chat (lead di prima). */ botOutcome?: string | null; /** Lo stato del lancio gia' scritto sulla riga (ri-arruolamento). */ lancioRow?: { lancio_slug: string | null; lancio_fase: string | null; lancio_benvenuto_at?: string | null }; /** Stato della chat e ultimo messaggio (per `riapreChatFerma`). */ aiStatus?: string | null; ultimoMessaggioAt?: string; aiPausedAt?: string | null }) {
   const calls = { updates: [] as any[], events: [] as any[] };
   const supabase: any = {
     from(table: string) {
@@ -601,7 +608,7 @@ function makeSupabaseLeggibile(opts: { crmLeadId?: string | null; outboundRecent
             return chain;
           },
           select(colonne?: string) {
-            const riga = { ai_owner: null, ai_status: null, crm_lead_id: opts.crmLeadId ?? null, last_inbound_at: opts.lastInboundAt ?? null, bot_outcome: opts.botOutcome ?? null };
+            const riga = { ai_owner: null, ai_status: opts.aiStatus ?? null, crm_lead_id: opts.crmLeadId ?? null, last_inbound_at: opts.lastInboundAt ?? null, bot_outcome: opts.botOutcome ?? null, ai_paused_at: opts.aiPausedAt ?? null };
             // `single()` è la lettura della guardia `apreSopraChatViva`: qui la chat non
             // è di Mario, quindi quella guardia non scatta e resta in scena l'anti-doppione.
             // La `maybeSingle()` che chiede `lancio_slug` è invece la rilettura dello
@@ -615,10 +622,15 @@ function makeSupabaseLeggibile(opts: { crmLeadId?: string | null; outboundRecent
         const partiti = Array.from({ length: opts.outboundRecenti ?? 0 }, (_, i) => ({ id: i, twilio_sid: `SM${i}` }));
         const falliti = Array.from({ length: opts.outboundFalliti ?? 0 }, (_, i) => ({ id: 100 + i, twilio_sid: null }));
         let soloPartiti = false;
+        let ordinata = false;
         const chain: any = {
           eq: () => chain, gte: () => chain,
+          order: () => { ordinata = true; return chain; },
           not: (col: string, op: string, val: unknown) => { if (col === 'twilio_sid' && op === 'is' && val === null) soloPartiti = true; return chain; },
-          limit: async () => ({ data: soloPartiti ? partiti : [...partiti, ...falliti] }),
+          limit: async () => {
+            if (ordinata) return { data: opts.ultimoMessaggioAt ? [{ created_at: opts.ultimoMessaggioAt }] : [] };
+            return { data: soloPartiti ? partiti : [...partiti, ...falliti] };
+          },
         };
         const conteggio: any = {
           eq: () => conteggio, gte: () => conteggio, not: () => conteggio,
@@ -1645,5 +1657,112 @@ describe('enrollLeadIntoMario — apertura doppia fermata con un leadId nuovo', 
     const { supabase, calls } = makeSupabaseLeggibile({ crmLeadId: 'LEAD-1', outboundRecenti: 1, botOutcome: 'NON_RISPOSTO' });
     await enrollLeadIntoMario(supabase, { phone: '+393330000204', crmLeadId: 'LEAD-1' });
     expect(calls.updates).toEqual([]);
+  });
+});
+
+describe('riapreChatFerma — chat ferma con un lead nuovo (30/10/2026)', () => {
+  const NOW = Date.parse('2026-10-30T10:00:00Z');
+  const base = {
+    crmLeadIdPrima: 'LEAD-VECCHIO', crmLeadIdNuovo: 'LEAD-NUOVO', aiStatus: 'active', botOutcome: null,
+    aiPausedAt: null, postino: false, lancio: false, ultimoMessaggioMs: NOW - 35 * 24 * 3600_000, nowMs: NOW,
+  };
+
+  it('chat active zitta da settimane, lead nuovo → riparte', () => {
+    expect(riapreChatFerma(base)).toBe(true);
+  });
+  it('chat chiusa con INTERROTTO e lead nuovo → riparte', () => {
+    expect(riapreChatFerma({ ...base, aiStatus: 'closed', botOutcome: 'INTERROTTO', ultimoMessaggioMs: NOW - 6 * 24 * 3600_000 })).toBe(true);
+  });
+  it('ultimo messaggio dentro le 96h → no (chi parla non sente "ciao" da capo)', () => {
+    expect(riapreChatFerma({ ...base, ultimoMessaggioMs: NOW - CHAT_FERMA_MS + 60_000 })).toBe(false);
+  });
+  it('stesso leadId, leadId mancante o lettura fallita → no', () => {
+    expect(riapreChatFerma({ ...base, crmLeadIdNuovo: 'LEAD-VECCHIO' })).toBe(false);
+    expect(riapreChatFerma({ ...base, crmLeadIdPrima: null })).toBe(false);
+    expect(riapreChatFerma({ ...base, crmLeadIdPrima: undefined })).toBe(false);
+    expect(riapreChatFerma({ ...base, crmLeadIdNuovo: null })).toBe(false);
+    expect(riapreChatFerma({ ...base, ultimoMessaggioMs: null })).toBe(false);
+  });
+  it('APPUNTAMENTO, booked, handed_off, fermo manuale, GDO, lancio → no', () => {
+    expect(riapreChatFerma({ ...base, botOutcome: 'APPUNTAMENTO', aiStatus: 'closed' })).toBe(false);
+    expect(riapreChatFerma({ ...base, aiStatus: 'booked' })).toBe(false);
+    expect(riapreChatFerma({ ...base, aiStatus: 'handed_off' })).toBe(false);
+    expect(riapreChatFerma({ ...base, aiPausedAt: '2026-10-01T00:00:00Z' })).toBe(false);
+    expect(riapreChatFerma({ ...base, postino: true })).toBe(false);
+    expect(riapreChatFerma({ ...base, lancio: true })).toBe(false);
+  });
+});
+
+describe('enrollLeadIntoMario — chat ferma da oltre 96h con un lead nuovo (buchi A e B)', () => {
+  const settimaneFa = () => new Date(Date.now() - 35 * 24 * 3600_000).toISOString();
+
+  it('A: chat active ferma (es. 17134) → niente apertura_saltata, apertura al lead nuovo e chat ripresa', async () => {
+    vi.setSystemTime(MEZZOGIORNO);
+    const { supabase, calls } = makeSupabase(0, false, {
+      convRow: { ai_owner: 'mario', ai_status: 'active', crm_lead_id: 'LEAD-VECCHIO' },
+      outboundCount: 5, ultimoMessaggioAt: settimaneFa(),
+    });
+    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000301', crmLeadId: 'LEAD-NUOVO' });
+    expect(res).not.toHaveProperty('aperturaSaltata');
+    expect(res).not.toHaveProperty('duplicato');
+    expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+    expect(calls.updates.at(-1)).toMatchObject({ crm_lead_id: 'LEAD-NUOVO', ai_status: 'active', ai_owner: 'mario' });
+    expect(calls.updates.at(-1).ai_started_at).toBe(new Date(MEZZOGIORNO).toISOString());
+    const tipi = calls.events.map((e: any) => e.type);
+    expect(tipi).toContain('fenice_enroll_chat_ferma_ripresa');
+    expect(tipi).not.toContain('apertura_saltata_chat_in_corso');
+  });
+
+  it('A: stessa chat ma con un messaggio di 2 giorni fa → resta apertura_saltata come prima', async () => {
+    vi.setSystemTime(MEZZOGIORNO);
+    const { supabase, calls } = makeSupabase(0, false, {
+      convRow: { ai_owner: 'mario', ai_status: 'active', crm_lead_id: 'LEAD-VECCHIO' },
+      outboundCount: 5, ultimoMessaggioAt: new Date(Date.now() - 2 * 24 * 3600_000).toISOString(),
+    });
+    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000302', crmLeadId: 'LEAD-NUOVO' });
+    expect(res).toMatchObject({ aperturaSaltata: true });
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+    expect(calls.events.map((e: any) => e.type)).toContain('apertura_saltata_chat_in_corso');
+  });
+
+  it('B: chat CHIUSA con INTERROTTO, lead che aveva scritto 6 giorni fa (es. 28178) → niente duplicato, esito azzerato e apertura', async () => {
+    vi.setSystemTime(MEZZOGIORNO);
+    const seiGiorniFa = new Date(Date.now() - 6 * 24 * 3600_000).toISOString();
+    const { supabase, calls } = makeSupabaseLeggibile({
+      crmLeadId: 'LEAD-VECCHIO', aiStatus: 'closed', botOutcome: 'INTERROTTO',
+      lastInboundAt: seiGiorniFa, ultimoMessaggioAt: seiGiorniFa,
+    });
+    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000303', crmLeadId: 'LEAD-NUOVO' });
+    expect(res).not.toHaveProperty('duplicato');
+    expect(sendTemplateAndLog).toHaveBeenCalledTimes(1);
+    expect(calls.updates.at(-1)).toMatchObject({
+      crm_lead_id: 'LEAD-NUOVO', ai_status: 'active', bot_outcome: null, bot_outcome_at: null, bot_scheduled_at: null,
+    });
+    expect(calls.events.map((e: any) => e.type)).not.toContain('fenice_enroll_duplicato');
+  });
+
+  it('B: chat chiusa con APPUNTAMENTO → resta duplicato, esito intatto', async () => {
+    vi.setSystemTime(MEZZOGIORNO);
+    const seiGiorniFa = new Date(Date.now() - 6 * 24 * 3600_000).toISOString();
+    const { supabase, calls } = makeSupabaseLeggibile({
+      crmLeadId: 'LEAD-VECCHIO', aiStatus: 'closed', botOutcome: 'APPUNTAMENTO',
+      lastInboundAt: seiGiorniFa, ultimoMessaggioAt: seiGiorniFa,
+    });
+    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000304', crmLeadId: 'LEAD-NUOVO' });
+    expect(res).toMatchObject({ duplicato: true });
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+    for (const u of calls.updates) expect(u).not.toHaveProperty('bot_outcome');
+  });
+
+  it('fermo manuale sulla chat → nessuna ripresa', async () => {
+    vi.setSystemTime(MEZZOGIORNO);
+    const seiGiorniFa = new Date(Date.now() - 6 * 24 * 3600_000).toISOString();
+    const { supabase } = makeSupabaseLeggibile({
+      crmLeadId: 'LEAD-VECCHIO', aiStatus: 'closed', botOutcome: 'INTERROTTO',
+      lastInboundAt: seiGiorniFa, ultimoMessaggioAt: seiGiorniFa, aiPausedAt: '2026-07-01T00:00:00Z',
+    });
+    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000305', crmLeadId: 'LEAD-NUOVO' });
+    expect(res).toMatchObject({ duplicato: true });
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
   });
 });
