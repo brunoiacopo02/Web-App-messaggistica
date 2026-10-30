@@ -3,6 +3,7 @@ import { isoWithOffset } from './bot-contract';
 import { quandoNoemi } from './gdo-recap';
 import { firstNameOf } from './name';
 import { giornoRoma, oraRoma, romeDayKey, romeHour, romeMinute, sameInstant } from './rome-time';
+import { parlaDiDisdireOSpostare } from './gdo-warmup';
 
 /**
  * Il bot sposta lui la call di un lead GDO (PO 28/10/2026, contratto v1.9 esito
@@ -209,6 +210,77 @@ export function testoSpostamentoFatto(i: {
 /** Il testo che parte quando lo spostamento non si è potuto fare: la data va alle Conferme. */
 export const TESTO_SPOSTAMENTO_NON_FATTO =
   'Ho segnato il giorno e l\'ora che mi hai detto. Per confermare il nuovo orario ti chiama Noemi, una nostra collega: rispondi, sono 5 minuti.';
+
+/**
+ * Il testo quando lo spostamento non si fa perche' le Conferme hanno gia' deciso sul lead
+ * (CRM 409 `scartato`/`confermato`, o lo stato locale lo dice gia'): li' nessuno ha in
+ * programma di richiamarlo, e «ti chiama Noemi» sarebbe una promessa falsa (lead c91081be,
+ * 30/10/2026: scartato dalle Conferme 90 secondi prima). La data va comunque alle Conferme.
+ */
+export const TESTO_SPOSTAMENTO_PASSATO_AI_COLLEGHI =
+  'Ho segnato il giorno e l\'ora che mi hai detto e li ho passati ai colleghi che seguono gli appuntamenti.';
+
+/** Motivi del "no" per cui le Conferme hanno gia' deciso: niente promessa della telefonata. */
+const MOTIVI_CONFERME_GIA_DECISO = new Set(['scartato', 'confermato', 'esito_conferme', 'gia_presentato']);
+
+export function testoSpostamentoNonFatto(motivo: string | null | undefined): string {
+  return motivo && MOTIVI_CONFERME_GIA_DECISO.has(motivo)
+    ? TESTO_SPOSTAMENTO_PASSATO_AI_COLLEGHI
+    : TESTO_SPOSTAMENTO_NON_FATTO;
+}
+
+/**
+ * Lo stesso [SPOSTA] alla stessa data e' gia' stato tentato e rifiutato in questa chat?
+ * (lead c91081be: dopo il 409, su «Ok grazie» il modello rimette [SPOSTA] e il lead riceve
+ * lo stesso testo due volte). `tentativi` = le date degli eventi `gdo_spostamento_non_fatto`.
+ */
+export function spostamentoGiaRifiutato(data: string | undefined, tentativi: readonly (string | null | undefined)[]): boolean {
+  if (!data || !data.trim()) return false;
+  return tentativi.some((t) => !!t && (t.trim() === data.trim() || (isoWithOffset(t.trim()) && isoWithOffset(data.trim()) && sameInstant(t, data))));
+}
+
+/** Frasi che confermano o prendono atto, non chiedono di spostare ("farò il possibile", "l'ho visto stamattina!"). */
+const FRASE_CHE_CONFERMA =
+  /^(faro il possibile|ci saro|confermo|l ho (gia )?visto|visto|fatto|tutto chiaro)( (grazie|stamattina|ieri|oggi|sicuramente|certo|allora))*$/;
+
+const normalizzaFrase = (s: string): string =>
+  s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+/**
+ * Il RICHIAMO del modello NON e' una richiesta di spostamento e non deve diventare la
+ * nota «SPOSTAMENTO CHIESTO … mantenuto finché non lo spostate voi»? (lead 4da4e19f,
+ * 30/10/2026: dopo lo spostamento fatto dal bot a martedi' 3 alle 17, «farò il possibile»
+ * e «l'ho visto stamattina!» hanno prodotto due note di spostamento.)
+ *
+ * Si', solo se il modello non ha messo una data nuova (o ha rimesso quella in agenda), il
+ * turno non ha un [SPOSTA], il lead non parla di spostare/disdire, e:
+ * - la call in agenda e' proprio quella appena spostata dal bot, oppure
+ * - il lead ha solo preso atto o confermato ("ok", "farò il possibile", "l'ho visto") e nei
+ *   suoi messaggi di prima (`testoPrima`) non c'e' una richiesta di spostare rimasta aperta:
+ *   un "ok" dopo «giovedì non posso» puo' essere il RICHIAMO vero di quella richiesta.
+ */
+export function richiamoNonESpostamento(i: {
+  outcome: string | undefined;
+  date: string | undefined;
+  spostaNelTurno: boolean;
+  /** La call in agenda adesso. */
+  callAt: string | null;
+  /** La data a cui il bot ha spostato la call (ultimo `gdo_spostamento_bot`), o null. */
+  spostataDalBotA: string | null;
+  testoLead: string;
+  /** Il turno del lead e' solo una presa d'atto (`isSoloPresaDAtto`). */
+  soloPresaDAtto: boolean;
+  /** I messaggi del lead dei turni appena prima (vale solo per la seconda regola). */
+  testoPrima?: string;
+}): boolean {
+  if (i.outcome !== 'RICHIAMO' || i.spostaNelTurno) return false;
+  if (i.date && i.date.trim() && !(i.callAt && isoWithOffset(i.date.trim()) && sameInstant(i.date, i.callAt))) return false;
+  if (parlaDiDisdireOSpostare(i.testoLead)) return false;
+  const callSpostata = !!i.callAt && !!i.spostataDalBotA && sameInstant(i.callAt, i.spostataDalBotA);
+  if (callSpostata) return true;
+  if (i.testoPrima && parlaDiDisdireOSpostare(i.testoPrima)) return false;
+  return i.soloPresaDAtto || FRASE_CHE_CONFERMA.test(normalizzaFrase(i.testoLead));
+}
 
 const LINK_VIDEO_RE = /https?:\/\/corso\.feniceacademy\.it\/conferenza-[A-Za-z0-9_-]+/g;
 

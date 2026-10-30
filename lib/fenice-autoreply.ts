@@ -52,12 +52,16 @@ import {
   notaSpostamentoPrompt,
   origineSpostamento,
   spostamentoAbilitato,
+  richiamoNonESpostamento,
+  spostamentoGiaRifiutato,
   testoSpostamentoFatto,
-  TESTO_SPOSTAMENTO_NON_FATTO,
+  testoSpostamentoNonFatto,
   ultimoLinkVideo,
   type MotivoNonSpostabile,
 } from './gdo-spostamento';
-import { giaSpostatoDalBot, inviaSpostamentoAlCrm, registraSpostamentoInChat, statoCrmLocale } from './gdo-spostamento-send';
+import {
+  giaSpostatoDalBot, inviaSpostamentoAlCrm, registraSpostamentoInChat, spostamentiRifiutati, statoCrmLocale, ultimoSpostamentoDalBot,
+} from './gdo-spostamento-send';
 import { isoWithOffset } from './bot-contract';
 import { sameInstant } from './rome-time';
 
@@ -1350,6 +1354,16 @@ export async function drainMarioReplies(
             videoVisto, videoLink: videoLinkSposta,
           });
           spostamentoFatto = true;
+        } else if (spostamentoGiaRifiutato(result.spostaAt, await spostamentiRifiutati(supabase, conversationId))) {
+          // Stessa data gia' tentata e rifiutata (lead c91081be: su «Ok grazie» il modello
+          // rimette [SPOSTA]): niente secondo POST al CRM, niente secondo testo, niente
+          // seconda nota. Parte solo quello che il modello ha scritto oltre al tag.
+          await supabase.from('event_log').insert({
+            type: 'gdo_spostamento_ripetuto_ignorato',
+            payload: { conversationId, crmLeadId, origine: origineSposta, data: result.spostaAt } as never,
+            message: `[${origineSposta}] conv ${conversationId}: spostamento a ${result.spostaAt} gia' rifiutato, non ritentato`,
+            level: 'info',
+          });
         } else {
           const motivo: string | null = motivoNoSposta
             ?? motivoDataNonValida(result.spostaAt, callSpostabileAt, adesso.getTime(), rangesSpostamento);
@@ -1388,7 +1402,8 @@ export async function drainMarioReplies(
               message: `[${origineSposta}] conv ${conversationId}: spostamento a ${result.spostaAt} non fatto (${perche}), parte la nota alle Conferme`,
               level: risposta && !risposta.ok && risposta.status === undefined ? 'error' : 'info',
             });
-            visibleReply = TESTO_SPOSTAMENTO_NON_FATTO;
+            // Le Conferme hanno gia' deciso (scartato/confermato): niente «ti chiama Noemi».
+            visibleReply = testoSpostamentoNonFatto(perche);
             // La data chiesta arriva alle Conferme come oggi: RICHIAMO sul canale solo-nota
             // diventa "SPOSTAMENTO CHIESTO — ... a <data>". Un esito gia' scritto dal modello vince.
             if (!result.outcome) {
@@ -1403,6 +1418,37 @@ export async function drainMarioReplies(
           visibleReply = '';
           result.outcome = undefined;
           result.scheduledAt = undefined;
+        }
+      }
+
+      // Un RICHIAMO senza data nuova su una frase che non chiede di spostare (o sulla call
+      // appena spostata dal bot) non diventa la nota «SPOSTAMENTO CHIESTO» (lead 4da4e19f).
+      if (origineSposta && crmLeadId && result.outcome === 'RICHIAMO' && result.spostaAt === undefined) {
+        const testoTurnoRichiamo = idxTurno >= 0
+          ? rows.slice(idxTurno).filter((m) => m.direction === 'in').map((m) => (m.body ?? '').trim()).filter(Boolean).join(' / ')
+          : '';
+        const spostataA = await ultimoSpostamentoDalBot(supabase, conversationId);
+        if (richiamoNonESpostamento({
+          outcome: result.outcome,
+          date: result.scheduledAt,
+          spostaNelTurno: false,
+          callAt: callSpostabileAt,
+          spostataDalBotA: spostataA,
+          testoLead: testoTurnoRichiamo,
+          soloPresaDAtto: isSoloPresaDAtto(testoTurnoRichiamo),
+          // Gli ultimi messaggi del lead prima di questo turno (al massimo 6 righe indietro).
+          testoPrima: rows.slice(Math.max(0, (idxTurno >= 0 ? idxTurno : rows.length) - 6), idxTurno >= 0 ? idxTurno : rows.length)
+            .filter((m) => m.direction === 'in').map((m) => m.body ?? '').join(' / '),
+        })) {
+          await supabase.from('event_log').insert({
+            type: 'richiamo_non_spostamento_ignorato',
+            payload: { conversationId, crmLeadId, origine: origineSposta, parole: testoTurnoRichiamo.slice(0, 200), callSpostataDalBot: !!spostataA } as never,
+            message: `[${origineSposta}] conv ${conversationId}: RICHIAMO del modello senza richiesta di spostamento, nessuna nota`,
+            level: 'info',
+          });
+          result.outcome = undefined;
+          result.scheduledAt = undefined;
+          result.note = undefined;
         }
       }
 

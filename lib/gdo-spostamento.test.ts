@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   dataCallDelBot, elencoGiorni, giorniSpostamento, motivoDataNonValida, motivoNonSpostabile, notaSpostamentoPrompt,
   origineSpostamento, spostamentoAbilitato, testoSpostamentoFatto, ultimoLinkVideo,
+  richiamoNonESpostamento, spostamentoGiaRifiutato, testoSpostamentoNonFatto,
+  TESTO_SPOSTAMENTO_NON_FATTO, TESTO_SPOSTAMENTO_PASSATO_AI_COLLEGHI,
 } from './gdo-spostamento';
 import { inviaSpostamentoAlCrm } from './gdo-spostamento-send';
 import { parseMarioReply } from './mario';
@@ -154,5 +156,54 @@ describe('origine dello spostamento (PO 29/10/2026)', () => {
       { direction: 'out', body: 'ok a domani' },
     ])).toBe('https://corso.feniceacademy.it/conferenza-bx');
     expect(ultimoLinkVideo([{ direction: 'out', body: 'niente link' }])).toBeNull();
+  });
+});
+
+describe('spostamento non fatto: testo e niente doppioni (lead c91081be, 30/10/2026)', () => {
+  it.each(['scartato', 'confermato', 'esito_conferme', 'gia_presentato'])('%s → niente promessa di Noemi', (m) => {
+    expect(testoSpostamentoNonFatto(m)).toBe(TESTO_SPOSTAMENTO_PASSATO_AI_COLLEGHI);
+    expect(TESTO_SPOSTAMENTO_PASSATO_AI_COLLEGHI).not.toMatch(/Noemi|chiama/);
+  });
+  it.each(['fuori_finestra', 'stessa_data', 'slot_pieno', null])('%s → testo di sempre', (m) => {
+    expect(testoSpostamentoNonFatto(m)).toBe(TESTO_SPOSTAMENTO_NON_FATTO);
+  });
+  it('stessa data gia\' rifiutata → si', () => {
+    expect(spostamentoGiaRifiutato('2026-11-03T17:00:00+01:00', ['2026-11-03T17:00:00+01:00'])).toBe(true);
+    expect(spostamentoGiaRifiutato('2026-11-03T17:00:00+01:00', ['2026-11-03T16:00:00.000Z'])).toBe(true);
+  });
+  it('data diversa, nessun tentativo o data vuota → no', () => {
+    expect(spostamentoGiaRifiutato('2026-11-03T18:00:00+01:00', ['2026-11-03T17:00:00+01:00'])).toBe(false);
+    expect(spostamentoGiaRifiutato('2026-11-03T17:00:00+01:00', [])).toBe(false);
+    expect(spostamentoGiaRifiutato('', ['2026-11-03T17:00:00+01:00'])).toBe(false);
+    expect(spostamentoGiaRifiutato(undefined, [''])).toBe(false);
+  });
+});
+
+describe('richiamoNonESpostamento: niente nota SPOSTAMENTO CHIESTO su frasi che non lo chiedono (lead 4da4e19f)', () => {
+  const CALL3 = '2026-11-03T16:00:00.000Z';
+  const base = {
+    outcome: 'RICHIAMO' as string | undefined, date: undefined as string | undefined, spostaNelTurno: false,
+    callAt: CALL3 as string | null, spostataDalBotA: CALL3 as string | null, testoLead: 'farò il possibile', soloPresaDAtto: false,
+  };
+  it('call appena spostata dal bot, «farò il possibile» / «l\'ho visto stamattina!» → ignora', () => {
+    expect(richiamoNonESpostamento(base)).toBe(true);
+    expect(richiamoNonESpostamento({ ...base, testoLead: "l'ho visto stamattina!" })).toBe(true);
+    expect(richiamoNonESpostamento({ ...base, testoLead: 'mi aspetto tanto da questa call', date: '2026-11-03T17:00:00+01:00' })).toBe(true);
+  });
+  it('il lead chiede davvero di spostare, o il modello mette una data nuova → nota come prima', () => {
+    expect(richiamoNonESpostamento({ ...base, testoLead: 'devo spostare di nuovo' })).toBe(false);
+    expect(richiamoNonESpostamento({ ...base, testoLead: 'non ci sono martedì' })).toBe(false);
+    expect(richiamoNonESpostamento({ ...base, date: '2026-11-04T18:00:00+01:00' })).toBe(false);
+  });
+  it('non RICHIAMO o [SPOSTA] nel turno → non tocca', () => {
+    expect(richiamoNonESpostamento({ ...base, outcome: 'SCARTO' })).toBe(false);
+    expect(richiamoNonESpostamento({ ...base, spostaNelTurno: true })).toBe(false);
+  });
+  it('senza spostamento del bot: solo prese d\'atto e conferme nette, e mai dopo una richiesta aperta', () => {
+    const senza = { ...base, spostataDalBotA: null };
+    expect(richiamoNonESpostamento(senza)).toBe(true);
+    expect(richiamoNonESpostamento({ ...senza, testoLead: 'ok', soloPresaDAtto: true })).toBe(true);
+    expect(richiamoNonESpostamento({ ...senza, testoLead: 'grazie, purtroppo lavoro quel giorno' })).toBe(false);
+    expect(richiamoNonESpostamento({ ...senza, testoLead: 'ok', soloPresaDAtto: true, testoPrima: 'giovedì devo spostare' })).toBe(false);
   });
 });

@@ -32,6 +32,42 @@ export async function giaSpostatoDalBot(supabase: Supa, conversationId: number):
   }
 }
 
+/** La data a cui il bot ha spostato la call l'ultima volta (`payload.a`), o null. Nel dubbio null. */
+export async function ultimoSpostamentoDalBot(supabase: Supa, conversationId: number): Promise<string | null> {
+  try {
+    const { data, error } = await supabase
+      .from('event_log')
+      .select('payload, created_at')
+      .eq('type', EVENTO_SPOSTAMENTO)
+      .eq('payload->>conversationId', String(conversationId))
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (error || !Array.isArray(data) || data.length === 0) return null;
+    const a = (data[0] as { payload?: { a?: string } | null }).payload?.a;
+    return typeof a === 'string' ? a : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Le date dei tentativi di spostamento gia' rifiutati in questa chat (`gdo_spostamento_non_fatto`). Nel dubbio nessuna. */
+export async function spostamentiRifiutati(supabase: Supa, conversationId: number): Promise<string[]> {
+  try {
+    const { data, error } = await supabase
+      .from('event_log')
+      .select('payload')
+      .eq('type', 'gdo_spostamento_non_fatto')
+      .eq('payload->>conversationId', String(conversationId))
+      .limit(20);
+    if (error || !Array.isArray(data)) return [];
+    return data
+      .map((r: { payload?: { data?: unknown } | null }) => r.payload?.data)
+      .filter((d: unknown): d is string => typeof d === 'string');
+  } catch {
+    return [];
+  }
+}
+
 /** Lo stato del lead che il CRM ci ha già mandato (`crm_lead_status`), o `null`. */
 export async function statoCrmLocale(
   supabase: Supa,
