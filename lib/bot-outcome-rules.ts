@@ -504,6 +504,10 @@ export function buildRispostaPostNrNote(input: { leadWords?: string; quandoNrIso
  * bot», e quell'esito non arrivava mai (il CRM rifiuta con 403 gli esiti non
  * APPUNTAMENTO su un lead che non è più di un account bot, e il bot chiude in silenzio).
  *
+ * Il prefisso «IL BOT HA RIPRESO LA CHAT» NON si tocca: il CRM riconosce la nota da lì
+ * (`isNotaBotRipreso` in src/lib/bot-fissatore/ripresaChat.ts, regex ancorata all'inizio)
+ * e su un lead aperto e senza GDO lo manda subito ai ridati come chat interrotta.
+ *
  * Le parole del lead stanno in testa: identificano IL FATTO (due messaggi diversi sono
  * due fatti diversi; lo stesso messaggio re-inviato dà la stessa chiave di dedup CRM,
  * che si taglia al primo punto). L'orario di invio e l'esito precedente vanno in coda,
@@ -517,8 +521,8 @@ export function buildBotRipresoNote(input: {
 }): string {
   const parole = paroleDelLead(input.leadWords);
   const testa = parole
-    ? `IL LEAD HA RISCRITTO SU WHATSAPP: «${parole}».`
-    : `IL LEAD HA RISCRITTO SU WHATSAPP (messaggio senza testo).`;
+    ? `IL BOT HA RIPRESO LA CHAT — IL LEAD HA RISCRITTO SU WHATSAPP: «${parole}».`
+    : `IL BOT HA RIPRESO LA CHAT — IL LEAD HA RISCRITTO SU WHATSAPP (messaggio senza testo).`;
   return (
     `${testa} Il lead è vostro: richiamatelo. ` +
     `Ve lo avevamo restituito come ${input.esitoPrecedente}; ha riscritto ${formatRomeDateTime(input.quandoIso)}.`

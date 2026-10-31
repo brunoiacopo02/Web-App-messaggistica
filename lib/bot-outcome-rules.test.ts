@@ -312,7 +312,7 @@ describe('buildLockedNote — formato fattuale per le Conferme', () => {
 describe('buildBotRipresoNote', () => {
   it('riporta le parole del lead e dice che il lead è del GDO: va richiamato', () => {
     const n = buildBotRipresoNote({ esitoPrecedente: 'INTERROTTO', quandoIso: DATE, leadWords: 'Scusate, mi richiamate?' });
-    expect(n.startsWith('IL LEAD HA RISCRITTO SU WHATSAPP: «Scusate, mi richiamate?».')).toBe(true);
+    expect(n.startsWith('IL BOT HA RIPRESO LA CHAT — IL LEAD HA RISCRITTO SU WHATSAPP: «Scusate, mi richiamate?».')).toBe(true);
     expect(n).toContain('Il lead è vostro: richiamatelo.');
     expect(n).toContain('INTERROTTO');
     expect(n).toContain(DATE_HUMAN);
@@ -327,7 +327,6 @@ describe('buildBotRipresoNote', () => {
       expect(n).not.toContain('non chiamatelo');
       expect(n).not.toContain('non chiamate');
       expect(n).not.toContain('esito dal bot');
-      expect(n).not.toContain('ripreso la chat');
     }
   });
 
@@ -337,7 +336,15 @@ describe('buildBotRipresoNote', () => {
     expect(n).toContain('…');
     expect(n).not.toContain('\n');
     const vuota = buildBotRipresoNote({ esitoPrecedente: 'DA_SCARTARE', quandoIso: DATE, leadWords: '   ' });
-    expect(vuota.startsWith('IL LEAD HA RISCRITTO SU WHATSAPP (messaggio senza testo).')).toBe(true);
+    expect(vuota).toContain('IL LEAD HA RISCRITTO SU WHATSAPP (messaggio senza testo).');
+  });
+
+  // Il CRM riconosce la nota dal prefisso (`isNotaBotRipreso`, src/lib/bot-fissatore/
+  // ripresaChat.ts) e manda ai ridati i lead aperti senza GDO: cambiarlo li lascerebbe fermi.
+  it('resta riconoscibile dal CRM: stesso prefisso della regex di ripresaChat.ts', () => {
+    const RIPRESO = /^\W*il bot ha ripreso la chat\b/i;
+    expect(RIPRESO.test(buildBotRipresoNote({ esitoPrecedente: 'NON_RISPOSTO', quandoIso: DATE, leadWords: 'ok' }))).toBe(true);
+    expect(RIPRESO.test(buildBotRipresoNote({ esitoPrecedente: 'NON_RISPOSTO', quandoIso: DATE }))).toBe(true);
   });
 
   // Lo stesso messaggio re-inviato a un minuto di distanza deve dare la stessa chiave di
