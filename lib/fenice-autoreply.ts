@@ -1850,10 +1850,13 @@ export async function drainMarioReplies(
           // `finally` di questo drain riscriverebbe finalStatus sopra).
           // Postino: la conversazione non si chiude mai per un esito. Il lead è del
           // GDO, il bot resta il suo canale su questa chat.
+          // 'riconferma_non_inviata' (= RICONFERMA_NON_INVIATA di bot-outcome, scritta per
+          // esteso perche' i test mockano il modulo): stessa data della call gia' fissata,
+          // nessuna nota al CRM, esito terminale come prima.
           // `keepOpen`: il CRM è stato informato con una nota (RICHIAMO senza una data
           // utilizzabile) ma la conversazione NON è esitata — il bot deve poter ancora
           // chiedere al lead quando gli va bene, invece di sparire.
-          if (!soloNota && !sent.keepOpen && (sent.sent || sent.error === 'note_duplicate')) {
+          if (!soloNota && !sent.keepOpen && (sent.sent || sent.error === 'note_duplicate' || sent.error === 'riconferma_non_inviata')) {
             finalStatus = 'closed';
           }
           break;

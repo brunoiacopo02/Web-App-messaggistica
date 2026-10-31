@@ -163,6 +163,26 @@ export function isRifissaggioDopoCallPassata(
 }
 
 /**
+ * Il tag APPUNTAMENTO ri-emesso su una call già fissata, con la STESSA data e ora di
+ * quella in agenda. Non è un fatto nuovo: il modello rimette il tag quando il lead
+ * scrive «ok», «grazie», «video guardato». Misurato (24-31/10/2026): 166 note
+ * «RICONFERMA» al CRM in 7 giorni, ~90% false, 151 su 163 entro 30 minuti dal
+ * fissaggio. Da qui (PO, 31/10/2026) al CRM non parte più niente: resta solo l'evento
+ * `riconferma_non_inviata` nel registro del bot, per misurarlo.
+ *
+ * Solo stessa data certa su entrambi i lati: una data diversa è uno spostamento (nota
+ * SPOSTAMENTO CHIESTO o rifissaggio dopo una call passata), e senza una delle due date
+ * non si può dire che sia la stessa call.
+ */
+export function isRiconfermaStessaData(
+  args: Pick<OutcomeArgs, 'outcome' | 'date'>,
+  existingDate: string | null,
+): boolean {
+  if (args.outcome !== 'APPUNTAMENTO' || !args.date || !existingDate) return false;
+  return sameInstant(args.date, existingDate);
+}
+
+/**
  * Decide cosa fare con un esito in arrivo dato l'esito corrente della conversazione.
  * Se la conversazione è già APPUNTAMENTO l'esito è terminale: 'locked' (nota, niente
  * declassamento). Altrimenti 'normal' (comportamento standard). Unica eccezione: il

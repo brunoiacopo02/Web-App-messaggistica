@@ -759,6 +759,16 @@ describe('sendOutcome — canale solo-NOTA per i lead dei GDO (noteOnly)', () =>
     expect(calls.events.some((e) => e.type === 'bot_note_sent')).toBe(true);
   });
 
+  it("APPUNTAMENTO con la stessa data dell'agenda GDO: nessuna nota, solo l'evento", async () => {
+    const { supabase, calls } = makeSupabase({ ...CONV_GDO, gdo_appuntamento_at: DATE });
+    const res = await sendOutcome(supabase, 7, { outcome: 'APPUNTAMENTO', date: DATE, leadWords: 'video guardato' }, { noteOnly: true });
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(res).toEqual({ sent: false, error: 'riconferma_non_inviata' });
+    expect(calls.updates).toHaveLength(0);
+    const ev = calls.events.find((e) => e.type === 'riconferma_non_inviata');
+    expect(ev.payload).toMatchObject({ conversationId: 7, crmLeadId: 'gdo1', leadWords: 'video guardato', noteOnly: true });
+  });
+
   it('lead senza crm_lead_id → nessun POST', async () => {
     const { supabase } = makeSupabase({ crm_lead_id: null, bot_outcome: null, bot_scheduled_at: null });
     const res = await sendOutcome(supabase, 7, { outcome: 'INTERROTTO' }, { noteOnly: true });
@@ -1092,9 +1102,30 @@ describe('sendOutcome — una call gia\' fissata non la sposta il bot', () => {
     expect(agg.cancel_requested_at).toBeTruthy();
   });
 
-  it('la stessa data resta una riconferma e non rimbalza al CRM come nuovo fissaggio', async () => {
+  // PO 31/10/2026: la "RICONFERMA" era falsa ~9 volte su 10 ("ok", "grazie").
+  it("la stessa data non manda niente al CRM: solo l'evento riconferma_non_inviata, chat chiusa", async () => {
+    const { supabase, calls } = makeSupabase(fissato);
+    const res = await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: domani, leadWords: 'ok grazie' });
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(res).toEqual({ sent: false, error: 'riconferma_non_inviata' });
+    const ev = calls.events.find((e) => e.type === 'riconferma_non_inviata');
+    expect(ev.payload).toMatchObject({ conversationId: 1, crmLeadId: 'crm1', leadWords: 'ok grazie', appuntamentoInAgenda: domani });
+    // Esito terminale come prima: nessun declassamento, nessun marcatore di disdetta.
+    expect(calls.updates).toEqual([{ ai_status: 'closed' }]);
+  });
+
+  it('lo stesso istante scritto in ora locale vale come stessa data', async () => {
     const { supabase } = makeSupabase(fissato);
-    await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: domani });
+    const d = new Date(domani);
+    const locale = new Date(d.getTime() + 2 * 3600_000).toISOString().replace('Z', '+02:00');
+    const res = await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO', date: locale });
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(res.error).toBe('riconferma_non_inviata');
+  });
+
+  it('senza data nel tag la nota parte come prima', async () => {
+    const { supabase } = makeSupabase(fissato);
+    await sendOutcome(supabase, 1, { outcome: 'APPUNTAMENTO' });
     expect(bodyInviato().outcome).toBe('NOTA');
   });
 });

@@ -11,6 +11,7 @@ import {
   checkDataRichiamo,
   isRichiestaDisdetta,
   isRifissaggioDopoCallPassata,
+  isRiconfermaStessaData,
   resolveOutcomeAction,
 } from './bot-outcome-rules';
 import { bookingBlackout } from './booking-blackout';
@@ -28,6 +29,10 @@ import {
 } from './richiamo-fasce';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
+
+/** `sendOutcome` non ha mandato niente perché era una riconferma della stessa data: è
+ *  terminale come `note_duplicate`, non un fallimento da ritentare. */
+export const RICONFERMA_NON_INVIATA = 'riconferma_non_inviata';
 
 const DEFAULT_CRM_URL = 'https://crm-sales-fenice.vercel.app/api/bot/outcome';
 
@@ -358,6 +363,35 @@ async function provaScartoDisdetta(
     // solo audit: un insert fallito non cambia la decisione
   }
   return { scartato, ...(crm?.status ? { status: crm.status } : {}) };
+}
+
+/**
+ * Il tag APPUNTAMENTO ri-emesso con la stessa data della call già in agenda
+ * (`isRiconfermaStessaData`): al CRM non parte niente, resta solo questa riga per
+ * misurare quante volte succede e su quali parole del lead. PO, 31/10/2026: le note
+ * «RICONFERMA» erano false ~9 volte su 10 («ok», «grazie», «video guardato»).
+ */
+async function registraRiconfermaNonInviata(
+  supabase: Supa,
+  conversationId: number,
+  crmLeadId: string,
+  args: SendOutcomeArgs,
+  appuntamentoInAgenda: string | null,
+  noteOnly: boolean,
+): Promise<void> {
+  await supabase.from('event_log').insert({
+    type: 'riconferma_non_inviata',
+    payload: {
+      conversationId,
+      crmLeadId,
+      date: args.date ?? null,
+      appuntamentoInAgenda,
+      leadWords: args.leadWords ?? null,
+      noteOnly,
+    } as never,
+    message: `[bot-fissatore] conv ${conversationId}: APPUNTAMENTO con la stessa data già in agenda (lead ${crmLeadId}), nessuna nota RICONFERMA al CRM`,
+    level: 'info',
+  });
 }
 
 /**
@@ -817,6 +851,10 @@ export async function sendOutcome(
       const scarto = await provaScartoDisdetta(supabase, conversationId, crmLeadId, secret);
       if (scarto.scartato) return { sent: true, status: scarto.status };
     }
+    if (isRiconfermaStessaData(args, dataNota)) {
+      await registraRiconfermaNonInviata(supabase, conversationId, crmLeadId, args, dataNota, true);
+      return { sent: false, error: RICONFERMA_NON_INVIATA };
+    }
     return sendCrmNoteOnly(supabase, conversationId, crmLeadId, args, dataNota, secret);
   }
 
@@ -1063,6 +1101,15 @@ export async function sendOutcome(
   // riporterebbe indietro di stato lato CRM — avvertenza esplicita del loro team).
   if (interim && action.kind !== 'normal') {
     return { sent: false, error: 'interim_skipped_locked' };
+  }
+
+  // Stessa data della call già fissata: non è un fatto nuovo, al CRM non parte la nota
+  // «RICONFERMA». L'esito resta terminale come quando la nota partiva, quindi la
+  // conversazione si chiude allo stesso modo (altrimenti il backstop la riclassifica).
+  if (action.kind === 'locked' && isRiconfermaStessaData(args, row?.bot_scheduled_at ?? null)) {
+    await registraRiconfermaNonInviata(supabase, conversationId, crmLeadId, args, row?.bot_scheduled_at ?? null, false);
+    await supabase.from('conversations').update({ ai_status: 'closed' }).eq('id', conversationId);
+    return { sent: false, error: RICONFERMA_NON_INVIATA };
   }
 
   // Un appuntamento in un giorno chiuso, di domenica, fuori dalla fascia 09-21 o fuori

@@ -12,6 +12,7 @@ import {
   checkDataAppuntamento,
   buildAppuntamentoNonFissabileNote,
   isRifissaggioDopoCallPassata,
+  isRiconfermaStessaData,
   motivoScartoAppuntamento,
   unisciGiorni,
 } from './bot-outcome-rules';
@@ -895,5 +896,28 @@ describe('motivoScartoAppuntamento — data concordata prima del link', () => {
 
   it('senza link in chat non aggiunge giorni', () => {
     expect(giorniDelLinkForm([{ direction: 'out', body: 'ciao', created_at: '2026-10-24T09:00:00Z' }], [])).toEqual([]);
+  });
+});
+
+// PO 31/10/2026: 166 note «RICONFERMA» in 7 giorni, ~90% false («ok», «grazie», «video
+// guardato»). Con la stessa data della call in agenda al CRM non parte più niente.
+describe('isRiconfermaStessaData', () => {
+  it('APPUNTAMENTO con la stessa data della call in agenda → vero', () => {
+    expect(isRiconfermaStessaData({ outcome: 'APPUNTAMENTO', date: DATE }, DATE)).toBe(true);
+  });
+  it('stesso istante con offset diversi → vero', () => {
+    expect(isRiconfermaStessaData({ outcome: 'APPUNTAMENTO', date: '2026-06-29T19:00:00+02:00' }, DATE)).toBe(true);
+  });
+  it('data diversa (spostamento) → falso', () => {
+    expect(isRiconfermaStessaData({ outcome: 'APPUNTAMENTO', date: DIFF }, DATE)).toBe(false);
+  });
+  it('senza una delle due date non si può dire che sia la stessa call → falso', () => {
+    expect(isRiconfermaStessaData({ outcome: 'APPUNTAMENTO' }, DATE)).toBe(false);
+    expect(isRiconfermaStessaData({ outcome: 'APPUNTAMENTO', date: DATE }, null)).toBe(false);
+  });
+  it('gli altri esiti con la stessa data non sono riconferme (RICHIAMO, DISDETTA restano note)', () => {
+    for (const o of ['RICHIAMO', 'DA_SCARTARE', 'INTERROTTO', 'NON_RISPOSTO'] as const) {
+      expect(isRiconfermaStessaData({ outcome: o, date: DATE }, DATE)).toBe(false);
+    }
   });
 });
