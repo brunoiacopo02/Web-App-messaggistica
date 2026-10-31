@@ -70,3 +70,40 @@ export function divergiChiaveDaNotePrecedenti(
     ? { note: out, chiave: chiaveFinale, irriducibile: true, collisione: collisioneFinale }
     : { note: out, chiave: chiaveFinale, irriducibile: false };
 }
+
+/** Etichette che hanno una regola loro e restano fuori da quella "una per tipo":
+ *  «IL BOT HA RIPRESO LA CHAT» (una ogni 6 ore in `lib/bot-riscritto.ts`) e la call
+ *  fissata dal bot che il CRM ha rifiutato con 403 (`buildAppuntamentoRifiutatoNote`). */
+const ETICHETTE_ESCLUSE = new Set(['IL BOT HA RIPRESO LA CHAT', 'CALL FISSATA DAL BOT']);
+
+/**
+ * Il TIPO di una nota al CRM, per la regola "al massimo una nota per tipo per
+ * conversazione ogni 2 ore" (PO, 31/10/2026). Il tipo è l'etichetta in testa, la parte
+ * prima di " — " scritta tutta in maiuscolo (SPOSTAMENTO CHIESTO, DISDETTA, DA
+ * RICHIAMARE, RICONFERMA...). Per gli SPOSTAMENTO conta anche la data chiesta dal lead:
+ * chiedere giovedì e poi venerdì sono due fatti, e la seconda nota deve passare.
+ *
+ * `null` = la regola non si applica: niente etichetta (note libere, «Riscaldamento – ...»,
+ * secondo recapito), etichetta non in maiuscolo, o etichetta esclusa.
+ *
+ * Funziona anche sulla chiave di dedup del CRM (`crmDedupKey`, la prima frase): la data
+ * di uno SPOSTAMENTO CHIESTO sta nella prima frase.
+ */
+export function tipoNota(note: string): string | null {
+  const idx = note.indexOf(' — ');
+  if (idx <= 0) return null;
+  const etichetta = note.slice(0, idx).trim();
+  if (!etichetta || etichetta !== etichetta.toUpperCase() || !/[A-Z]/.test(etichetta)) return null;
+  if (ETICHETTE_ESCLUSE.has(etichetta)) return null;
+  if (!etichetta.startsWith('SPOSTAMENTO')) return etichetta;
+  // "spostare a giovedì 29 ottobre alle 15:00." (SPOSTAMENTO CHIESTO) oppure
+  // "spostare la call (giovedì 29 ottobre alle 15:00) ma" (SPOSTAMENTO NON REGISTRATO).
+  const data = /spostare (?:a |la call \()([^.)]+)/.exec(note)?.[1]?.trim() ?? '';
+  return `${etichetta}|${data}`;
+}
+
+/** Le parole del lead citate nella nota (`Parole del lead: "..."` o fra « »), se ci sono. */
+export function paroleLeadDallaNota(note: string): string | null {
+  const m = /Parole del lead: "([\s\S]*?)"\.?\s*$/.exec(note) ?? /«([\s\S]*?)»/.exec(note);
+  return m ? m[1] : null;
+}

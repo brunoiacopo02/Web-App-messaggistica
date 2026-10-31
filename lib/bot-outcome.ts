@@ -18,7 +18,13 @@ import { bookingBlackout } from './booking-blackout';
 import { contestoGiudiceDaDb, giudicaDisdetta, giudiceDisdetteAcceso, type GiudizioDisdetta } from './giudice-disdetta';
 import { sameInstant } from './rome-time';
 import { categoriaPerCrm, disponibilitaDalTesto, motivoRichiesta } from './contatti-umani';
-import { noteFingerprint, divergiChiaveDaNotePrecedenti, type NotaCrmPrecedente } from './note-dedup';
+import {
+  noteFingerprint,
+  divergiChiaveDaNotePrecedenti,
+  paroleLeadDallaNota,
+  tipoNota,
+  type NotaCrmPrecedente,
+} from './note-dedup';
 import {
   classificaRichiamo,
   periodoDaCongedo,
@@ -111,6 +117,101 @@ async function notaGiaInviata(
   return (data ?? []).length > 0;
 }
 
+/** Al massimo una nota dello stesso tipo per conversazione in questa finestra. */
+export const FINESTRA_NOTA_PER_TIPO_MS = 2 * 60 * 60 * 1000;
+
+/** Il lucchetto della regola "una nota per tipo": una riga per nota partita (o in partenza). */
+export const EVENTO_NOTA_TIPO = 'nota_crm_tipo';
+
+/** Cosa resta da fare a chi ha ottenuto il via libera: se l'invio fallisce, `rilascia`
+ *  toglie il lucchetto così il messaggio successivo riprova. */
+export type PrenotazioneNota = { ok: true; rilascia: () => Promise<void> } | { ok: false };
+
+const NIENTE_DA_RILASCIARE = async () => {};
+
+/**
+ * AL MASSIMO UNA NOTA PER TIPO PER CONVERSAZIONE OGNI 2 ORE (PO, 31/10/2026).
+ *
+ * Il modello rimette il tag a ogni turno: «ok», «grazie», «a presto» del lead dopo una
+ * disdetta producevano un'altra DISDETTA (8 in 7 minuti sulla conv 29516; 199 note in
+ * eccesso su 489 in 7 giorni). La dedup per impronta non le prendeva perché il testo
+ * cambia sempre (parole del lead, «Causa:» riscritta dal modello).
+ *
+ * Il tipo è `tipoNota` (etichetta in testa; per gli SPOSTAMENTO anche la data chiesta):
+ * tipi diversi non si toccano mai (SPOSTAMENTO poi DISDETTA passa). Le note senza tipo
+ * (`null`) passano senza scrivere niente.
+ *
+ * Concorrenza, come `notaRiscrittoSeDovuta` (`lib/bot-riscritto.ts`): si scrive PRIMA il
+ * lucchetto, poi si guarda chi è il più vecchio della finestra per (conversazione, tipo).
+ * Di due messaggi in volo insieme spedisce solo quello col lucchetto più vecchio.
+ * Se il lucchetto non si riesce a scrivere si spedisce comunque: meglio una nota doppia
+ * che una persa.
+ */
+export async function prenotaNotaPerTipo(
+  supabase: Supa,
+  input: { conversationId: number; crmLeadId: string; note: string; paroleDelLead?: string | null },
+): Promise<PrenotazioneNota> {
+  const { conversationId, crmLeadId, note } = input;
+  const tipo = tipoNota(note);
+  if (!tipo) return { ok: true, rilascia: NIENTE_DA_RILASCIARE };
+
+  let mioId: number;
+  try {
+    const { data: mio, error } = await supabase
+      .from('event_log')
+      .insert({
+        type: EVENTO_NOTA_TIPO,
+        payload: { conversationId, crmLeadId, tipo } as never,
+        message: `[bot-fissatore] conv ${conversationId}: nota ${tipo} verso il CRM`,
+        level: 'info',
+      })
+      .select('id')
+      .single();
+    if (error || !mio) return { ok: true, rilascia: NIENTE_DA_RILASCIARE };
+    mioId = (mio as { id: number }).id;
+  } catch {
+    return { ok: true, rilascia: NIENTE_DA_RILASCIARE };
+  }
+
+  const rilascia = async () => {
+    try { await supabase.from('event_log').delete().eq('id', mioId); } catch { /* resta il lucchetto: al peggio una nota in meno per 2 ore */ }
+  };
+
+  let primoId: number | undefined;
+  try {
+    const da = new Date(Date.now() - FINESTRA_NOTA_PER_TIPO_MS).toISOString();
+    const { data } = await supabase
+      .from('event_log')
+      .select('id')
+      .eq('type', EVENTO_NOTA_TIPO)
+      .eq('payload->>conversationId', String(conversationId))
+      .eq('payload->>tipo', tipo)
+      .gte('created_at', da)
+      .order('id', { ascending: true })
+      .limit(1);
+    primoId = ((data ?? [])[0] as { id: number } | undefined)?.id;
+  } catch {
+    return { ok: true, rilascia };
+  }
+  if (primoId === undefined || primoId === mioId) return { ok: true, rilascia };
+
+  await rilascia();
+  const parole = input.paroleDelLead ?? paroleLeadDallaNota(note);
+  await supabase.from('event_log').insert({
+    type: 'nota_doppia_non_inviata',
+    payload: {
+      conversationId,
+      crmLeadId,
+      tipo,
+      paroleDelLead: parole ? parole.slice(0, 300) : null,
+      nota: note.slice(0, 500),
+    } as never,
+    message: `[bot-fissatore] conv ${conversationId}: nota ${tipo} già partita nelle ultime 2 ore, questa non va al CRM`,
+    level: 'info',
+  });
+  return { ok: false };
+}
+
 /**
  * La restituzione di un RICHIAMO (ramo `restituisci` delle tre fasce) è già partita
  * per questa conversazione?
@@ -199,7 +300,18 @@ export async function inviaNotaAlCrm(
   // restare stabile fra due invii della stessa nota anche se in mezzo cambia il set di
   // note recenti con cui entra in collisione.
   const fingerprint = noteFingerprint(noteBase);
-  const notePrecedenti = await noteCrmRecentiPerLead(supabase, crmLeadId);
+  const prenotazione = await prenotaNotaPerTipo(supabase, { conversationId, crmLeadId, note: noteBase });
+  if (!prenotazione.ok) return { sent: false, error: 'note_duplicate' };
+  const { rilascia } = prenotazione;
+  // L'allungamento anti-collisione serve solo fra note di TIPO diverso (o senza tipo:
+  // note libere, «Riscaldamento – ...», secondo recapito), dove due fatti diversi
+  // potrebbero avere la stessa prima frase. Fra note dello stesso tipo è il contrario
+  // di quello che vogliamo: la regola sopra ne lascia passare una ogni 2 ore per
+  // conversazione, e se ne arriva un'altra sullo stesso lead (es. da un'altra chat)
+  // il CRM DEVE poterla raggruppare con la prima invece di suonare due volte.
+  const mioTipo = tipoNota(noteBase);
+  const notePrecedenti = (await noteCrmRecentiPerLead(supabase, crmLeadId))
+    .filter((p) => mioTipo === null || tipoNota(p.chiave) !== mioTipo);
   const divergenza = divergiChiaveDaNotePrecedenti(noteBase, fingerprint, notePrecedenti);
   const noteSicura = divergenza.note;
   if (divergenza.irriducibile) {
@@ -229,6 +341,7 @@ export async function inviaNotaAlCrm(
       message: `[bot-fissatore] nota non valida per lead ${crmLeadId}: ${valid.reason}`,
       level: 'error',
     });
+    await rilascia();
     return { sent: false, error: valid.reason };
   }
   const rawBody = JSON.stringify(body);
@@ -254,8 +367,10 @@ export async function inviaNotaAlCrm(
       return { sent: true, status: res.status };
     }
     const text = await res.text().catch(() => '');
+    await rilascia();
     return { sent: false, status: res.status, error: text || `http_${res.status}` };
   } catch (e) {
+    await rilascia();
     return { sent: false, error: e instanceof Error ? e.message : 'errore' };
   }
 }
@@ -422,6 +537,11 @@ async function sendCrmNoteOnly(
     });
     return { sent: false, error: 'note_duplicate' };
   }
+  // Una nota per tipo ogni 2 ore (vedi `prenotaNotaPerTipo`). La call fissata dal bot e
+  // rifiutata con 403 (`testo`) ha l'etichetta esclusa, quindi passa sempre.
+  const prenotazione = await prenotaNotaPerTipo(supabase, { conversationId, crmLeadId, note, paroleDelLead: args.leadWords ?? null });
+  if (!prenotazione.ok) return { sent: false, error: 'note_duplicate' };
+  const { rilascia } = prenotazione;
 
   const body: BotOutcomeBody = {
     leadId: crmLeadId,
@@ -437,6 +557,7 @@ async function sendCrmNoteOnly(
       message: `[gdo] nota non valida per lead ${crmLeadId}: ${valid.reason}`,
       level: 'error',
     });
+    await rilascia();
     return { sent: false, error: valid.reason };
   }
 
@@ -458,6 +579,7 @@ async function sendCrmNoteOnly(
       return { sent: true, status: res.status };
     }
     const text = await res.text().catch(() => '');
+    await rilascia();
     // Anche il 403 qui è solo informativo: non c'è nessuno stato locale da
     // congelare, la conversazione va avanti comunque.
     await supabase.from('event_log').insert({
@@ -468,6 +590,7 @@ async function sendCrmNoteOnly(
     });
     return { sent: false, status: res.status, error: text || `http_${res.status}` };
   } catch (e) {
+    await rilascia();
     await supabase.from('event_log').insert({
       type: 'bot_outcome_error',
       payload: { conversationId, crmLeadId, error: e instanceof Error ? e.message : 'errore', noteOnly: true } as never,
@@ -1211,6 +1334,20 @@ export async function sendOutcome(
     }
   }
 
+  // Una nota per tipo ogni 2 ore (vedi `prenotaNotaPerTipo`): stesso trattamento della
+  // nota identica qui sopra, esito terminale e conversazione chiusa.
+  let rilasciaNota: () => Promise<void> = NIENTE_DA_RILASCIARE;
+  if (action.kind === 'locked') {
+    const prenotazione = await prenotaNotaPerTipo(supabase, {
+      conversationId, crmLeadId, note: action.note, paroleDelLead: args.leadWords ?? null,
+    });
+    if (!prenotazione.ok) {
+      await supabase.from('conversations').update({ ai_status: 'closed' }).eq('id', conversationId);
+      return { sent: false, error: 'note_duplicate' };
+    }
+    rilasciaNota = prenotazione.rilascia;
+  }
+
   const body: BotOutcomeBody = action.kind === 'locked'
     ? {
         leadId: crmLeadId,
@@ -1241,6 +1378,7 @@ export async function sendOutcome(
       message: `[bot-fissatore] outcome non valido per lead ${crmLeadId}: ${valid.reason}`,
       level: 'error',
     });
+    await rilasciaNota();
     return { sent: false, error: valid.reason };
   }
 
@@ -1299,6 +1437,8 @@ export async function sendOutcome(
       return { sent: true, status: res.status, corpo };
     }
     const text = await res.text().catch(() => '');
+    // Nota non arrivata: il lucchetto si toglie, il prossimo messaggio riprova.
+    await rilasciaNota();
     if (res.status === 403 && opts.notaSeRifiutato === true && args.outcome === 'APPUNTAMENTO' && action.kind === 'normal' && !interim) {
       // Il lead e' di un GDO e il CRM non prende l'appuntamento dal bot: la call fissata in
       // chat arriva comunque a chi ha il lead, come nota. Niente bot_outcome, niente
@@ -1346,6 +1486,7 @@ export async function sendOutcome(
     });
     return { sent: false, status: res.status, error: text || `http_${res.status}` };
   } catch (e) {
+    await rilasciaNota();
     await supabase.from('event_log').insert({
       type: 'bot_outcome_error',
       payload: { conversationId, crmLeadId, error: e instanceof Error ? e.message : 'errore' } as never,
