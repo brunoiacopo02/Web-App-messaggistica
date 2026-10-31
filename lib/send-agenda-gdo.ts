@@ -37,7 +37,19 @@ export type SendAgendaResult = {
   conversationId?: number;
   sid?: string;
   error?: string;
+  /**
+   * Solo su `fallito`, quando il motivo è noto e il GDO può farci qualcosa (contratto
+   * v1.12). Oggi un solo valore: `numero_senza_whatsapp` (Twilio 63024), così il CRM può
+   * dire al GDO di chiedere al lead un altro numero invece di farlo ritentare a vuoto.
+   */
+  motivo?: SendAgendaMotivo;
 };
+
+/** Perché un'agenda è fallita, quando lo sappiamo con certezza. */
+export type SendAgendaMotivo = 'numero_senza_whatsapp';
+
+/** Twilio 63024: "invalid message recipient" — il destinatario non ha WhatsApp. */
+export const TWILIO_SENZA_WHATSAPP = 63024;
 
 export type SendAgendaDeps = {
   now?: () => number;
@@ -169,19 +181,29 @@ export async function runSendAgenda(
   // Attesa della consegna: lo stato lo aggiornano le status callback di Twilio sul
   // webhook, qui si rilegge la riga del messaggio. Il budget parte dall'inizio della
   // richiesta, non da adesso: l'invio ha già consumato una parte dei 10s del CRM.
+  //
+  // Si decide sul CODICE d'errore, non solo sullo stato: le callback di Twilio arrivano
+  // fuori ordine e un 'sent' può sovrascrivere un 'undelivered' già arrivato (31/10: il
+  // secondo invio al lead da526f13 è rimasto `sent` con 63024). Il 63024 è definitivo.
+  const ultimaLettura: { codiceErrore: number | null } = { codiceErrore: null };
   const esito = await waitForDelivery({
     readStatus: async () => {
       const { data } = await supabase
         .from('messages')
-        .select('twilio_status')
+        .select('twilio_status, twilio_error_code')
         .eq('twilio_sid', inviata.sid as string)
         .maybeSingle();
-      return (data as { twilio_status: string | null } | null)?.twilio_status ?? null;
+      const riga = data as { twilio_status: string | null; twilio_error_code?: number | string | null } | null;
+      ultimaLettura.codiceErrore = riga?.twilio_error_code != null ? Number(riga.twilio_error_code) : null;
+      if (ultimaLettura.codiceErrore === TWILIO_SENZA_WHATSAPP) return 'undelivered';
+      return riga?.twilio_status ?? null;
     },
     now,
     sleep,
     waitMs: Math.max(0, waitMs - (now() - start)),
   });
+  const motivo: SendAgendaMotivo | undefined =
+    esito === 'fallito' && ultimaLettura.codiceErrore === TWILIO_SENZA_WHATSAPP ? 'numero_senza_whatsapp' : undefined;
 
   await supabase
     .from('conversations')
@@ -190,12 +212,15 @@ export async function runSendAgenda(
 
   await supabase.from('event_log').insert({
     type: 'gdo_agenda_esito',
-    payload: { crmLeadId: payload.leadId, conversationId: inviata.conversationId, sid: inviata.sid, esito } as never,
-    message: `[gdo] agenda per il lead ${payload.leadId}: ${esito}`,
+    payload: {
+      crmLeadId: payload.leadId, conversationId: inviata.conversationId, sid: inviata.sid, esito,
+      ...(motivo ? { motivo, twilioErrorCode: ultimaLettura.codiceErrore } : {}),
+    } as never,
+    message: `[gdo] agenda per il lead ${payload.leadId}: ${esito}${motivo ? ` (${motivo})` : ''}`,
     level: 'info',
   });
 
-  return { ok: true, esito, conversationId: inviata.conversationId, sid: inviata.sid };
+  return { ok: true, esito, conversationId: inviata.conversationId, sid: inviata.sid, ...(motivo ? { motivo } : {}) };
 }
 
 /**

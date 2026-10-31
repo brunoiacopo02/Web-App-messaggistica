@@ -46,6 +46,13 @@ Sempre **200** quando la richiesta è valida: l'esito sta nel corpo, non nello s
 | `inviato` | accettato da Twilio, nessuna conferma entro ~8s (telefono spento/offline) | **NO**: arriverebbe doppio appena torna online |
 | `fallito` | numero non su WhatsApp, template bloccato, Twilio giù | sì |
 
+**Campo `motivo` (dal 31/10/2026, contratto CRM v1.12).** Solo su `fallito` e solo quando
+la causa è certa. Oggi un solo valore: `"numero_senza_whatsapp"` (Twilio 63024 sul
+messaggio dell'agenda). Si decide sul codice d'errore, non sullo stato: le callback di
+Twilio arrivano fuori ordine e un `sent` può sovrascrivere un `undelivered`. Assente in
+tutti gli altri casi: un client che non lo conosce non vede differenze. Con il motivo
+anche `message` cambia ("Il numero non ha WhatsApp: ...").
+
 La risposta arriva entro ~8 secondi dall'inizio della richiesta: oltre non si aspetta e
 si risponde `inviato`.
 

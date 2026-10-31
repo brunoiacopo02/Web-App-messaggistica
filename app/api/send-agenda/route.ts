@@ -28,6 +28,11 @@ const MESSAGGIO: Record<string, string> = {
   fallito: 'Invio fallito: puoi ritentare.',
 };
 
+// Contratto v1.12: con `motivo` il fallito ha una causa su cui il GDO può agire.
+const MESSAGGIO_MOTIVO: Record<string, string> = {
+  numero_senza_whatsapp: 'Il numero non ha WhatsApp: chiedi al lead un numero su cui ha WhatsApp e ritenta con quello.',
+};
+
 export async function POST(req: NextRequest) {
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
   const rl = checkRateLimit(`sendagenda:${ip}`, 120, 60_000);
@@ -59,7 +64,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ok: res.ok,
       esito: res.esito,
-      message: MESSAGGIO[res.esito],
+      message: (res.motivo && MESSAGGIO_MOTIVO[res.motivo]) || MESSAGGIO[res.esito],
+      // Solo se valorizzato: i client che non lo conoscono non vedono differenze.
+      ...(res.motivo ? { motivo: res.motivo } : {}),
       deduplicato: res.deduplicato ?? false,
       varianteAggiornata: res.varianteAggiornata ?? false,
       videoGiaInviato: res.videoGiaInviato ?? false,

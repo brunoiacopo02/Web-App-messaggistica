@@ -22,7 +22,7 @@ const PAYLOAD = {
  * messaggio appena inviato, che cambia nel tempo come farebbero le status callback.
  */
 function makeSupabase(
-  opts: { convPrecedente?: any; statusSequence?: (string | null)[]; settingsRows?: { key: string; value: unknown }[] } = {},
+  opts: { convPrecedente?: any; statusSequence?: (string | null | { status: string | null; code: number | null })[]; settingsRows?: { key: string; value: unknown }[] } = {},
 ) {
   const statusSequence = opts.statusSequence ?? [null];
   let letture = 0;
@@ -57,7 +57,8 @@ function makeSupabase(
               eq() { return stub; },
               maybeSingle() {
                 const s = statusSequence[Math.min(letture++, statusSequence.length - 1)];
-                return Promise.resolve({ data: { twilio_status: s } });
+                if (s && typeof s === 'object') return Promise.resolve({ data: { twilio_status: s.status, twilio_error_code: s.code } });
+                return Promise.resolve({ data: { twilio_status: s, twilio_error_code: null } });
               },
             };
             return stub;
@@ -111,6 +112,27 @@ describe('runSendAgenda — i tre stati che vede il GDO', () => {
     const res = await runSendAgenda(supabase, PAYLOAD, fakeDeps());
 
     expect(res).toMatchObject({ ok: false, esito: 'fallito', error: 'twilio 63024' });
+  });
+
+  it('numero senza WhatsApp (63024) → fallito con motivo, anche se lo stato è già tornato a sent', async () => {
+    // 31/10, lead da526f13: le callback arrivano fuori ordine e il 'sent' sovrascrive
+    // l'undelivered. Il codice d'errore è definitivo: decide lui.
+    const { supabase, calls } = makeSupabase({ statusSequence: [{ status: 'sent', code: 63024 }] });
+
+    const res = await runSendAgenda(supabase, PAYLOAD, fakeDeps());
+
+    expect(res).toMatchObject({ ok: true, esito: 'fallito', motivo: 'numero_senza_whatsapp' });
+    expect(calls.updates.at(-1)).toMatchObject({ gdo_agenda_esito: 'fallito' });
+    expect(calls.events.find((e) => e.type === 'gdo_agenda_esito')?.payload).toMatchObject({ motivo: 'numero_senza_whatsapp', twilioErrorCode: 63024 });
+  });
+
+  it('fallito per un altro motivo → nessun motivo nella risposta', async () => {
+    const { supabase } = makeSupabase({ statusSequence: [{ status: 'undelivered', code: 63016 }] });
+
+    const res = await runSendAgenda(supabase, PAYLOAD, fakeDeps());
+
+    expect(res.esito).toBe('fallito');
+    expect(res.motivo).toBeUndefined();
   });
 
   it('numero non normalizzabile → fallito subito, nessun invio', async () => {
