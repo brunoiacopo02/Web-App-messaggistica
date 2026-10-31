@@ -8,7 +8,7 @@ import { shouldAutoReply, shouldReopen, shouldAdoptInbound, drainMarioReplies, r
 import { isAudioInbound, transcribeTwilioAudio } from '@/lib/transcribe';
 import { handleGdoDeliveryUpdate } from '@/lib/send-agenda-gdo';
 import { sendCrmNota } from '@/lib/bot-outcome';
-import { buildBotRipresoNote } from '@/lib/bot-outcome-rules';
+import { notaRiscrittoSeDovuta } from '@/lib/bot-riscritto';
 import { segnalaRispostaDopoTerzoNr } from '@/lib/risposta-post-nr';
 import {
   classificaPrimoMessaggio, isMarkerPulsanteWebinar, isMarkerLinkSviluppatore, LANCIO_INGRESSO_LINK_SVILUPPATORE,
@@ -756,20 +756,22 @@ export async function POST(req: NextRequest) {
       })) {
         await supabase.from('conversations').update({ ai_status: 'active' }).eq('id', conversationId);
         conv.ai_status = 'active';
-        // Il lead era già stato restituito al CRM e ha riscritto: da adesso il bot e i
-        // GDO lavorano la stessa persona. Avvisarli è l'unico modo perché non chiamino
-        // a vuoto (caso Marina Destefanis). APPUNTAMENTO è escluso: lì il lead è già in
-        // agenda e la riapertura ha il suo canale, le note del lead terminale.
+        // Il lead era già stato restituito al CRM e ha riscritto. Il lead è del GDO
+        // (decisione PO 31/10/2026): la nota porta le sue parole e dice di richiamarlo,
+        // al massimo una ogni 6 ore per conversazione (niente raffica sui saluti).
+        // APPUNTAMENTO è escluso: lì il lead è già in agenda e la riapertura ha il suo
+        // canale, le note del lead terminale.
         // Dopo la risposta a Twilio: la loro rete non deve rallentare il webhook.
         // Su un congedo appena sciolto la nota e' gia' partita qui sopra, con le parole del
         // lead: una seconda campanella per lo stesso fatto e' rumore.
         if (!congedoSciolto && conv.crm_lead_id && conv.bot_outcome && conv.bot_outcome !== 'APPUNTAMENTO') {
           after(
-            sendCrmNota(
-              supabase,
+            notaRiscrittoSeDovuta(supabase, {
               conversationId,
-              buildBotRipresoNote({ esitoPrecedente: conv.bot_outcome, quandoIso: new Date().toISOString() }),
-            ),
+              crmLeadId: conv.crm_lead_id,
+              esitoPrecedente: conv.bot_outcome,
+              testo: messageBody,
+            }),
           );
         }
       }

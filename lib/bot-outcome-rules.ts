@@ -497,28 +497,31 @@ export function buildRispostaPostNrNote(input: { leadWords?: string; quandoNrIso
 }
 
 /**
- * Il lead era già stato restituito al CRM e ha riscritto. Da qui in poi due canali
- * lavorano la stessa persona senza vedersi, ed è esattamente com'è andata a Marina
- * Destefanis: restituita il 26/07, riassegnata a un GDO che l'ha chiamata tre volte e
- * poi scartata, mentre il giorno dopo il bot le fissava l'appuntamento. La nota serve a
- * fermare quella telefonata, quindi lo dice in chiaro.
+ * Il lead era già stato restituito al CRM (esito non APPUNTAMENTO) e ha riscritto su
+ * WhatsApp. Decisione del PO (31/10/2026): se il lead è arrivato al GDO ormai è suo. Il
+ * bot può continuare a rispondere, ma la nota NON dice più di aspettare il bot né di non
+ * chiamarlo: prima diceva «Non chiamatelo a mano finché non vi arriva un nuovo esito dal
+ * bot», e quell'esito non arrivava mai (il CRM rifiuta con 403 gli esiti non
+ * APPUNTAMENTO su un lead che non è più di un account bot, e il bot chiude in silenzio).
  *
- * `quandoIso` è `new Date().toISOString()` preso al momento dell'invio, non un dato dal
- * DB: due invii dello STESSO fatto (il lead che ha ripreso a scrivere dopo lo stesso
- * scarto) arrivano a `sendOutcome` a pochi secondi di distanza — l'abbiamo misurato a
- * 30, 23, 44 e 101 secondi — e ciascuno calcola il proprio "adesso". Se l'orario stesse
- * in testa (prima del primo punto, dove il CRM taglia per derivare la chiave di dedup)
- * i minuti diversi renderebbero diversa la chiave, il CRM non riconoscerebbe il
- * re-invio, e la nota entrerebbe due volte: è il difetto misurato, 122 note su 152.
- * L'esito precedente invece è lo stesso per i due invii (è quello che c'era prima che il
- * lead riscrivesse) ed è quello che identifica IL FATTO: resta in testa. L'orario va in
- * coda, dove un valore che cambia non spacca la chiave.
+ * Le parole del lead stanno in testa: identificano IL FATTO (due messaggi diversi sono
+ * due fatti diversi; lo stesso messaggio re-inviato dà la stessa chiave di dedup CRM,
+ * che si taglia al primo punto). L'orario di invio e l'esito precedente vanno in coda,
+ * dove un valore che cambia non spacca la chiave. Il tetto di una nota ogni 6 ore per
+ * conversazione sta nel chiamante (`lib/bot-riscritto.ts`).
  */
-export function buildBotRipresoNote(input: { esitoPrecedente: string; quandoIso: string }): string {
+export function buildBotRipresoNote(input: {
+  esitoPrecedente: string;
+  quandoIso: string;
+  leadWords?: string;
+}): string {
+  const parole = paroleDelLead(input.leadWords);
+  const testa = parole
+    ? `IL LEAD HA RISCRITTO SU WHATSAPP: «${parole}».`
+    : `IL LEAD HA RISCRITTO SU WHATSAPP (messaggio senza testo).`;
   return (
-    `IL BOT HA RIPRESO LA CHAT — il lead ha riscritto dopo che ve lo avevamo restituito ` +
-    `come ${input.esitoPrecedente}. Ha riscritto ${formatRomeDateTime(input.quandoIso)}. ` +
-    `Non chiamatelo a mano finché non vi arriva un nuovo esito dal bot.`
+    `${testa} Il lead è vostro: richiamatelo. ` +
+    `Ve lo avevamo restituito come ${input.esitoPrecedente}; ha riscritto ${formatRomeDateTime(input.quandoIso)}.`
   );
 }
 

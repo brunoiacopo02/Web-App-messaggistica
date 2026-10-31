@@ -310,39 +310,49 @@ describe('buildLockedNote — formato fattuale per le Conferme', () => {
 });
 
 describe('buildBotRipresoNote', () => {
-  it('dice cosa era stato restituito, quando il lead ha riscritto, e di non chiamare', () => {
-    const n = buildBotRipresoNote({ esitoPrecedente: 'INTERROTTO', quandoIso: DATE });
-    expect(n.startsWith('IL BOT HA RIPRESO LA CHAT —')).toBe(true);
+  it('riporta le parole del lead e dice che il lead è del GDO: va richiamato', () => {
+    const n = buildBotRipresoNote({ esitoPrecedente: 'INTERROTTO', quandoIso: DATE, leadWords: 'Scusate, mi richiamate?' });
+    expect(n.startsWith('IL LEAD HA RISCRITTO SU WHATSAPP: «Scusate, mi richiamate?».')).toBe(true);
+    expect(n).toContain('Il lead è vostro: richiamatelo.');
     expect(n).toContain('INTERROTTO');
     expect(n).toContain(DATE_HUMAN);
-    expect(n.toLowerCase()).toContain('non chiamatelo');
   });
 
-  it('vale per qualunque esito precedente', () => {
-    for (const o of ['NON_RISPOSTO', 'DA_SCARTARE', 'RICHIAMO']) {
-      expect(buildBotRipresoNote({ esitoPrecedente: o, quandoIso: DATE })).toContain(o);
+  // Decisione PO 31/10/2026: il lead restituito è del GDO. La vecchia nota diceva di non
+  // chiamarlo e di aspettare un esito dal bot che il CRM poi rifiutava con 403.
+  it('non dice mai di non chiamare o di aspettare il bot', () => {
+    for (const o of ['INTERROTTO', 'NON_RISPOSTO', 'DA_SCARTARE', 'RICHIAMO']) {
+      const n = buildBotRipresoNote({ esitoPrecedente: o, quandoIso: DATE, leadWords: 'ciao' }).toLowerCase();
+      expect(n).toContain(o.toLowerCase());
+      expect(n).not.toContain('non chiamatelo');
+      expect(n).not.toContain('non chiamate');
+      expect(n).not.toContain('esito dal bot');
+      expect(n).not.toContain('ripreso la chat');
     }
   });
 
-  // Misurato: due invii dello STESSO fatto (il lead che ha ripreso a scrivere dopo lo
-  // stesso scarto) partono a pochi secondi l'uno dall'altro (30, 23, 44, 101s nei
-  // campioni reali) e ciascuno calcola il proprio `new Date().toISOString()`. Prima del
-  // fix l'orario stava in testa (prima del primo punto, dove il CRM taglia per la
-  // chiave di dedup): un minuto di differenza bastava a produrre due chiavi diverse e
-  // due campanelle alle Conferme per lo stesso fatto — 122 note su 152 di questo tipo.
-  // Con l'orario in coda le due chiavi restano identiche. Questo test fallirebbe sul
-  // codice pre-fix: è la prova che il difetto c'era.
-  it('stesso esito precedente, istanti diversi a un minuto di distanza → stessa chiave di dedup CRM (l\'orario di invio non deve stare in testa)', () => {
+  it('parole lunghe troncate, niente a capo; messaggio vuoto gestito', () => {
+    const n = buildBotRipresoNote({ esitoPrecedente: 'DA_SCARTARE', quandoIso: DATE, leadWords: 'parola '.repeat(200) });
+    expect(n.length).toBeLessThan(600);
+    expect(n).toContain('…');
+    expect(n).not.toContain('\n');
+    const vuota = buildBotRipresoNote({ esitoPrecedente: 'DA_SCARTARE', quandoIso: DATE, leadWords: '   ' });
+    expect(vuota.startsWith('IL LEAD HA RISCRITTO SU WHATSAPP (messaggio senza testo).')).toBe(true);
+  });
+
+  // Lo stesso messaggio re-inviato a un minuto di distanza deve dare la stessa chiave di
+  // dedup CRM: l'orario di invio sta in coda, non in testa (122 note doppie su 152 a settembre).
+  it('stesso messaggio, istanti diversi → stessa chiave di dedup CRM', () => {
     const t0 = '2026-09-05T09:26:03.000Z';
-    const t1 = '2026-09-05T09:27:03.000Z'; // un minuto dopo: stesso fatto, secondo invio
-    const prima = buildBotRipresoNote({ esitoPrecedente: 'DA_SCARTARE', quandoIso: t0 });
-    const dopo = buildBotRipresoNote({ esitoPrecedente: 'DA_SCARTARE', quandoIso: t1 });
+    const t1 = '2026-09-05T09:27:03.000Z';
+    const prima = buildBotRipresoNote({ esitoPrecedente: 'DA_SCARTARE', quandoIso: t0, leadWords: 'ci sono' });
+    const dopo = buildBotRipresoNote({ esitoPrecedente: 'DA_SCARTARE', quandoIso: t1, leadWords: 'ci sono' });
     expect(crmDedupKey(prima)).toBe(crmDedupKey(dopo));
   });
 
-  it('esiti precedenti diversi restano fatti diversi: la chiave non collassa a prescindere dall\'orario', () => {
-    const a = buildBotRipresoNote({ esitoPrecedente: 'DA_SCARTARE', quandoIso: DATE });
-    const b = buildBotRipresoNote({ esitoPrecedente: 'INTERROTTO', quandoIso: DATE });
+  it('messaggi diversi restano fatti diversi', () => {
+    const a = buildBotRipresoNote({ esitoPrecedente: 'DA_SCARTARE', quandoIso: DATE, leadWords: 'ci sono' });
+    const b = buildBotRipresoNote({ esitoPrecedente: 'DA_SCARTARE', quandoIso: DATE, leadWords: 'quando mi chiamate' });
     expect(crmDedupKey(a)).not.toBe(crmDedupKey(b));
   });
 });
