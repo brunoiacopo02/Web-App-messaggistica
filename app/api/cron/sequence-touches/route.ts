@@ -16,20 +16,15 @@ import {
   type MsgLite,
 } from '@/lib/sequence';
 import { inviaNotaAlCrm } from '@/lib/bot-outcome';
-import { sendTemplate, sendFreeText, getTemplateBody } from '@/lib/twilio';
+import { sendFreeText } from '@/lib/twilio';
+import { inviaAperturaMario, sendSequenceTemplate } from '@/lib/apertura-mario-invio';
 import { stopDalCrmPerLead } from '@/lib/stop-crm';
-import { feniceOpening } from '@/lib/fenice-opening';
 import {
   personaForConversation,
-  normalizeFunnel,
-  variantIndexFor,
-  openingEnvKey,
-  openingBody,
-  openingWaysFor,
   PERSONA_NAME,
   OPENING_ENV_KEYS,
 } from '@/lib/persona';
-import { firstNameOf, templateName } from '@/lib/name';
+import { templateName } from '@/lib/name';
 import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
 import { mittenteDiConversazione } from '@/lib/mittente';
@@ -55,65 +50,6 @@ function authorized(req: NextRequest): boolean {
   return false;
 }
 
-/**
- * Come sendTemplateAndLog, ma con gestione del frequency cap Meta (63049):
- * in quel caso NON inserisce nessun messaggio (il touch non è consumato e
- * verrà ritentato al run successivo) e logga `sequence_freq_capped`.
- */
-async function sendSequenceTemplate(
-  supabase: Supa,
-  conversationId: number,
-  phone: string,
-  templateSid: string,
-  label: string,
-  from: string | undefined,
-  variables: Record<string, string>,
-  bodyOverride?: string,
-): Promise<{ ok: boolean; capped?: boolean; error?: string }> {
-  // `from` anche qui: il testo del template si legge dall'account che possiede il mittente.
-  const tplBody = bodyOverride ?? (await getTemplateBody(templateSid, from)) ?? `[template] ${label}`;
-  try {
-    const sent = await sendTemplate({ to: phone, contentSid: templateSid, variables, from });
-    await supabase.from('messages').insert({
-      conversation_id: conversationId,
-      direction: 'out',
-      body: tplBody,
-      twilio_sid: sent.sid,
-      twilio_status: sent.status,
-      template_sid: templateSid,
-      is_template: true,
-      sender: 'automazione',
-    });
-    await supabase
-      .from('conversations')
-      .update({ last_message_at: new Date().toISOString() })
-      .eq('id', conversationId);
-    return { ok: true };
-  } catch (err: unknown) {
-    const e = err as { message?: string; code?: number };
-    if (e?.code === 63049) {
-      await supabase.from('event_log').insert({
-        type: 'sequence_freq_capped',
-        payload: { conversationId, templateSid } as never,
-        message: `[sequenza] frequency cap Meta su conv ${conversationId}: touch non consumato, ritento al prossimo run`,
-        level: 'info',
-      });
-      return { ok: false, capped: true };
-    }
-    await supabase.from('messages').insert({
-      conversation_id: conversationId,
-      direction: 'out',
-      body: tplBody,
-      twilio_status: 'failed',
-      twilio_error_code: e?.code ?? null,
-      template_sid: templateSid,
-      is_template: true,
-      sender: 'automazione',
-    });
-    return { ok: false, error: e?.message ?? 'unknown' };
-  }
-}
-
 export async function GET(req: NextRequest) {
   if (!authorized(req)) return new NextResponse('unauthorized', { status: 401 });
 
@@ -136,7 +72,6 @@ export async function GET(req: NextRequest) {
   // `TWILIO_WHATSAPP_NUMBER_FOLLOWUP` non si legge piu': un numero "dei follow-up"
   // diverso da quello dell'apertura e' proprio il thread spezzato che questa regola
   // chiude, e sull'apertura differita avrebbe ignorato la scelta dell'intake.
-  const openingSid = process.env.FENICE_OPENING_TEMPLATE_SID;
   const maxPerRun = Math.max(1, Number(process.env.SEQUENCE_MAX_PER_RUN) || 25);
 
   // SID sequenza Track A: env SEQ_TEMPLATE_SID_1..4 (posizionali sui touch 1..4).
@@ -188,7 +123,6 @@ export async function GET(req: NextRequest) {
       level: 'error',
     });
   };
-  const newOpeningEnabled = process.env.NEW_OPENING_ENABLED === '1';
   // Sollecito prima del parcheggio (PO 29/10/2026): null = spento, tutto come prima.
   const sollecito = sequenzaAccesa ? await caricaContesto(supabase, now) : null;
   const sollecitoSaltati: Record<string, number> = {};
@@ -306,36 +240,12 @@ export async function GET(req: NextRequest) {
             skipped++;
             continue;
           }
-          if (newOpeningEnabled) {
-            // Nuove aperture per-funnel A/B (persona Marta), stessa selezione dell'enroll.
-            const funnel = normalizeFunnel(c.crm_funnel as string | null | undefined);
-            const ways = openingWaysFor(funnel, (k) => Boolean(process.env[k]));
-            const variant = variantIndexFor(c.id, ways);
-            const envKey = openingEnvKey(funnel, variant);
-            const newSid = process.env[envKey];
-            if (newSid) {
-              sent++;
-              await sendSequenceTemplate(
-                supabase, c.id, phone, newSid, `Apertura ${envKey}`, from,
-                { '1': templateName(firstName) },
-                openingBody(funnel, variant, firstName),
-              );
-              continue;
-            }
-            // SID mancante → una volta per run l'errore, poi fallback all'apertura legacy.
-            await logOpeningConfigError(envKey);
-          }
-          if (!openingSid) {
-            await logConfigError('FENICE_OPENING_TEMPLATE_SID');
-            skipped++;
-            continue;
-          }
-          const cleanName = firstNameOf(firstName);
-          const variables: Record<string, string> = cleanName ? { '3': cleanName } : {};
-          sent++;
-          await sendSequenceTemplate(
-            supabase, c.id, phone, openingSid, 'Fenice apertura', from, variables, feniceOpening(firstName),
-          );
+          const r = await inviaAperturaMario(supabase, {
+            conversationId: c.id, phone, firstName, funnel: c.crm_funnel as string | null | undefined, from,
+            logConfigError, logOpeningConfigError,
+          });
+          if (r.tentato) sent++;
+          else skipped++;
         } else if (action.kind === 'send_touch') {
           const sid =
             persona === 'marta'

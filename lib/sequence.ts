@@ -79,7 +79,7 @@ export type MsgLite = { direction: string; twilio_status: string | null; templat
 
 const romeFmt = new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', hour: 'numeric', minute: 'numeric', hour12: false });
 
-function romeMinutes(nowMs: number): number {
+export function romeMinutes(nowMs: number): number {
   const parts = romeFmt.formatToParts(new Date(nowMs));
   const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
   return get('hour') * 60 + get('minute');

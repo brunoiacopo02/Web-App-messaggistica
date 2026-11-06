@@ -1,0 +1,254 @@
+import { describe, it, expect, vi } from 'vitest';
+import {
+  configRecupero,
+  decidiChat,
+  eseguiRecupero,
+  inFinestraRecupero,
+  scegliNumeroRecupero,
+  EVENTO_RECUPERO_INVIATA,
+  EVENTO_RECUPERO_RESTITUITA,
+  EVENTO_RECUPERO_SALTATA,
+  RECUPERO_MAX_PER_GIRO,
+  type ChatCoda,
+  type ConfigRecupero,
+  type DepsRecupero,
+} from './recupero-aperture';
+
+const H = 3600_000;
+// Venerdi' 06/11/2026 15:00 Roma (UTC+1).
+const ADESSO = Date.parse('2026-11-06T14:00:00Z');
+const N0047 = 'whatsapp:+393522070047';
+const N8718 = 'whatsapp:+393522018718';
+
+const chat = (id: number, aiStartedAt: string, extra: Partial<ChatCoda> = {}): ChatCoda => ({
+  id, ai_started_at: aiStartedAt, crm_lead_id: `crm-${id}`, crm_funnel: null,
+  wa_number: 'whatsapp:+393520158061', phone: `+39333${id}`, firstName: 'Anna', ...extra,
+});
+
+describe('configRecupero', () => {
+  it('assente o 0 = spento', () => {
+    expect(configRecupero({}).tetto).toBe(0);
+    expect(configRecupero({ RECUPERO_APERTURE_GIORNALIERE: '0' }).tetto).toBe(0);
+    expect(configRecupero({ RECUPERO_APERTURE_GIORNALIERE: 'abc' }).tetto).toBe(0);
+    expect(configRecupero({ RECUPERO_APERTURE_GIORNALIERE: '-3' }).tetto).toBe(0);
+    expect(configRecupero({ RECUPERO_APERTURE_GIORNALIERE: '40' }).tetto).toBe(40);
+  });
+
+  it('mai 8061, mai 3199 ne\' il primario, qualunque cosa dica l\'env', () => {
+    const c = configRecupero({
+      RECUPERO_APERTURE_GIORNALIERE: '40',
+      TWILIO_WHATSAPP_NUMBER_FENICE: 'whatsapp:+393520413199',
+      RECUPERO_NUMERI: '+393520158061, whatsapp:+393520413199,+393522070047,whatsapp:+393522018718,+393522070047',
+    });
+    expect(c.numeri).toEqual([N0047, N8718]);
+    expect(c.maxPerGiro).toBe(RECUPERO_MAX_PER_GIRO);
+  });
+});
+
+describe('inFinestraRecupero', () => {
+  it('09:30-20:30 Roma, estremo alto escluso', () => {
+    expect(inFinestraRecupero(Date.parse('2026-11-06T08:29:00Z'))).toBe(false); // 09:29
+    expect(inFinestraRecupero(Date.parse('2026-11-06T08:30:00Z'))).toBe(true); // 09:30
+    expect(inFinestraRecupero(Date.parse('2026-11-06T19:29:00Z'))).toBe(true); // 20:29
+    expect(inFinestraRecupero(Date.parse('2026-11-06T19:30:00Z'))).toBe(false); // 20:30
+  });
+});
+
+describe('decidiChat', () => {
+  const nessuno = { out: 0, in: 0 };
+  it('chat della coda mai aperta e recente = invia', () => {
+    expect(decidiChat(chat(1, '2026-11-05T01:00:00Z'), nessuno, ADESSO)).toEqual({ azione: 'invia' });
+  });
+  it('un messaggio in uscita, anche fallito, la toglie dalla coda', () => {
+    expect(decidiChat(chat(1, '2026-11-05T01:00:00Z'), { out: 1, in: 0 }, ADESSO)).toEqual({ azione: 'ignora', motivo: 'gia_aperta' });
+  });
+  it('arruolata dal 06/11 07:00 UTC in poi: e\' della rete, non del recupero', () => {
+    expect(decidiChat(chat(1, '2026-11-06T07:00:00Z'), nessuno, ADESSO)).toEqual({ azione: 'ignora', motivo: 'fuori_coda' });
+  });
+  it('troppo vecchia per la coda (prima del 01/11): non si tocca', () => {
+    expect(decidiChat(chat(1, '2026-10-30T10:00:00Z'), nessuno, ADESSO)).toEqual({ azione: 'ignora', motivo: 'fuori_coda' });
+  });
+  it('ci ha scritto lui: saltata', () => {
+    expect(decidiChat(chat(1, '2026-11-05T01:00:00Z'), { out: 0, in: 2 }, ADESSO)).toEqual({ azione: 'salta', motivo: 'ha_scritto_lui' });
+  });
+  it('oltre 5 giorni dall\'arruolamento = restituisci', () => {
+    const now = Date.parse('2026-11-08T07:00:00Z');
+    expect(decidiChat(chat(1, '2026-11-03T01:00:00Z'), nessuno, now)).toEqual({ azione: 'restituisci' });
+    expect(decidiChat(chat(1, '2026-11-03T01:00:00Z'), nessuno, Date.parse('2026-11-08T00:59:00Z'))).toEqual({ azione: 'invia' });
+  });
+  it('senza telefono: saltata', () => {
+    expect(decidiChat(chat(1, '2026-11-05T01:00:00Z', { phone: null }), nessuno, ADESSO)).toEqual({ azione: 'salta', motivo: 'senza_telefono' });
+  });
+});
+
+describe('scegliNumeroRecupero', () => {
+  it('il meno carico; a parita\' l\'ordine dell\'env', () => {
+    expect(scegliNumeroRecupero([])).toBeNull();
+    expect(scegliNumeroRecupero([{ numero: N8718, carico: 50 }, { numero: N0047, carico: 20 }])).toBe(N0047);
+    expect(scegliNumeroRecupero([{ numero: N8718, carico: 5 }, { numero: N0047, carico: 5 }])).toBe(N8718);
+  });
+});
+
+// ─────────────────────────── orchestratore con dipendenze finte ───────────────────────────
+
+function finti(o: {
+  coda: ChatCoda[];
+  giaOggi?: number | null;
+  messaggi?: Map<number, { out: number; in: number }> | null;
+  numeri?: { numero: string; carico: number }[];
+  stop?: Record<string, string>;
+  esitoInvio?: (id: number) => { ok: boolean; capped?: boolean; error?: string; configMancante?: boolean };
+}) {
+  const eventi: { type: string; payload: Record<string, unknown> }[] = [];
+  const deps: DepsRecupero = {
+    contaInviateOggi: vi.fn(async () => (o.giaOggi === undefined ? 0 : o.giaOggi)),
+    caricaCoda: vi.fn(async () => o.coda),
+    contaMessaggi: vi.fn(async () => (o.messaggi === undefined ? new Map() : o.messaggi)),
+    stopCrm: vi.fn(async (id: string | null) => (id && o.stop?.[id]) || null),
+    numeriUtilizzabili: vi.fn(async () => ({ ok: (o.numeri ?? [{ numero: N0047, carico: 0 }]).map((n) => ({ ...n })), scarti: [] })),
+    riassegnaNumero: vi.fn(async () => true),
+    invia: vi.fn(async (c: ChatCoda) => (o.esitoInvio ? o.esitoInvio(c.id) : { ok: true })),
+    restituisci: vi.fn(async () => ({ sent: true, status: 200 })),
+    saltataOggi: vi.fn(async () => false),
+    log: vi.fn(async (type: string, _l: 'info' | 'warn', payload: Record<string, unknown>) => { eventi.push({ type, payload }); }),
+  };
+  return { deps, eventi };
+}
+
+const CFG: ConfigRecupero = { tetto: 40, numeri: [N0047, N8718], maxPerGiro: 8 };
+
+/** n chat del 05/11, la piu' recente con id piu' alto. */
+const codaDi = (n: number) =>
+  Array.from({ length: n }, (_, i) => chat(100 + n - i, new Date(Date.parse('2026-11-05T06:00:00Z') - i * 60_000).toISOString()));
+
+describe('eseguiRecupero', () => {
+  it('spento: nessuna dipendenza toccata', async () => {
+    const { deps } = finti({ coda: codaDi(3) });
+    const r = await eseguiRecupero({ ...CFG, tetto: 0 }, deps, ADESSO);
+    expect(r.disabled).toBe(true);
+    expect(deps.caricaCoda).not.toHaveBeenCalled();
+    expect(deps.invia).not.toHaveBeenCalled();
+  });
+
+  it('fuori finestra: niente', async () => {
+    const { deps } = finti({ coda: codaDi(3) });
+    const r = await eseguiRecupero(CFG, deps, Date.parse('2026-11-06T06:00:00Z')); // 07:00 Roma
+    expect(r.fuoriFinestra).toBe(true);
+    expect(deps.caricaCoda).not.toHaveBeenCalled();
+  });
+
+  it('al massimo 8 per giro, nell\'ordine della coda (dalla piu\' recente)', async () => {
+    const coda = codaDi(12);
+    const { deps, eventi } = finti({ coda });
+    const r = await eseguiRecupero(CFG, deps, ADESSO);
+    expect(r.inviate).toBe(8);
+    const inviati = (deps.invia as ReturnType<typeof vi.fn>).mock.calls.map((c) => (c[0] as ChatCoda).id);
+    expect(inviati).toEqual(coda.slice(0, 8).map((c) => c.id));
+    expect(eventi.filter((e) => e.type === EVENTO_RECUPERO_INVIATA)).toHaveLength(8);
+  });
+
+  it('il tetto giornaliero conta i recuperi gia\' fatti oggi', async () => {
+    const { deps } = finti({ coda: codaDi(12), giaOggi: 37 });
+    const r = await eseguiRecupero(CFG, deps, ADESSO);
+    expect(r.inviate).toBe(3);
+    expect(r.residuoOggi).toBe(0);
+  });
+
+  it('conteggio di oggi fallito: nessun invio (fallisce chiuso)', async () => {
+    const { deps } = finti({ coda: codaDi(3), giaOggi: null });
+    const r = await eseguiRecupero(CFG, deps, ADESSO);
+    expect(r.inviate).toBe(0);
+    expect(deps.invia).not.toHaveBeenCalled();
+  });
+
+  it('riassegna il wa_number al numero scelto prima di inviare, e bilancia sul carico', async () => {
+    const { deps, eventi } = finti({ coda: codaDi(4), numeri: [{ numero: N0047, carico: 21 }, { numero: N8718, carico: 20 }] });
+    await eseguiRecupero(CFG, deps, ADESSO);
+    const riass = (deps.riassegnaNumero as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[1]);
+    // 8718 (20) → pari 21/21 vince l'ordine dell'env (0047) → 8718 (21 vs 22) → pari, 0047
+    expect(riass).toEqual([N8718, N0047, N8718, N0047]);
+    const inv = eventi.filter((e) => e.type === EVENTO_RECUPERO_INVIATA);
+    expect(inv[0].payload.numeroPrima).toBe('whatsapp:+393520158061');
+    expect(inv[0].payload.numero).toBe(N8718);
+    const daInvia = (deps.invia as ReturnType<typeof vi.fn>).mock.calls.map((c) => [(c[0] as ChatCoda).wa_number, c[1]]);
+    expect(daInvia.every(([a, b]) => a === b)).toBe(true);
+  });
+
+  it('nessun numero utilizzabile: un solo evento, nessun invio', async () => {
+    const { deps, eventi } = finti({ coda: codaDi(5), numeri: [] });
+    const r = await eseguiRecupero(CFG, deps, ADESSO);
+    expect(r.inviate).toBe(0);
+    expect(deps.riassegnaNumero).not.toHaveBeenCalled();
+    expect(eventi.filter((e) => e.type === EVENTO_RECUPERO_SALTATA && e.payload.motivo === 'nessun_numero')).toHaveLength(1);
+  });
+
+  it('stop dal CRM: saltata col motivo, non consuma il lotto', async () => {
+    const coda = codaDi(10);
+    const { deps, eventi } = finti({ coda, stop: { [coda[0].crm_lead_id as string]: 'gia_cliente' } });
+    const r = await eseguiRecupero(CFG, deps, ADESSO);
+    expect(r.inviate).toBe(8);
+    expect(eventi.find((e) => e.type === EVENTO_RECUPERO_SALTATA)?.payload.motivo).toBe('stop_crm_gia_cliente');
+    expect(deps.riassegnaNumero).not.toHaveBeenCalledWith(coda[0].id, expect.anything());
+  });
+
+  it('chat gia\' aperta o con un inbound: non riceve niente', async () => {
+    const coda = codaDi(3);
+    const messaggi = new Map([[coda[0].id, { out: 1, in: 0 }], [coda[1].id, { out: 0, in: 1 }]]);
+    const { deps, eventi } = finti({ coda, messaggi });
+    const r = await eseguiRecupero(CFG, deps, ADESSO);
+    expect(r.inviate).toBe(1);
+    expect(r.gia_aperte).toBe(1);
+    expect(eventi.find((e) => e.type === EVENTO_RECUPERO_SALTATA)?.payload.motivo).toBe('ha_scritto_lui');
+  });
+
+  it('lettura messaggi fallita: nessun invio e nessuna restituzione', async () => {
+    const { deps } = finti({ coda: codaDi(3), messaggi: null });
+    const r = await eseguiRecupero(CFG, deps, ADESSO);
+    expect(r.inviate).toBe(0);
+    expect(deps.invia).not.toHaveBeenCalled();
+    expect(deps.restituisci).not.toHaveBeenCalled();
+  });
+
+  it('oltre 5 giorni: restituita al CRM (evento dedicato), anche a tetto esaurito', async () => {
+    const vecchia = chat(9, '2026-11-01T06:00:00Z');
+    const { deps, eventi } = finti({ coda: [...codaDi(2), vecchia], giaOggi: 40 });
+    const r = await eseguiRecupero(CFG, deps, ADESSO);
+    expect(r.inviate).toBe(0);
+    expect(r.restituite).toBe(1);
+    expect(deps.restituisci).toHaveBeenCalledWith(vecchia);
+    expect(eventi.find((e) => e.type === EVENTO_RECUPERO_RESTITUITA)?.payload.conversationId).toBe(9);
+  });
+
+  it('frequency cap e invio fallito: saltate, non contano', async () => {
+    const coda = codaDi(3);
+    const { deps, eventi } = finti({
+      coda,
+      esitoInvio: (id) => (id === coda[0].id ? { ok: false, capped: true } : id === coda[1].id ? { ok: false, error: 'boom' } : { ok: true }),
+    });
+    const r = await eseguiRecupero(CFG, deps, ADESSO);
+    expect(r.inviate).toBe(1);
+    const motivi = eventi.filter((e) => e.type === EVENTO_RECUPERO_SALTATA).map((e) => e.payload.motivo);
+    expect(motivi).toEqual(['frequency_cap', 'invio_fallito']);
+  });
+
+  it('template di apertura non configurato: si ferma al primo', async () => {
+    const { deps } = finti({ coda: codaDi(3), esitoInvio: () => ({ ok: false, configMancante: true }) });
+    const r = await eseguiRecupero(CFG, deps, ADESSO);
+    expect(r.inviate).toBe(0);
+    expect(deps.invia).toHaveBeenCalledTimes(1);
+  });
+
+  it('una saltata gia\' scritta oggi per quella chat e motivo non si riscrive', async () => {
+    const coda = codaDi(1);
+    const { deps, eventi } = finti({ coda, messaggi: new Map([[coda[0].id, { out: 0, in: 1 }]]) });
+    (deps.saltataOggi as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    await eseguiRecupero(CFG, deps, ADESSO);
+    expect(eventi.filter((e) => e.type === EVENTO_RECUPERO_SALTATA)).toHaveLength(0);
+  });
+
+  it('chat appena arrivate dopo le 12h (rete) non vengono mai prese', async () => {
+    const { deps } = finti({ coda: [chat(1, new Date(ADESSO - 2 * H).toISOString())] });
+    const r = await eseguiRecupero(CFG, deps, ADESSO);
+    expect(r.inviate).toBe(0);
+  });
+});
