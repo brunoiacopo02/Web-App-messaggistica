@@ -1853,10 +1853,12 @@ export async function drainMarioReplies(
           // 'riconferma_non_inviata' (= RICONFERMA_NON_INVIATA di bot-outcome, scritta per
           // esteso perche' i test mockano il modulo): stessa data della call gia' fissata,
           // nessuna nota al CRM, esito terminale come prima.
+          // 'spostamento_non_inviato' (= SPOSTAMENTO_NON_INVIATO): il giudice degli spostamenti
+          // ha detto che la nota SPOSTAMENTO non era vera, stessa chiusura.
           // `keepOpen`: il CRM è stato informato con una nota (RICHIAMO senza una data
           // utilizzabile) ma la conversazione NON è esitata — il bot deve poter ancora
           // chiedere al lead quando gli va bene, invece di sparire.
-          if (!soloNota && !sent.keepOpen && (sent.sent || sent.error === 'note_duplicate' || sent.error === 'riconferma_non_inviata')) {
+          if (!soloNota && !sent.keepOpen && (sent.sent || sent.error === 'note_duplicate' || sent.error === 'riconferma_non_inviata' || sent.error === 'spostamento_non_inviato')) {
             finalStatus = 'closed';
           }
           break;

@@ -16,6 +16,14 @@ import {
 } from './bot-outcome-rules';
 import { bookingBlackout } from './booking-blackout';
 import { contestoGiudiceDaDb, giudicaDisdetta, giudiceDisdetteAcceso, type GiudizioDisdetta } from './giudice-disdetta';
+import {
+  agendaVecchia,
+  contestoSpostamentoDaDb,
+  giudicaSpostamento,
+  giudiceSpostamentiAcceso,
+  type GiudizioSpostamento,
+  type VerdettoSpostamento,
+} from './giudice-spostamento';
 import { sameInstant } from './rome-time';
 import { categoriaPerCrm, disponibilitaDalTesto, motivoRichiesta } from './contatti-umani';
 import {
@@ -480,6 +488,95 @@ async function provaScartoDisdetta(
   return { scartato, ...(crm?.status ? { status: crm.status } : {}) };
 }
 
+/** `sendOutcome` non ha mandato la nota SPOSTAMENTO perché il giudice degli spostamenti
+ *  ha detto che non lo era: terminale come `note_duplicate`, non un fallimento. */
+export const SPOSTAMENTO_NON_INVIATO = 'spostamento_non_inviato';
+
+const NOTA_SPOSTAMENTO_PREFISSO = 'SPOSTAMENTO CHIESTO';
+
+/** La nota che sta per partire è una «SPOSTAMENTO CHIESTO» e il giudice è acceso? */
+function spostamentoDaGiudicare(note: string): boolean {
+  return giudiceSpostamentiAcceso() && note.startsWith(NOTA_SPOSTAMENTO_PREFISSO);
+}
+
+type DecisioneSpostamento =
+  | { verdetto: 'spostamento_vero' | 'dubbio' }
+  | { verdetto: 'non_spostamento' }
+  | { verdetto: 'disdetta'; motivo: string };
+
+/**
+ * Il giudice degli spostamenti (PO 06/11/2026, `lib/giudice-spostamento.ts`), chiamato
+ * DOPO le dedup (impronta e una nota per tipo ogni 2 ore): i re-invii dello stesso fatto
+ * non arrivano qui. Non lancia mai: errore o timeout valgono `dubbio`, cioè la nota parte.
+ *
+ * Prima del modello la guardia deterministica: sul lead di un GDO una call in agenda
+ * passata da più di `AGENDA_VECCHIA_GIORNI` giorni non riceve note di spostamento.
+ *
+ * Ogni chiamata lascia un evento `giudice_spostamento` (verdetto, citazione, guardie,
+ * tempi, token, decisione) per l'audit.
+ */
+async function giudicaNotaSpostamento(
+  supabase: Supa,
+  i: { conversationId: number; crmLeadId: string; canale: 'gdo' | 'bot'; agendaAt: string | null; dataChiesta: string | null; nota: string },
+): Promise<DecisioneSpostamento> {
+  const t0 = Date.now();
+  let giudizio: GiudizioSpostamento | null = null;
+  let errore: string | null = null;
+  let guardia: string[] = [];
+  let verdetto: VerdettoSpostamento;
+  if (i.canale === 'gdo' && agendaVecchia(i.agendaAt, Date.now())) {
+    verdetto = 'non_spostamento';
+    guardia = ['agenda_vecchia'];
+  } else {
+    try {
+      const { messaggi, fatti } = await contestoSpostamentoDaDb(supabase, i.conversationId, {
+        canale: i.canale,
+        agendaAt: i.agendaAt,
+        dataChiesta: i.dataChiesta,
+      });
+      giudizio = await giudicaSpostamento(messaggi, fatti, { timeoutMs: GIUDICE_TIMEOUT_DRAIN_MS });
+      verdetto = giudizio.verdetto;
+      guardia = giudizio.guardia;
+    } catch (e) {
+      errore = e instanceof Error ? e.message : String(e);
+      verdetto = 'dubbio';
+    }
+  }
+  const decisione = verdetto === 'non_spostamento' ? 'nessuna_nota' : verdetto === 'disdetta' ? 'nota_disdetta' : 'nota_spostamento';
+  try {
+    await supabase.from('event_log').insert({
+      type: 'giudice_spostamento',
+      payload: {
+        conversationId: i.conversationId,
+        crmLeadId: i.crmLeadId,
+        canale: i.canale,
+        verdetto,
+        verdettoModello: giudizio?.verdettoModello ?? null,
+        citazione: giudizio?.citazione ?? null,
+        motivo: giudizio?.motivo ?? null,
+        guardia,
+        modello: giudizio?.modello ?? null,
+        token: giudizio?.token ?? null,
+        msGiudice: giudizio?.ms ?? null,
+        msTotale: Date.now() - t0,
+        errore,
+        decisione,
+        nota: i.nota.slice(0, 500),
+      } as never,
+      message: errore
+        ? `[giudice-spostamento] conv ${i.conversationId}: errore (${errore}) — nota SPOSTAMENTO come prima`
+        : `[giudice-spostamento] conv ${i.conversationId}: ${verdetto}${guardia.length ? ` (${guardia.join(', ')})` : ''} → ${decisione}`,
+      level: errore ? 'warn' : 'info',
+    });
+  } catch {
+    // solo audit: un insert fallito non cambia la decisione
+  }
+  if (verdetto === 'disdetta') {
+    return { verdetto, motivo: (giudizio?.motivo ?? '').trim() || 'disdetta (giudice degli spostamenti)' };
+  }
+  return { verdetto };
+}
+
 /**
  * Il tag APPUNTAMENTO ri-emesso con la stessa data della call già in agenda
  * (`isRiconfermaStessaData`): al CRM non parte niente, resta solo questa riga per
@@ -524,9 +621,12 @@ async function sendCrmNoteOnly(
   secret: string,
   /** Testo gia' pronto al posto di `buildLockedNote` (fallback dell'APPUNTAMENTO rifiutato). */
   testo?: string,
-): Promise<{ sent: boolean; status?: number; error?: string }> {
+): Promise<{ sent: boolean; status?: number; error?: string; disdetta?: string }> {
   const note = testo ?? buildLockedNote(args, existingDate);
-  if (isRichiestaDisdetta(args.outcome)) await marcaDisdetta(supabase, conversationId, crmLeadId, args.outcome);
+  // Una nota SPOSTAMENTO da far passare al giudice marca la chat solo dopo il verdetto:
+  // il marcatore spegne i promemoria pre-call, e su un «grazie» non deve succedere.
+  const daGiudicare = !testo && spostamentoDaGiudicare(note);
+  if (isRichiestaDisdetta(args.outcome) && !daGiudicare) await marcaDisdetta(supabase, conversationId, crmLeadId, args.outcome);
   const fp = noteFingerprint(note);
   if (await notaGiaInviata(supabase, 'bot_note_sent', conversationId, fp)) {
     await supabase.from('event_log').insert({
@@ -542,6 +642,27 @@ async function sendCrmNoteOnly(
   const prenotazione = await prenotaNotaPerTipo(supabase, { conversationId, crmLeadId, note, paroleDelLead: args.leadWords ?? null });
   if (!prenotazione.ok) return { sent: false, error: 'note_duplicate' };
   const { rilascia } = prenotazione;
+
+  if (daGiudicare) {
+    const d = await giudicaNotaSpostamento(supabase, {
+      conversationId,
+      crmLeadId,
+      canale: 'gdo',
+      agendaAt: existingDate,
+      dataChiesta: args.date && !sameInstant(args.date, existingDate) ? args.date : null,
+      nota: note,
+    });
+    if (d.verdetto === 'non_spostamento') {
+      await rilascia();
+      return { sent: false, error: SPOSTAMENTO_NON_INVIATO };
+    }
+    if (d.verdetto === 'disdetta') {
+      // Il chiamante la rimanda come DISDETTA (giudice delle disdette compreso).
+      await rilascia();
+      return { sent: false, error: SPOSTAMENTO_NON_INVIATO, disdetta: d.motivo };
+    }
+    if (isRichiestaDisdetta(args.outcome)) await marcaDisdetta(supabase, conversationId, crmLeadId, args.outcome);
+  }
 
   const body: BotOutcomeBody = {
     leadId: crmLeadId,
@@ -965,7 +1086,14 @@ export async function sendOutcome(
     // bot_scheduled_at è nullo: la disdetta arrivava al CRM senza dire QUALE
     // appuntamento. `gdo_appuntamento_at` è la data che ci manda il CRM
     // (POST /api/appointment-set) ed è l'unica che abbiamo per quei lead.
-    const dataNota = row?.bot_scheduled_at ?? row?.gdo_appuntamento_at ?? null;
+    // Col giudice degli spostamenti acceso, `bot_scheduled_at` vale solo se è la data di un
+    // APPUNTAMENTO del bot: il ramo normale la scrive per qualsiasi esito con una data, e un
+    // vecchio RICHIAMO del bot (31/08, 30/06) finiva nelle note come «in agenda resta» al
+    // posto della call vera del GDO (misurato il 06/11/2026: conv 7626, 1278).
+    const dataNota = giudiceSpostamentiAcceso()
+      ? ((row?.bot_outcome ?? null) === 'APPUNTAMENTO' ? row?.bot_scheduled_at ?? null : null)
+        ?? row?.gdo_appuntamento_at ?? null
+      : row?.bot_scheduled_at ?? row?.gdo_appuntamento_at ?? null;
     // Il giudice delle disdette (PO 28/10/2026): solo qui, dove nasce la nota DISDETTA sui
     // lead dei GDO. Se la disdetta è vera il CRM scarta il lead dalle Conferme e la nota
     // non serve più; in ogni altro caso (dubbio, errore, timeout, CRM che non scarta) si
@@ -978,7 +1106,14 @@ export async function sendOutcome(
       await registraRiconfermaNonInviata(supabase, conversationId, crmLeadId, args, dataNota, true);
       return { sent: false, error: RICONFERMA_NON_INVIATA };
     }
-    return sendCrmNoteOnly(supabase, conversationId, crmLeadId, args, dataNota, secret);
+    const inviata = await sendCrmNoteOnly(supabase, conversationId, crmLeadId, args, dataNota, secret);
+    if (inviata.disdetta === undefined) return inviata;
+    // Il giudice degli spostamenti dice che è una disdetta: parte come DISDETTA, passando
+    // dal giudice delle disdette come ogni altra disdetta sui lead dei GDO.
+    const comeDisdetta: SendOutcomeArgs = { ...args, outcome: 'DA_SCARTARE', date: undefined, discardReason: inviata.disdetta };
+    const scarto = await provaScartoDisdetta(supabase, conversationId, crmLeadId, secret);
+    if (scarto.scartato) return { sent: true, status: scarto.status };
+    return sendCrmNoteOnly(supabase, conversationId, crmLeadId, comeDisdetta, dataNota, secret);
   }
 
   // Passa PRIMA di resolveOutcomeAction apposta: su un lead già APPUNTAMENTO il ramo
@@ -1023,7 +1158,15 @@ export async function sendOutcome(
   const chiedeSpostamento =
     isRichiestaDisdetta(args.outcome) ||
     (args.outcome === 'APPUNTAMENTO' && !rifissaDopoCallPassata && !!args.date && !sameInstant(args.date, row?.bot_scheduled_at ?? null));
-  if (holdsAppointment && !interim && chiedeSpostamento) {
+  // Sulla call fissata dal bot una nota «SPOSTAMENTO CHIESTO» passa dal giudice degli
+  // spostamenti, e la marcatura (che spegne i promemoria) aspetta il verdetto. Solo quando
+  // la nota arriva di sicuro al ramo locked: un RICHIAMO senza data valida prende un'altra
+  // strada (nota "richiamo senza data") e lì si marca subito come sempre.
+  const spostamentoLockedDaGiudicare =
+    holdsAppointment && !interim && !rifissaDopoCallPassata &&
+    (args.outcome !== 'RICHIAMO' || checkDataRichiamo(args.date, Date.now()).ok) &&
+    spostamentoDaGiudicare(buildLockedNote(args, row?.bot_scheduled_at ?? null));
+  if (holdsAppointment && !interim && chiedeSpostamento && !spostamentoLockedDaGiudicare) {
     await marcaDisdetta(supabase, conversationId, crmLeadId, args.outcome);
   }
 
@@ -1214,7 +1357,7 @@ export async function sendOutcome(
     return { ...esito, keepOpen: true };
   }
 
-  const action = resolveOutcomeAction(
+  let action = resolveOutcomeAction(
     (row?.bot_outcome ?? null) as BotOutcome | null,
     args,
     row?.bot_scheduled_at ?? null,
@@ -1346,6 +1489,43 @@ export async function sendOutcome(
       return { sent: false, error: 'note_duplicate' };
     }
     rilasciaNota = prenotazione.rilascia;
+  }
+
+  // Il giudice degli spostamenti, dopo le due dedup: i re-invii dello stesso fatto non
+  // arrivano qui (vedi `giudicaNotaSpostamento`).
+  if (action.kind === 'locked' && spostamentoLockedDaGiudicare && action.note.startsWith(NOTA_SPOSTAMENTO_PREFISSO)) {
+    const agenda = row?.bot_scheduled_at ?? null;
+    const d = await giudicaNotaSpostamento(supabase, {
+      conversationId,
+      crmLeadId,
+      canale: 'bot',
+      agendaAt: agenda,
+      dataChiesta: args.date && !sameInstant(args.date, agenda) ? args.date : null,
+      nota: action.note,
+    });
+    if (d.verdetto === 'non_spostamento') {
+      // Nessuna nota: esito terminale come la nota doppia, conversazione chiusa.
+      await rilasciaNota();
+      await supabase.from('conversations').update({ ai_status: 'closed' }).eq('id', conversationId);
+      return { sent: false, error: SPOSTAMENTO_NON_INVIATO };
+    }
+    if (d.verdetto === 'disdetta') {
+      await rilasciaNota();
+      rilasciaNota = NIENTE_DA_RILASCIARE;
+      const comeDisdetta: SendOutcomeArgs = { ...args, outcome: 'DA_SCARTARE', date: undefined, discardReason: d.motivo };
+      action = { kind: 'locked', outcome: 'NOTA', note: buildLockedNote(comeDisdetta, agenda), date: null };
+      await marcaDisdetta(supabase, conversationId, crmLeadId, 'DA_SCARTARE');
+      const prenotazione = await prenotaNotaPerTipo(supabase, {
+        conversationId, crmLeadId, note: action.note, paroleDelLead: args.leadWords ?? null,
+      });
+      if (!prenotazione.ok) {
+        await supabase.from('conversations').update({ ai_status: 'closed' }).eq('id', conversationId);
+        return { sent: false, error: 'note_duplicate' };
+      }
+      rilasciaNota = prenotazione.rilascia;
+    } else if (chiedeSpostamento) {
+      await marcaDisdetta(supabase, conversationId, crmLeadId, args.outcome);
+    }
   }
 
   const body: BotOutcomeBody = action.kind === 'locked'
