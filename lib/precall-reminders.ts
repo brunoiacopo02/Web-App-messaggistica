@@ -154,6 +154,9 @@ export interface GdoReminder24Input {
   videoSentAt: string | null;
   recapSentAt: string | null;
   lastInboundAtMs: number | null;
+  /** L'ultimo inbound e' arrivato sul numero da cui si mandera' (lib/finestra-numero.ts).
+   *  `false` = finestra 24h chiusa su quel numero, qualunque sia l'ora. Assente = si. */
+  inboundSulNumero?: boolean;
   aiPausedAt: string | null;
   cancelRequestedAt: string | null;
   /** Già partito per QUESTA data della call (uno spostamento lo riapre). */
@@ -219,7 +222,7 @@ export function decideGdoReminder24(i: GdoReminder24Input): 'template' | 'testo'
 
   const daUltimoInbound = i.lastInboundAtMs === null ? null : i.nowMs - i.lastInboundAtMs;
   if (daUltimoInbound !== null && daUltimoInbound < GDO_CONVERSAZIONE_VIVA_MS) return null;
-  return daUltimoInbound !== null && daUltimoInbound < GDO_FINESTRA_MS ? 'testo' : 'template';
+  return daUltimoInbound !== null && daUltimoInbound < GDO_FINESTRA_MS && i.inboundSulNumero !== false ? 'testo' : 'template';
 }
 
 /**

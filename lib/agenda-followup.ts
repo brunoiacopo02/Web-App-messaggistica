@@ -5,6 +5,7 @@ import { firstNameOf } from './name';
 import { FILTRO_FUORI_LANCIO } from './lancio-fase';
 import { logCronQueryError } from './cron-query-error';
 import { mittenteDiConversazione, numeroPrimario } from './mittente';
+import { inboundSulNumero } from './finestra-numero';
 import { haConfermatoIlForm } from './conferma-form';
 
 const H = 3600_000;
@@ -40,6 +41,9 @@ export interface AgendaFollowupInput {
   terminal: boolean;
   followupAlreadySent: boolean;
   lastInboundAtMs: number | null;
+  /** L'ultimo inbound e' arrivato sul numero da cui si mandera' (lib/finestra-numero.ts).
+   *  `false` = finestra 24h chiusa su quel numero, qualunque sia l'ora. Assente = si. */
+  inboundSulNumero?: boolean;
   lastMessageIsInbound: boolean;
   romeHour: number;
   /** Lead arruolato per conto di un GDO (`gdo_agenda_at` valorizzato). */
@@ -67,6 +71,8 @@ export function decideAgendaFollowup(input: AgendaFollowupInput): 'send' | 'none
   if (input.nowMs - input.agendaSentAtMs < AGENDA_FOLLOWUP_DELAY_MS) return 'none';
   if (input.lastInboundAtMs === null) return 'none';
   if (input.nowMs - input.lastInboundAtMs >= WINDOW_MS) return 'none';
+  // Free-text: vale solo se il lead ha scritto proprio al numero della chat.
+  if (input.inboundSulNumero === false) return 'none';
   if (input.romeHour < FOLLOWUP_HOUR_START || input.romeHour >= FOLLOWUP_HOUR_END) return 'none';
   return 'send';
 }
@@ -156,7 +162,7 @@ export async function runAgendaFollowups(
   // 2. Stato delle conversazioni candidate.
   const { data: convs, error: errConvs } = await supabase
     .from('conversations')
-    .select('id, lead_id, ai_status, bot_outcome, bot_followups_sent, gdo_agenda_at, wa_number')
+    .select('id, lead_id, ai_status, bot_outcome, bot_followups_sent, gdo_agenda_at, wa_number, last_inbound_number')
     .in('id', convIds)
     // Lancio Web Dev AI: il link di prenotazione in chat non e' suo, ma l'intake del
     // lancio azzera `bot_outcome` e rimette `ai_status='active'` — cioe' scioglie la
@@ -205,6 +211,7 @@ export async function runAgendaFollowups(
         || c.ai_status === 'handed_off',
       followupAlreadySent: (c.bot_followups_sent ?? 0) >= 1,
       lastInboundAtMs,
+      inboundSulNumero: inboundSulNumero(c.last_inbound_number, mittenteDiConversazione(c)),
       lastMessageIsInbound,
       romeHour: hour,
       gdoPostino: c.gdo_agenda_at != null,

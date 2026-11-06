@@ -22,6 +22,7 @@ import { templateName } from '@/lib/name';
 import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
 import { mittenteDiConversazione, numeroPrimario } from '@/lib/mittente';
+import { inboundSulNumero } from '@/lib/finestra-numero';
 import { conversazioniParcheggiate } from '@/lib/conf-richiamo';
 
 export const runtime = 'nodejs';
@@ -108,7 +109,7 @@ export async function GET(req: NextRequest) {
     .select(`
       id, gdo_agenda_at, gdo_appuntamento_set_at, gdo_video_url, gdo_video_sent_at, gdo_video_watched_at,
       gdo_video_followups_sent, gdo_noemi_reminded_at, gdo_appuntamento_at, bot_scheduled_at,
-      ai_started_at, wa_number, leads(phone_e164, first_name)
+      ai_started_at, wa_number, last_inbound_number, leads(phone_e164, first_name)
     `)
     .not('gdo_agenda_at', 'is', null)
     .gte('gdo_agenda_at', da)
@@ -187,6 +188,7 @@ export async function GET(req: NextRequest) {
         followupsSent: c.gdo_video_followups_sent ?? 0,
         appointmentAt: c.gdo_appuntamento_at,
         lastInboundAtMs,
+        inboundSulNumero: inboundSulNumero(c.last_inbound_number, from),
         lastMessageIsInbound,
         nowMs: now.getTime(),
         slot,

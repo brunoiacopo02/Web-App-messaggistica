@@ -69,6 +69,9 @@ export interface RecapInput {
   recapForAt: string | null;
   videoSentAt: string | null;
   lastInboundAtMs: number | null;
+  /** L'ultimo inbound e' arrivato sul numero da cui si mandera' (lib/finestra-numero.ts).
+   *  `false` = finestra 24h chiusa su quel numero, qualunque sia l'ora. Assente = si. */
+  inboundSulNumero?: boolean;
   aiPausedAt: string | null;
   cancelRequestedAt: string | null;
   nowMs: number;
@@ -82,6 +85,9 @@ export function decideGdoRecap(i: RecapInput): RecapTipo | null {
   const callMs = Date.parse(i.appuntamentoAt);
   if (Number.isNaN(callMs) || callMs - i.nowMs < ANTICIPO_MIN_MS) return null;
   if (i.lastInboundAtMs === null || i.nowMs - i.lastInboundAtMs > FINESTRA_MS) return null;
+  // Il recap e' testo libero: se il lead ha scritto a un altro nostro numero, da qui
+  // tornerebbe 63016.
+  if (i.inboundSulNumero === false) return null;
   // Già riassunto per questa stessa call.
   if (sameInstant(i.recapForAt, i.appuntamentoAt)) return null;
 

@@ -106,6 +106,7 @@ export type Database = {
           gdo_video_watched_at: string | null
           id: number
           last_inbound_at: string | null
+          last_inbound_number: string | null
           last_message_at: string
           last_message_preview: string | null
           lancio_slug: string | null
@@ -164,6 +165,7 @@ export type Database = {
           gdo_video_watched_at?: string | null
           id?: number
           last_inbound_at?: string | null
+          last_inbound_number?: string | null
           last_message_at?: string
           last_message_preview?: string | null
           lancio_slug?: string | null
@@ -222,6 +224,7 @@ export type Database = {
           gdo_video_watched_at?: string | null
           id?: number
           last_inbound_at?: string | null
+          last_inbound_number?: string | null
           last_message_at?: string
           last_message_preview?: string | null
           lancio_slug?: string | null

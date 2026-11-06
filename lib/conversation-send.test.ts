@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const PRIMARIO = 'whatsapp:+393520413199';
 const SERENAMENTE = 'whatsapp:+393520158061';
 
-const riga = { wa_number: null as string | null, last_inbound_at: new Date().toISOString() as string | null };
+const riga = { wa_number: null as string | null, last_inbound_at: new Date().toISOString() as string | null, last_inbound_number: null as string | null };
 vi.mock('@/lib/supabase/admin', () => ({
   getSupabaseAdmin: () => ({
     from: () => {
@@ -35,6 +35,7 @@ beforeEach(() => {
   vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', PRIMARIO);
   vi.stubEnv('TWILIO_WHATSAPP_NUMBER', SERENAMENTE);
   riga.wa_number = null;
+  riga.last_inbound_number = null;
   sendFreeText.mockReset().mockResolvedValue({ sid: 'SM1', status: 'queued' });
   allinea.mockReset();
 });
@@ -50,5 +51,23 @@ describe('sendConversationMessage — mittente', () => {
     riga.wa_number = SERENAMENTE;
     await sendConversationMessage({ conversation_id: 3, mode: 'free', body: 'ciao' } as never);
     expect(sendFreeText.mock.calls[0][0].from).toBe(PRIMARIO);
+  });
+});
+
+describe('sendConversationMessage — finestra 24h sul numero da cui si risponde', () => {
+  it("il lead ha scritto un'ora fa al 0047, la chat risponde dal 3199: window_expired, nessun testo libero", async () => {
+    riga.wa_number = PRIMARIO;
+    riga.last_inbound_number = 'whatsapp:+393522070047';
+    const r = await sendConversationMessage({ conversation_id: 3, mode: 'free', body: 'ciao' } as never);
+    expect(r.status).toBe(422);
+    expect(await r.json()).toEqual({ error: 'window_expired' });
+    expect(sendFreeText).not.toHaveBeenCalled();
+  });
+
+  it('inbound arrivato proprio sul numero della chat: parte', async () => {
+    riga.wa_number = PRIMARIO;
+    riga.last_inbound_number = PRIMARIO;
+    await sendConversationMessage({ conversation_id: 3, mode: 'free', body: 'ciao' } as never);
+    expect(sendFreeText).toHaveBeenCalledOnce();
   });
 });

@@ -11,6 +11,7 @@ import { templateName } from '@/lib/name';
 import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
 import { mittenteDiConversazione } from '@/lib/mittente';
+import { inboundSulNumero } from '@/lib/finestra-numero';
 import { fissatoIlDi } from '@/lib/noemi-quando';
 import { EVENTO_SPOSTAMENTO } from '@/lib/gdo-spostamento-send';
 import {
@@ -295,7 +296,7 @@ async function promemoriaGdo(supabase: Supa, now: number): Promise<EsitoRamo> {
 
   const { data: convData, error: convErr } = await supabase
     .from('conversations')
-    .select('id, gdo_agenda_at, gdo_appuntamento_set_at, gdo_appuntamento_at, gdo_video_sent_at, gdo_recap_sent_at, gdo_reminder24_for_at, bot_outcome, ai_paused_at, cancel_requested_at, wa_number, leads(phone_e164, first_name)')
+    .select('id, gdo_agenda_at, gdo_appuntamento_set_at, gdo_appuntamento_at, gdo_video_sent_at, gdo_recap_sent_at, gdo_reminder24_for_at, bot_outcome, ai_paused_at, cancel_requested_at, wa_number, last_inbound_number, leads(phone_e164, first_name)')
     .not('gdo_agenda_at', 'is', null)
     // Gli appuntamenti del bot hanno già i loro promemoria (ramo sopra).
     .or('bot_outcome.is.null,bot_outcome.neq.APPUNTAMENTO')
@@ -347,6 +348,7 @@ async function promemoriaGdo(supabase: Supa, now: number): Promise<EsitoRamo> {
       videoSentAt: c.gdo_video_sent_at ?? null,
       recapSentAt: c.gdo_recap_sent_at ?? null,
       lastInboundAtMs: ultimoIn?.created_at ? Date.parse(ultimoIn.created_at) : null,
+      inboundSulNumero: inboundSulNumero(c.last_inbound_number, mittenteDiConversazione(c)),
       aiPausedAt: c.ai_paused_at ?? null,
       cancelRequestedAt: c.cancel_requested_at ?? null,
       giaInviato,
@@ -462,7 +464,7 @@ async function promemoriaRichiamo(supabase: Supa, now: number): Promise<EsitoRam
 
   const { data: convData, error: convErr } = await supabase
     .from('conversations')
-    .select('id, crm_lead_id, ai_paused_at, wa_number, conf_richiamo_sollecito_for_at, leads(phone_e164, first_name)')
+    .select('id, crm_lead_id, ai_paused_at, wa_number, last_inbound_number, conf_richiamo_sollecito_for_at, leads(phone_e164, first_name)')
     .in('id', [...perConv.keys()])
     // Fermo manuale dal pannello: nessun invio automatico. La disdetta chiesta invece
     // non ferma il sollecito: il parcheggio di solito segue proprio uno spostamento.
@@ -502,6 +504,7 @@ async function promemoriaRichiamo(supabase: Supa, now: number): Promise<EsitoRam
       aiPausedAt: c.ai_paused_at ?? null,
       giaInviato,
       lastInboundAtMs: ultimoIn?.created_at ? Date.parse(ultimoIn.created_at) : null,
+      inboundSulNumero: inboundSulNumero(c.last_inbound_number, mittenteDiConversazione(c)),
       haTemplate: !!sid,
       nowMs: now,
     });

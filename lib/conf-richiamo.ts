@@ -34,6 +34,9 @@ export interface SollecitoRichiamoInput {
   /** Già preso per QUESTO richiamo (un richiamo spostato lo riapre). */
   giaInviato: boolean;
   lastInboundAtMs: number | null;
+  /** L'ultimo inbound e' arrivato sul numero da cui si mandera' (lib/finestra-numero.ts).
+   *  `false` = finestra 24h chiusa su quel numero, qualunque sia l'ora. Assente = si. */
+  inboundSulNumero?: boolean;
   haTemplate: boolean;
   nowMs: number;
 }
@@ -57,7 +60,7 @@ export function decideSollecitoRichiamo(i: SollecitoRichiamoInput): 'template' |
   if (clampToSendWindow(i.nowMs) !== i.nowMs) return null;
 
   const daUltimoInbound = i.lastInboundAtMs === null ? null : i.nowMs - i.lastInboundAtMs;
-  if (daUltimoInbound !== null && daUltimoInbound < FINESTRA_MS) return 'testo';
+  if (daUltimoInbound !== null && daUltimoInbound < FINESTRA_MS && i.inboundSulNumero !== false) return 'testo';
   return i.haTemplate ? 'template' : null;
 }
 

@@ -36,6 +36,10 @@ describe('decideSollecitoRichiamo', () => {
     expect(decideSollecitoRichiamo(base({ lastInboundAtMs: at('2026-10-20T11:00:00+02:00') }))).toBe('testo');
   });
 
+  it('ha scritto da poco ma a un altro nostro numero: template, non testo (06/11/2026)', () => {
+    expect(decideSollecitoRichiamo(base({ lastInboundAtMs: at('2026-10-20T11:00:00+02:00'), inboundSulNumero: false }))).toBe('template');
+  });
+
   it('richiamo alle 16:00: alle 15:50 è troppo tardi', () => {
     expect(decideSollecitoRichiamo(base({ nowMs: at('2026-10-20T15:50:00+02:00') }))).toBeNull();
   });

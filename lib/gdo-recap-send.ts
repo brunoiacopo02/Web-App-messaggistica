@@ -6,6 +6,7 @@
 
 import { decideGdoRecap, gdoRecapText, gdoSpostamentoText, type RecapOccasione, type RecapTipo } from './gdo-recap';
 import { mittenteDiConversazione } from './mittente';
+import { inboundSulNumero } from './finestra-numero';
 import { fissatoIlDi } from './noemi-quando';
 import { DOMANDA_1, domandaNelRecap } from './gdo-warmup';
 import { sendFreeText } from './twilio';
@@ -137,7 +138,7 @@ export async function inviaRecapDopoData(
   try {
     const { data: conv, error } = await supabase
       .from('conversations')
-      .select('id, bot_outcome, gdo_agenda_at, gdo_appuntamento_set_at, gdo_appuntamento_at, gdo_video_url, gdo_video_sent_at, gdo_recap_for_at, gdo_recap_sent_at, gdo_noemi_reminded_at, gdo_warmup_step, ai_paused_at, cancel_requested_at, last_inbound_at, wa_number, leads(phone_e164, first_name)')
+      .select('id, bot_outcome, gdo_agenda_at, gdo_appuntamento_set_at, gdo_appuntamento_at, gdo_video_url, gdo_video_sent_at, gdo_recap_for_at, gdo_recap_sent_at, gdo_noemi_reminded_at, gdo_warmup_step, ai_paused_at, cancel_requested_at, last_inbound_at, last_inbound_number, wa_number, leads(phone_e164, first_name)')
       .eq('id', conversationId)
       .single();
     if (error || !conv) return null;
@@ -151,6 +152,7 @@ export async function inviaRecapDopoData(
       recapForAt: conv.gdo_recap_for_at ?? null,
       videoSentAt: conv.gdo_video_sent_at ?? null,
       lastInboundAtMs: conv.last_inbound_at ? Date.parse(conv.last_inbound_at) : null,
+      inboundSulNumero: inboundSulNumero(conv.last_inbound_number, mittenteDiConversazione(conv)),
       aiPausedAt: conv.ai_paused_at ?? null,
       cancelRequestedAt: conv.cancel_requested_at ?? null,
       nowMs,

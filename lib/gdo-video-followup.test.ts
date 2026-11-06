@@ -53,6 +53,15 @@ describe('decideGdoVideoFollowup — chi ha risposto', () => {
     }))).toBe('sollecito-libero');
   });
 
+  it('finestra aperta su un altro nostro numero: sollecito in template (06/11/2026)', () => {
+    expect(decideGdoVideoFollowup(base({
+      gdoVideoSentAt: '2026-08-01T15:00:00Z',
+      lastInboundAtMs: ORA - 8 * H,
+      inboundSulNumero: false,
+      haRispostoDopoVideo: false,
+    }))).toBe('sollecito-template');
+  });
+
   it('con finestra chiusa si ricade sul template', () => {
     expect(decideGdoVideoFollowup(base({
       gdoVideoSentAt: '2026-07-31T15:00:00Z',

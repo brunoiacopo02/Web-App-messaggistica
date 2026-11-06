@@ -18,6 +18,7 @@ import { templateName } from '@/lib/name';
 import { PERSONA_NAME, personaForConversation } from '@/lib/persona';
 import { martaSidsFromEnv, shouldReopen } from '@/lib/fenice-autoreply';
 import { mittenteDiConversazione } from '@/lib/mittente';
+import { ultimoInboundSulNumero } from '@/lib/finestra-numero';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -140,6 +141,7 @@ export async function POST(req: NextRequest) {
     appointmentAt: evento.appointmentAt,
     ultimoInboundAt: stato.ultimoInboundAt,
     waNumber: conv.wa_number,
+    lastInboundNumber: conv.last_inbound_number,
   });
   return esito.inviato
     ? NextResponse.json({ ok: true, inviato: true, ramo: esito.ramo })
@@ -156,6 +158,8 @@ type ConversazioneTrovata = Pick<
   ai_started_at: string | null;
   /** Il NOSTRO numero, quello con cui la chat è nata: il recupero parte da lì. */
   wa_number: string | null;
+  /** A quale nostro numero e' arrivato l'ultimo inbound (finestra 24h per numero). */
+  last_inbound_number: string | null;
   leads: { phone_e164: string | null; first_name: string | null } | null;
 };
 
@@ -168,7 +172,7 @@ async function trovaConversazione(supabase: Supa, leadId: string): Promise<Conve
     // `gdo_appuntamento_at` serve alla guardia (i lead postino hanno l'appuntamento
     // lì e non su `bot_scheduled_at`) ed è in SOLA LETTURA, come le altre colonne
     // dell'appuntamento: qui non si scrive mai.
-    .select('id, ai_owner, ai_status, ai_paused_at, bot_outcome, bot_scheduled_at, gdo_appuntamento_at, cancel_requested_at, ai_started_at, wa_number, leads(phone_e164, first_name)')
+    .select('id, ai_owner, ai_status, ai_paused_at, bot_outcome, bot_scheduled_at, gdo_appuntamento_at, cancel_requested_at, ai_started_at, wa_number, last_inbound_number, leads(phone_e164, first_name)')
     .eq('crm_lead_id', leadId)
     .order('id', { ascending: false })
     .limit(1);
@@ -240,6 +244,8 @@ type ContestoInvio = {
   ultimoInboundAt: string | null;
   /** `conversations.wa_number`: il numero con cui la chat è nata. */
   waNumber: string | null;
+  /** `conversations.last_inbound_number`: la finestra 24h vale su quel numero. */
+  lastInboundNumber: string | null;
 };
 
 type EsitoInvio = { inviato: true; ramo: Ramo } | { inviato: false; motivo: string };
@@ -265,7 +271,9 @@ async function inviaRecuperoNr(supabase: Supa, ctx: ContestoInvio): Promise<Esit
   }
 
   const quando = quandoLeggibile(ctx.appointmentAt);
-  const ramo: Ramo = dentroFinestra(ctx.ultimoInboundAt, Date.now()) ? 'libero' : 'template';
+  // La finestra e' del numero da cui si manda: un inbound arrivato su un altro nostro
+  // numero non la apre qui (lib/finestra-numero.ts).
+  const ramo: Ramo = dentroFinestra(ultimoInboundSulNumero(ctx.ultimoInboundAt, ctx.lastInboundNumber, from), Date.now()) ? 'libero' : 'template';
 
   // Fuori dalla finestra serve un template approvato. Finché Meta non li approva i SID
   // non sono in env, ed è una condizione normale, non un guasto: si dice che il

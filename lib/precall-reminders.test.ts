@@ -130,6 +130,10 @@ describe('decideGdoReminder24: il promemoria del giorno prima ai lead GDO', () =
     expect(decideGdoReminder24(base({ lastInboundAtMs: NOW - 10 * H }))).toBe('testo');
   });
 
+  it('finestra aperta ma il lead ha scritto a un ALTRO nostro numero: template (06/11/2026)', () => {
+    expect(decideGdoReminder24(base({ lastInboundAtMs: NOW - 10 * H, inboundSulNumero: false }))).toBe('template');
+  });
+
   it('conversazione viva (ultimo messaggio 2 ore fa): niente', () => {
     expect(decideGdoReminder24(base({ lastInboundAtMs: NOW - 2 * H }))).toBeNull();
   });
