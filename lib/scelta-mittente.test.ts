@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('./spedibilita', () => ({ spedibileDa: vi.fn(async (sid: string) => ({ ok: true, sidTradotto: sid })) }));
-vi.mock('./bot2-tetto', async (orig) => ({ ...(await orig<typeof import('./bot2-tetto')>()), chatNateOggi: vi.fn(async () => 0) }));
-vi.mock('./tetti-numeri', async (orig) => ({ ...(await orig<typeof import('./tetti-numeri')>()), getTettiNumeri: vi.fn() }));
+vi.mock('./bot2-tetto', async (orig) => ({ ...(await orig<typeof import('./bot2-tetto')>()), apertureMarioOggi: vi.fn(async () => 0) }));
+vi.mock('./tetti-numeri', async (orig) => ({ ...(await orig<typeof import('./tetti-numeri')>()), getTettiNumeri: vi.fn(), getStatoQualitaNumeri: vi.fn() }));
 
-import { scegliMittenteNuovo, sidAperturaMario, conCodaMarketing } from './scelta-mittente';
+import { scegliMittenteNuovo, sidAperturaMario, conCodaMarketing, registraAperturaMario, numeriTrabocco } from './scelta-mittente';
 import { spedibileDa } from './spedibilita';
-import { chatNateOggi } from './bot2-tetto';
-import { getTettiNumeri, parseTettiNumeri } from './tetti-numeri';
+import { apertureMarioOggi } from './bot2-tetto';
+import { getTettiNumeri, getStatoQualitaNumeri, parseTettiNumeri } from './tetti-numeri';
 import { OPENING_ENV_KEYS } from './persona';
 
 const P = 'whatsapp:+393520413199';
@@ -46,9 +46,16 @@ function supa(o: { conteggioRotto?: boolean } = {}) {
   } as any;
   return { eventi, filtri, s };
 }
+/** Il 06/11/2026 alle 15 a Roma: "oggi" per lo storico della qualita'. */
+const ADESSO = new Date('2026-11-06T14:00:00Z');
+const OGGI = '2026-11-06';
+const IERI = '2026-11-05';
+const tutti = (q: string) => Object.fromEntries([P, ELIXIR, N8061, N0047].map((n) => [n.replace('whatsapp:', ''), { [OGGI]: q }]));
+const qualita = (storico: Record<string, Record<string, string>>, pause: Record<string, unknown> = {}) =>
+  vi.mocked(getStatoQualitaNumeri).mockResolvedValue({ storico, pause });
 const tetti = (o: Record<string, number>) => vi.mocked(getTettiNumeri).mockResolvedValue(parseTettiNumeri(o));
 const scegli = (s: any, extra: Partial<Parameters<typeof scegliMittenteNuovo>[1]> = {}) =>
-  scegliMittenteNuovo(s, { templateSids: ['HX_A'], chiave: '+393331234567', ...extra });
+  scegliMittenteNuovo(s, { templateSids: ['HX_A'], chiave: '+393331234567', adesso: ADESSO, ...extra });
 
 beforeEach(() => {
   vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', P);
@@ -58,18 +65,20 @@ beforeEach(() => {
   vi.stubEnv('TWILIO_WHATSAPP_NUMBERS_2', '');
   vi.stubEnv('TWILIO_WHATSAPP_NUMBERS_3', '');
   vi.mocked(spedibileDa).mockReset().mockImplementation(async (sid: string) => ({ ok: true, sidTradotto: sid }));
-  vi.mocked(chatNateOggi).mockReset().mockResolvedValue(0);
+  vi.mocked(apertureMarioOggi).mockReset().mockResolvedValue(0);
   // Anche questo va azzerato a ogni test: senza reset le chiamate si sommano fra i
   // test (nessun `clearMocks` globale in vitest.config.ts) e il test "nessun
   // secondario configurato" — che verifica una NON chiamata — vede quelle di prima.
   vi.mocked(getTettiNumeri).mockReset();
+  vi.mocked(getStatoQualitaNumeri).mockReset().mockResolvedValue({ storico: tutti('HIGH'), pause: {} });
+  vi.stubEnv('BOT_NUMERI_TRABOCCO', '');
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 describe('scegliMittenteNuovo', () => {
   it('prende il secondario con meno chat oggi', async () => {
     tetti({ [ELIXIR]: 150, [N8061]: 150, [N0047]: 0 });
-    vi.mocked(chatNateOggi).mockImplementation(async (_s, n) => (n === ELIXIR ? 40 : 12));
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === ELIXIR ? 40 : 12));
     const { s } = supa();
     const r = await scegli(s);
     expect(r).toMatchObject({ from: N8061, secondario: true, motivo: 'scelto' });
@@ -83,12 +92,12 @@ describe('scegliMittenteNuovo', () => {
   it('tetto zero o assente: il numero non e nemmeno contato', async () => {
     tetti({ [ELIXIR]: 150 });
     await scegli(supa().s);
-    expect(vi.mocked(chatNateOggi).mock.calls.map((c) => c[1])).toEqual([ELIXIR]);
+    expect(vi.mocked(apertureMarioOggi).mock.calls.map((c) => c[1])).toEqual([ELIXIR]);
   });
 
-  it('tutti pieni: trabocco sul secondario meno carico, mai il 3199 (PO 29/10/2026)', async () => {
-    tetti({ [ELIXIR]: 150, [N8061]: 150 });
-    vi.mocked(chatNateOggi).mockImplementation(async (_s, n) => (n === ELIXIR ? 160 : 150));
+  it('tutti pieni: il trabocco va solo all 8061 fra i secondari, non a elixir (PO 06/11/2026)', async () => {
+    tetti({ [ELIXIR]: 50, [N8061]: 15 });
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === ELIXIR ? 50 : 40));
     const { s, eventi } = supa();
     const r = await scegli(s);
     expect(r).toMatchObject({ from: N8061, secondario: true, motivo: 'scelto' });
@@ -98,15 +107,17 @@ describe('scegliMittenteNuovo', () => {
 
   it('trabocco: un numero a riposo (tetto 0) non prende mai il trabocco', async () => {
     tetti({ [ELIXIR]: 10, [N8061]: 0 });
-    vi.mocked(chatNateOggi).mockResolvedValue(10);
-    const r = await scegli(supa().s);
-    expect(r).toMatchObject({ from: ELIXIR, secondario: true });
-    expect(vi.mocked(chatNateOggi).mock.calls.map((c) => c[1])).toEqual([ELIXIR]);
+    vi.mocked(apertureMarioOggi).mockResolvedValue(10);
+    const { s, eventi } = supa();
+    const r = await scegli(s);
+    expect(r).toMatchObject({ from: P, motivo: 'nessun_candidato' });
+    expect(vi.mocked(apertureMarioOggi).mock.calls.map((c) => c[1])).toEqual([ELIXIR]);
+    expect(eventi.find((e) => e.type === 'mittente_trabocco_senza_numero')?.level).toBe('warn');
   });
 
   it('trabocco: un numero pieno ma non spedibile resta fuori, si torna al 3199', async () => {
-    tetti({ [ELIXIR]: 10 });
-    vi.mocked(chatNateOggi).mockResolvedValue(10);
+    tetti({ [N8061]: 10 });
+    vi.mocked(apertureMarioOggi).mockResolvedValue(10);
     vi.mocked(spedibileDa).mockResolvedValue({ ok: false, motivo: 'template_bloccato', sidTradotto: 'HX_A', errore: 'x' } as any);
     const r = await scegli(supa().s);
     expect(r).toMatchObject({ from: P, motivo: 'nessun_candidato' });
@@ -133,7 +144,7 @@ describe('scegliMittenteNuovo', () => {
   // Review Focus 4
   it('conteggio fallito su un numero: scartato quello, l altro resta', async () => {
     tetti({ [ELIXIR]: 150, [N8061]: 150 });
-    vi.mocked(chatNateOggi).mockImplementation(async (_s, n) => (n === ELIXIR ? null : 3));
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === ELIXIR ? null : 3));
     expect((await scegli(supa().s)).from).toBe(N8061);
   });
 
@@ -167,10 +178,10 @@ describe('scegliMittenteNuovo', () => {
 
   it('ignoraTetti: un numero pieno viene scelto lo stesso, senza contare', async () => {
     tetti({ [ELIXIR]: 150 });
-    vi.mocked(chatNateOggi).mockResolvedValue(150);
+    vi.mocked(apertureMarioOggi).mockResolvedValue(150);
     const r = await scegli(supa().s, { ignoraTetti: true });
     expect(r).toMatchObject({ from: ELIXIR, secondario: true, motivo: 'scelto' });
-    expect(chatNateOggi).not.toHaveBeenCalled();
+    expect(apertureMarioOggi).not.toHaveBeenCalled();
   });
 
   it('ignoraTetti: non sceglie un numero con template mancante', async () => {
@@ -192,7 +203,7 @@ describe('scegliMittenteNuovo', () => {
   // Spec §4.3: una sola riga mittente_tetto per numero per giorno di Roma.
   it('mittente_tetto: la prima volta si scrive, la seconda nello stesso giorno no', async () => {
     tetti({ [ELIXIR]: 150 });
-    vi.mocked(chatNateOggi).mockResolvedValue(150);
+    vi.mocked(apertureMarioOggi).mockResolvedValue(150);
     const { s, eventi, filtri } = supa();
     await scegli(s);
     await scegli(s);
@@ -205,12 +216,12 @@ describe('scegliMittenteNuovo', () => {
   });
 
   it('mittente_tetto: se il conteggio fallisce non si scrive (e solo un log)', async () => {
-    tetti({ [ELIXIR]: 150 });
-    vi.mocked(chatNateOggi).mockResolvedValue(150);
+    tetti({ [N8061]: 150 });
+    vi.mocked(apertureMarioOggi).mockResolvedValue(150);
     const { s, eventi } = supa({ conteggioRotto: true });
     const r = await scegli(s);
-    // Pieno ma unico secondario spedibile: prende il trabocco (PO 29/10/2026).
-    expect(r.from).toBe(ELIXIR);
+    // Pieno ma numero del trabocco e HIGH: lo prende lui (PO 06/11/2026).
+    expect(r.from).toBe(N8061);
     expect(eventi.filter((e) => e.type === 'mittente_tetto')).toHaveLength(0);
   });
 
@@ -249,6 +260,25 @@ describe('scegliMittenteNuovo', () => {
   });
 });
 
+describe('aperture di Mario: la riga che conta il tetto (PO 06/11/2026)', () => {
+  it('registraAperturaMario scrive mittente_apertura col numero, e il conteggio vero la ritrova', async () => {
+    const { s, eventi } = supa();
+    await registraAperturaMario(s, { numero: P, conversationId: 9, crmLeadId: 'L1' });
+    expect(eventi).toMatchObject([{ type: 'mittente_apertura', payload: { numero: P, conversationId: 9, crmLeadId: 'L1' } }]);
+    // Un'agenda GDO o una chat aperta dal lead non scrivono questa riga: non contano.
+    eventi.push({ type: 'gdo_agenda_chat_su_numero_storico', payload: { numero: P } });
+    const vero = (await vi.importActual<typeof import('./bot2-tetto')>('./bot2-tetto')).apertureMarioOggi;
+    expect(await vero(s, P, ADESSO)).toBe(1);
+    expect(await vero(s, N8061, ADESSO)).toBe(0);
+  });
+
+  it('conteggio in errore: null (il numero esce dal giro)', async () => {
+    const vero = (await vi.importActual<typeof import('./bot2-tetto')>('./bot2-tetto')).apertureMarioOggi;
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect(await vero(supa({ conteggioRotto: true }).s, P, ADESSO)).toBeNull();
+  });
+});
+
 describe('sidAperturaMario', () => {
   afterEach(() => { vi.unstubAllEnvs(); });
 
@@ -277,14 +307,14 @@ describe('sidAperturaMario', () => {
 describe('scegliMittenteNuovo con includiPrimario (PO 23/10/2026: il 3199 torna nel giro)', () => {
   it('primario con tetto > 0 e meno chat oggi: vince il primario', async () => {
     tetti({ [P]: 100000, [ELIXIR]: 100000, [N8061]: 100000, [N0047]: 100000 });
-    vi.mocked(chatNateOggi).mockImplementation(async (_s, n) => (n === P ? 3 : 20));
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === P ? 3 : 20));
     const r = await scegli(supa().s, { includiPrimario: true });
     expect(r).toMatchObject({ from: P, secondario: false, motivo: 'scelto' });
   });
 
   it('primario con piu chat oggi: vince il secondario meno carico', async () => {
     tetti({ [P]: 100000, [ELIXIR]: 100000, [N8061]: 100000, [N0047]: 100000 });
-    vi.mocked(chatNateOggi).mockImplementation(async (_s, n) => (n === P ? 30 : n === N8061 ? 5 : 20));
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === P ? 30 : n === N8061 ? 5 : 20));
     const r = await scegli(supa().s, { includiPrimario: true });
     expect(r).toMatchObject({ from: N8061, secondario: true, motivo: 'scelto' });
   });
@@ -297,29 +327,106 @@ describe('scegliMittenteNuovo con includiPrimario (PO 23/10/2026: il 3199 torna 
 
   it('primario senza tetto in tetti_numeri: resta fuori, come prima', async () => {
     tetti({ [ELIXIR]: 100000 });
-    vi.mocked(chatNateOggi).mockImplementation(async (_s, n) => (n === ELIXIR ? 50 : 0));
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === ELIXIR ? 50 : 0));
     const r = await scegli(supa().s, { includiPrimario: true });
     expect(r).toMatchObject({ from: ELIXIR, secondario: true });
-    expect(vi.mocked(chatNateOggi).mock.calls.map((c) => c[1])).not.toContain(P);
+    expect(vi.mocked(apertureMarioOggi).mock.calls.map((c) => c[1])).not.toContain(P);
   });
 
   it('senza includiPrimario il tetto del primario e ignorato (lancio e altri chiamanti)', async () => {
     tetti({ [P]: 100000, [ELIXIR]: 100000 });
-    vi.mocked(chatNateOggi).mockImplementation(async (_s, n) => (n === P ? 0 : 50));
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === P ? 0 : 50));
     const r = await scegli(supa().s);
     expect(r).toMatchObject({ from: ELIXIR, secondario: true });
   });
 
-  it('primario pieno e secondari pieni: trabocco sul secondario, non sul primario', async () => {
-    tetti({ [P]: 10, [ELIXIR]: 10 });
-    vi.mocked(chatNateOggi).mockResolvedValue(10);
+  it('primario pieno e secondari pieni: trabocco fra 3199 e 8061, il meno carico', async () => {
+    tetti({ [P]: 15, [ELIXIR]: 50, [N8061]: 15 });
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === P ? 18 : n === N8061 ? 21 : 50));
     const r = await scegli(supa().s, { includiPrimario: true });
-    expect(r).toMatchObject({ from: ELIXIR, secondario: true, motivo: 'scelto' });
+    expect(r).toMatchObject({ from: P, secondario: false, motivo: 'scelto' });
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === P ? 22 : n === N8061 ? 21 : 50));
+    const r2 = await scegli(supa().s, { includiPrimario: true });
+    expect(r2).toMatchObject({ from: N8061, secondario: true });
+  });
+
+  it('trabocco a turno: 10 lead oltre i tetti si dividono 5 e 5 fra 3199 e 8061', async () => {
+    tetti({ [P]: 15, [ELIXIR]: 50, [N8061]: 15, [N0047]: 20 });
+    const conta: Record<string, number> = { [P]: 15, [N8061]: 15, [ELIXIR]: 50, [N0047]: 20 };
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => conta[n]);
+    const presi: string[] = [];
+    for (let k = 0; k < 10; k++) {
+      const r = await scegli(supa().s, { includiPrimario: true });
+      conta[r.from] += 1;
+      presi.push(r.from);
+    }
+    expect(presi.filter((n) => n === P)).toHaveLength(5);
+    expect(presi.filter((n) => n === N8061)).toHaveLength(5);
+  });
+
+  it('trabocco: il 3199 non HIGH resta fuori, va tutto all 8061', async () => {
+    tetti({ [P]: 15, [N8061]: 15 });
+    qualita({ ...tutti('HIGH'), '+393520413199': { [OGGI]: 'LOW' } });
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === P ? 15 : 30));
+    const r = await scegli(supa().s, { includiPrimario: true });
+    expect(r.from).toBe(N8061);
+  });
+
+  it('trabocco: 8061 non HIGH e 3199 LOW: warn e ripiego; 8061 in pausa: va al 3199 HIGH', async () => {
+    tetti({ [P]: 15, [N8061]: 15 });
+    qualita({ ...tutti('HIGH'), '+393520413199': { [OGGI]: 'LOW' }, '+393520158061': { [OGGI]: 'MEDIUM' } });
+    vi.mocked(apertureMarioOggi).mockResolvedValue(15);
+    const { s, eventi } = supa();
+    const r = await scegli(s, { includiPrimario: true });
+    expect(r).toMatchObject({ from: P, motivo: 'nessun_candidato' });
+    expect(eventi.find((e) => e.type === 'mittente_trabocco_senza_numero')).toBeTruthy();
+    qualita(tutti('HIGH'), { '+393520158061': { fino: '2026-11-09' } });
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === P ? 40 : 15));
+    const r2 = await scegli(supa().s, { includiPrimario: true });
+    expect(r2).toMatchObject({ from: P, motivo: 'scelto' });
+  });
+
+  it('trabocco: senza lettura di oggi vale quella di ieri; piu vecchia = non HIGH', async () => {
+    tetti({ [N8061]: 15 });
+    vi.mocked(apertureMarioOggi).mockResolvedValue(15);
+    qualita({ '+393520158061': { [IERI]: 'HIGH' } });
+    expect((await scegli(supa().s)).from).toBe(N8061);
+    qualita({ '+393520158061': { '2026-11-04': 'HIGH' } });
+    expect((await scegli(supa().s)).from).toBe(P);
+  });
+
+  it('trabocco: stato qualita illeggibile = nessun numero HIGH', async () => {
+    tetti({ [N8061]: 15 });
+    vi.mocked(apertureMarioOggi).mockResolvedValue(15);
+    vi.mocked(getStatoQualitaNumeri).mockResolvedValue(null);
+    expect((await scegli(supa().s)).motivo).toBe('nessun_candidato');
+  });
+
+  it('coda marketing oltre i tetti: trabocco solo sull 8061, mai il 3199', async () => {
+    tetti({ [P]: 15, [N8061]: 15, [ELIXIR]: 50 });
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === P ? 0 : n === N8061 ? 30 : 50));
+    const r = await scegli(supa().s, { includiPrimario: true, codaMarketing: true });
+    expect(r).toMatchObject({ from: N8061, secondario: true });
+  });
+
+  it('BOT_NUMERI_TRABOCCO cambia i numeri del trabocco', async () => {
+    vi.stubEnv('BOT_NUMERI_TRABOCCO', '+393522018718');
+    expect(numeriTrabocco()).toEqual(['+393522018718']);
+    tetti({ [ELIXIR]: 50, [N8061]: 15 });
+    vi.mocked(apertureMarioOggi).mockResolvedValue(60);
+    expect((await scegli(supa().s)).from).toBe(ELIXIR);
+  });
+
+  it('3199 a tetto 15: le agende non contano, apre finche le sue aperture di Mario sono sotto 15', async () => {
+    tetti({ [P]: 15, [ELIXIR]: 50, [N8061]: 15 });
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === P ? 3 : 20));
+    const r = await scegli(supa().s, { includiPrimario: true });
+    expect(r).toMatchObject({ from: P, motivo: 'scelto' });
   });
 
   it('conteggio del primario fallito: primario fuori dal giro, si sceglie fra i secondari', async () => {
     tetti({ [P]: 100000, [ELIXIR]: 100000 });
-    vi.mocked(chatNateOggi).mockImplementation(async (_s, n) => (n === P ? null : 40));
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === P ? null : 40));
     const r = await scegli(supa().s, { includiPrimario: true });
     expect(r).toMatchObject({ from: ELIXIR, secondario: true });
   });
@@ -328,7 +435,7 @@ describe('scegliMittenteNuovo con includiPrimario (PO 23/10/2026: il 3199 torna 
 describe('scegliMittenteNuovo con la coda marketing (PO 29/10/2026)', () => {
   it('mai il primario, anche se ha un tetto e meno chat', async () => {
     tetti({ [P]: 100000, [ELIXIR]: 100000, [N8061]: 100000 });
-    vi.mocked(chatNateOggi).mockImplementation(async (_s, n) => (n === P ? 0 : 50));
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === P ? 0 : 50));
     const { s, eventi } = supa();
     const r = await scegli(s, { includiPrimario: true, codaMarketing: true });
     expect(r).toMatchObject({ from: ELIXIR, secondario: true });
@@ -337,7 +444,7 @@ describe('scegliMittenteNuovo con la coda marketing (PO 29/10/2026)', () => {
 
   it('divide alla pari: 30 lead della coda fanno 10 per numero, anche con chat diverse', async () => {
     tetti({ [P]: 100000, [ELIXIR]: 100000, [N8061]: 100000, [N0047]: 100000 });
-    vi.mocked(chatNateOggi).mockImplementation(async (_s, n) => (n === ELIXIR ? 5 : n === N8061 ? 40 : 80));
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === ELIXIR ? 5 : n === N8061 ? 40 : 80));
     const { s, eventi } = supa();
     for (let k = 0; k < 30; k++) await scegli(s, { includiPrimario: true, codaMarketing: true });
     const per = (n: string) => eventi.filter((e) => e.type === 'mittente_coda_marketing' && e.payload.numero === n).length;
@@ -346,7 +453,7 @@ describe('scegliMittenteNuovo con la coda marketing (PO 29/10/2026)', () => {
 
   it('dal contesto della richiesta (conCodaMarketing), senza argomento', async () => {
     tetti({ [P]: 100000, [ELIXIR]: 100000 });
-    vi.mocked(chatNateOggi).mockImplementation(async (_s, n) => (n === P ? 0 : 50));
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === P ? 0 : 50));
     const r = await conCodaMarketing(true, () => scegli(supa().s, { includiPrimario: true }));
     expect(r.from).toBe(ELIXIR);
     const fuori = await scegli(supa().s, { includiPrimario: true });

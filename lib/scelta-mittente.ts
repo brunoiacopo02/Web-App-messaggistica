@@ -5,8 +5,14 @@
  *
  * Regola: fra i secondari con tetto > 0 (app_settings.tetti_numeri), che oggi non
  * l'hanno ancora raggiunto e da cui TUTTI i template richiesti sono spedibili, si
- * prende quello con meno chat nate oggi. Tutti al tetto = il meno carico di loro
- * (trabocco, PO 29/10/2026). Nessuno spedibile = il numero storico.
+ * prende quello con meno aperture di Mario oggi (`apertureMarioOggi`: agende GDO,
+ * Professioni, chat aperte dal lead non contano, PO 06/11/2026).
+ *
+ * Trabocco (PO 06/11/2026): tutti al tetto = il lead va comunque, ma SOLO su uno dei
+ * due numeri tenuti bassi apposta (`numeriTrabocco`: 3199 e 8061), il meno carico, e
+ * solo se e' HIGH (ultima lettura del cron qualita-numeri), non in pausa e con tetto
+ * > 0. Nessuno dei due utilizzabile = il numero storico, con un warn
+ * `mittente_trabocco_senza_numero`. Nessuno spedibile = il numero storico.
  *
  * `ignoraTetti` (lancio_sender='secondario') salta il conteggio e il tetto > 0, ma
  * non il riposo: un numero a tetto 0 resta escluso anche li'.
@@ -23,8 +29,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { getSupabaseAdmin } from './supabase/admin';
 import { numeroPrimario, numeriSecondari } from './mittente';
-import { getTettiNumeri, tettoDi } from './tetti-numeri';
-import { chatNateOggi, inizioGiornataRoma } from './bot2-tetto';
+import { getTettiNumeri, getStatoQualitaNumeri, eHighEFuoriPausa, tettoDi } from './tetti-numeri';
+import { apertureMarioOggi, inizioGiornataRoma, EVENTO_APERTURA_MARIO } from './bot2-tetto';
 import { credenzialiPerMittente, eSuAltroAccount } from './twilio-account';
 import { spedibileDa } from './spedibilita';
 import { OPENING_ENV_KEYS } from './persona';
@@ -50,6 +56,59 @@ export type SceltaMittente = {
 
 async function log(supabase: Supa, type: string, level: 'info' | 'warn', payload: Record<string, unknown>, message: string) {
   await supabase.from('event_log').insert({ type, level, payload: payload as never, message }).then(() => undefined, () => undefined);
+}
+
+const soloNum = (n: string) => n.trim().replace(/^whatsapp:/i, '');
+
+/** Giorno civile di Roma, YYYY-MM-DD (le chiavi dello storico del cron qualita-numeri). */
+function giornoRomaDi(d: Date): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Rome', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(d);
+}
+
+/**
+ * I numeri che prendono il trabocco (PO 06/11/2026): i due tenuti bassi apposta,
+ * il 3199 e l'8061. `BOT_NUMERI_TRABOCCO` (lista separata da virgole) li cambia
+ * senza toccare il codice.
+ */
+export function numeriTrabocco(): string[] {
+  const grezzo = (process.env.BOT_NUMERI_TRABOCCO ?? '').trim();
+  const lista = grezzo ? grezzo.split(',') : [numeroPrimario() ?? '', '+393520158061'];
+  return lista.map(soloNum).filter(Boolean);
+}
+
+/**
+ * Una chat appena NATA per un'apertura di Mario: e' la riga che `apertureMarioOggi`
+ * conta per il tetto del numero. La chiama `enrollLeadIntoMario` solo quando la
+ * conversazione non esisteva prima (vedi `chatEsistente`).
+ */
+export async function registraAperturaMario(
+  supabase: Supa, a: { numero: string; conversationId: number; crmLeadId?: string | null },
+): Promise<void> {
+  await log(supabase, EVENTO_APERTURA_MARIO, 'info',
+    { numero: a.numero, conversationId: a.conversationId, crmLeadId: a.crmLeadId ?? null },
+    `[numeri] apertura di Mario su ${a.numero} (conv ${a.conversationId})`);
+}
+
+/**
+ * Il lead ha gia' una conversazione? Letto PRIMA di `findOrCreateLeadConversation`,
+ * per sapere se l'arruolamento fa nascere una chat (che conta nel tetto) o ne riusa
+ * una. null = lettura fallita: chi chiama la tratta come chat nuova (si conta, il
+ * tetto sbaglia per eccesso).
+ */
+export async function chatEsistente(supabase: Supa, phone: string): Promise<boolean | null> {
+  try {
+    const { data: lead, error } = await supabase.from('leads').select('id').eq('phone_e164', phone).maybeSingle();
+    if (error) return null;
+    if (!lead) return false;
+    const { data: conv, error: e2 } = await supabase
+      .from('conversations').select('id').eq('lead_id', (lead as { id: number }).id).maybeSingle();
+    if (e2) return null;
+    return !!conv;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -212,9 +271,9 @@ export async function scegliMittenteNuovo(
     const tetto = tettoDi(tetti, numero);
     if (tetto <= 0) { scartati.push({ numero, motivo: 'tetto_zero' }); continue; }
     if (!i.ignoraTetti) {
-      // `chatNateOggi` ha un tipo `Supa` minimale (solo la catena che usa); il client
-      // vero non vi si assegna strutturalmente, da qui il cast.
-      const n = await chatNateOggi(supabase as never, numero, i.adesso);
+      // `apertureMarioOggi` ha un tipo `Supa` minimale (solo la catena che usa); il
+      // client vero non vi si assegna strutturalmente, da qui il cast.
+      const n = await apertureMarioOggi(supabase as never, numero, i.adesso);
       if (n === null) {
         scartati.push({ numero, motivo: 'conteggio_fallito' });
         await log(supabase, 'mittente_ripiego', 'warn', { ...base, numero, motivo: 'conteggio_fallito' },
@@ -252,27 +311,54 @@ export async function scegliMittenteNuovo(
     (pieno ? pieni : candidati).push({ numero, oggi });
   }
 
-  // Il primario in coda alla lista: a parita' di chat passa davanti un secondario.
+  // Il primario in coda alla lista: a parita' di aperture passa davanti un secondario.
   // Non serve verificarne i template ne' le credenziali: e' gia' il ripiego di tutti.
-  // Conteggio fallito o tetto pieno = fuori dal giro, ma resta il ripiego qui sotto.
+  // Conteggio fallito = fuori dal giro; tetto pieno = solo il trabocco qui sotto.
   // I lead della coda marketing non nascono MAI sul primario (PO 29/10/2026).
+  let primarioPieno: { numero: string; oggi: number } | null = null;
   if (i.includiPrimario && !i.ignoraTetti && !codaMarketing) {
     const tettoP = tettoDi(tetti, primario);
     if (tettoP > 0) {
-      const n = await chatNateOggi(supabase as never, primario, i.adesso);
+      const n = await apertureMarioOggi(supabase as never, primario, i.adesso);
       if (n !== null && n < tettoP) candidati.push({ numero: primario, oggi: n });
+      else if (n !== null) {
+        primarioPieno = { numero: primario, oggi: n };
+        await logTettoUnaVoltaAlGiorno(supabase, { ...base, numero: primario, oggi: n, tetto: tettoP }, i.adesso);
+      }
     }
   }
 
-  // Trabocco (PO 29/10/2026): se tutti i secondari spedibili sono al tetto, il lead va
-  // al meno carico di loro, NON al 3199. Il 3199 resta il ripiego solo quando nessun
-  // secondario puo' proprio spedire (riposo, credenziali, template, conteggio rotto).
-  if (candidati.length === 0 && pieni.length > 0) {
-    pieni.sort((a, b) => a.oggi - b.oggi);
-    const scelto = pieni[0];
-    await logUnaVoltaAlGiorno(supabase, 'mittente_trabocco', { ...base, numero: scelto.numero, oggi: scelto.oggi },
-      `[numeri] tutti i secondari al tetto: ${scelto.numero} prende il trabocco (${scelto.oggi} chat oggi)`, i.adesso);
-    candidati.push(scelto);
+  // Trabocco (PO 06/11/2026): tutti al tetto = il lead parte lo stesso, ma solo da uno
+  // dei numeri del trabocco (3199 e 8061, `numeriTrabocco`), il meno carico, e solo se
+  // e' HIGH e non in pausa. Mai da un numero a riposo (tetto 0: non e' fra i pieni),
+  // mai da uno non HIGH. Il 3199 entra solo per le aperture di Mario (`includiPrimario`,
+  // non la coda marketing).
+  if (candidati.length === 0 && (pieni.length > 0 || primarioPieno)) {
+    const ammessi = numeriTrabocco();
+    const giro = [...pieni, ...(primarioPieno ? [primarioPieno] : [])]
+      .filter((c) => ammessi.includes(soloNum(c.numero)));
+    let utilizzabili: { numero: string; oggi: number }[] = [];
+    if (giro.length > 0) {
+      const stato = await getStatoQualitaNumeri(supabase);
+      const adesso = i.adesso ?? new Date();
+      const oggiG = giornoRomaDi(adesso);
+      const ieriG = giornoRomaDi(new Date(adesso.getTime() - 24 * 3600 * 1000));
+      utilizzabili = giro.filter((c) => eHighEFuoriPausa(stato, c.numero, oggiG, ieriG));
+    }
+    if (utilizzabili.length > 0) {
+      // Meno aperture oggi vince; a parita' l'ordine di `numeriTrabocco`.
+      utilizzabili.sort((a, b) => (a.oggi - b.oggi)
+        || (ammessi.indexOf(soloNum(a.numero)) - ammessi.indexOf(soloNum(b.numero))));
+      const scelto = utilizzabili[0];
+      await logUnaVoltaAlGiorno(supabase, 'mittente_trabocco', { ...base, numero: scelto.numero, oggi: scelto.oggi },
+        `[numeri] tutti i numeri al tetto: ${scelto.numero} prende il trabocco (${scelto.oggi} aperture oggi)`, i.adesso);
+      if (scelto.numero === primario) return alPrimario('scelto', scartati);
+      candidati.push(scelto);
+    } else {
+      await log(supabase, 'mittente_trabocco_senza_numero', 'warn',
+        { ...base, pieni: giro.map((c) => c.numero), ammessi },
+        `[numeri] tutti i numeri al tetto e nessun numero del trabocco HIGH: ${i.chiave} nasce sul numero storico`);
+    }
   }
 
   if (candidati.length === 0) {
@@ -290,7 +376,7 @@ export async function scegliMittenteNuovo(
     for (const c of candidati) mkt.set(c.numero, (await codaMarketingOggi(supabase, c.numero, i.adesso)) ?? 0);
   }
 
-  // Meno chat oggi vince; a parita' resta l'ordine della lista (sort stabile). Con
+  // Meno aperture oggi vince; a parita' resta l'ordine della lista (sort stabile). Con
   // `ignoraTetti` ogni `oggi` resta 0 per tutti (il conteggio non si fa): vince il
   // primo secondario non a riposo e spedibile nell'ordine della lista, senza
   // bilanciamento.

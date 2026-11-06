@@ -81,7 +81,7 @@ describe('decidi (PO 29/10/2026)', () => {
     expect(r.tetti[`whatsapp:${C}`]).toBe(0);
   });
 
-  it('3199: rientra a 30 dopo 4 giorni HIGH di fila, a regime dopo altri 4 (PO 29/10 sera)', () => {
+  it('3199: rientra a 15 dopo 4 giorni HIGH di fila e non sale piu (PO 06/11/2026)', () => {
     let s = vuoto();
     let tetti = tuttiAperti() as Record<string, number>;
     const giorno = (k: number) => piuGiorni('2026-11-01', k);
@@ -91,25 +91,37 @@ describe('decidi (PO 29/10/2026)', () => {
       s = r.stato; tetti = r.tetti;
     }
     const r4 = run(giorno(3), leggi({ [P]: 'HIGH' }), s, tetti);
-    expect(r4.tetti[`whatsapp:${P}`]).toBe(30);
-    expect(r4.azioni).toEqual([{ tipo: 'rientro_primario', numero: P, tetto: 30 }]);
+    expect(r4.tetti[`whatsapp:${P}`]).toBe(15);
+    expect(r4.azioni).toEqual([{ tipo: 'rientro_primario', numero: P, tetto: 15 }]);
     s = r4.stato; tetti = r4.tetti;
-    for (let k = 4; k < 7; k++) {
+    for (let k = 4; k < 12; k++) {
       const r = run(giorno(k), leggi({ [P]: 'HIGH' }), s, tetti);
-      expect(r.tetti[`whatsapp:${P}`]).toBe(30);
+      expect(r.tetti[`whatsapp:${P}`]).toBe(15);
+      expect(r.azioni).toEqual([]);
       s = r.stato; tetti = r.tetti;
     }
-    const r8 = run(giorno(7), leggi({ [P]: 'HIGH' }), s, tetti);
-    expect(r8.tetti[`whatsapp:${P}`]).toBe(100000);
-    expect(r8.azioni).toEqual([{ tipo: 'regime_primario', numero: P, tetto: 100000 }]);
-    expect(r8.stato.primario).toBeNull();
+    expect(s.primario).toBeNull();
   });
 
-  it('3199 a 30 che scende: esce subito e la fila riparte da zero', () => {
+  it('3199 messo a 15 a mano e HIGH: resta a 15', () => {
+    const tetti = { ...tuttiAperti(), [`whatsapp:${P}`]: 15 };
+    const r = run('2026-11-06', leggi({ [P]: 'HIGH' }), vuoto(), tetti);
+    expect(r.tetti[`whatsapp:${P}`]).toBe(15);
+    expect(r.azioni).toEqual([]);
+  });
+
+  it('una fase "trenta" rimasta dallo stato vecchio si azzera senza alzare il tetto', () => {
+    const tetti = { ...tuttiAperti(), [`whatsapp:${P}`]: 30 };
+    const r = run('2026-11-20', leggi({ [P]: 'HIGH' }), { ...vuoto(), primario: { fase: 'trenta', dal: '2026-11-01' } }, tetti);
+    expect(r.tetti[`whatsapp:${P}`]).toBe(30);
+    expect(r.stato.primario).toBeNull();
+  });
+
+  it('3199 a 15 che scende: esce subito e la fila riparte da zero', () => {
     let s = vuoto();
     let tetti = tuttiAperti() as Record<string, number>;
     for (let k = 0; k < 4; k++) { const r = run(piuGiorni('2026-11-01', k), leggi({ [P]: 'HIGH' }), s, tetti); s = r.stato; tetti = r.tetti; }
-    expect(tetti[`whatsapp:${P}`]).toBe(30);
+    expect(tetti[`whatsapp:${P}`]).toBe(15);
     const giu = run('2026-11-05', leggi({ [P]: 'MEDIUM' }), s, tetti);
     expect(giu.tetti[`whatsapp:${P}`]).toBeUndefined();
     expect(giu.stato.primario).toBeNull();

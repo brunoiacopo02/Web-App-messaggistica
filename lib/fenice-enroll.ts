@@ -14,7 +14,7 @@ import { leggiTettoOrario, sottoTettoOrario } from './lancio-tetto';
 import { contaBenvenutiUltimaOra } from './lancio-db';
 import { mittenteDiConversazione, numeroPrimario } from './mittente';
 import { mittenteBenvenutoLancio } from './lancio-mittente';
-import { scegliMittenteNuovo, sidAperturaMario } from './scelta-mittente';
+import { scegliMittenteNuovo, sidAperturaMario, chatEsistente, registraAperturaMario } from './scelta-mittente';
 import { HANDOFF_VERGINI, HANDOFF_CRM_NON_DEL_BOT } from './lancio-vergini';
 import { lancioInCorso } from './lancio-fase';
 
@@ -201,12 +201,18 @@ export async function enrollLeadIntoMario(
     includiPrimario: true,
   });
   const mittenteImposto: string | undefined = scelta.from;
+  // Il tetto di ogni numero conta le chat che NASCONO qui (PO 06/11/2026): si guarda
+  // prima se la chat c'era gia', e se nasce adesso si scrive la riga che la conta.
+  const esistevaGia = await chatEsistente(supabase, args.phone);
   const { conversationId, waNumber } = await findOrCreateLeadConversation(supabase, {
     phone: args.phone,
     firstName,
     lastName: args.lastName ?? undefined,
     email: args.email ?? undefined,
   }, { mittente: mittenteImposto });
+  if (esistevaGia !== true && waNumber && waNumber === scelta.from) {
+    await registraAperturaMario(supabase, { numero: waNumber, conversationId, crmLeadId: args.crmLeadId ?? null });
+  }
   // Il numero della chat: quello scelto da `scegliMittenteNuovo` se e' appena nata, il
   // suo se esisteva gia'. Il `?? primario` e' solo per il tipo — col primario
   // configurato non e' mai undefined.

@@ -41,6 +41,54 @@ type Supa = {
 };
 
 /**
+ * Riga di event_log scritta quando una chat NASCE per un'apertura di Mario
+ * (`registraAperturaMario` in lib/scelta-mittente.ts, chiamata da fenice-enroll).
+ * Payload: `{ numero, conversationId, crmLeadId }`.
+ */
+export const EVENTO_APERTURA_MARIO = 'mittente_apertura';
+
+/**
+ * Quante aperture di Mario sono nate oggi (giorno di Roma) su quel numero: e' il
+ * conteggio su cui vale il tetto di `tetti_numeri` (PO 06/11/2026).
+ *
+ * Non conta le agende dei GDO, le chat di Professioni, le chat che il lead apre
+ * scrivendo per primo, le chat che "seguono il lead" su un altro numero: sul 3199
+ * sono 17-44 al giorno, e con il tetto a 15 il 3199 non aprirebbe mai. Prima del
+ * 06/11 il conteggio era `chatNateOggi` (tutte le chat nate oggi col numero).
+ * null = conteggio non riuscito: chi chiama tratta il numero come chiuso.
+ */
+export async function apertureMarioOggi(supabase: SupaEventi, numero: string, adesso: Date = new Date()): Promise<number | null> {
+  try {
+    const { count, error } = await supabase
+      .from('event_log')
+      .select('id', { count: 'exact', head: true })
+      .eq('type', EVENTO_APERTURA_MARIO)
+      .eq('payload->>numero', numero)
+      .gte('created_at', inizioGiornataRoma(adesso));
+    if (error || count === null || count === undefined) {
+      console.error(`[numeri] aperture di oggi per ${numero} non contate`, error);
+      return null;
+    }
+    return count;
+  } catch (e) {
+    console.error(`[numeri] conteggio aperture di oggi per ${numero} esploso`, e);
+    return null;
+  }
+}
+
+type SupaEventi = {
+  from: (t: string) => {
+    select: (c: string, o?: { count: 'exact'; head: true }) => {
+      eq: (k: string, v: unknown) => {
+        eq: (k: string, v: unknown) => {
+          gte: (k: string, v: unknown) => PromiseLike<{ count: number | null; error: unknown }>;
+        };
+      };
+    };
+  };
+};
+
+/**
  * Quante conversazioni sono NATE oggi (giorno di Roma) con quel `wa_number`.
  * E' la prova di cosa e' davvero partito, non un contatore a parte. null =
  * conteggio non riuscito: chi chiama deve trattarlo come "numero chiuso".

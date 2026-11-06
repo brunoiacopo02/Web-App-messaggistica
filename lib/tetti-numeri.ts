@@ -50,3 +50,41 @@ export async function getTettiNumeri(supabase: Supa): Promise<Map<string, number
     return null;
   }
 }
+
+/**
+ * Lo stato del cron qualita-numeri (`app_settings.qualita_numeri_stato`, scritto da
+ * lib/qualita-numeri.ts), letto per il trabocco di `scegliMittenteNuovo`: storico
+ * per numero (senza `whatsapp:`) → giorno di Roma → lettura peggiore del giorno, e
+ * pause in corso.
+ */
+export type StatoQualitaLetto = {
+  storico: Record<string, Record<string, string>>;
+  pause: Record<string, unknown>;
+};
+
+/** null = non si e' potuto leggere: nessun numero vale HIGH (fallisce chiuso). */
+export async function getStatoQualitaNumeri(supabase: Supa): Promise<StatoQualitaLetto | null> {
+  try {
+    const { data, error } = await supabase.from('app_settings').select('value').eq('key', 'qualita_numeri_stato').maybeSingle();
+    if (error) return null;
+    const v = (data as { value?: Partial<StatoQualitaLetto> } | null)?.value;
+    if (!v || typeof v !== 'object') return null;
+    return { storico: v.storico ?? {}, pause: v.pause ?? {} };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * HIGH secondo l'ultima lettura del cron: quella di oggi, o di ieri se oggi non c'e'
+ * ancora (il cron gira 06:10-21:10 Roma; un intake di notte vede la sera prima).
+ * Piu' vecchia, mancante o UNKNOWN = non HIGH. Un numero con una pausa in corso
+ * (finche' il cron non la toglie) = non HIGH.
+ */
+export function eHighEFuoriPausa(stato: StatoQualitaLetto | null, numero: string, oggi: string, ieri: string): boolean {
+  if (!stato) return false;
+  const n = chiave(numero);
+  if (stato.pause[n]) return false;
+  const giorni = stato.storico[n] ?? {};
+  return (giorni[oggi] ?? giorni[ieri]) === 'HIGH';
+}

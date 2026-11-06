@@ -12,6 +12,8 @@ vi.mock('./lancio-settings', () => ({
 vi.mock('./scelta-mittente', () => ({
   scegliMittenteNuovo: vi.fn(async () => ({ from: 'whatsapp:+393520413199', secondario: false, scartati: [], motivo: 'nessun_secondario' })),
   sidAperturaMario: vi.fn(() => ['HX_OPEN']),
+  chatEsistente: vi.fn(async () => false),
+  registraAperturaMario: vi.fn(async () => undefined),
 }));
 
 import { apreSopraChatViva, azzeraEsitoPerLeadNuovo, enrollGdoLeadAsPostino, enrollLeadIntoMario, riapreChatFerma, CHAT_FERMA_MS } from './fenice-enroll';
@@ -20,7 +22,7 @@ import { getLancioSettings } from './lancio-settings';
 import { lancioBenvenutoText } from './lancio-fase';
 import { decideAperturaLancio, riassumiOutboundLancio } from './lancio-aperture';
 import { openingBody } from './persona';
-import { scegliMittenteNuovo } from './scelta-mittente';
+import { scegliMittenteNuovo, chatEsistente, registraAperturaMario } from './scelta-mittente';
 
 /** Fake del client Supabase: traccia update su conversations ed insert su event_log.
  *  `benvenutiUltimaOra` è il numero che il tetto orario del lancio legge da `messages`.
@@ -151,6 +153,25 @@ describe('mittente di una chat nuova (parco numeri)', () => {
     await enrollLeadIntoMario(makeSupabase().supabase as never, { phone: '+393331234567', numeroBot: 2, riscaldamento: true });
     expect(vi.mocked(findOrCreateLeadConversation).mock.calls[0][2]).toEqual({ mittente: 'whatsapp:+393520413199' });
     expect(vi.mocked(scegliMittenteNuovo)).toHaveBeenCalledTimes(1);
+  });
+
+  // PO 06/11/2026: il tetto conta solo le chat che NASCONO per un'apertura di Mario.
+  it('chat nata adesso sul numero scelto: scrive la riga che conta il tetto', async () => {
+    vi.mocked(registraAperturaMario).mockClear();
+    vi.mocked(scegliMittenteNuovo).mockResolvedValueOnce({ from: 'whatsapp:+393520158061', secondario: true, scartati: [], motivo: 'scelto' });
+    vi.mocked(chatEsistente).mockResolvedValueOnce(false);
+    vi.mocked(findOrCreateLeadConversation).mockResolvedValueOnce({ leadId: 7, conversationId: 42, waNumber: 'whatsapp:+393520158061' });
+    await enrollLeadIntoMario(makeSupabase().supabase as never, { phone: '+393331234567', crmLeadId: 'L9' });
+    expect(vi.mocked(registraAperturaMario).mock.calls[0][1]).toEqual({ numero: 'whatsapp:+393520158061', conversationId: 42, crmLeadId: 'L9' });
+  });
+
+  it('chat che esisteva gia: nessuna riga (non e una apertura nuova)', async () => {
+    vi.mocked(registraAperturaMario).mockClear();
+    vi.mocked(scegliMittenteNuovo).mockResolvedValueOnce({ from: 'whatsapp:+393520158061', secondario: true, scartati: [], motivo: 'scelto' });
+    vi.mocked(chatEsistente).mockResolvedValueOnce(true);
+    vi.mocked(findOrCreateLeadConversation).mockResolvedValueOnce({ leadId: 7, conversationId: 42, waNumber: 'whatsapp:+393520158061' });
+    await enrollLeadIntoMario(makeSupabase().supabase as never, { phone: '+393331234567', crmLeadId: 'L9' });
+    expect(registraAperturaMario).not.toHaveBeenCalled();
   });
 });
 
