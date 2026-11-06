@@ -9,6 +9,7 @@ import { adessoLancio } from '@/lib/lancio-orologio';
 import type { Json } from '@/lib/supabase/types';
 import { impostaFaseLancio } from '@/lib/lancio-db';
 import { getLancioSettings } from '@/lib/lancio-settings';
+import { blackFridayAttivoPer } from '@/lib/black-friday';
 import { templateName } from '@/lib/name';
 import { inSendWindow } from '@/lib/sequence';
 import { assertTemplateSendable } from '@/lib/twilio';
@@ -172,7 +173,8 @@ export async function POST(req: NextRequest) {
         .order('created_at', { ascending: true }).limit(1);
       const primoRiga = (primi ?? [])[0] as { body: string | null; created_at: string } | undefined;
       // Qui il primo inbound e' anche l'ultimo: la chat ha un solo messaggio, il suo.
-      const esito = classificaPrimoMessaggio({ primoInbound: primoRiga?.body, inboundCorrente: primoRiga?.body, pulsanteAttivo });
+      const blackFridayAttivo = await blackFridayAttivoPer(admin, [primoRiga?.body]);
+      const esito = classificaPrimoMessaggio({ primoInbound: primoRiga?.body, inboundCorrente: primoRiga?.body, pulsanteAttivo, blackFridayAttivo });
       const provenienza = esito.provenienza;
 
       const now = new Date().toISOString();

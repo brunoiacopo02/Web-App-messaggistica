@@ -26,6 +26,7 @@ import type { Json } from '@/lib/supabase/types';
 import { impostaFaseLancio, marcaNotaRestituzione, revocaCongedo } from '@/lib/lancio-db';
 import { notaInboundDopoRestituzione } from '@/lib/lancio-restituzioni';
 import { getLancioSettings } from '@/lib/lancio-settings';
+import { blackFridayAttivoPer } from '@/lib/black-friday';
 import { pushLeadEntrante } from '@/lib/lead-entrante';
 import { segnaProfessione } from '@/lib/professione-chat';
 import { eNumeroDelBot } from '@/lib/mittente';
@@ -531,7 +532,8 @@ export async function POST(req: NextRequest) {
           // Il messaggio corrente e' il fallback: se la lettura fallisce o la riga non si
           // vede ancora, e' comunque il primo inbound di questa conversazione.
           const primoMessaggioTesto = primoRigaInbound?.body ?? messageBody;
-          const esito = classificaPrimoMessaggio({ primoInbound: primoMessaggioTesto, inboundCorrente: messageBody, pulsanteAttivo: pulsanteVale });
+          const blackFridayAttivo = await blackFridayAttivoPer(supabase, [primoMessaggioTesto, messageBody]);
+          const esito = classificaPrimoMessaggio({ primoInbound: primoMessaggioTesto, inboundCorrente: messageBody, pulsanteAttivo: pulsanteVale, blackFridayAttivo });
           const provenienza = esito.provenienza;
           // Cinque minuti indietro, e non `now`: il messaggio che ha innescato questa
           // adozione e' stato inserito qui sopra col `created_at` di default, cioe'

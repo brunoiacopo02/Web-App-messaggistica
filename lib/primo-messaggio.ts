@@ -1,4 +1,5 @@
 import { funnelDaPrimoMessaggio } from './persona';
+import { isMarkerBlackFriday, PROVENIENZA_BLACK_FRIDAY } from './black-friday';
 import { isMarkerProfessioni, riconosciProfessione, PROVENIENZA_PROFESSIONI, type SlugProfessione } from './professioni';
 
 /**
@@ -16,6 +17,8 @@ import { isMarkerProfessioni, riconosciProfessione, PROVENIENZA_PROFESSIONI, typ
  *    nasce nel bucket del lancio (stessa provenienza del pulsante);
  *  - il funnel Professioni (PO 14/10/2026): la landing manda "scheda del corso" con il
  *    nome della professione → PROFESSIONI, Mario standard col corso scelto (lib/professioni.ts);
+ *  - il funnel Black Friday (PO 06/11/2026): la frase dell'email "offerta Black Friday"
+ *    → BLACK FRIDAY, Mario con la nota dell'offerta (lib/black-friday.ts), solo a funnel acceso;
  *  - tutto il resto → INBOUND, Mario standard.
  *
  * La provenienza Telegram si legge dal PRIMO inbound della conversazione (chi riscrive
@@ -46,14 +49,15 @@ export const MARKER_LINK_SVILUPPATORE = /professione dello sviluppatore ai/i;
 /** `conversations.lancio_ingresso` di chi entra dal link (accanto a 'lista' e 'pulsante_webinar'). */
 export const LANCIO_INGRESSO_LINK_SVILUPPATORE = 'link_sviluppatore' as const;
 
-export type ProvenienzaLeadEntrante = 'TELEGRAM' | 'INBOUND' | typeof PROVENIENZA_LANCIO_WEBDEV | typeof PROVENIENZA_PROFESSIONI;
+export type ProvenienzaLeadEntrante = 'TELEGRAM' | 'INBOUND' | typeof PROVENIENZA_LANCIO_WEBDEV | typeof PROVENIENZA_PROFESSIONI | typeof PROVENIENZA_BLACK_FRIDAY;
 
 export type EsitoPrimoMessaggio =
   | { tipo: 'telegram'; provenienza: 'TELEGRAM' }
   | { tipo: 'inbound'; provenienza: 'INBOUND' }
   | { tipo: 'lancio_pulsante'; provenienza: typeof PROVENIENZA_LANCIO_WEBDEV }
   | { tipo: 'lancio_link'; provenienza: typeof PROVENIENZA_LANCIO_WEBDEV }
-  | { tipo: 'professioni'; provenienza: typeof PROVENIENZA_PROFESSIONI; professione: SlugProfessione | null };
+  | { tipo: 'professioni'; provenienza: typeof PROVENIENZA_PROFESSIONI; professione: SlugProfessione | null }
+  | { tipo: 'black_friday'; provenienza: typeof PROVENIENZA_BLACK_FRIDAY };
 
 export function isMarkerPulsanteWebinar(body: string | null | undefined): boolean {
   return MARKER_PULSANTE_WEBINAR.test(body ?? '');
@@ -85,6 +89,11 @@ export function classificaPrimoMessaggio(input: {
    * ragiona solo sui testi (i test del modulo) non deve passarlo.
    */
   pulsanteAttivo?: boolean;
+  /**
+   * Il funnel Black Friday e' acceso (`funnelBlackFridayAttivo`, lib/black-friday.ts)?
+   * Spento, la frase vale come assente. Default spento: chi non lo passa non lo accende.
+   */
+  blackFridayAttivo?: boolean;
 }): EsitoPrimoMessaggio {
   if ((input.pulsanteAttivo ?? true) && isMarkerPulsanteWebinar(input.inboundCorrente)) {
     return { tipo: 'lancio_pulsante', provenienza: PROVENIENZA_LANCIO_WEBDEV };
@@ -93,6 +102,12 @@ export function classificaPrimoMessaggio(input: {
   // come Telegram: chi manda "ciao" e poi incolla la frase e' arrivato comunque da li'.
   if (isMarkerLinkSviluppatore(input.inboundCorrente) || isMarkerLinkSviluppatore(input.primoInbound)) {
     return { tipo: 'lancio_link', provenienza: PROVENIENZA_LANCIO_WEBDEV };
+  }
+  // Funnel Black Friday (PO 06/11/2026): primo O corrente, come il link, e prima delle
+  // Professioni (e' la richiesta piu' recente se il lead le ha scritte entrambe).
+  if ((input.blackFridayAttivo ?? false)
+    && (isMarkerBlackFriday(input.inboundCorrente) || isMarkerBlackFriday(input.primoInbound))) {
+    return { tipo: 'black_friday', provenienza: PROVENIENZA_BLACK_FRIDAY };
   }
   // Funnel Professioni (PO 14/10/2026): primo O corrente, come il link. Il corso si legge
   // dal messaggio che contiene la frase; senza corso riconosciuto Mario chiede quale.

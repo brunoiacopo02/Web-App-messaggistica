@@ -84,6 +84,22 @@ export function professioniVince(i: {
   now: number;
 }): boolean {
   if (i.professione === null && i.crmFunnel !== PROVENIENZA_PROFESSIONI) return false;
+  return liberaDaLancioEAgenda(i);
+}
+
+/**
+ * La chat non e' presa da un lancio in corso ne' da una call GDO ancora da fare: le due
+ * condizioni con cui un funnel che il lead sceglie scrivendoci (Professioni, Black Friday)
+ * vince su quello che la chat era prima. Regole nel commento di `professioniVince`.
+ */
+export function liberaDaLancioEAgenda(i: {
+  lancioSlug: string | null | undefined;
+  lancioFase: string | null | undefined;
+  gdoAgendaAt: string | null;
+  botScheduledAt: string | null;
+  gdoAppuntamentoAt: string | null;
+  now: number;
+}): boolean {
   if (lancioInCorso({ lancio_slug: i.lancioSlug, lancio_fase: i.lancioFase })) return false;
   if (i.gdoAgendaAt === null) return true;
   const agenda = Date.parse(i.gdoAgendaAt);

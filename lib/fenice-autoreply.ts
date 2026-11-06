@@ -42,6 +42,7 @@ import type { LancioInfo } from './lancio-crm';
 import { mittenteDiConversazione } from './mittente';
 import { brochureContextNote, professioniContextNote, professioniVince, richiestaSchedaFuoriFunnel, schedaDaInviare, schedaSubito } from './professioni-nota';
 import { isSlugProfessione, PROVENIENZA_PROFESSIONI } from './professioni';
+import { blackFridayContextNote, blackFridayVince, funnelBlackFridayAttivo, isMarkerBlackFriday, leggiSettingsBlackFriday, PROVENIENZA_BLACK_FRIDAY, type SettingsBlackFriday } from './black-friday';
 import { inviaScheda } from './scheda-invio';
 import { fissatoIlDi } from './noemi-quando';
 import {
@@ -553,7 +554,10 @@ export async function drainMarioReplies(
   let professione = (claimed as { professione?: string | null }).professione ?? null;
   // Il funnel deciso all'adozione: una chat PROFESSIONI senza corso riconosciuto riceve la
   // nota lo stesso (spec §2), e Mario chiede quale corso.
+  const crmFunnelRiga = ((claimed as { crm_funnel?: string | null }).crm_funnel ?? null)?.trim().toUpperCase() ?? null;
   const funnelProfessioni = (claimed as { crm_funnel?: string | null }).crm_funnel === PROVENIENZA_PROFESSIONI;
+  // Black Friday: scadenza e posti, letti una volta per drain e solo sulle chat col segno.
+  let settingsBlackFriday: SettingsBlackFriday | undefined;
   let schedaInviataAt = (claimed as { scheda_inviata_at?: string | null }).scheda_inviata_at ?? null;
 
   // Il mittente e' quello della chat (vedi lib/mittente.ts). Si risolve DOPO il claim
@@ -915,15 +919,42 @@ export async function drainMarioReplies(
       // turno e' quello del funnel: niente contesto GDO (nota, video, Noemi, esiti solo nota)
       // e niente note del lancio chiuso. Si decide qui, a ogni giro, perche' il turno del
       // lancio qui sopra puo' aver appena chiuso la fase.
-      const vinceProfessioni = professioniVince({
+      // Funnel Black Friday (PO 06/11/2026, lib/black-friday.ts): la chat entrata come
+      // BLACK FRIDAY o col messaggio del link in cronologia, a funnel acceso, con le stesse
+      // condizioni di Professioni (niente lancio in corso, niente call GDO da fare). Vince
+      // anche su Professioni. Le impostazioni si leggono solo se la chat ne ha il segno.
+      const segnoBlackFriday = crmFunnelRiga === PROVENIENZA_BLACK_FRIDAY
+        || rows.some((m) => m.direction === 'in' && isMarkerBlackFriday(m.body));
+      settingsBlackFriday = segnoBlackFriday ? (settingsBlackFriday ?? await leggiSettingsBlackFriday(supabase)) : settingsBlackFriday;
+      const vinceBlackFriday = segnoBlackFriday && blackFridayVince({
+        attivo: funnelBlackFridayAttivo({ env: process.env.BLACK_FRIDAY_FUNNEL, nowMs: Date.now(), scadenzaAtMs: settingsBlackFriday?.scadenza?.atMs ?? null }),
+        crmFunnel: crmFunnelRiga,
+        testiInbound: rows.filter((m) => m.direction === 'in').map((m) => m.body),
+        lancioSlug: lancio.lancio_slug, lancioFase: lancio.lancio_fase,
+        gdoAgendaAt, botScheduledAt, gdoAppuntamentoAt,
+        now: Date.now(),
+      });
+      const vinceProfessioni = !vinceBlackFriday && professioniVince({
         professione,
         crmFunnel: funnelProfessioni ? PROVENIENZA_PROFESSIONI : null,
         lancioSlug: lancio.lancio_slug, lancioFase: lancio.lancio_fase,
         gdoAgendaAt, botScheduledAt, gdoAppuntamentoAt,
         now: Date.now(),
       });
-      const postino = agendaGdo && !vinceProfessioni;
-      const lancioStandard = !vinceProfessioni && lancioStandardDrain(lancio);
+      const postino = agendaGdo && !vinceProfessioni && !vinceBlackFriday;
+      const lancioStandard = !vinceProfessioni && !vinceBlackFriday && lancioStandardDrain(lancio);
+      // La VSL dell'offerta (stesso URL dell'offerta del mese, PO 28/10/2026). Senza link
+      // Mario usa i quattro video classici, e resta una traccia.
+      const vslBlackFriday = vinceBlackFriday ? (await leggiSettingsLancio()).offertaDelMeseLink : null;
+      if (vinceBlackFriday && !vslBlackFriday) {
+        await alertUnaVolta(supabase, {
+          type: 'black_friday_vsl_mancante',
+          conversationId,
+          payload: { crmLeadId },
+          message: `[black-friday] conv ${conversationId}: offerta_del_mese_link non impostato, Mario usa i video classici`,
+          level: 'warn',
+        });
+      }
       // Chi e' entrato dal link "professione dello Sviluppatore AI" (PO 24/09/2026): prima
       // della live non c'e' nessuna registrazione da mandare, e nessun avviso da scrivere
       // perche' manca — i video restano i classici e Mario non nomina la live.
@@ -938,7 +969,7 @@ export async function drainMarioReplies(
         ? eventoLancioPassato((await leggiSettingsLancio()).eventoAt, Date.now())
         : true;
       const videoLive = lancioStandard && eventoPassato ? await leggiVideoLive() : null;
-      const videoExtra: string[] = videoLive ? [videoLive] : [];
+      const videoExtra: string[] = videoLive ? [videoLive] : vslBlackFriday ? [vslBlackFriday] : [];
       const linkExtra: string[] = [...videoExtra, ...(gdoVideoUrl ? [gdoVideoUrl] : [])];
       // Un link del video già uscito in questa chat: serve sia alla patch del blocco
       // conferma, sia alla rete di sicurezza sul FATTO qui sotto.
@@ -1142,6 +1173,14 @@ export async function drainMarioReplies(
           // Mario lo legge dalla nota Professioni (`appenaInviata`, qui sotto).
         }
       }
+      const notaBlackFriday = vinceBlackFriday
+        ? [blackFridayContextNote({
+            vslLink: vslBlackFriday,
+            scadenza: settingsBlackFriday?.scadenza ?? null,
+            posti: settingsBlackFriday?.posti ?? null,
+            nowMs: Date.now(),
+          }), notaPrimo].filter(Boolean).join('\n\n')
+        : null;
       const notaProfessioni = vinceProfessioni
         ? [professioniContextNote(isSlugProfessione(professione) ? professione : null, { schedaInviata: !!schedaInviataAt, appenaInviata: schedaAppenaInviata }), notaPrimo].filter(Boolean).join('\n\n')
         : null;
@@ -1250,6 +1289,8 @@ export async function drainMarioReplies(
             ? { contextNote: [notaLancioCompleta, notaSpostaBot].filter(Boolean).join('\n\n') }
             : notaStudente
             ? { contextNote: [notaStudente, notaBrochure, notaSpostaBot].filter(Boolean).join('\n\n') }
+            : notaBlackFriday
+            ? { contextNote: [notaBlackFriday, notaBrochure, notaSpostaBot].filter(Boolean).join('\n\n') }
             : notaProfessioni
             ? { contextNote: [notaProfessioni, notaSpostaBot].filter(Boolean).join('\n\n') }
             : notaPrimo || notaBrochure || notaSpostaBot

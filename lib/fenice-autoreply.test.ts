@@ -20,6 +20,12 @@ vi.mock('./lancio-settings', () => ({
   })),
 }));
 
+// Scadenza e posti del Black Friday stanno in `app_settings`: qui il default e' "chiavi assenti".
+vi.mock('./black-friday', async (orig) => ({
+  ...(await orig<typeof import('./black-friday')>()),
+  leggiSettingsBlackFriday: vi.fn(async () => ({ scadenza: null, posti: null })),
+}));
+
 import { generateMarioReply, GDO_CONTEXT_NOTE } from './mario';
 import { sendOutcome, inviaNotaAlCrm, registraEsitoSenzaLeadId } from './bot-outcome';
 import { NOTA_VIDEO, NOTA_NOEMI } from './gdo-context-note';
@@ -4012,4 +4018,80 @@ describe('drainMarioReplies — il numero della risposta e quello dell ultimo me
     expect(mittenti()).toEqual([N2508]);
     expect(calls.events.some((e: { type: string }) => e.type === 'mittente_aggiornato_nel_turno')).toBe(false);
   });
+});
+
+describe('drainMarioReplies — funnel Black Friday (PO 06/11/2026)', () => {
+  const VSL = 'https://lp.feniceacademy.it/vsl-offerta';
+  const FRASE: FakeMsgRow = {
+    direction: 'in', body: "Ciao, sono interessato a saperne di più sull'offerta Black Friday", template_sid: null, created_at: '2026-11-09T10:00:00Z',
+  };
+  const riga = (extra: Partial<ClaimedRow> = {}): ClaimedRow => ({
+    id: 90, ai_started_at: null, crm_lead_id: 'crm90', bot_outcome: null, professione: null, scheda_inviata_at: null, ...extra,
+  });
+  const settingsConVsl = {
+    attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: 'https://corso.feniceacademy.it/live-webdev-2026',
+    offertaDelMeseLink: VSL, eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti', sender: 'principale', quotaSecondario: 0,
+  } as never;
+  const notaDelTurno = () => (vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string }).contextNote ?? '';
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.stubEnv('BLACK_FRIDAY_FUNNEL', '1');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(sendFreeText).mockClear();
+    vi.mocked(getLancioSettings).mockResolvedValue(settingsConVsl);
+  });
+  afterEach(() => { vi.unstubAllEnvs(); vi.mocked(getLancioSettings).mockReset(); });
+
+  it("chat nuova dal link: nota dell'offerta con la VSL e la dichiarazione IA; la VSL non e' un link inventato", async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: `Perfetto, allora ci siamo\n*Prima della videochiamata guarda questo video* 👉 ${VSL}`,
+      appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+    const { supabase, calls } = makeDrainSupabase(riga({ crm_funnel: 'BLACK FRIDAY' }), [FRASE]);
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0, 0);
+
+    const nota = notaDelTurno();
+    expect(nota).toContain('CONTESTO FUNNEL BLACK FRIDAY');
+    expect(nota).toContain(VSL);
+    expect(nota).toContain(NOTA_PRIMO_CONTATTO);
+    expect(nota).not.toMatch(/tablet/i);
+    expect(nota).toContain('Non citare date di fine offerta');
+    expect(calls.events.some((e: { type: string }) => e.type === 'unknown_fenice_link')).toBe(false);
+  }, 20_000);
+
+  it('chat esistente (lancio chiuso + agenda GDO vecchia + corso Professioni) che scrive la frase: vince il Black Friday', async () => {
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: "Si, il Black Friday e' attivo", appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+    const { supabase } = makeDrainSupabase(riga({
+      professione: 'copywriter', scheda_inviata_at: '2026-10-20T10:00:00Z',
+      lancio_slug: 'webdev-2026-10', lancio_fase: 'chiuso', crm_funnel: 'Lancio Web Dev AI',
+      gdo_agenda_at: '2026-09-17T12:37:38Z', gdo_video_url: 'https://corso.feniceacademy.it/conferenza-bx', gdo_video_sent_at: '2026-09-17T14:38:02Z',
+    }), [
+      { direction: 'out', body: 'Ciao, sono Marta', template_sid: null, created_at: '2026-09-17T12:00:00Z' },
+      FRASE,
+    ]);
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0, 0);
+
+    const nota = notaDelTurno();
+    expect(nota).toContain('CONTESTO FUNNEL BLACK FRIDAY');
+    expect(nota).not.toContain('FUNNEL PROFESSIONI');
+    expect(nota).not.toContain(NOTA_LANCIO_NIENTE_PASSAGGIO);
+    expect(nota).not.toContain(GDO_CONTEXT_NOTE);
+  }, 20_000);
+
+  it('funnel spento (env 0): nessuna nota del Black Friday', async () => {
+    vi.stubEnv('BLACK_FRIDAY_FUNNEL', '0');
+    vi.mocked(generateMarioReply).mockResolvedValueOnce({
+      visibleReply: 'Ciao!', appointmentFixed: false, passToHuman: false, videoWatched: false,
+    });
+    const { supabase } = makeDrainSupabase(riga({ crm_funnel: 'BLACK FRIDAY' }), [FRASE]);
+
+    await drainMarioReplies(supabase, 90, '+391234567890', () => 0, 0);
+
+    expect(notaDelTurno()).not.toContain('BLACK FRIDAY');
+  }, 20_000);
 });
