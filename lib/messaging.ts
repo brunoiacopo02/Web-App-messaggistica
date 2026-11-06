@@ -75,8 +75,33 @@ export async function findOrCreateLeadConversation(
 }
 
 /**
+ * Il corpo del template come lo legge il lead: i segnaposto `{{n}}` sostituiti con le
+ * stesse variabili spedite a Twilio.
+ *
+ * Serve perche' in `messages` finiva il testo grezzo ("Ciao {{1}}, ti ricordo la
+ * videocall di {{2}}"): 778 promemoria e recuperi in 14 giorni (06/11/2026). Al lead
+ * arrivavano compilati, ma il modello rileggeva la cronologia coi segnaposto e a volte
+ * si scusava per un "promemoria partito rotto".
+ *
+ * Una variabile che manca non resta come `{{n}}`: si toglie insieme allo spazio che la
+ * precede ("Ciao {{1}}," -> "Ciao,"), cosi' la cronologia non mostra mai un segnaposto.
+ */
+export function compilaCorpoTemplate(grezzo: string, variables: Record<string, string>): string {
+  // Il segnaposto si prende con gli spazi che lo precedono: se la variabile c'e' gli
+  // spazi si rimettono, se manca vanno via con lui. Il resto del testo non si tocca.
+  return grezzo.replace(/([ \t]*)\{\{\s*(\w+)\s*\}\}/g, (_pezzo, spazi: string, chiave: string) => {
+    const valore = variables[chiave];
+    return valore == null || valore === '' ? '' : spazi + String(valore);
+  });
+}
+
+/**
  * Invia un template a una conversazione esistente e registra il messaggio (out).
  * In caso di errore Twilio registra comunque un messaggio 'failed'.
+ *
+ * Senza `bodyOverride` il testo salvato e' il corpo del template compilato con le
+ * variabili inviate (`compilaCorpoTemplate`); le variabili finiscono anche in
+ * `template_vars`.
  */
 export async function sendTemplateAndLog(
   supabase: Supa,
@@ -90,7 +115,13 @@ export async function sendTemplateAndLog(
 ): Promise<{ ok: boolean; sid?: string; error?: string }> {
   // `from` anche qui: il testo del template si legge dall'account che possiede il
   // mittente, e il SID di un account sull'altro torna 404 (vedi `getTemplateBody`).
-  const tplBody = bodyOverride ?? (await getTemplateBody(templateSid, from)) ?? `[template] ${label}`;
+  let tplBody = bodyOverride;
+  if (tplBody == null) {
+    const grezzo = await getTemplateBody(templateSid, from);
+    tplBody = grezzo ? compilaCorpoTemplate(grezzo, variables) : `[template] ${label}`;
+  }
+  // Le chiavi numeriche ({ 1: nome }) diventano stringhe, come nel JSON spedito a Twilio.
+  const templateVars = Object.keys(variables).length > 0 ? variables : null;
   try {
     const sent = await sendTemplate({ to: phone, contentSid: templateSid, variables, from });
     await supabase.from('messages').insert({
@@ -100,6 +131,7 @@ export async function sendTemplateAndLog(
       twilio_sid: sent.sid,
       twilio_status: sent.status,
       template_sid: templateSid,
+      template_vars: templateVars as never,
       is_template: true,
       sender: 'automazione',
     });
@@ -117,6 +149,7 @@ export async function sendTemplateAndLog(
       twilio_status: 'failed',
       twilio_error_code: e?.code ?? null,
       template_sid: templateSid,
+      template_vars: templateVars as never,
       is_template: true,
       sender: 'automazione',
     });
