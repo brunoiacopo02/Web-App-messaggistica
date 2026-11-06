@@ -1,4 +1,4 @@
-import { decideTrackA, decideTrackB, FAST_FAIL_H, SEQUENCE_END_DAYS, TRACKB_GIVEUP_H, type MsgLite } from './sequence';
+import { decideTrackA, decideTrackB, APERTURA_MAI_PARTITA_DAL_MS, APERTURA_MAI_PARTITA_H, FAST_FAIL_H, SEQUENCE_END_DAYS, TRACKB_GIVEUP_H, type MsgLite } from './sequence';
 import { lancioInCorso } from './lancio-fase';
 
 const H = 3600_000;
@@ -128,14 +128,29 @@ export function serveCronologia(c: CronConvRow, nowMs: number): boolean {
 
   if (inboundDopoArruolamento) return nowMs - inbound >= TRACKB_GIVEUP_H * H;
   if (arruolamento === null) return true;
-  return nowMs - arruolamento >= TRACKA_MIN_CLASSIFY_H * H;
+  if (nowMs - arruolamento >= TRACKA_MIN_CLASSIFY_H * H) return true;
+  // Rete "apertura mai partita" (06/11/2026): fra 12h e la soglia di sopra serve la
+  // cronologia solo per la chat che non ha MAI avuto un messaggio in uscita. Dalle
+  // colonne: `last_message_at` vuoto o anteriore all'arruolamento (l'enroll inserisce
+  // l'apertura poco prima di `ai_started_at`, da qui il buffer). Nel dubbio si carica.
+  return (
+    nowMs - arruolamento >= APERTURA_MAI_PARTITA_H * H &&
+    arruolamento >= APERTURA_MAI_PARTITA_DAL_MS &&
+    nessunOutboundDopoArruolamento(c, arruolamento)
+  );
+}
+
+/** Dalle colonne: nessun messaggio dopo l'arruolamento (inbound esclusi a monte). */
+function nessunOutboundDopoArruolamento(c: CronConvRow, arruolamento: number): boolean {
+  const ultimo = ms(c.last_message_at);
+  return ultimo === null || ultimo < arruolamento - 5 * 60_000;
 }
 
 // Il cron bot-followups fa SOLO le classificazioni finali verso il CRM:
 // gli invii (aperture, touch, nudge) sono compito del cron sequence-touches.
 // `mai_consegnato` si chiamava `discard_dead`: fino al 25/09/2026 finiva in un
 // DA_SCARTARE "numero inesistente" (vedi `esitoMaiConsegnato` in fondo al file).
-export type FollowupAction = 'non_risposto' | 'mai_consegnato' | 'interrotto_classify' | 'none';
+export type FollowupAction = 'non_risposto' | 'mai_consegnato' | 'apertura_mai_partita' | 'interrotto_classify' | 'none';
 
 /**
  * Decide la classificazione finale per un lead CRM. Pura: delega a
@@ -159,6 +174,8 @@ export function decideFollowupAction(input: {
   gdoPostino?: boolean;
   /** Chat del lancio con fase non terminale: mai classificare. */
   lancio?: boolean;
+  /** `ai_started_at` in ms: serve alla rete "apertura mai partita" del Track A. */
+  arruolatoAtMs?: number | null;
 }): FollowupAction {
   // Chat del lancio Web Dev AI: l'esito lo decide il flusso del lancio (B5). Una
   // classificazione di Mario qui restituirebbe al CRM un lead che sta aspettando il 5/10.
@@ -192,7 +209,9 @@ export function decideFollowupAction(input: {
     msgs: input.msgs,
     seqSids: input.seqSids,
     sequenceEnabled: input.sequenceEnabled ?? false,
+    arruolatoAtMs: input.arruolatoAtMs,
   });
+  if (a.kind === 'apertura_mai_partita') return 'apertura_mai_partita';
   if (a.kind === 'discard_dead') return 'mai_consegnato';
   if (a.kind === 'non_risposto') return 'non_risposto';
   return 'none';
@@ -277,4 +296,23 @@ export function esitoMaiConsegnato(msgs: MsgConErrore[]): { outcome: 'NON_RISPOS
  */
 export function haLettoUnNostroMessaggio(msgs: { direction: string; twilio_status?: string | null }[]): boolean {
   return msgs.some((m) => m.direction === 'out' && m.twilio_status === 'read');
+}
+
+/**
+ * L'esito per una chat a cui il bot non ha MAI scritto (`apertura_mai_partita`): lead
+ * arrivato fuori fascia, apertura differita mai partita entro APERTURA_DIFFERITA_MAX_H.
+ *
+ * Il contratto non ha un'azione "restituisci come fresco": la piu' vicina e'
+ * `NON_RISPOSTO` con la nota che comincia per "WhatsApp mai consegnato", che il CRM
+ * (`isWhatsappMaiConsegnato`, PO 28/10/2026) NON parcheggia ma manda al giro dei GDO,
+ * lead di nuovo NEW con callCount 0. Ed e' vero alla lettera: nessun WhatsApp gli e'
+ * arrivato. `letto:false` per non lasciarlo dedurre. Il prefisso non va toccato: senza,
+ * il lead finisce parcheggiato e non lo chiama nessuno.
+ */
+export function esitoAperturaMaiPartita(): { outcome: 'NON_RISPOSTO'; note: string; letto: false } {
+  return {
+    outcome: 'NON_RISPOSTO',
+    note: "WhatsApp mai consegnato: l'apertura non e' mai partita (lead arrivato fuori fascia, il bot non gli ha mai scritto). Lead nuovo: chiamare a voce.",
+    letto: false,
+  };
 }

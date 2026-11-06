@@ -7,6 +7,7 @@ import {
   ultimaAttivitaMs,
   ultimoMessaggioEInbound,
   esitoMaiConsegnato,
+  esitoAperturaMaiPartita,
   puoAverScrittoPrimaDellAvvio,
   scrittiSenzaRispostaPrimaDellAvvio,
   type CronConvRow,
@@ -467,5 +468,56 @@ describe('haLettoUnNostroMessaggio (contratto v1.11, PO 29/10/2026)', () => {
   });
   it('un messaggio del lead "read" non conta: conta solo il nostro', () => {
     expect(haLettoUnNostroMessaggio([{ direction: 'in', twilio_status: 'read' }])).toBe(false);
+  });
+});
+
+describe('rete "apertura mai partita" (06/11/2026)', () => {
+  const ADESSO = Date.parse('2026-11-10T11:00:00Z'); // 12:00 Rome
+  const fa = (h: number) => new Date(ADESSO - h * H).toISOString();
+  const riga = (over: Partial<CronConvRow>): CronConvRow => ({
+    ai_status: 'active', ai_started_at: fa(13), created_at: fa(13), last_message_at: null,
+    last_inbound_at: null, bot_outcome: null, gdo_agenda_at: null, ...over,
+  });
+
+  it('serveCronologia: 13h senza nessun messaggio dopo l arruolamento → si carica', () => {
+    expect(serveCronologia(riga({}), ADESSO)).toBe(true);
+    // last_message_at anteriore all'arruolamento (giro precedente) vale come "nessun messaggio".
+    expect(serveCronologia(riga({ last_message_at: fa(40) }), ADESSO)).toBe(true);
+  });
+  it('serveCronologia: 13h con l apertura partita → no, come prima (si aspettano le 24h)', () => {
+    expect(serveCronologia(riga({ last_message_at: fa(13) }), ADESSO)).toBe(false);
+  });
+  it('serveCronologia: 11h senza messaggi → no', () => {
+    expect(serveCronologia(riga({ ai_started_at: fa(11), created_at: fa(11) }), ADESSO)).toBe(false);
+  });
+  it('serveCronologia: chat arruolata prima del 06/11 07:00 UTC → resta esclusa sotto le 24h', () => {
+    const vecchia = Date.parse('2026-11-06T05:00:00Z');
+    expect(serveCronologia(riga({ ai_started_at: new Date(vecchia).toISOString() }), vecchia + 13 * H)).toBe(false);
+  });
+  it('serveCronologia: chat handed_off → mai', () => {
+    expect(serveCronologia(riga({ ai_status: 'handed_off' }), ADESSO)).toBe(false);
+  });
+  it('decideFollowupAction: t0 nullo oltre 12h → apertura_mai_partita', () => {
+    expect(decideFollowupAction({
+      nowMs: ADESSO, msgs: [], seqSids: SEQ_SIDS, hasInbound: false, lastInboundAtMs: null,
+      sequenceEnabled: false, arruolatoAtMs: ADESSO - 13 * H,
+    })).toBe('apertura_mai_partita');
+  });
+  it('decideFollowupAction: senza arruolatoAtMs resta il comportamento di prima (none)', () => {
+    expect(decideFollowupAction({
+      nowMs: ADESSO, msgs: [], seqSids: SEQ_SIDS, hasInbound: false, lastInboundAtMs: null, sequenceEnabled: false,
+    })).toBe('none');
+  });
+  it('decideFollowupAction: lead del GDO o con esito → none', () => {
+    const base = { nowMs: ADESSO, msgs: [], seqSids: SEQ_SIDS, hasInbound: false, lastInboundAtMs: null, arruolatoAtMs: ADESSO - 13 * H };
+    expect(decideFollowupAction({ ...base, gdoPostino: true })).toBe('none');
+    expect(decideFollowupAction({ ...base, botOutcome: 'NON_RISPOSTO' })).toBe('none');
+  });
+  it('esitoAperturaMaiPartita: NON_RISPOSTO, letto false, nota col prefisso che il CRM manda ai GDO', () => {
+    const e = esitoAperturaMaiPartita();
+    expect(e.outcome).toBe('NON_RISPOSTO');
+    expect(e.letto).toBe(false);
+    // Stessa regex di isWhatsappMaiConsegnato (CRM, src/lib/bot-fissatore/maiConsegnato.ts).
+    expect(/^\W*whats\s*-?\s*app\W*\s*mai\s+consegnat[oa]/i.test(e.note.trim())).toBe(true);
   });
 });

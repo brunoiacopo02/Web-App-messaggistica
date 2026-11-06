@@ -9,6 +9,7 @@ import {
   firstOutboundAtMs,
   lastOutboundAtMs,
   toRomeIso,
+  APERTURA_DIFFERITA_MAX_H,
   NUDGE1_MAX_H,
   SEQUENCE_END_DAYS,
   TOUCH_OFFSETS_DAYS,
@@ -117,7 +118,13 @@ export async function GET(req: NextRequest) {
   if (!authorized(req)) return new NextResponse('unauthorized', { status: 401 });
 
   // Kill-switch: questa route fa SOLO invii, la classificazione resta a bot-followups.
-  if (process.env.SEQUENCE_ENABLED !== '1') {
+  // Due interruttori dal 06/11/2026. SEQUENCE_ENABLED governa follow-up, nudge e
+  // sollecito (spento dal 02/11, voluto). Le aperture differite — il primo messaggio ai
+  // lead arrivati fra le 23 e le 07 — hanno il loro (APERTURA_DIFFERITA_ENABLED, assente =
+  // accese): legate al primo, dal 03/11 al 06/11 139 lead notturni non sono mai stati aperti.
+  const sequenzaAccesa = process.env.SEQUENCE_ENABLED === '1';
+  const apertureDifferite = process.env.APERTURA_DIFFERITA_ENABLED !== '0';
+  if (!sequenzaAccesa && !apertureDifferite) {
     return NextResponse.json({ ok: true, disabled: true });
   }
 
@@ -183,14 +190,14 @@ export async function GET(req: NextRequest) {
   };
   const newOpeningEnabled = process.env.NEW_OPENING_ENABLED === '1';
   // Sollecito prima del parcheggio (PO 29/10/2026): null = spento, tutto come prima.
-  const sollecito = await caricaContesto(supabase, now);
+  const sollecito = sequenzaAccesa ? await caricaContesto(supabase, now) : null;
   const sollecitoSaltati: Record<string, number> = {};
   let sollecitiInviati = 0;
 
   // Tutte le conv CRM attive, con paginazione (>1000 possibili a regime 50/g).
   const convs: any[] = [];
   for (let fromRow = 0; ; fromRow += 1000) {
-    const { data, error } = await supabase
+    let qConv = supabase
       .from('conversations')
       .select('id, ai_status, ai_started_at, crm_lead_id, crm_funnel, bot_outcome, bot_followups_sent, wa_number, professione, scheda_inviata_at, leads(phone_e164, first_name)')
       .not('crm_lead_id', 'is', null)
@@ -204,8 +211,13 @@ export async function GET(req: NextRequest) {
       .is('ai_paused_at', null)
       // Lancio Web Dev AI: niente aperture, touch o nudge. Il benvenuto differito lo
       // manda /api/cron/lancio-aperture, il resto è silenzio fino al 5/10 (spec §5.1).
-      .or(FILTRO_FUORI_LANCIO)
-      .range(fromRow, fromRow + 999);
+      .or(FILTRO_FUORI_LANCIO);
+    // Sequenza spenta: restano solo le aperture differite, cioe' le chat arruolate da
+    // meno di APERTURA_DIFFERITA_MAX_H. Le altre non avrebbero niente da ricevere.
+    if (!sequenzaAccesa) {
+      qConv = qConv.gte('ai_started_at', new Date(now - APERTURA_DIFFERITA_MAX_H * H).toISOString());
+    }
+    const { data, error } = await qConv.order('id', { ascending: true }).range(fromRow, fromRow + 999);
     // Una query fallita torna `data: null`: senza questa riga il run finisce con
     // "0 invii" e nessuno se ne accorge.
     if (error) { await logCronQueryError(supabase, 'sequence_touches_query_error', error); break; }
@@ -280,8 +292,12 @@ export async function GET(req: NextRequest) {
         // Il touch "Ti ho scritto ieri" e' MARKETING a chi non ha mai risposto: sospeso
         // dal PO il 24/09/2026 per la qualita' dei numeri. Riparte solo con '1'.
         const action = decideTrackA({
-          nowMs: now, msgs, seqSids, sequenceEnabled: true,
-          touchEnabled: process.env.SEQUENCE_TOUCH_ENABLED === '1',
+          nowMs: now, msgs, seqSids, sequenceEnabled: sequenzaAccesa,
+          touchEnabled: sequenzaAccesa && process.env.SEQUENCE_TOUCH_ENABLED === '1',
+          apertureDifferite,
+          // Senza `ai_started_at` l'eta' della chat non si sa: nessuna apertura (mai un
+          // "ciao" differito di giorni). In pratica l'enroll lo scrive sempre.
+          arruolatoAtMs: c.ai_started_at ? Date.parse(c.ai_started_at) : now - APERTURA_DIFFERITA_MAX_H * H,
         });
 
         if (action.kind === 'send_opening') {
@@ -397,7 +413,7 @@ export async function GET(req: NextRequest) {
               }
             }
           }
-        } else if (sollecito && persona === 'marta' && (action.kind === 'wait' || action.kind === 'non_risposto')) {
+        } else if (sequenzaAccesa && sollecito && persona === 'marta' && (action.kind === 'wait' || action.kind === 'non_risposto')) {
           // Sollecito prima del parcheggio: un solo template, dallo stesso numero
           // dell'apertura, 20-30h dopo, in fascia. Il NON_RISPOSTO lo aspetta
           // (bot-followups, `decidiChiusura`).
@@ -445,6 +461,11 @@ export async function GET(req: NextRequest) {
 
       // ── Track B: ha risposto poi silenzio ───────────────────────────────
       trackB++;
+      // Il nudge e' un follow-up: con la sequenza spenta non parte.
+      if (!sequenzaAccesa) {
+        skipped++;
+        continue;
+      }
       const lastInboundAtMs = msgs.reduce<number>(
         (acc, m) => (m.direction === 'in' ? Math.max(acc, Date.parse(m.created_at)) : acc),
         0,
@@ -453,7 +474,7 @@ export async function GET(req: NextRequest) {
         nowMs: now,
         lastInboundAtMs,
         nudgesSent: (c.bot_followups_sent as number | null) ?? 0,
-        sequenceEnabled: true,
+        sequenceEnabled: sequenzaAccesa,
       });
 
       if (action.kind !== 'nudge_free') {
@@ -507,7 +528,7 @@ export async function GET(req: NextRequest) {
 
   await supabase.from('event_log').insert({
     type: 'sequence_run',
-    payload: { sent, skipped, trackA, trackB, ...(sollecito ? { sollecitiInviati, sollecitoSaltati } : {}) } as never,
+    payload: { sent, skipped, trackA, trackB, sequenzaAccesa, apertureDifferite, ...(sollecito ? { sollecitiInviati, sollecitoSaltati } : {}) } as never,
     message: `[sequenza] run: ${sent} invii, ${skipped} skip (A=${trackA}, B=${trackB})`,
     level: 'info',
   });

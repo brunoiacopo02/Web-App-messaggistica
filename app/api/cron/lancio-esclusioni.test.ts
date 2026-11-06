@@ -247,7 +247,9 @@ describe('sequence-touches: niente apertura né touch alle chat del lancio', () 
   const conv = (id: number, lancio: Riga): Riga => ({
     id,
     ai_status: 'active',
-    ai_started_at: null,
+    // Arruolata da un'ora: dal 06/11/2026 l'apertura differita parte solo entro 12h
+    // dall'arruolamento, e senza `ai_started_at` non parte affatto.
+    ai_started_at: new Date(ADESSO.getTime() - H).toISOString(),
     ai_paused_at: null,
     crm_lead_id: `crm-${id}`,
     crm_funnel: null,
@@ -285,6 +287,31 @@ describe('sequence-touches: niente apertura né touch alle chat del lancio', () 
     const destinatari = sendTemplate.mock.calls.map((c) => (c[0] as { to: string }).to);
     expect(destinatari).toEqual([tel(2), tel(3)]);
     expect(destinatari).not.toContain(tel(1));
+  });
+
+  // 06/11/2026: le aperture differite non dipendono piu' da SEQUENCE_ENABLED.
+  it('sequenza spenta: l apertura differita parte lo stesso, ma solo entro 12h dall arruolamento', async () => {
+    process.env.SEQUENCE_ENABLED = '0';
+    stato.righe.conversations = [
+      conv(2, CHIUSO),
+      { ...conv(3, NIENTE_LANCIO), ai_started_at: new Date(ADESSO.getTime() - 13 * H).toISOString() },
+    ];
+    const body = await (await richiestaGet(sequenceTouches, '/api/cron/sequence-touches')).json();
+    expect(body.disabled).toBeUndefined();
+    const destinatari = sendTemplate.mock.calls.map((c) => (c[0] as { to: string }).to);
+    expect(destinatari).toEqual([tel(2)]);
+  });
+
+  it('APERTURA_DIFFERITA_ENABLED=0 e sequenza spenta: la route non fa niente', async () => {
+    process.env.SEQUENCE_ENABLED = '0';
+    process.env.APERTURA_DIFFERITA_ENABLED = '0';
+    try {
+      const body = await (await richiestaGet(sequenceTouches, '/api/cron/sequence-touches')).json();
+      expect(body.disabled).toBe(true);
+      expect(sendTemplate).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.APERTURA_DIFFERITA_ENABLED;
+    }
   });
 });
 

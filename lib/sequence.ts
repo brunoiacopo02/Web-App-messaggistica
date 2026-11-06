@@ -55,6 +55,26 @@ export const TRACKB_GIVEUP_H = 24;
 export const FAST_FAIL_H = 48;
 const MIN_GAP_OUT_H = 20; // anti-doppione tra due out consecutivi
 
+// 06/11/2026 — aperture differite e rete di sicurezza sul "t0 nullo".
+//
+// Dal 02/11 SEQUENCE_ENABLED=0 (follow-up e nudge spenti, voluto) e con lui si era spenta
+// anche l'unica cosa che manda l'apertura ai lead arrivati fra le 23 e le 07: 139 lead
+// notturni dal 03/11 al 06/11 mai aperti, fermi sul bot senza un timer di restituzione
+// (senza un primo outbound `decideTrackA` restituiva `wait` per sempre).
+//
+// APERTURA_DIFFERITA_MAX_H: l'apertura differita parte solo se l'arruolamento ha meno di
+// 12 ore. E' il primo "ciao" a chi ha appena lasciato il numero: dopo mezza giornata non
+// e' piu' una risposta, e' un messaggio a freddo (e al primo giro dopo il fix non devono
+// partire le aperture vecchie di giorni). Chi arriva alle 23 la riceve alle 07 (8h).
+export const APERTURA_DIFFERITA_MAX_H = 12;
+// APERTURA_MAI_PARTITA_H: una chat attiva senza nessun messaggio in uscita dopo 12 ore
+// dall'arruolamento non verra' piu' aperta (vedi sopra): torna al CRM da chiamare.
+export const APERTURA_MAI_PARTITA_H = APERTURA_DIFFERITA_MAX_H;
+// La rete vale solo per le chat arruolate da qui in poi. Quelle di prima (i 119 lead del
+// 03-05/11 e i 20 della notte del 06/11) le ha gestite a mano un'altra sessione: i primi
+// ridati ai GDO e messi in handed_off, i secondi lasciati al bot per decisione del PO.
+export const APERTURA_MAI_PARTITA_DAL_MS = Date.parse('2026-11-06T07:00:00Z');
+
 export type MsgLite = { direction: string; twilio_status: string | null; template_sid: string | null; created_at: string; is_template?: boolean };
 
 const romeFmt = new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', hour: 'numeric', minute: 'numeric', hour12: false });
@@ -136,6 +156,8 @@ export type TrackAAction =
   | { kind: 'send_touch'; touchIndex: number }
   | { kind: 'discard_dead' }
   | { kind: 'non_risposto' }
+  /** Nessun outbound oltre APERTURA_MAI_PARTITA_H dall'arruolamento: al CRM da chiamare. */
+  | { kind: 'apertura_mai_partita' }
   | { kind: 'wait' };
 
 /** Track A: lead CRM mai risposto. Puro. */
@@ -147,12 +169,29 @@ export function decideTrackA(input: {
   /** Il touch di sequenza, separato dalle aperture differite: si puo' sospendere da
    *  solo (`SEQUENCE_TOUCH_ENABLED`). Assente = acceso, come prima. */
   touchEnabled?: boolean;
+  /** Aperture differite (`APERTURA_DIFFERITA_ENABLED`), indipendenti da follow-up e
+   *  nudge dal 06/11/2026. Assente = segue `sequenceEnabled`, come prima. */
+  apertureDifferite?: boolean;
+  /** `ai_started_at` della chat. Se c'e', l'apertura differita parte solo entro
+   *  APERTURA_DIFFERITA_MAX_H e oltre APERTURA_MAI_PARTITA_H scatta la restituzione. */
+  arruolatoAtMs?: number | null;
 }): TrackAAction {
   const { nowMs, msgs, seqSids, sequenceEnabled, touchEnabled = true } = input;
+  const apertureDifferite = input.apertureDifferite ?? sequenceEnabled;
   const t0 = firstOutboundAtMs(msgs);
   if (t0 === null) {
     // Apertura differita: la conv CRM esiste ma non è ancora partito nulla.
-    return inOpeningWindow(nowMs) && sequenceEnabled ? { kind: 'send_opening' } : { kind: 'wait' };
+    const arruolato = input.arruolatoAtMs;
+    if (typeof arruolato === 'number') {
+      const etaH = (nowMs - arruolato) / H;
+      // Rete di sicurezza (06/11/2026): troppo tardi per aprirla, nessun timer la
+      // restituirebbe mai. Vale a interruttori spenti: e' una classificazione, non un invio.
+      if (etaH >= APERTURA_MAI_PARTITA_H) {
+        return arruolato >= APERTURA_MAI_PARTITA_DAL_MS ? { kind: 'apertura_mai_partita' } : { kind: 'wait' };
+      }
+      return inOpeningWindow(nowMs) && apertureDifferite ? { kind: 'send_opening' } : { kind: 'wait' };
+    }
+    return inOpeningWindow(nowMs) && apertureDifferite ? { kind: 'send_opening' } : { kind: 'wait' };
   }
   const touches = countSequenceTouches(msgs, seqSids);
   // Fast-fail: già ritentato almeno una volta e mai consegnato nulla → numero morto.

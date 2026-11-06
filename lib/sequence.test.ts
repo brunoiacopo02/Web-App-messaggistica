@@ -417,3 +417,51 @@ describe('nudge scheda', () => {
     expect(usaNudgeScheda({ scheda_inviata_at: null, bot_outcome: null, professione: 'copywriter' })).toBeNull();
   });
 });
+
+// 06/11/2026: aperture differite separate da SEQUENCE_ENABLED, mai oltre 12h
+// dall'arruolamento, e rete per la chat che non ha mai avuto un messaggio in uscita.
+describe('decideTrackA — aperture differite con eta e rete "apertura mai partita"', () => {
+  // Novembre: Europe/Rome = UTC+1. 08:00 Rome, dopo la data di partenza della rete.
+  const MATTINA = Date.parse('2026-11-10T07:00:00Z');
+  const base = { msgs: [] as MsgLite[], seqSids: SEQ };
+
+  it('arrivato alle 23 (8h fa), sequenza spenta ma aperture accese → send_opening', () => {
+    expect(decideTrackA({ ...base, nowMs: MATTINA, sequenceEnabled: false, apertureDifferite: true, arruolatoAtMs: MATTINA - 8 * H }))
+      .toEqual({ kind: 'send_opening' });
+  });
+  it('aperture spente con APERTURA_DIFFERITA_ENABLED=0 → wait anche a sequenza accesa', () => {
+    expect(decideTrackA({ ...base, nowMs: MATTINA, sequenceEnabled: true, apertureDifferite: false, arruolatoAtMs: MATTINA - 8 * H }))
+      .toEqual({ kind: 'wait' });
+  });
+  it('11h59 dall arruolamento → ancora send_opening', () => {
+    expect(decideTrackA({ ...base, nowMs: MATTINA, sequenceEnabled: false, apertureDifferite: true, arruolatoAtMs: MATTINA - 12 * H + 60_000 }))
+      .toEqual({ kind: 'send_opening' });
+  });
+  it('12h dall arruolamento → niente apertura, restituzione al CRM', () => {
+    expect(decideTrackA({ ...base, nowMs: MATTINA, sequenceEnabled: false, apertureDifferite: true, arruolatoAtMs: MATTINA - 12 * H }))
+      .toEqual({ kind: 'apertura_mai_partita' });
+  });
+  it('la rete scatta anche a interruttori tutti spenti (e una classificazione, non un invio)', () => {
+    expect(decideTrackA({ ...base, nowMs: MATTINA, sequenceEnabled: false, apertureDifferite: false, arruolatoAtMs: MATTINA - 30 * H }))
+      .toEqual({ kind: 'apertura_mai_partita' });
+  });
+  it('mai un apertura "differita" di giorni', () => {
+    expect(decideTrackA({ ...base, nowMs: MATTINA, sequenceEnabled: true, apertureDifferite: true, arruolatoAtMs: MATTINA - 3 * 24 * H }))
+      .not.toEqual({ kind: 'send_opening' });
+  });
+  it('chat arruolate prima del 06/11 07:00 UTC: niente rete (le ha gestite a mano un altra sessione)', () => {
+    const vecchia = Date.parse('2026-11-04T02:00:00Z');
+    expect(decideTrackA({ ...base, nowMs: MATTINA, sequenceEnabled: false, apertureDifferite: true, arruolatoAtMs: vecchia }))
+      .toEqual({ kind: 'wait' });
+  });
+  it('notte fonda, arruolato 2h fa → wait (si apre alle 07)', () => {
+    const notte = Date.parse('2026-11-10T02:00:00Z'); // 03:00 Rome
+    expect(decideTrackA({ ...base, nowMs: notte, sequenceEnabled: false, apertureDifferite: true, arruolatoAtMs: notte - 2 * H }))
+      .toEqual({ kind: 'wait' });
+  });
+  it('con un outbound gia partito la rete non c entra', () => {
+    const msgs = [out(13, 'delivered', 'HXopening', MATTINA)];
+    expect(decideTrackA({ msgs, seqSids: SEQ, nowMs: MATTINA, sequenceEnabled: false, apertureDifferite: true, arruolatoAtMs: MATTINA - 13 * H }))
+      .toEqual({ kind: 'wait' });
+  });
+});

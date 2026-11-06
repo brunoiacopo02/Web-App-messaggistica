@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendOutcome } from '@/lib/bot-outcome';
 import { caricaContesto as caricaContestoSollecito, decidiChiusura } from '@/lib/sollecito-parcheggio';
-import { decideFollowupAction, esitoMaiConsegnato, haLettoUnNostroMessaggio, postinoGdo, serveCronologia, ultimaAttivitaMs, puoAverScrittoPrimaDellAvvio, scrittiSenzaRispostaPrimaDellAvvio, ARRUOLAMENTO_BUFFER_MS } from '@/lib/bot-followups';
+import { decideFollowupAction, esitoAperturaMaiPartita, esitoMaiConsegnato, haLettoUnNostroMessaggio, postinoGdo, serveCronologia, ultimaAttivitaMs, puoAverScrittoPrimaDellAvvio, scrittiSenzaRispostaPrimaDellAvvio, ARRUOLAMENTO_BUFFER_MS } from '@/lib/bot-followups';
 import { classifyInterrupted } from '@/lib/interrotto-note';
 import { buildConfermaPersaNote } from '@/lib/bot-outcome-rules';
 import { paroleDellaRichiesta } from '@/lib/contatti-umani';
@@ -310,6 +310,7 @@ export async function GET(req: NextRequest) {
         // Oggi ridondante (il blocco 2a-bis ha gia' fatto `continue`), e resta: la
         // guardia del modulo puro non deve dipendere dall'ordine dei blocchi qui.
         lancio: lancioInCorso(c),
+        arruolatoAtMs: c.ai_started_at ? Date.parse(c.ai_started_at) : null,
       });
 
       // Ci aveva scritto lui, prima dell'arruolamento, e nessuno gli aveva risposto: e' la
@@ -354,7 +355,21 @@ export async function GET(req: NextRequest) {
         }
       }
 
-      if (action === 'mai_consegnato') {
+      if (action === 'apertura_mai_partita') {
+        // Il bot non gli ha mai scritto (apertura differita mai partita, 06/11/2026): al
+        // CRM come lead da chiamare, senza scrivergli. Vedi `esitoAperturaMaiPartita`.
+        const r = await sendOutcome(supabase, c.id, esitoAperturaMaiPartita());
+        await supabase.from('event_log').insert({
+          type: 'apertura_mai_partita_restituita',
+          payload: {
+            conversationId: c.id, crmLeadId: c.crm_lead_id ?? null, aiStartedAt: c.ai_started_at ?? null,
+            sent: r.sent, status: r.status ?? null, error: r.error ?? null,
+          } as never,
+          message: `[bot-followups] conv ${c.id}: apertura mai partita, restituita al CRM da chiamare (${r.sent ? 'ok' : r.error ?? r.status ?? 'errore'})`,
+          level: r.sent ? 'info' : 'warn',
+        });
+        report.push({ id: c.id, action });
+      } else if (action === 'mai_consegnato') {
         // WhatsApp non ha consegnato niente: quasi sempre il numero non ha WhatsApp
         // (63024), non è inesistente. Decisione PO 25/09/2026: mai scartarlo, torna a
         // un GDO da chiamare a voce. Era un DA_SCARTARE "numero inesistente" con una
