@@ -42,7 +42,7 @@ import type { LancioInfo } from './lancio-crm';
 import { mittenteDiConversazione } from './mittente';
 import { brochureContextNote, professioniContextNote, professioniVince, richiestaSchedaFuoriFunnel, schedaDaInviare, schedaSubito } from './professioni-nota';
 import { isSlugProfessione, PROVENIENZA_PROFESSIONI } from './professioni';
-import { inviaScheda, testoScheda } from './scheda-invio';
+import { inviaScheda } from './scheda-invio';
 import { fissatoIlDi } from './noemi-quando';
 import {
   dataCallDelBot,
@@ -1108,9 +1108,9 @@ export async function drainMarioReplies(
         if (esitoSubito === 'inviata') {
           schedaAppenaInviata = true;
           schedaPartitaAlMs = Date.now();
-          // La cronologia del modello e' stata letta prima: il PDF ci entra a mano, cosi'
-          // Mario vede che e' partito e non lo ripete.
-          history.push({ role: 'assistant', content: testoScheda(slugSubito) });
+          // Niente turno assistant in coda alla cronologia: claude-sonnet-5 rifiuta il
+          // prefill (400, 17/17 schede "subito" dal 31/10/2026). Che il PDF e' partito
+          // Mario lo legge dalla nota Professioni (`appenaInviata`, qui sotto).
         }
       }
       const notaProfessioni = vinceProfessioni

@@ -5,6 +5,7 @@ import { bookingSlotsContext, computeBookingDays } from './booking-slots';
 import { sanitizeOutbound } from './outbound-sanitize';
 import { isoWithOffset } from './bot-contract';
 import { isSlugProfessione, type SlugProfessione } from './professioni';
+import { getSupabaseAdmin } from './supabase/admin';
 
 export const MARIO_MODEL = 'claude-sonnet-5';
 
@@ -159,6 +160,22 @@ export const GDO_CONTEXT_NOTE =
 export const MEDIA_SENZA_TESTO =
   '[il lead ha inviato un contenuto senza testo: una foto, uno sticker, un video o un documento]';
 
+/** Traccia in `event_log` un chiamante che ha passato una cronologia finita su un turno
+ *  assistant: la richiesta parte lo stesso (vedi `generateMarioReply`), ma il chiamante
+ *  va corretto. Un log che fallisce non deve mai fermare la risposta al lead. */
+async function logTurnoAssistantFinaleRimosso(coda: readonly string[]): Promise<void> {
+  try {
+    await getSupabaseAdmin().from('event_log').insert({
+      type: 'mario_turno_assistant_finale_rimosso',
+      payload: { turni: coda.length, anteprima: coda.map((c) => c.slice(0, 120)) } as never,
+      message: `Cronologia finita su ${coda.length} turno/i assistant: spostati nella nota di sistema`,
+      level: 'warn',
+    });
+  } catch {
+    // niente: il log e' un di piu'
+  }
+}
+
 /** Genera la prossima risposta del bot data la cronologia. Inietta l'ora di Roma.
  *  `personaName` (default 'Mario') parametrizza SOLO il nome nel system prompt.
  *  `contextNote` aggiunge in coda al system un contesto specifico della conversazione.
@@ -196,13 +213,27 @@ export async function generateMarioReply(
     if (t.role === 'user') return [{ role: 'user' as const, content: MEDIA_SENZA_TESTO }];
     return []; // un turno di Mario senza testo non ha nulla da dire: via.
   });
+  // La conversazione non puo' finire su un turno di Mario: claude-sonnet-5 rifiuta la
+  // richiesta intera con 400 "does not support assistant message prefill". Succedeva
+  // con la scheda "subito" del funnel Professioni (31/10-06/11/2026: 17 su 17, il lead
+  // riceveva il PDF senza una riga). I turni di coda escono dai messaggi e Mario li
+  // legge come nota di sistema, cosi' sa cosa ha gia' mandato e non lo ripete.
+  const codaAssistant: string[] = [];
+  while (turni.length > 0 && turni[turni.length - 1].role === 'assistant') {
+    codaAssistant.unshift(turni.pop()!.content);
+  }
+  if (codaAssistant.length > 0) await logTurnoAssistantFinaleRimosso(codaAssistant);
+  const notaCoda = codaAssistant.length > 0
+    ? `GIA' INVIATO DA TE DOPO L'ULTIMO MESSAGGIO DEL LEAD (e' gia' in chat, non ripeterlo):\n${codaAssistant.map((c) => `«${c}»`).join('\n')}`
+    : null;
   const messages =
     turni.length > 0
       ? turni
       : [{ role: 'user' as const, content: 'Inizia la conversazione presentandoti.' }];
 
   const now = opts?.now ?? new Date();
-  const contextNote = opts?.contextNote ? `\n\n${opts.contextNote}` : '';
+  const note = [opts?.contextNote, notaCoda].filter(Boolean).join('\n\n');
+  const contextNote = note ? `\n\n${note}` : '';
   // I due giorni si calcolano UNA volta e si passano al blocco del prompt, così quelli
   // che il modello legge sono esattamente quelli che restituiamo al chiamante: sono
   // loro a dover arrivare fino alla guardia sull'esito, non un secondo calcolo fatto

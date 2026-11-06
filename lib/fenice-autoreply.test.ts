@@ -2820,7 +2820,7 @@ describe('drainMarioReplies — funnel Professioni: la scheda del corso (Task 7)
     expect(calls.events.find((e) => e.type === 'scheda_inviata')?.payload).toMatchObject({ slug: 'copywriter', momento: 'subito' });
   }, 20_000);
 
-  it('(a2) frase del link: Mario vede la scheda in cronologia e la nota dice che e\' appena arrivata', async () => {
+  it("(a2) frase del link: la cronologia finisce sul lead (niente prefill) e la nota dice che la scheda e' appena arrivata", async () => {
     vi.mocked(generateMarioReply).mockResolvedValueOnce({
       visibleReply: "Dagli un'occhiata con calma\nIntanto dimmi, tu attualmente lavori?", appointmentFixed: false, passToHuman: false, videoWatched: false,
     });
@@ -2829,7 +2829,9 @@ describe('drainMarioReplies — funnel Professioni: la scheda del corso (Task 7)
     await drainMarioReplies(supabase, 70, '+391234567890', () => 0, 0);
 
     const [history, opts] = vi.mocked(generateMarioReply).mock.calls[0] as [Array<{ role: string; content: string }>, { contextNote?: string }];
-    expect(history.at(-1)).toEqual({ role: 'assistant', content: 'Ecco la scheda del corso di Copywriter 👇' });
+    // claude-sonnet-5 rifiuta una cronologia che finisce su assistant (400 prefill): il PDF
+    // partito lo racconta la nota, non un turno finto in coda.
+    expect(history.at(-1)?.role).toBe('user');
     expect(opts.contextNote).toContain('APPENA ARRIVATA');
     expect(opts.contextNote).not.toContain('prima vuoi capire');
     const invii = vi.mocked(sendFreeText).mock.calls.map((c) => c[0] as { body: string; mediaUrl?: string[] });

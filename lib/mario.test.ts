@@ -7,11 +7,17 @@ vi.mock('@anthropic-ai/sdk', () => ({
   },
 }));
 
+const eventInsert = vi.fn(async (_row: Record<string, unknown>) => ({ error: null }));
+vi.mock('./supabase/admin', () => ({
+  getSupabaseAdmin: () => ({ from: () => ({ insert: eventInsert }) }),
+}));
+
 import { parseMarioReply, generateMarioReply, GDO_CONTEXT_NOTE } from './mario';
 import { MARIO_SYSTEM_PROMPT, buildMarioSystem } from './mario-prompt';
 
 beforeEach(() => {
   messagesCreate.mockReset();
+  eventInsert.mockClear();
   process.env.ANTHROPIC_API_KEY = 'sk-test';
 });
 
@@ -150,6 +156,48 @@ describe('generateMarioReply', () => {
     expect(messagesCreate.mock.calls[0][0].messages).toEqual([
       { role: 'user', content: 'Inizia la conversazione presentandoti.' },
     ]);
+  });
+
+  // La scheda "subito" del funnel Professioni metteva il PDF in coda alla cronologia come
+  // turno assistant: claude-sonnet-5 rispondeva 400 "does not support assistant message
+  // prefill" (17/17 dal 31/10/2026) e il lead riceveva il PDF senza una riga di testo.
+  it("cronologia finita su assistant: l'ultimo messaggio resta del lead, la coda va nella nota", async () => {
+    messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'Ok!' }] });
+    await generateMarioReply([
+      { role: 'user', content: 'mi mandi la scheda?' },
+      { role: 'assistant', content: 'Ecco la scheda del corso 👇' },
+    ], { contextNote: 'NOTA DEL TURNO' });
+    const arg = messagesCreate.mock.calls[0][0];
+    expect(arg.messages.at(-1).role).toBe('user');
+    expect(arg.messages).toEqual([{ role: 'user', content: 'mi mandi la scheda?' }]);
+    const variabile = arg.system[1].text as string;
+    expect(variabile).toContain('NOTA DEL TURNO');
+    expect(variabile).toContain('«Ecco la scheda del corso 👇»');
+    expect(eventInsert).toHaveBeenCalledTimes(1);
+    expect(eventInsert.mock.calls[0][0]).toMatchObject({ type: 'mario_turno_assistant_finale_rimosso', level: 'warn' });
+  });
+
+  it("piu' turni assistant in coda: escono tutti, nell'ordine", async () => {
+    messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'Ok!' }] });
+    await generateMarioReply([
+      { role: 'user', content: 'ciao' },
+      { role: 'assistant', content: 'primo' },
+      { role: 'assistant', content: 'secondo' },
+    ]);
+    const arg = messagesCreate.mock.calls[0][0];
+    expect(arg.messages.at(-1).role).toBe('user');
+    const variabile = arg.system[1].text as string;
+    expect(variabile.indexOf('«primo»')).toBeLessThan(variabile.indexOf('«secondo»'));
+  });
+
+  it("cronologia gia' finita sul lead: nessuna nota e nessun log", async () => {
+    messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'Ok!' }] });
+    await generateMarioReply([
+      { role: 'assistant', content: 'Ciao, sono Mario' },
+      { role: 'user', content: 'ciao' },
+    ]);
+    expect(messagesCreate.mock.calls[0][0].system[1].text).not.toContain("GIA' INVIATO DA TE");
+    expect(eventInsert).not.toHaveBeenCalled();
   });
 
   it('tollera un content nullo arrivato dal database', async () => {
