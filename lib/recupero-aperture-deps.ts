@@ -10,7 +10,7 @@ import { sendOutcome } from './bot-outcome';
 import { esitoAperturaMaiPartita } from './bot-followups';
 import { inviaAperturaMario } from './apertura-mario-invio';
 import { eNumeroDelBot } from './mittente';
-import { getTettiNumeri, getStatoQualitaNumeri, eHighEFuoriPausa, tettoDi } from './tetti-numeri';
+import { getTettiNumeri, getStatoQualitaNumeri, tettoDi } from './tetti-numeri';
 import { apertureMarioOggi, inizioGiornataRoma } from './bot2-tetto';
 import { sidAperturaMario } from './scelta-mittente';
 import { credenzialiPerMittente, eSuAltroAccount } from './twilio-account';
@@ -20,7 +20,9 @@ import {
   EVENTO_RECUPERO_SALTATA,
   RECUPERO_CODA_DAL_MS,
   RECUPERO_FINO_AL_MS,
+  qualitaAmmessaRecupero,
   type ChatCoda,
+  type NumeroRecupero,
   type ConfigRecupero,
   type ConteggioMessaggi,
   type DepsRecupero,
@@ -71,8 +73,8 @@ export function depsRecupero(supabase: Supa, cfg: ConfigRecupero, adesso: Date):
           .or(FILTRO_FUORI_LANCIO)
           .lt('ai_started_at', new Date(RECUPERO_FINO_AL_MS).toISOString())
           .gte('ai_started_at', new Date(RECUPERO_CODA_DAL_MS).toISOString())
-          .order('ai_started_at', { ascending: false })
-          .order('id', { ascending: false })
+          .order('ai_started_at', { ascending: true })
+          .order('id', { ascending: true })
           .range(from, to) as never,
       );
       return righe.map((r): ChatCoda => {
@@ -119,7 +121,7 @@ export function depsRecupero(supabase: Supa, cfg: ConfigRecupero, adesso: Date):
     stopCrm: (crmLeadId) => stopDalCrmPerLead(supabase, crmLeadId),
 
     numeriUtilizzabili: async () => {
-      const ok: { numero: string; carico: number }[] = [];
+      const ok: NumeroRecupero[] = [];
       const scarti: { numero: string; motivo: string }[] = [];
       const tetti = await getTettiNumeri(supabase);
       const stato = await getStatoQualitaNumeri(supabase);
@@ -130,7 +132,10 @@ export function depsRecupero(supabase: Supa, cfg: ConfigRecupero, adesso: Date):
         if (!eNumeroDelBot(numero)) { scarti.push({ numero, motivo: 'non_del_bot' }); continue; }
         if (tetti === null) { scarti.push({ numero, motivo: 'tetti_illeggibili' }); continue; }
         if (tettoDi(tetti, numero) <= 0) { scarti.push({ numero, motivo: 'tetto_zero' }); continue; }
-        if (!eHighEFuoriPausa(stato, numero, oggi, ieri)) { scarti.push({ numero, motivo: 'non_high_o_in_pausa' }); continue; }
+        const tettoRecupero = cfg.tettiNumero.get(numero);
+        if (!qualitaAmmessaRecupero(stato, numero, oggi, ieri, tettoRecupero)) {
+          scarti.push({ numero, motivo: 'non_high_o_in_pausa' }); continue;
+        }
         if (eSuAltroAccount(numero) && credenzialiPerMittente(numero)?.sid === process.env.TWILIO_ACCOUNT_SID) {
           scarti.push({ numero, motivo: 'credenziali_mancanti' }); continue;
         }
@@ -144,7 +149,10 @@ export function depsRecupero(supabase: Supa, cfg: ConfigRecupero, adesso: Date):
         const mario = await apertureMarioOggi(supabase as never, numero, adesso);
         const recuperi = await contaEventiOggi(supabase, EVENTO_RECUPERO_INVIATA, { numero }, adesso);
         if (mario === null || recuperi === null) { scarti.push({ numero, motivo: 'conteggio_fallito' }); continue; }
-        ok.push({ numero, carico: mario + recuperi });
+        if (tettoRecupero !== undefined && recuperi >= tettoRecupero) {
+          scarti.push({ numero, motivo: 'tetto_recupero_raggiunto' }); continue;
+        }
+        ok.push({ numero, carico: mario + recuperi, recuperiOggi: recuperi, tettoRecupero });
       }
       return { ok, scarti };
     },

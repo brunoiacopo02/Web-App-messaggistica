@@ -10,14 +10,19 @@
  * Regole:
  * - Coda: chat attive di lead CRM, arruolate prima di APERTURA_MAI_PARTITA_DAL_MS (e non
  *   prima di RECUPERO_CODA_DAL_MS), senza alcun messaggio in uscita ne' in entrata, dalla
- *   PIU' RECENTE alla piu' vecchia.
+ *   PIU' VECCHIA alla piu' recente (PO 06/11 sera: si salvano prima quelle che stanno per
+ *   superare i 5 giorni).
  * - Solo 09:30-20:30 Roma, al massimo RECUPERO_MAX_PER_GIRO per giro di cron, fino a
  *   `RECUPERO_APERTURE_GIORNALIERE` al giorno (assente/0 = spento). Il conteggio e' a
  *   parte (evento `recupero_apertura_inviata`) e NON scrive `mittente_apertura`: non ruba
  *   posti ai freschi nei tetti per numero.
  * - Numeri: solo quelli di `RECUPERO_NUMERI`, mai 8061 ne' 3199 (ne' il primario), HIGH
  *   e fuori pausa, con tetto > 0 in `tetti_numeri`, template spedibile. Vince il meno
- *   carico oggi (aperture di Mario + recuperi). Prima dell'invio la chat passa a quel
+ *   carico oggi (aperture di Mario + recuperi), senza superare il tetto di recupero del
+ *   numero (`RECUPERO_TETTI_NUMERO`, es. "+393522018718:25,+393522070047:20"; un numero
+ *   non elencato ha solo il tetto totale, uno a 0 non recupera). Un numero elencato li' con
+ *   tetto > 0 e qualita' UNKNOWN mai valutata (nessuna lettura diversa da UNKNOWN) e'
+ *   ammesso: sono i numeri nuovi, in prova con pochi invii. MEDIUM/LOW/pausa mai. Prima dell'invio la chat passa a quel
  *   numero: lecito, nessun messaggio e' mai partito, non c'e' un thread da spezzare.
  * - Oltre RECUPERO_MAX_GIORNI dall'arruolamento non si apre piu': la chat torna al CRM
  *   come lead mai contattato, con lo stesso esito della rete (`esitoAperturaMaiPartita`),
@@ -49,7 +54,28 @@ export const EVENTO_RECUPERO_RUN = 'recupero_aperture_run';
 
 const soloNum = (n: string | null | undefined) => (n ?? '').trim().replace(/^whatsapp:/i, '');
 
-export type ConfigRecupero = { tetto: number; numeri: string[]; maxPerGiro: number };
+export type ConfigRecupero = {
+  tetto: number;
+  numeri: string[];
+  maxPerGiro: number;
+  /** Tetto giornaliero di recupero per numero (`whatsapp:+39...`). Assente = solo il totale. */
+  tettiNumero: Map<string, number>;
+};
+
+/** "+39...:25,+39...:20" -> Map(`whatsapp:+39...` -> 25). Voci malformate o negative ignorate. */
+export function parseTettiRecupero(raw: string | undefined): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const voce of (raw ?? '').split(',')) {
+    const i = voce.lastIndexOf(':');
+    if (i <= 0) continue;
+    const n = soloNum(voce.slice(0, i));
+    const grezzo = voce.slice(i + 1).trim();
+    const v = grezzo === '' ? NaN : Number(grezzo);
+    if (!n || !/^\+\d{6,15}$/.test(n) || !Number.isInteger(v) || v < 0) continue;
+    out.set(`whatsapp:${n}`, v);
+  }
+  return out;
+}
 
 /** Legge le env. `tetto` 0 = spento. Numeri in forma `whatsapp:+39…`, deduplicati. */
 export function configRecupero(env: Record<string, string | undefined> = process.env): ConfigRecupero {
@@ -64,7 +90,33 @@ export function configRecupero(env: Record<string, string | undefined> = process
     visti.add(n);
     numeri.push(`whatsapp:${n}`);
   }
-  return { tetto, numeri, maxPerGiro: RECUPERO_MAX_PER_GIRO };
+  const tettiNumero = parseTettiRecupero(env.RECUPERO_TETTI_NUMERO);
+  // Un numero col tetto di recupero a 0 non recupera: lo si toglie subito.
+  const ammessi = numeri.filter((n) => tettiNumero.get(n) !== 0);
+  return { tetto, numeri: ammessi, maxPerGiro: RECUPERO_MAX_PER_GIRO, tettiNumero };
+}
+
+export type QualitaLetta = { storico: Record<string, Record<string, string>>; pause: Record<string, unknown> } | null;
+
+/**
+ * Pura: la qualita' del numero ammette il recupero? HIGH (oggi, o ieri se oggi manca) e
+ * fuori pausa, come per le aperture. In piu' (PO 06/11): UNKNOWN se il numero ha un tetto
+ * di recupero > 0 e non e' MAI stato letto diverso da UNKNOWN (numero nuovo, in prova).
+ * Stato illeggibile, pausa, MEDIUM, LOW, lettura vecchia = no.
+ */
+export function qualitaAmmessaRecupero(
+  stato: QualitaLetta, numero: string, oggi: string, ieri: string, tettoRecupero: number | undefined,
+): 'HIGH' | 'UNKNOWN_IN_PROVA' | null {
+  if (!stato) return null;
+  const n = soloNum(numero);
+  if (stato.pause[n]) return null;
+  const giorni = stato.storico[n] ?? {};
+  const ultima = giorni[oggi] ?? giorni[ieri];
+  if (ultima === 'HIGH') return 'HIGH';
+  if (ultima === 'UNKNOWN' && (tettoRecupero ?? 0) > 0 && Object.values(giorni).every((q) => q === 'UNKNOWN')) {
+    return 'UNKNOWN_IN_PROVA';
+  }
+  return null;
 }
 
 /** 09:30 (inclusa) – 20:30 (esclusa), Europe/Rome. */
@@ -106,11 +158,33 @@ export function decidiChat(c: ChatCoda, m: ConteggioMessaggi, nowMs: number): De
   return { azione: 'invia' };
 }
 
-/** Pura: il numero meno carico; a parita' l'ordine di `RECUPERO_NUMERI`. */
-export function scegliNumeroRecupero(numeri: { numero: string; carico: number }[]): string | null {
-  if (numeri.length === 0) return null;
-  const ordinati = numeri.map((n, i) => ({ ...n, i })).sort((a, b) => (a.carico - b.carico) || (a.i - b.i));
-  return ordinati[0].numero;
+export type NumeroRecupero = {
+  numero: string;
+  /** Aperture di Mario + recuperi di oggi: decide chi e' il meno carico. */
+  carico: number;
+  /** Recuperi di oggi da questo numero. */
+  recuperiOggi?: number;
+  /** Tetto di recupero del numero; assente = nessun tetto per numero. */
+  tettoRecupero?: number;
+};
+
+/** Pura: il numero meno carico fra quelli sotto il proprio tetto di recupero; a parita' l'ordine di `RECUPERO_NUMERI`. */
+export function scegliNumeroRecupero(numeri: NumeroRecupero[]): string | null {
+  const liberi = numeri
+    .map((n, i) => ({ ...n, i }))
+    .filter((n) => n.tettoRecupero === undefined || (n.recuperiOggi ?? 0) < n.tettoRecupero);
+  if (liberi.length === 0) return null;
+  liberi.sort((a, b) => (a.carico - b.carico) || (a.i - b.i));
+  return liberi[0].numero;
+}
+
+/** Pura: la coda dalla piu' vecchia (per arruolamento) alla piu' recente; a parita' l'id. */
+export function ordinaCoda(coda: ChatCoda[]): ChatCoda[] {
+  const t = (c: ChatCoda) => {
+    const v = c.ai_started_at ? Date.parse(c.ai_started_at) : NaN;
+    return Number.isNaN(v) ? Number.MAX_SAFE_INTEGER : v;
+  };
+  return [...coda].sort((a, b) => (t(a) - t(b)) || (a.id - b.id));
 }
 
 export type EsitoInvio = { ok: boolean; capped?: boolean; error?: string };
@@ -118,13 +192,13 @@ export type EsitoInvio = { ok: boolean; capped?: boolean; error?: string };
 export type DepsRecupero = {
   /** Recuperi gia' inviati oggi (giorno di Roma). null = conteggio fallito: niente invii. */
   contaInviateOggi: () => Promise<number | null>;
-  /** La coda gia' filtrata sulle colonne, dalla piu' recente. */
+  /** La coda gia' filtrata sulle colonne (l'ordine lo rifa' `ordinaCoda`). */
   caricaCoda: () => Promise<ChatCoda[]>;
   /** Messaggi di sempre per chat. Una chat assente dalla mappa = nessun messaggio. null = lettura fallita. */
   contaMessaggi: (ids: number[]) => Promise<Map<number, ConteggioMessaggi> | null>;
   stopCrm: (crmLeadId: string | null) => Promise<string | null>;
   /** Numeri ammessi oggi, col carico; gli scarti finiscono nel riepilogo del run. */
-  numeriUtilizzabili: () => Promise<{ ok: { numero: string; carico: number }[]; scarti: { numero: string; motivo: string }[] }>;
+  numeriUtilizzabili: () => Promise<{ ok: NumeroRecupero[]; scarti: { numero: string; motivo: string }[] }>;
   riassegnaNumero: (id: number, numero: string) => Promise<boolean>;
   invia: (c: ChatCoda, numero: string) => Promise<EsitoInvio & { configMancante?: boolean }>;
   restituisci: (c: ChatCoda) => Promise<{ sent: boolean; status?: number; error?: string }>;
@@ -163,7 +237,7 @@ export async function eseguiRecupero(cfg: ConfigRecupero, deps: DepsRecupero, no
   let residuo = giaOggi === null ? 0 : Math.max(0, cfg.tetto - giaOggi);
   let perGiro = cfg.maxPerGiro;
 
-  const coda = await deps.caricaCoda();
+  const coda = ordinaCoda(await deps.caricaCoda());
   const msgs = await deps.contaMessaggi(coda.map((c) => c.id));
   if (msgs === null) {
     await deps.log(EVENTO_RECUPERO_RUN, 'warn', { errore: 'lettura_messaggi_fallita' },
@@ -172,7 +246,7 @@ export async function eseguiRecupero(cfg: ConfigRecupero, deps: DepsRecupero, no
   }
 
   // I numeri si leggono solo se c'e' qualcosa da mandare.
-  let numeri: { numero: string; carico: number }[] | null = null;
+  let numeri: NumeroRecupero[] | null = null;
   let senzaNumero = false;
 
   for (const c of coda) {
@@ -208,8 +282,10 @@ export async function eseguiRecupero(cfg: ConfigRecupero, deps: DepsRecupero, no
     const numero = scegliNumeroRecupero(numeri);
     if (!numero) {
       senzaNumero = true;
-      await deps.log(EVENTO_RECUPERO_SALTATA, 'warn', { motivo: 'nessun_numero', scarti: report.scartiNumeri ?? [] },
-        '[recupero-aperture] nessun numero ammesso utilizzabile (HIGH, fuori pausa, tetto > 0, template spedibile): nessun invio');
+      await deps.log(EVENTO_RECUPERO_SALTATA, 'warn', {
+        motivo: 'nessun_numero', scarti: report.scartiNumeri ?? [],
+        aTetto: numeri.map((x) => ({ numero: x.numero, recuperiOggi: x.recuperiOggi ?? 0, tettoRecupero: x.tettoRecupero ?? null })),
+      }, '[recupero-aperture] nessun numero ammesso sotto il proprio tetto di recupero (HIGH o UNKNOWN in prova, fuori pausa, tetto > 0, template spedibile): nessun altro invio');
       report.saltate.nessun_numero = (report.saltate.nessun_numero ?? 0) + 1;
       continue;
     }
@@ -234,7 +310,7 @@ export async function eseguiRecupero(cfg: ConfigRecupero, deps: DepsRecupero, no
     residuo--;
     perGiro--;
     const voce = numeri.find((x) => x.numero === numero);
-    if (voce) voce.carico++;
+    if (voce) { voce.carico++; voce.recuperiOggi = (voce.recuperiOggi ?? 0) + 1; }
     await deps.log(EVENTO_RECUPERO_INVIATA, 'info', {
       conversationId: c.id, crmLeadId: c.crm_lead_id, numero, numeroPrima,
       aiStartedAt: c.ai_started_at,
