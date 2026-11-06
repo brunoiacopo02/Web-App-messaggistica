@@ -357,6 +357,8 @@ type ClaimedRow = {
   professione?: string | null;
   scheda_inviata_at?: string | null;
   crm_funnel?: string | null;
+  /** Il numero della chat: il drain lo rilegge prima di rispondere. */
+  wa_number?: string | null;
 };
 type FakeMsgRow = { direction: string; body: string; template_sid: string | null; created_at: string; id?: number };
 
@@ -399,6 +401,7 @@ function makeDrainSupabase(claimedRow: ClaimedRow, initialRows: FakeMsgRow[]) {
                   lancio_slug: claimedRow.lancio_slug ?? null,
                   lancio_fase: claimedRow.lancio_fase ?? null,
                   lancio_info: claimedRow.lancio_info ?? null,
+                  wa_number: claimedRow.wa_number ?? null,
                 },
                 error: null,
               }),
@@ -3948,5 +3951,65 @@ describe('drainMarioReplies — il bot sposta anche le call che ha fissato lui (
     vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('ok'));
     await drainMarioReplies(supabase, 93, '+391234567890', () => 0);
     expect(contesto()).not.toContain('SPOSTAMENTO DELLA CALL');
+  });
+});
+
+describe('drainMarioReplies — il numero della risposta e quello dell ultimo messaggio del lead', () => {
+  const N3199 = 'whatsapp:+393520413199';
+  const N2508 = 'whatsapp:+393522782508';
+  const N2245 = 'whatsapp:+393522622245';
+  const APERTURA: FakeMsgRow = { direction: 'out', body: 'apertura', template_sid: null, created_at: '2026-11-06T18:01:04Z' };
+  const REPLY = { visibleReply: 'Ciao! Dimmi, tu attualmente lavori?', appointmentFixed: false, passToHuman: false, videoWatched: false };
+  const mittenti = () => vi.mocked(sendFreeText).mock.calls.map((c) => (c[0] as { from?: string }).from);
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', N3199);
+    vi.stubEnv('BOT_NUMERI_SECONDARI', `${N2508},${N2245}`);
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(sendFreeText).mockClear();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('conv 3292: il lead scrive al 2508 e 3 secondi dopo al 2245, si risponde dal 2245', async () => {
+    const claimedRow: ClaimedRow = { id: 3292, ai_started_at: null, crm_lead_id: null, bot_outcome: null, wa_number: N2508 };
+    const rows: FakeMsgRow[] = [
+      APERTURA,
+      { direction: 'in', body: 'Dimmi tutto', template_sid: null, created_at: '2026-11-06T18:05:47Z' },
+      { direction: 'in', body: 'Dimmi tutto', template_sid: null, created_at: '2026-11-06T18:05:50Z' },
+    ];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(REPLY);
+
+    // Durante la finestra di accorpamento arriva il secondo messaggio e il webhook sposta la chat.
+    await drainMarioReplies(supabase, 3292, '+393476525616', () => { claimedRow.wa_number = N2245; return 0; });
+
+    expect(mittenti()).toEqual([N2245]);
+    const ev = calls.events.find((e: { type: string }) => e.type === 'mittente_aggiornato_nel_turno');
+    expect(ev?.payload).toMatchObject({ conversationId: 3292, da: N2508, a: N2245, momento: 'dopo_accorpamento' });
+  });
+
+  it('la chat si sposta mentre il modello scrive: le bolle partono dal numero nuovo', async () => {
+    const claimedRow: ClaimedRow = { id: 3293, ai_started_at: null, crm_lead_id: null, bot_outcome: null, wa_number: N2508 };
+    const rows: FakeMsgRow[] = [APERTURA, { direction: 'in', body: 'Boh', template_sid: null, created_at: '2026-11-06T18:02:12Z' }];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockImplementationOnce(async () => { claimedRow.wa_number = N2245; return REPLY; });
+
+    await drainMarioReplies(supabase, 3293, '+393476525616', () => 0);
+
+    expect(mittenti()).toEqual([N2245]);
+    const ev = calls.events.find((e: { type: string }) => e.type === 'mittente_aggiornato_nel_turno');
+    expect(ev?.payload).toMatchObject({ da: N2508, a: N2245, momento: 'prima_delle_bolle' });
+  });
+
+  it('la chat non si sposta: si risponde dal suo numero e non si scrive nessun evento', async () => {
+    const claimedRow: ClaimedRow = { id: 3294, ai_started_at: null, crm_lead_id: null, bot_outcome: null, wa_number: N2508 };
+    const rows: FakeMsgRow[] = [APERTURA, { direction: 'in', body: 'Ciao', template_sid: null, created_at: '2026-11-06T18:02:15Z' }];
+    const { supabase, calls } = makeDrainSupabase(claimedRow, rows);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(REPLY);
+
+    await drainMarioReplies(supabase, 3294, '+393476525616', () => 0);
+
+    expect(mittenti()).toEqual([N2508]);
+    expect(calls.events.some((e: { type: string }) => e.type === 'mittente_aggiornato_nel_turno')).toBe(false);
   });
 });

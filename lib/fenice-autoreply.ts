@@ -559,7 +559,8 @@ export async function drainMarioReplies(
   // Il mittente e' quello della chat (vedi lib/mittente.ts). Si risolve DOPO il claim
   // perche' sta sulla riga; se manca e' la configurazione (nemmeno il primario in env)
   // e si esce sciogliendo il lucchetto a mano, come nel ramo dello stop del CRM sotto.
-  const from = mittenteDiConversazione(claimed as { wa_number?: string | null });
+  // `let`: si rilegge prima di rispondere (vedi `rileggiMittente` qui sotto).
+  let from = mittenteDiConversazione(claimed as { wa_number?: string | null });
   if (!from) {
     await supabase.from('event_log').insert({
       type: 'fenice_ai_error', payload: { conversationId } as never,
@@ -759,6 +760,32 @@ export async function drainMarioReplies(
     }
     return lancioVideoLive;
   };
+  // Il numero da cui rispondere si rilegge PRIMA di ogni invio del turno, non solo al
+  // claim. Il webhook sposta `wa_number` sul numero a cui il lead scrive (dal 05/10), ma
+  // il turno dura 5-40 secondi di accorpamento piu' il modello: conv 3292 (06/11/2026),
+  // il lead scrive al 2508 e 3 secondi dopo al 2245, il drain del primo messaggio aveva
+  // letto 2508 e ha risposto da li' a tutti e due — mentre la chat era gia' sul 2245.
+  // Rileggere qui vuol dire rispondere dal numero dell'ULTIMO messaggio del lead, cioe'
+  // quello con la finestra delle 24 ore appena aperta. Una lettura che fallisce lascia
+  // il numero che c'era: nel dubbio non si cambia.
+  const rileggiMittente = async (momento: string): Promise<void> => {
+    try {
+      const { data, error } = await supabase
+        .from('conversations').select('wa_number').eq('id', conversationId).maybeSingle();
+      if (error || !data) return;
+      const attuale = mittenteDiConversazione(data as { wa_number?: string | null });
+      if (!attuale || attuale === from) return;
+      await supabase.from('event_log').insert({
+        type: 'mittente_aggiornato_nel_turno',
+        payload: { conversationId, da: from, a: attuale, momento } as never,
+        message: `[fenice] conv ${conversationId}: la chat e' passata da ${from} a ${attuale} durante il turno, si risponde da ${attuale} (${momento})`,
+        level: 'info',
+      });
+      from = attuale;
+    } catch {
+      // nel dubbio resta il numero letto prima
+    }
+  };
   try {
     for (let round = 0; round < MAX_ROUNDS_PER_DRAIN; round++) {
       const before = await loadHistory();
@@ -770,6 +797,8 @@ export async function drainMarioReplies(
       // (Task 5), Mario deve rispondere sulla cronologia e sul messaggio di quel giro.
       let rows = await loadHistory();
       if (nextUnansweredInboundIndex(rows) === -1) break;
+      // Dopo l'accorpamento: un secondo messaggio a un altro nostro numero ha spostato la chat.
+      await rileggiMittente('dopo_accorpamento');
 
       // Il messaggio del lead a cui stiamo rispondendo in questo giro.
       const inboundIdx = nextUnansweredInboundIndex(rows);
@@ -1561,6 +1590,9 @@ export async function drainMarioReplies(
         const attesa = distaccoSchedaMs - (Date.now() - schedaPartitaAlMs);
         if (attesa > 0) await sleep(attesa);
       }
+      // Il modello ha impiegato secondi: se intanto il lead ha scritto a un altro nostro
+      // numero, le bolle partono da quello.
+      if (parts.length > 0) await rileggiMittente('prima_delle_bolle');
       // Il passo del riscaldamento avanza solo se la bolla con la domanda e' partita.
       let domandaUscita = false;
       try {
