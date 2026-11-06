@@ -6,9 +6,12 @@ vi.mock('./twilio', () => ({
   sendTemplate: (...a: unknown[]) => sendTemplate(...a),
   getTemplateBody: (...a: unknown[]) => getTemplateBody(...a),
 }));
-vi.mock('./mittente', () => ({ mittentePerNuovaConversazione: () => null }));
+vi.mock('./mittente', async (orig) => ({
+  ...(await orig<typeof import('./mittente')>()),
+  mittentePerNuovaConversazione: () => null,
+}));
 
-import { compilaCorpoTemplate, sendTemplateAndLog } from './messaging';
+import { allineaNumeroChat, compilaCorpoTemplate, sendTemplateAndLog } from './messaging';
 
 const T24 = 'Ciao {{1}}, ti ricordo la videocall di {{2}}. Hai già visto il video?';
 
@@ -106,5 +109,40 @@ describe('sendTemplateAndLog', () => {
     const msg = inserts.find((i) => i.table === 'messages')!.row;
     expect(msg.body).toBe('[template] Video');
     expect(msg.template_vars).toBeNull();
+  });
+});
+
+describe('allineaNumeroChat — dopo un invio da un altro numero la chat ci passa (06/11/2026)', () => {
+  function supaConUpdate() {
+    const updates: Array<{ table: string; row: Record<string, unknown>; id?: unknown }> = [];
+    const inserts: Array<{ table: string; row: Record<string, unknown> }> = [];
+    const supa = {
+      from(table: string) {
+        return {
+          insert(row: Record<string, unknown>) { inserts.push({ table, row }); return Promise.resolve({ error: null }); },
+          update(row: Record<string, unknown>) {
+            return { eq: (_c: string, id: unknown) => { updates.push({ table, row, id }); return Promise.resolve({ error: null }); } };
+          },
+        };
+      },
+    };
+    return { supa: supa as never, updates, inserts };
+  }
+
+  it('chat su X, inviato da Y: wa_number = Y e un evento chat_segue_mittente', async () => {
+    const { supa, updates, inserts } = supaConUpdate();
+    const r = await allineaNumeroChat(supa, 9, 'whatsapp:+393522070047', '+393520413199', 'send-template');
+    expect(r).toBe('whatsapp:+393520413199');
+    expect(updates).toEqual([{ table: 'conversations', row: { wa_number: 'whatsapp:+393520413199' }, id: 9 }]);
+    const ev = inserts.find((i) => i.table === 'event_log')!.row;
+    expect(ev.type).toBe('chat_segue_mittente');
+    expect(ev.payload).toMatchObject({ conversationId: 9, numeroChat: 'whatsapp:+393522070047', origine: 'send-template' });
+  });
+
+  it('stesso numero: nessuna scrittura', async () => {
+    const { supa, updates, inserts } = supaConUpdate();
+    expect(await allineaNumeroChat(supa, 9, 'whatsapp:+393520413199', 'whatsapp:+393520413199', 'x')).toBeNull();
+    expect(updates).toEqual([]);
+    expect(inserts).toEqual([]);
   });
 });

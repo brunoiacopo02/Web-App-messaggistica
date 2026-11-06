@@ -1,6 +1,6 @@
 import type { getSupabaseAdmin } from './supabase/admin';
 import { sendTemplate, getTemplateBody } from './twilio';
-import { mittentePerNuovaConversazione } from './mittente';
+import { mittentePerNuovaConversazione, numeroChatDopoInvio } from './mittente';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -171,4 +171,33 @@ export async function sendTemplateAndLog(
     });
     return { ok: false, error: e?.message ?? 'unknown' };
   }
+}
+
+/**
+ * Dopo un invio RIUSCITO da `inviatoDa`, la chat passa a quel numero se non c'era gia'
+ * (06/11/2026). Senza questo, un invio forzato da un altro numero (un `from` esplicito
+ * su /api/send-template, un mittente sbagliato in `wa_number`) partiva da Y lasciando la
+ * chat su X: il lead rispondeva su Y e il bot gli rispondeva da X, dove la finestra
+ * delle 24 ore e' chiusa. Due thread scollegati agli occhi del lead.
+ *
+ * Si chiama SOLO dopo un invio riuscito: un invio fallito non ha aperto nessun thread.
+ * Ritorna il numero scritto, o `null` se non e' cambiato niente.
+ */
+export async function allineaNumeroChat(
+  supabase: Supa,
+  conversationId: number,
+  waNumberPrima: string | null | undefined,
+  inviatoDa: string | null | undefined,
+  origine: string,
+): Promise<string | null> {
+  const nuovo = numeroChatDopoInvio(waNumberPrima, inviatoDa);
+  if (!nuovo) return null;
+  const { error } = await supabase.from('conversations').update({ wa_number: nuovo }).eq('id', conversationId);
+  await supabase.from('event_log').insert({
+    type: 'chat_segue_mittente',
+    payload: { conversationId, numeroChat: waNumberPrima ?? null, inviatoDa: nuovo, origine, errore: error?.message ?? null } as never,
+    message: `[invio] conv ${conversationId}: inviato da ${nuovo} (${origine}), la chat passa da ${waNumberPrima ?? 'nessun numero'} a ${nuovo}`,
+    level: error ? 'error' : 'info',
+  });
+  return error ? null : nuovo;
 }

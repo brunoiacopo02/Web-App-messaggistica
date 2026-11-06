@@ -3,6 +3,8 @@ import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendFreeText, sendTemplate, getTemplateBody } from '@/lib/twilio';
 import { renderBodyTemplate } from '@/lib/campaigns';
 import { isWindowOpen } from '@/lib/utils';
+import { mittenteInvioChat } from '@/lib/mittente';
+import { allineaNumeroChat } from '@/lib/messaging';
 import type { z } from 'zod';
 import type { SendMessageSchema } from '@/lib/schemas';
 
@@ -22,8 +24,13 @@ export async function sendConversationMessage(input: SendMessageInput): Promise<
   if (!phone) return NextResponse.json({ error: 'lead phone missing' }, { status: 422 });
 
   // Risposta dallo stesso numero aziendale della conversazione (finestra 24h per
-  // coppia numero/utente). Fallback: default env (TWILIO_WHATSAPP_NUMBER).
-  const from = ((conv as any).wa_number as string | null) ?? undefined;
+  // coppia numero/utente), letto come ogni altro invio da `mittenteDiConversazione`.
+  // Fino al 06/11/2026 qui si usava `wa_number` grezzo e, se mancava, il default
+  // `TWILIO_WHATSAPP_NUMBER` — il numero ex Serenamente. Ora senza un numero del bot
+  // vale il primario Fenice, e dopo l'invio la chat passa al numero usato.
+  const waNumber = ((conv as any).wa_number as string | null) ?? null;
+  const from = mittenteInvioChat({ wa_number: waNumber });
+  if (!from) return NextResponse.json({ error: 'sender_not_configured' }, { status: 500 });
 
   if (input.mode === 'free') {
     if (!isWindowOpen((conv as any).last_inbound_at)) {
@@ -48,6 +55,7 @@ export async function sendConversationMessage(input: SendMessageInput): Promise<
       sender: 'operatore',
     }).select('id').single();
     await admin.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', input.conversation_id);
+    await allineaNumeroChat(admin, input.conversation_id, waNumber, from, 'operatore-testo');
     return NextResponse.json({ id: (msg as any)?.id, twilio_sid: sent.sid });
   }
 
@@ -90,5 +98,6 @@ export async function sendConversationMessage(input: SendMessageInput): Promise<
     sender: 'operatore',
   }).select('id').single();
   await admin.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', input.conversation_id);
+  await allineaNumeroChat(admin, input.conversation_id, waNumber, from, 'operatore-template');
   return NextResponse.json({ id: (msg as any)?.id, twilio_sid: sent.sid });
 }

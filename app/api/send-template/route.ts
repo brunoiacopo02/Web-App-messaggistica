@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { toE164 } from '@/lib/phone';
-import { findOrCreateLeadConversation, sendTemplateAndLog } from '@/lib/messaging';
+import { allineaNumeroChat, findOrCreateLeadConversation, sendTemplateAndLog } from '@/lib/messaging';
 import { getTemplateBody } from '@/lib/twilio';
-import { mittenteDiConversazione } from '@/lib/mittente';
+import { mittenteInvioChat } from '@/lib/mittente';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
 // Endpoint generico chiamato dal CRM per inviare UN template a un lead, su trigger.
 // Adatto a tutti i messaggi "manuali/evento" (es. conferme: nr, autoconferma).
 // Body JSON: { phone, templateSid, label?, firstName?, lastName?, email?, acContactId?,
-//              variables?: {"1":"Mehdi"}, from?: "fenice" | "+39..." }
+//              variables?: {"1":"Mehdi"}, from?: "fenice" | "+39..." }  (assente = "fenice")
 
 function authorized(req: NextRequest): boolean {
   const secret = process.env.AGENDA_API_SECRET; // secret condiviso dei trigger CRM
@@ -47,17 +47,18 @@ export async function POST(req: NextRequest) {
 
   const supabase = getSupabaseAdmin();
 
-  // Il mittente, in tre casi:
-  //  - `from: 'fenice'` → il numero della chat (lib/mittente.ts): il primario se la chat
-  //    nasce adesso, il suo se esisteva gia'. Prima era sempre
-  //    il numero storico, e con due numeri avrebbe spezzato le chat nate sul secondo;
-  //  - `from: '+39…'` → quel numero, scritto in `wa_number` se la chat nasce adesso;
-  //  - `from` assente → il numero di default di `sendTemplate` (`TWILIO_WHATSAPP_NUMBER`),
-  //    come sempre: e' la strada di Serenamente (`serenamenteMessaging.ts` nel CRM), che
-  //    non manda `from` e non deve finire su un numero Fenice. Alla nascita si scrive
-  //    quel numero, cosi' `wa_number` dice sempre da dove la chat ha parlato davvero.
-  const fromRaw = (body.from ?? body.sender) as string | undefined;
-  const esplicito = fromRaw === 'fenice' ? undefined : (fromRaw || process.env.TWILIO_WHATSAPP_NUMBER || null);
+  // Il mittente (06/11/2026):
+  //  - `from: 'fenice'` o assente → il numero della chat (`mittenteInvioChat`): il
+  //    primario se la chat nasce adesso, il suo se esisteva gia'. Fino al 06/11 il `from`
+  //    assente voleva dire `TWILIO_WHATSAPP_NUMBER`, il numero ex Serenamente (sospeso
+  //    dal 26/09): un lead Fenice si vedeva scrivere da un'altra azienda. Mai piu';
+  //  - `from: '+39…'` → quel numero, scritto in `wa_number` se la chat nasce adesso. Su
+  //    una chat esistente, dopo l'invio riuscito la chat PASSA a quel numero
+  //    (`allineaNumeroChat`): prima restava sul vecchio e il lead rispondeva su un
+  //    thread che il bot non considerava suo.
+  const fromGrezzo = body.from ?? body.sender;
+  const fromRaw = typeof fromGrezzo === 'string' ? fromGrezzo.trim() : undefined;
+  const forzato = fromRaw && fromRaw.toLowerCase() !== 'fenice' ? fromRaw : undefined;
 
   const { conversationId, waNumber } = await findOrCreateLeadConversation(supabase, {
     phone,
@@ -65,8 +66,11 @@ export async function POST(req: NextRequest) {
     lastName: (body.lastName ?? body.last_name) as string | undefined,
     email: body.email as string | undefined,
     acContactId: (body.acContactId ?? body.contact_id) as string | undefined,
-  }, { mittente: esplicito });
-  const from = fromRaw === 'fenice' ? mittenteDiConversazione({ wa_number: waNumber }) : (fromRaw || undefined);
+  }, { mittente: forzato ? mittenteInvioChat(null, forzato) : undefined });
+  const from = mittenteInvioChat({ wa_number: waNumber }, forzato);
+  if (!from) {
+    return NextResponse.json({ ok: false, error: 'mittente non configurato (TWILIO_WHATSAPP_NUMBER_FENICE)', conversationId }, { status: 500 });
+  }
 
   // Le variabili del template ({{1}} = nome) e il numero mittente. Senza le prime un
   // template che saluta per nome parte come "Ciao ,"; senza il secondo esce dal numero
@@ -97,6 +101,7 @@ export async function POST(req: NextRequest) {
   }
 
   const res = await sendTemplateAndLog(supabase, conversationId, phone, templateSid, label, from, variables, bodyLog);
+  if (res.ok) await allineaNumeroChat(supabase, conversationId, waNumber, from, 'send-template');
 
   await supabase.from('event_log').insert({
     type: res.ok ? 'template_sent' : 'send_error',

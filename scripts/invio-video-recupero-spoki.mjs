@@ -15,6 +15,7 @@
 //   il bot ripartirebbe col pitch con gente che ha già l'appuntamento fissato. Le
 //   risposte restano in inbox per un umano.
 import fs from 'node:fs';
+import { allineaNumeroChatScript, mittenteScript } from './lib/numero-chat.mjs';
 
 const CSV = process.argv.find((a) => a.endsWith('.csv')) ?? 'C:/Users/bruno/Desktop/invio-video-29-30-luglio.csv';
 const LIVE = process.argv.includes('--invia');
@@ -34,6 +35,9 @@ const FROM = (() => {
   const v = FROM_RAW.trim().replace(/^["']|["']$/g, '').replace(/\s+/g, '');
   return v.startsWith('whatsapp:') ? v : `whatsapp:${v}`;
 })();
+// Con FORZA_MITTENTE=1 si manda da FROM anche alle chat che vivono su un altro numero
+// (e la chat ci passa). Senza, ogni chat esistente sente il suo numero.
+const FORZA_MITTENTE = process.env.FORZA_MITTENTE === '1';
 if (!SUPA || !KEY || !TW_SID || !TW_TOK || !FROM_RAW) throw new Error('env mancanti (supabase/twilio/from)');
 // Quante ne mandi al massimo in questo giro (per un invio di prova prima del blocco).
 const LIMITE = process.env.LIMITE ? Number(process.env.LIMITE) : Infinity;
@@ -145,10 +149,14 @@ for (const [i, r] of finali.slice(0, LIMITE).entries()) {
   }
 
   try {
-    const { conversationId } = await trovaOCrea(r.telefono, nome);
+    const { conversationId, waNumber } = await trovaOCrea(r.telefono, nome);
+    // Verso una chat che ha gia' un numero si scrive da quello (06/11/2026): FROM vale
+    // solo per le chat senza numero, o per tutte con FORZA_MITTENTE=1 — e allora la
+    // chat passa a FROM dopo l'invio (allineaNumeroChatScript).
+    const daNumero = mittenteScript(waNumber, FROM, { forza: FORZA_MITTENTE });
     const body = new URLSearchParams({
       To: `whatsapp:${r.telefono}`,
-      From: FROM,
+      From: daNumero,
       ContentSid: sid,
       ContentVariables: JSON.stringify(vars),
     });
@@ -176,6 +184,7 @@ for (const [i, r] of finali.slice(0, LIMITE).entries()) {
       body: JSON.stringify({ last_message_at: new Date().toISOString() }),
       headers: { Prefer: 'return=minimal' },
     });
+    await allineaNumeroChatScript(sb, conversationId, waNumber, daNumero, 'invio-video-recupero-spoki');
     esiti.inviati++;
     console.log(`  ok  ${String(i + 1).padStart(2)}/${finali.length} ${nome.padEnd(14)} ${r.telefono} ${msg.status}`);
   } catch (e) {
@@ -194,15 +203,15 @@ async function trovaOCrea(phone, firstName) {
     headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
   });
   const leadId = up[0].id;
-  const esiste = await sb(`conversations?select=id&lead_id=eq.${leadId}&limit=1`);
-  if (esiste.length) return { leadId, conversationId: esiste[0].id };
+  const esiste = await sb(`conversations?select=id,wa_number&lead_id=eq.${leadId}&limit=1`);
+  if (esiste.length) return { leadId, conversationId: esiste[0].id, waNumber: esiste[0].wa_number ?? null };
   // ai_owner deliberatamente non impostato: vedi nota in testa al file.
   const nuova = await sb('conversations', {
     method: 'POST',
     body: JSON.stringify({ lead_id: leadId }),
     headers: { Prefer: 'return=representation' },
   });
-  return { leadId, conversationId: nuova[0].id };
+  return { leadId, conversationId: nuova[0].id, waNumber: null };
 }
 
 if (LIVE) {

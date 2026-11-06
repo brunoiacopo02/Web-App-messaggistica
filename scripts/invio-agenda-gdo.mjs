@@ -27,6 +27,7 @@
 // - il template si verifica prima di spedire (approved + UTILITY), anche in dry run.
 import fs from 'node:fs';
 import { assertApprovedUtility, twilioAuth } from './lib/template-guard.mjs';
+import { allineaNumeroChatScript } from './lib/numero-chat.mjs';
 
 const CSV = process.argv.find((a) => a.toLowerCase().endsWith('.csv'));
 if (!CSV) throw new Error('manca il CSV: node ... scripts/invio-agenda-gdo.mjs <file.csv> [--invia]');
@@ -210,7 +211,8 @@ for (const [i, r] of daFare.entries()) {
 
   let conversationId;
   try {
-    ({ conversationId } = await trovaOCrea(r.phone, r.nome, r.email));
+    let waNumber;
+    ({ conversationId, waNumber } = await trovaOCrea(r.phone, r.nome, r.email));
     const body = new URLSearchParams({
       To: `whatsapp:${r.phone}`,
       From: FROM,
@@ -240,6 +242,9 @@ for (const [i, r] of daFare.entries()) {
       }),
       headers: { Prefer: 'return=minimal' },
     });
+    // L'agenda parte sempre dal numero storico (PO 24/09) e la chat ci passa: cosi'
+    // la risposta del lead e il video arrivano sullo stesso thread dell'agenda.
+    await allineaNumeroChatScript(sb, conversationId, waNumber, FROM, 'invio-agenda-gdo');
     await modalitaPostino(conversationId, r, 'inviato');
     esiti.inviati++;
     console.log(`  ok  ${String(i + 1).padStart(2)}/${daFare.length} ${nome.padEnd(12)} ${r.phone} conv ${conversationId} ${msg.status}`);
@@ -266,14 +271,14 @@ async function trovaOCrea(phone, nome, email) {
     headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
   });
   const leadId = up[0].id;
-  const esiste = await sb(`conversations?select=id&lead_id=eq.${leadId}&order=id.asc&limit=1`);
-  if (esiste.length) return { leadId, conversationId: esiste[0].id };
+  const esiste = await sb(`conversations?select=id,wa_number&lead_id=eq.${leadId}&order=id.asc&limit=1`);
+  if (esiste.length) return { leadId, conversationId: esiste[0].id, waNumber: esiste[0].wa_number ?? null };
   const nuova = await sb('conversations', {
     method: 'POST',
     body: JSON.stringify({ lead_id: leadId }),
     headers: { Prefer: 'return=representation' },
   });
-  return { leadId, conversationId: nuova[0].id };
+  return { leadId, conversationId: nuova[0].id, waNumber: null };
 }
 
 // Stessi campi di enrollGdoLeadAsPostino: senza questi il video non parte alla risposta

@@ -47,6 +47,9 @@ const { data: conv, error } = await db
 if (error) throw error;
 
 const to = conv.leads?.phone_e164;
+// Mai un mittente di default: senza il numero della chat Twilio userebbe il suo, che non
+// e' il thread che il lead conosce.
+if (!conv.wa_number) throw new Error(`conv ${id}: wa_number assente, non so da quale numero rispondere`);
 if (!to) throw new Error(`conv ${id}: lead senza phone_e164`);
 
 // Finestra 24h: fuori da qui Twilio rifiuta il free text (servirebbe un template).

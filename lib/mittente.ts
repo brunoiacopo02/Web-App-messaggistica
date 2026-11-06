@@ -155,3 +155,40 @@ export function eNumeroDelBot(to: string | null | undefined): boolean {
   const numero = soloNumero(to);
   return Boolean(numero) && numeriDelBot().map(soloNumero).includes(numero);
 }
+
+/**
+ * Da quale numero parte un invio verso una chat GIA' ESISTENTE (06/11/2026).
+ *
+ * Senza un mittente forzato e' il numero della chat (`mittenteDiConversazione`).
+ * Con un mittente forzato dal chiamante (es. `from: '+39…'` su /api/send-template)
+ * e' quello: chi forza sa perche' lo fa. Ma allora la chat lo deve seguire — vedi
+ * `numeroChatDopoInvio` — altrimenti il lead risponde su un thread che il bot non
+ * considera suo e restano due conversazioni scollegate.
+ *
+ * Mai `TWILIO_WHATSAPP_NUMBER`: e' il numero ex Serenamente, e un lead Fenice che
+ * se lo vede scrivere riceve un messaggio da un'altra azienda.
+ */
+export function mittenteInvioChat(
+  conv: { wa_number?: string | null } | null | undefined,
+  forzato?: string | null,
+): string | undefined {
+  const f = soloNumero(forzato);
+  if (f) return inFormaWhatsapp(f);
+  return mittenteDiConversazione(conv);
+}
+
+/**
+ * Dopo un invio RIUSCITO da `inviatoDa`: il numero da scrivere in `wa_number`, o
+ * `null` se la chat e' gia' li'. La chat segue l'ultimo numero da cui le abbiamo
+ * scritto, perche' e' li' che il lead rispondera'. Il confronto ignora il prefisso
+ * `whatsapp:`; il valore restituito e' sempre in forma `whatsapp:+…`.
+ */
+export function numeroChatDopoInvio(
+  waNumber: string | null | undefined,
+  inviatoDa: string | null | undefined,
+): string | null {
+  const nuovo = soloNumero(inviatoDa);
+  if (!nuovo) return null;
+  if (soloNumero(waNumber) === nuovo) return null;
+  return inFormaWhatsapp(nuovo);
+}

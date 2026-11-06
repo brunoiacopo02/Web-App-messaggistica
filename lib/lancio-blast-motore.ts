@@ -10,6 +10,7 @@ import { CODICE_FREQUENCY_CAP } from './lancio-aperture';
 import { logCronQueryError } from './cron-query-error';
 import { romeDayKey, romeDaysBetween } from './rome-time';
 import { numeroPrimario } from './mittente';
+import { allineaNumeroChat } from './messaging';
 import { spedibileDa } from './lancio-mittente';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
@@ -381,8 +382,9 @@ export async function inviaTemplateTimbrato(supabase: Supa, stato: StatoRun, p: 
     //
     // Il ripiego e' PER CONVERSAZIONE e non ferma il run: le altre chat continuano. Ed
     // e' un ripiego, non un blocco — meglio un link che parte dal numero sbagliato che
-    // un link che non parte. `wa_number` non si tocca: lo riallinea da solo il webhook
-    // in ingresso alla prima risposta del lead.
+    // un link che non parte. Dal 06/11/2026, se il ripiego scatta e l'invio riesce, la
+    // chat passa al numero storico (`allineaNumeroChat`): e' li' che il lead rispondera',
+    // e i prossimi invii non devono tornare sul numero da cui non ha ricevuto niente.
     let mittente = p.from;
     const storico = numeroPrimario();
     if (storico && !stessoNumero(mittente, storico)) {
@@ -427,6 +429,7 @@ export async function inviaTemplateTimbrato(supabase: Supa, stato: StatoRun, p: 
         sender: 'automazione',
       });
       await supabase.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', id);
+      if (mittente !== p.from) await allineaNumeroChat(supabase, id, p.from, mittente, `${p.prefisso}_ripiego`);
       // Compare-and-set sulla fase, non un update alla cieca: mentre il template partiva,
       // il turno puo' aver portato la chat avanti. Se la guardia scatta non si scrive
       // NIENTE, timbro compreso: a proteggere dal doppio invio e' il claim di sopra.

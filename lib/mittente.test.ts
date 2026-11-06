@@ -1,10 +1,12 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   mittentePerNuovaConversazione,
   mittenteDiConversazione,
   eNumeroDelBot,
   numeriDelBot,
   numeriSecondari,
+  mittenteInvioChat,
+  numeroChatDopoInvio,
 } from './mittente';
 
 const PRIMARIO = 'whatsapp:+393520413199';
@@ -225,5 +227,45 @@ describe('riconosciuti vs sceglibili', () => {
     process.env.TWILIO_WHATSAPP_NUMBER_FENICE_2 = '+393522070047';
     expect(numeriSecondari()).toEqual([SECONDO]);
     expect(numeriDelBot()).toEqual([PRIMARIO, SECONDO]);
+  });
+});
+
+describe('mittenteInvioChat — ogni invio verso una chat esistente parte dal suo numero (06/11/2026)', () => {
+  it('senza forzatura: il numero della chat', () => {
+    expect(mittenteInvioChat({ wa_number: SECONDO })).toBe(SECONDO);
+  });
+
+  it('chat senza numero: il primario Fenice, MAI TWILIO_WHATSAPP_NUMBER (ex Serenamente)', () => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER', 'whatsapp:+393520158061');
+    expect(mittenteInvioChat({ wa_number: null })).toBe(PRIMARIO);
+    expect(mittenteInvioChat(null)).toBe(PRIMARIO);
+    vi.unstubAllEnvs();
+  });
+
+  it('forzato: vince il numero forzato, in forma whatsapp:', () => {
+    expect(mittenteInvioChat({ wa_number: SECONDO }, '+393520413199')).toBe(PRIMARIO);
+  });
+
+  it('forzato vuoto o solo spazi: conta come assente', () => {
+    expect(mittenteInvioChat({ wa_number: SECONDO }, '  ')).toBe(SECONDO);
+  });
+});
+
+describe("numeroChatDopoInvio — la chat segue l'ultimo numero usato", () => {
+  it('inviato da un numero diverso da quello della chat: la chat ci passa', () => {
+    expect(numeroChatDopoInvio(SECONDO, '+393520413199')).toBe(PRIMARIO);
+  });
+
+  it('stesso numero (con o senza prefisso): niente da scrivere', () => {
+    expect(numeroChatDopoInvio(PRIMARIO, '+393520413199')).toBeNull();
+    expect(numeroChatDopoInvio('+393520413199', PRIMARIO)).toBeNull();
+  });
+
+  it('chat senza numero: si scrive quello usato', () => {
+    expect(numeroChatDopoInvio(null, SECONDO)).toBe(SECONDO);
+  });
+
+  it('mittente sconosciuto: niente da scrivere', () => {
+    expect(numeroChatDopoInvio(SECONDO, undefined)).toBeNull();
   });
 });
