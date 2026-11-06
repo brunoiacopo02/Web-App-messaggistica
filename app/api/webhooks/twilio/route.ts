@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse, after } from 'next/server';
+import { CODICE_FINESTRA_CHIUSA, registraFinestraChiusa } from '@/lib/finestra-63016';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { validateTwilioSignature } from '@/lib/twilio';
 import { toE164 } from '@/lib/phone';
@@ -84,6 +85,11 @@ export async function POST(req: NextRequest) {
       message: `Status ${params.MessageStatus} per ${params.MessageSid}`,
       level: params.MessageStatus === 'failed' || params.MessageStatus === 'undelivered' ? 'warn' : 'info',
     });
+
+    // 63016 = testo libero fuori finestra 24h: evento dedicato (lib/finestra-63016.ts).
+    if (params.ErrorCode === String(CODICE_FINESTRA_CHIUSA)) {
+      await registraFinestraChiusa(supabase, { sid: params.MessageSid, errorCode: params.ErrorCode, from: params.From, to: params.To });
+    }
 
     // Agenda GDO finita in "inviato" e poi consegnata davvero: il CRM va avvisato,
     // altrimenti quel lead resta per sempre in uno stato ambiguo col reinvio bloccato.
@@ -213,6 +219,9 @@ export async function POST(req: NextRequest) {
     await supabase.from('conversations').update({
       last_message_at: now,
       last_inbound_at: now,
+      // A QUALE numero ha scritto: la finestra 24h vale per numero, non per chat
+      // (lib/finestra-numero.ts). Anche quando la chat non si sposta.
+      last_inbound_number: params.To?.startsWith('whatsapp:') ? params.To : null,
       unread_count: (cur?.unread_count ?? 0) + 1,
       ...daScrivere,
     }).eq('id', conversationId);

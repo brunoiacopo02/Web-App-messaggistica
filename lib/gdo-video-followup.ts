@@ -25,6 +25,9 @@ export interface GdoFollowupInput {
   /** Data della call. Oggi il CRM non la manda: quasi sempre null. */
   appointmentAt: string | null;
   lastInboundAtMs: number | null;
+  /** L'ultimo inbound e' arrivato sul numero da cui si mandera' (lib/finestra-numero.ts).
+   *  `false` = finestra 24h chiusa su quel numero, qualunque sia l'ora. Assente = si. */
+  inboundSulNumero?: boolean;
   lastMessageIsInbound: boolean;
   nowMs: number;
   slot: GdoSlot;
@@ -91,7 +94,7 @@ export function decideGdoVideoFollowup(i: GdoFollowupInput): GdoFollowupAction {
   // parte, e lo slot mattina resta l'unico messaggio.
   if (i.slot === 'mattina' && i.promemoriaGdoAttivo && i.promemoriaGdoPossibile && hasValidAppointment) return 'none';
 
-  const finestraAperta = daUltimoInbound !== null && daUltimoInbound < FINESTRA_24H_MS;
+  const finestraAperta = daUltimoInbound !== null && daUltimoInbound < FINESTRA_24H_MS && i.inboundSulNumero !== false;
   return finestraAperta ? 'sollecito-libero' : 'sollecito-template';
 }
 

@@ -6,7 +6,8 @@ import { segmentOf, fermaReason } from '@/lib/lead-segments';
 import { ChatStatusPill, ReasonPill, SegmentPill } from '@/components/fenice/status';
 import { lancioFaseLabel } from '@/lib/lancio-fase';
 import { formatRomeDateTime } from '@/lib/rome-time';
-import { isWindowOpen } from '@/lib/utils';
+import { finestraApertaSuNumero } from '@/lib/finestra-numero';
+import { mittenteDiConversazione } from '@/lib/mittente';
 import { ChatTakeover } from './_components/ChatTakeover';
 
 export const dynamic = 'force-dynamic';
@@ -26,7 +27,7 @@ export default async function ChatConversationPage({
 
   const [convRes, msgsRes] = await Promise.all([
     supabase.from('conversations').select(`
-      id, last_inbound_at, last_message_at, ai_owner, ai_status, ai_paused_at, gdo_agenda_at, gdo_video_sent_at,
+      id, last_inbound_at, last_inbound_number, wa_number, last_message_at, ai_owner, ai_status, ai_paused_at, gdo_agenda_at, gdo_video_sent_at,
       bot_outcome, bot_scheduled_at, lancio_slug, lancio_fase,
       lead:leads(id, first_name, last_name, phone_e164)
     `).eq('id', id).single(),
@@ -91,7 +92,7 @@ export default async function ChatConversationPage({
       <ChatTakeover
         conversationId={id}
         paused={!!conv.ai_paused_at}
-        windowOpen={isWindowOpen(conv.last_inbound_at)}
+        windowOpen={finestraApertaSuNumero(conv, mittenteDiConversazione(conv))}
       />
     </div>
   );

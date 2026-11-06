@@ -23,6 +23,8 @@ const base = {
 describe('decideAgendaFollowup', () => {
   it('manda quando: ≥2h, non preso, mai inviato, finestra aperta, orario ok', () => {
     expect(decideAgendaFollowup(base)).toBe('send');
+    // Il lead ha scritto a un altro nostro numero: dal numero della chat la finestra e' chiusa.
+    expect(decideAgendaFollowup({ ...base, inboundSulNumero: false })).toBe('none');
   });
   it('niente se agenda inviata da meno di 2h', () => {
     expect(decideAgendaFollowup({ ...base, nowMs: 1 * H })).toBe('none');

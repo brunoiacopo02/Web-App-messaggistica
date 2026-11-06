@@ -2,7 +2,8 @@ import { notFound } from 'next/navigation';
 import { getSupabaseServer } from '@/lib/supabase/server';
 import { MessageThread } from '@/components/MessageThread';
 import { Composer } from '@/components/Composer';
-import { isWindowOpen } from '@/lib/utils';
+import { finestraApertaSuNumero } from '@/lib/finestra-numero';
+import { mittenteDiConversazione } from '@/lib/mittente';
 import { isFeniceConversation } from '@/lib/campagne';
 
 export const dynamic = 'force-dynamic';
@@ -21,7 +22,7 @@ export default async function CampagneConversationPage({
 
   const [convRes, msgsRes, campsRes] = await Promise.all([
     supabase.from('conversations').select(`
-      id, last_inbound_at, last_message_at,
+      id, last_inbound_at, last_inbound_number, wa_number, last_message_at,
       lead:leads(id, first_name, last_name, phone_e164, email)
     `).eq('id', id).single(),
     supabase.from('messages').select('*').eq('conversation_id', id).order('created_at', { ascending: true }).limit(500),
@@ -40,7 +41,8 @@ export default async function CampagneConversationPage({
     .eq('conversation_id', id).eq('direction', 'in').is('read_at', null);
   await supabase.from('conversations').update({ unread_count: 0 }).eq('id', id);
 
-  const open = isWindowOpen(conv.last_inbound_at);
+  // Finestra del numero da cui partira' la risposta (lib/finestra-numero.ts).
+  const open = finestraApertaSuNumero(conv, mittenteDiConversazione(conv));
   const fullName = [conv.lead?.first_name, conv.lead?.last_name].filter(Boolean).join(' ') || conv.lead?.phone_e164 || 'Sconosciuto';
 
   return (

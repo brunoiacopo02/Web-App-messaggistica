@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendFreeText, sendTemplate, getTemplateBody } from '@/lib/twilio';
 import { renderBodyTemplate } from '@/lib/campaigns';
-import { isWindowOpen } from '@/lib/utils';
+import { finestraApertaSuNumero } from '@/lib/finestra-numero';
 import { mittenteInvioChat } from '@/lib/mittente';
 import { allineaNumeroChat } from '@/lib/messaging';
 import type { z } from 'zod';
@@ -15,7 +15,7 @@ export async function sendConversationMessage(input: SendMessageInput): Promise<
   const admin = getSupabaseAdmin();
   const { data: conv } = await admin
     .from('conversations')
-    .select('id, last_inbound_at, wa_number, lead:leads(phone_e164)')
+    .select('id, last_inbound_at, last_inbound_number, wa_number, lead:leads(phone_e164)')
     .eq('id', input.conversation_id)
     .single();
   if (!conv) return NextResponse.json({ error: 'conversation not found' }, { status: 404 });
@@ -33,7 +33,9 @@ export async function sendConversationMessage(input: SendMessageInput): Promise<
   if (!from) return NextResponse.json({ error: 'sender_not_configured' }, { status: 500 });
 
   if (input.mode === 'free') {
-    if (!isWindowOpen((conv as any).last_inbound_at)) {
+    // La finestra e' quella del numero da cui si risponde, non della chat: se il lead ha
+    // scritto a un altro nostro numero, da qui il testo libero tornerebbe 63016.
+    if (!finestraApertaSuNumero(conv as any, from)) {
       return NextResponse.json({ error: 'window_expired' }, { status: 422 });
     }
     let sent;

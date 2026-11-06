@@ -57,6 +57,8 @@ describe('decideGdoRecap', () => {
   const con = (o: Partial<RecapInput>): RecapInput => ({ ...base, ...o });
 
   it('turno-video → completo', () => expect(decideGdoRecap(base)).toBe('completo'));
+  it('finestra aperta su un altro nostro numero: niente recap in testo (06/11/2026)', () =>
+    expect(decideGdoRecap({ ...base, inboundSulNumero: false })).toBeNull());
   it('registrato col video mandato → senza-video', () =>
     expect(decideGdoRecap(con({ occasione: 'registrato', videoSentAt: '2026-10-22T10:00:00Z' }))).toBe('senza-video'));
   it('registrato senza video → null', () =>
