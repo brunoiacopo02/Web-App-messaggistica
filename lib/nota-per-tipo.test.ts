@@ -218,6 +218,10 @@ describe('le tre vie verso il CRM rispettano la regola', () => {
   });
 
   it('ramo locked: SPOSTAMENTO poi DISDETTA passano entrambe', async () => {
+    // Orologio fermo al 30/10: il richiamo del 02/11 deve restare nel futuro (prima il test
+    // si rompeva da solo appena passata quella data).
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-30T10:00:00Z'));
     const { supabase } = makeDb({ crm_lead_id: 'lead-25581', bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: DATA_IN_AGENDA });
     await sendOutcome(supabase, 25581, { outcome: 'RICHIAMO', date: '2026-11-02T15:00:00+01:00', leadWords: 'lunedì?' });
     await sendOutcome(supabase, 25581, { outcome: 'RICHIAMO', date: '2026-11-02T15:00:00+01:00', leadWords: 'ok' });
