@@ -90,7 +90,7 @@ vi.mock('@/lib/fenice-autoreply', () => ({
   LOCK_TTL_MS: 600_000,
   serveRedrive: () => false,
 }));
-vi.mock('@/lib/agenda-followup', () => ({ runAgendaFollowups: vi.fn(async () => ({ sent: 0, skipped: 0 })) }));
+vi.mock('@/lib/agenda-followup', () => ({ runAgendaFollowups: vi.fn(async () => ({ sent: 0, skipped: 0 })), agendaFollowupAcceso: vi.fn(async () => false) }));
 
 import { GET } from './route';
 

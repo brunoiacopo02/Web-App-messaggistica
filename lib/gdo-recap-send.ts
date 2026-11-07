@@ -4,6 +4,7 @@
  * webhook) non mandano lo stesso riassunto due volte per la stessa call.
  */
 
+import { leggiHoldoutGdo, braccioHoldout, segnaBraccioHoldout } from './holdout-gdo';
 import { decideGdoRecap, gdoRecapText, gdoSpostamentoText, type RecapOccasione, type RecapTipo } from './gdo-recap';
 import { mittenteDiConversazione } from './mittente';
 import { inboundSulNumero } from './finestra-numero';
@@ -160,6 +161,13 @@ export async function inviaRecapDopoData(
     const phone: string | undefined = conv.leads?.phone_e164 ?? undefined;
     if (!tipo || !phone || !conv.gdo_appuntamento_at) return null;
 
+    // Holdout del riscaldamento (PO 07/11/2026, lib/holdout-gdo.ts): niente domanda 1 in
+    // coda al recap per il braccio holdout. Il recap esce a tutti.
+    const holdout = process.env.GDO_WARMUP_ENABLED === '1' ? await leggiHoldoutGdo(supabase, nowMs) : null;
+    const braccioWarmup = braccioHoldout(holdout, conversationId, conv.gdo_agenda_at);
+    if (braccioWarmup) await segnaBraccioHoldout(supabase, { conversationId, braccio: braccioWarmup, dove: `recap_${occasione}` });
+    const holdoutWarmup = braccioWarmup === 'holdout';
+
     const conNoemi = tipo !== 'spostamento';
     const appuntamentoAt: string = conv.gdo_appuntamento_at;
     // I valori di prima si fotografano PRIMA della presa: servono a rilasciarla se l'invio fallisce.
@@ -175,7 +183,7 @@ export async function inviaRecapDopoData(
       : gdoRecapText({ nome, call, videoLink: null, fissatoIl: fissatoIlRecap(occasione, conv, nowMs) });
     // La domanda 1 del riscaldamento in coda al recap, dopo una riga vuota (lib/gdo-warmup.ts).
     const conDomanda = domandaNelRecap({
-      enabled: process.env.GDO_WARMUP_ENABLED === '1',
+      enabled: process.env.GDO_WARMUP_ENABLED === '1' && !holdoutWarmup,
       tipo,
       step: conv.gdo_warmup_step ?? null,
       appuntamentoAt,

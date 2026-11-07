@@ -30,6 +30,7 @@ import { logCronQueryError } from '@/lib/cron-query-error';
 import { mittenteDiConversazione } from '@/lib/mittente';
 import { formatRomeDateTime } from '@/lib/rome-time';
 import { caricaContesto, decidiInvio, sidPerConversazione } from '@/lib/sollecito-parcheggio';
+import { caricaTouchAb, idoneaTouchAb, sidTouchPerPersona } from '@/lib/touch-ab';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -60,12 +61,15 @@ export async function GET(req: NextRequest) {
   // accese): legate al primo, dal 03/11 al 06/11 139 lead notturni non sono mai stati aperti.
   const sequenzaAccesa = process.env.SEQUENCE_ENABLED === '1';
   const apertureDifferite = process.env.APERTURA_DIFFERITA_ENABLED !== '0';
-  if (!sequenzaAccesa && !apertureDifferite) {
-    return NextResponse.json({ ok: true, disabled: true });
-  }
 
   const supabase = getSupabaseAdmin();
   const now = Date.now();
+  // A/B del touch su un solo numero (PO 07/11/2026, lib/touch-ab.ts): indipendente da
+  // SEQUENCE_ENABLED, che resta spento (niente nudge). null = spento o fermato.
+  const touchAb = await caricaTouchAb(supabase, now);
+  if (!sequenzaAccesa && !apertureDifferite && !touchAb) {
+    return NextResponse.json({ ok: true, disabled: true });
+  }
 
   // Il mittente — dell'apertura differita, dei touch e dei nudge — e' quello della
   // singola chat (`wa_number`, scelto all'arruolamento, vedi lib/mittente.ts).
@@ -130,8 +134,7 @@ export async function GET(req: NextRequest) {
 
   // Tutte le conv CRM attive, con paginazione (>1000 possibili a regime 50/g).
   const convs: any[] = [];
-  for (let fromRow = 0; ; fromRow += 1000) {
-    let qConv = supabase
+  const baseConv = () => supabase
       .from('conversations')
       .select('id, ai_status, ai_started_at, crm_lead_id, crm_funnel, bot_outcome, bot_followups_sent, wa_number, professione, scheda_inviata_at, leads(phone_e164, first_name)')
       .not('crm_lead_id', 'is', null)
@@ -146,6 +149,8 @@ export async function GET(req: NextRequest) {
       // Lancio Web Dev AI: niente aperture, touch o nudge. Il benvenuto differito lo
       // manda /api/cron/lancio-aperture, il resto è silenzio fino al 5/10 (spec §5.1).
       .or(FILTRO_FUORI_LANCIO);
+  for (let fromRow = 0; ; fromRow += 1000) {
+    let qConv = baseConv();
     // Sequenza spenta: restano solo le aperture differite, cioe' le chat arruolate da
     // meno di APERTURA_DIFFERITA_MAX_H. Le altre non avrebbero niente da ricevere.
     if (!sequenzaAccesa) {
@@ -159,6 +164,19 @@ export async function GET(req: NextRequest) {
     convs.push(...batch);
     if (batch.length < 1000) break;
   }
+  // Sequenza spenta e A/B acceso: in piu' le chat del numero del test arruolate nelle
+  // ultime 48h (il touch parte fra 20h e 30h dall'apertura).
+  if (!sequenzaAccesa && touchAb) {
+    const visti = new Set(convs.map((c) => c.id));
+    const { data, error } = await baseConv()
+      .in('wa_number', [`whatsapp:${touchAb.config.numero}`, touchAb.config.numero])
+      .gte('ai_started_at', new Date(now - 48 * H).toISOString())
+      .order('id', { ascending: true })
+      .limit(1000);
+    if (error) await logCronQueryError(supabase, 'sequence_touches_query_error', error);
+    for (const c of data ?? []) if (!visti.has(c.id)) convs.push(c);
+  }
+  let touchAbInviati = 0;
 
   let sent = 0;
   let skipped = 0;
@@ -233,6 +251,44 @@ export async function GET(req: NextRequest) {
           // "ciao" differito di giorni). In pratica l'enroll lo scrive sempre.
           arruolatoAtMs: c.ai_started_at ? Date.parse(c.ai_started_at) : now - APERTURA_DIFFERITA_MAX_H * H,
         });
+
+        // A/B del touch: le chat del numero del test le gestisce solo questo blocco
+        // (niente touch di sequenza ne' sollecito sopra). L'apertura differita resta sotto.
+        if (touchAb && action.kind !== 'send_opening' && touchAb.nelTest(c)) {
+          if (idoneaTouchAb(msgs, now)) await touchAb.segnaAssegnata(c, 'sequenza');
+          const d = touchAb.braccio(c.id) === 'touch' && touchAb.puoInviare
+            ? decidiInvio({ nowMs: now, msgs, sids: seqSids })
+            : null;
+          const sid = d?.invia ? sidTouchPerPersona(persona) : undefined;
+          if (!d?.invia || !sid || !(await touchAb.templateOk(sid))) {
+            if (d?.invia && !sid) await logConfigError(persona === 'marta' ? 'MARTA_SEQ_TEMPLATE_SID_1' : 'SEQ_TEMPLATE_SID_1');
+            skipped++;
+            continue;
+          }
+          sent++;
+          const res = await sendSequenceTemplate(
+            supabase, c.id, phone, sid, 'Touch A/B ti ho scritto ieri', from, { '1': templateName(firstName) },
+          );
+          const t0 = firstOutboundAtMs(msgs) ?? now;
+          const payload = {
+            conversationId: c.id, crmLeadId: c.crm_lead_id ?? null, numero: touchAb.config.numero, sid, persona,
+            oreDallApertura: Math.round(((now - t0) / H) * 10) / 10,
+            aperturaLetta: msgs.some((m) => m.direction === 'out' && m.twilio_status === 'read'),
+          };
+          if (res.ok) {
+            touchAbInviati++;
+            await supabase.from('event_log').insert({
+              type: 'touch_ab_inviato', level: 'info', payload: payload as never,
+              message: `[touch-ab] conv ${c.id}: touch inviato ${payload.oreDallApertura}h dopo l'apertura`,
+            });
+          } else if (!res.capped) {
+            await supabase.from('event_log').insert({
+              type: 'touch_ab_invio_fallito', level: 'warn', payload: { ...payload, error: res.error ?? null } as never,
+              message: `[touch-ab] conv ${c.id}: touch non partito (${res.error ?? 'errore'})`,
+            });
+          }
+          continue;
+        }
 
         if (action.kind === 'send_opening') {
           if (!from) {
@@ -438,7 +494,7 @@ export async function GET(req: NextRequest) {
 
   await supabase.from('event_log').insert({
     type: 'sequence_run',
-    payload: { sent, skipped, trackA, trackB, sequenzaAccesa, apertureDifferite, ...(sollecito ? { sollecitiInviati, sollecitoSaltati } : {}) } as never,
+    payload: { sent, skipped, trackA, trackB, sequenzaAccesa, apertureDifferite, ...(touchAb ? { touchAb: { numero: touchAb.config.numero, puoInviare: touchAb.puoInviare, inviati: touchAbInviati } } : {}), ...(sollecito ? { sollecitiInviati, sollecitoSaltati } : {}) } as never,
     message: `[sequenza] run: ${sent} invii, ${skipped} skip (A=${trackA}, B=${trackB})`,
     level: 'info',
   });

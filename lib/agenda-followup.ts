@@ -7,6 +7,8 @@ import { logCronQueryError } from './cron-query-error';
 import { mittenteDiConversazione, numeroPrimario } from './mittente';
 import { inboundSulNumero } from './finestra-numero';
 import { haConfermatoIlForm } from './conferma-form';
+import { giornoRoma, type StatoQualita } from './qualita-numeri';
+import { numeroHighOggi } from './numero-high';
 
 const H = 3600_000;
 
@@ -123,6 +125,30 @@ export function agendaFollowupText(firstName: string | null): string {
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
 /**
+ * Interruttore (PO 07/11/2026: riacceso, era spento dal 24/09 per la qualita' dei numeri).
+ * `app_settings.agenda_followup` = {"attivo": true|false}: si gira senza deploy. Senza la
+ * riga vale l'env storica `AGENDA_FOLLOWUP_ENABLED === '1'`. Riga illeggibile = env.
+ *
+ * Anche acceso, il sollecito parte SOLO da un numero che oggi e' HIGH (`numeroHighOggi`,
+ * lib/numero-high.ts): una lettura MEDIUM/LOW o una pausa lo ferma su quel numero fino a
+ * quando la qualita' torna HIGH (il giorno dopo, alla prima lettura buona).
+ */
+export const KEY_AGENDA_FOLLOWUP = 'agenda_followup';
+
+export async function agendaFollowupAcceso(supabase: Supa): Promise<boolean> {
+  const env = process.env.AGENDA_FOLLOWUP_ENABLED === '1';
+  try {
+    const { data, error } = await supabase.from('app_settings').select('value').eq('key', KEY_AGENDA_FOLLOWUP).maybeSingle();
+    if (error || !data) return env;
+    const v = (data as { value?: unknown }).value;
+    if (v && typeof v === 'object' && !Array.isArray(v) && 'attivo' in v) return (v as { attivo?: unknown }).attivo === true;
+    return env;
+  } catch {
+    return env;
+  }
+}
+
+/**
  * Invia (idempotente) un singolo follow-up free-text ai lead a cui Mario ha mandato
  * il link di prenotazione (l'agenda) da >= 2h e che non hanno ancora preso l'appuntamento.
  * Rispetta finestra 24h e fascia oraria. Marca `bot_followups_sent` per non ripetere.
@@ -130,7 +156,7 @@ type Supa = ReturnType<typeof getSupabaseAdmin>;
 export async function runAgendaFollowups(
   supabase: Supa,
   now: Date = new Date(),
-): Promise<{ sent: number; skipped: number }> {
+): Promise<{ sent: number; skipped: number; fermi?: Record<string, number> }> {
   // Il mittente e' della singola chat (`wa_number`, vedi lib/mittente.ts); qui si
   // controlla solo che la configurazione regga, come prima.
   if (!numeroPrimario()) return { sent: 0, skipped: 0 };
@@ -162,7 +188,7 @@ export async function runAgendaFollowups(
   // 2. Stato delle conversazioni candidate.
   const { data: convs, error: errConvs } = await supabase
     .from('conversations')
-    .select('id, lead_id, ai_status, bot_outcome, bot_followups_sent, gdo_agenda_at, wa_number, last_inbound_number')
+    .select('id, lead_id, crm_lead_id, ai_status, bot_outcome, bot_followups_sent, gdo_agenda_at, wa_number, last_inbound_number')
     .in('id', convIds)
     // Lancio Web Dev AI: il link di prenotazione in chat non e' suo, ma l'intake del
     // lancio azzera `bot_outcome` e rimette `ai_status='active'` — cioe' scioglie la
@@ -181,6 +207,15 @@ export async function runAgendaFollowups(
   const hour = romeHour(now);
   let sent = 0;
   let skipped = 0;
+
+  // Qualita' dei numeri (PO 07/11/2026): letta una volta per run.
+  const oggi = giornoRoma(now);
+  const { data: rigaStato } = await supabase.from('app_settings').select('value').eq('key', 'qualita_numeri_stato').maybeSingle();
+  const statoQualita = ((rigaStato as { value?: StatoQualita } | null)?.value ?? null) as StatoQualita | null;
+  const { data: rigaTetti } = await supabase.from('app_settings').select('value').eq('key', 'tetti_numeri').maybeSingle();
+  const tetti = ((rigaTetti as { value?: Record<string, unknown> } | null)?.value ?? null);
+  /** `numero:motivo` → quanti solleciti non partiti per la qualita' del numero. */
+  const fermi: Record<string, number> = {};
 
   for (const c of (convs ?? []) as any[]) {
     const agendaSentAtMs = agendaAtByConv.get(c.id);
@@ -223,6 +258,14 @@ export async function runAgendaFollowups(
     const from = mittenteDiConversazione(c);
     if (decision === 'none' || !phone || !from) { skipped++; continue; }
 
+    const q = numeroHighOggi({ numero: from, stato: statoQualita, tetti, oggi });
+    if (!q.ok) {
+      const k = `${from.replace(/^whatsapp:/i, '')}:${q.motivo}${q.qualita ? `_${q.qualita}` : ''}`;
+      fermi[k] = (fermi[k] ?? 0) + 1;
+      skipped++;
+      continue;
+    }
+
     const body = agendaFollowupText((lead?.first_name as string | null) ?? null);
     const msg = await sendFreeText({ to: phone, body, from });
     await supabase.from('messages').insert({
@@ -235,12 +278,21 @@ export async function runAgendaFollowups(
       .eq('id', c.id);
     await supabase.from('event_log').insert({
       type: 'agenda_followup_sent',
-      payload: { conversationId: c.id, phone } as never,
+      payload: { conversationId: c.id, phone, numero: from, crmLeadId: c.crm_lead_id ?? null } as never,
       message: `Follow-up agenda inviato a ${phone}`,
       level: 'info',
     });
     sent++;
   }
 
-  return { sent, skipped };
+  if (Object.keys(fermi).length > 0) {
+    await supabase.from('event_log').insert({
+      type: 'agenda_followup_numero_fermo',
+      payload: { oggi, fermi } as never,
+      message: `[agenda-followup] solleciti fermi per qualita' del numero: ${Object.entries(fermi).map(([k, n]) => `${k}=${n}`).join(' ')}`,
+      level: 'info',
+    });
+  }
+
+  return { sent, skipped, fermi };
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { eseguiControlloQualita } from '@/lib/qualita-numeri';
+import { controllaStopTouchAb } from '@/lib/touch-ab';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -21,6 +22,9 @@ function authorized(req: NextRequest): boolean {
 
 export async function GET(req: NextRequest) {
   if (!authorized(req)) return new NextResponse('unauthorized', { status: 401 });
-  const esito = await eseguiControlloQualita(getSupabaseAdmin());
+  const supabase = getSupabaseAdmin();
+  const esito = await eseguiControlloQualita(supabase);
+  // A/B del touch (PO 07/11/2026): lo stop a scatto scatta alla lettura, non al primo invio.
+  if (esito.ok) await controllaStopTouchAb(supabase);
   return NextResponse.json(esito, { status: esito.ok ? 200 : 500 });
 }

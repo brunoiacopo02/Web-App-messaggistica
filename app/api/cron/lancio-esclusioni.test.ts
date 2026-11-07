@@ -463,10 +463,15 @@ describe('agenda-followup: nessun sollecito free-text sulle chat del lancio', ()
     bot_outcome: null,
     bot_followups_sent: 0,
     gdo_agenda_at: null,
+    wa_number: 'whatsapp:+390000000',
     ...lancio,
   });
 
   beforeEach(() => {
+    // Il numero della chat oggi e' HIGH (dal 07/11/2026 il sollecito parte solo da li').
+    stato.righe.app_settings = [
+      { key: 'qualita_numeri_stato', value: { storico: { '+390000000': { '2026-09-20': 'HIGH' } }, pause: {} } },
+    ];
     stato.righe.conversations = [conv(1, IN_CORSO), conv(2, CHIUSO)];
     // Per ogni chat: il link di prenotazione uscito 3 ore fa (oltre le 2 di attesa) e
     // un inbound di un'ora fa, che tiene aperta la finestra 24h. L'out sta per primo:
@@ -490,6 +495,21 @@ describe('agenda-followup: nessun sollecito free-text sulle chat del lancio', ()
     expect(sendFreeText).toHaveBeenCalledTimes(1);
     expect((sendFreeText.mock.calls[0][0] as { to: string }).to).toBe(tel(2));
     expect(res.sent).toBe(1);
+  });
+
+  it('PO 07/11/2026: numero sceso a MEDIUM oggi (o in pausa) = nessun sollecito da quel numero', async () => {
+    stato.righe.app_settings = [
+      { key: 'qualita_numeri_stato', value: { storico: { '+390000000': { '2026-09-20': 'MEDIUM' } }, pause: {} } },
+    ];
+    const res = await runAgendaFollowups(finto as never, ADESSO);
+    expect(sendFreeText).not.toHaveBeenCalled();
+    expect(res.sent).toBe(0);
+    expect(res.fermi).toEqual({ '+390000000:sotto_high_MEDIUM': 1 });
+    sendFreeText.mockClear();
+    stato.righe.app_settings = [
+      { key: 'qualita_numeri_stato', value: { storico: { '+390000000': { '2026-09-20': 'HIGH' } }, pause: { '+390000000': { fino: '2026-09-23' } } } },
+    ];
+    expect((await runAgendaFollowups(finto as never, ADESSO)).sent).toBe(0);
   });
 });
 

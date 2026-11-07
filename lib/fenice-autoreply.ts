@@ -37,6 +37,7 @@ import {
 import { LANCIO_INGRESSO_LINK_SVILUPPATORE } from './primo-messaggio';
 import { eStudenteOfferta, STUDENTI_CONTEXT_NOTE } from './studenti-offerta';
 import { getLancioSettings, type LancioSettings } from './lancio-settings';
+import { leggiHoldoutGdo, braccioHoldout, segnaBraccioHoldout } from './holdout-gdo';
 import { alertUnaVolta } from './alert-una-volta';
 import type { LancioInfo } from './lancio-crm';
 import { mittenteDiConversazione } from './mittente';
@@ -1212,7 +1213,14 @@ export async function drainMarioReplies(
       // Riscaldamento (lib/gdo-warmup.ts): le domande le scrive il codice, in coda alla
       // bolla del modello. Qui solo il motivo per cui la domanda del turno puo' partire o
       // tace (evento `gdo_warmup_nota`); il modello non ne sa niente.
-      const warmupAcceso = process.env.GDO_WARMUP_ENABLED === '1';
+      // Holdout del riscaldamento (PO 07/11/2026, lib/holdout-gdo.ts): meta' dei lead GDO
+      // non riceve le domande; il braccio si logga una volta per conversazione.
+      const holdoutGdo = agendaGdo && postino && process.env.GDO_WARMUP_ENABLED === '1'
+        ? await leggiHoldoutGdo(supabase)
+        : null;
+      const braccioWarmup = braccioHoldout(holdoutGdo, conversationId, gdoAgendaAt);
+      if (braccioWarmup) await segnaBraccioHoldout(supabase, { conversationId, braccio: braccioWarmup, crmLeadId, dove: 'turno' });
+      const warmupAcceso = process.env.GDO_WARMUP_ENABLED === '1' && braccioWarmup !== 'holdout';
       const motivoWarmup = agendaGdo && warmupAcceso
         ? motivoRiscaldamento({
             enabled: true,

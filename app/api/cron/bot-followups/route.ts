@@ -10,10 +10,11 @@ import { buildRichiamoRestituitoNote } from '@/lib/richiamo-fasce';
 import { haConfermatoIlForm, decidiSuConfermaForm } from '@/lib/conferma-form';
 import type { MarioTurn } from '@/lib/mario';
 import { drainMarioReplies, lastIsUnansweredInbound, isOrphanedReplyingLock, isLockStale, LOCK_TTL_MS, serveRedrive } from '@/lib/fenice-autoreply';
-import { runAgendaFollowups } from '@/lib/agenda-followup';
+import { runAgendaFollowups, agendaFollowupAcceso } from '@/lib/agenda-followup';
 import { lancioInCorso, lancioRestituito } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
 import { alertUnaVolta } from '@/lib/alert-una-volta';
+import { caricaTouchAb, idoneaTouchAb } from '@/lib/touch-ab';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -106,6 +107,12 @@ export async function GET(req: NextRequest) {
   ].filter((s): s is string => Boolean(s));
   // Sollecito prima del parcheggio (PO 29/10/2026): null = spento, NON_RISPOSTO a 24h come prima.
   const sollecito = await caricaContestoSollecito(supabase, now);
+  // A/B del touch (PO 07/11/2026, lib/touch-ab.ts): null = spento o fermato.
+  const touchAb = await caricaTouchAb(supabase, now);
+  // Tutti i SID dei touch (Mario e Marta, tutti gli indici): riconoscono il touch in cronologia.
+  const touchSids = [1, 2, 3, 4]
+    .flatMap((i) => [process.env[`SEQ_TEMPLATE_SID_${i}`], process.env[`MARTA_SEQ_TEMPLATE_SID_${i}`]])
+    .filter((s): s is string => Boolean(s));
 
   // Conversazioni CRM-linked non chiuse, paginate (capienza 50 lead/giorno →
   // il vecchio .limit(500) non basta più).
@@ -346,7 +353,25 @@ export async function GET(req: NextRequest) {
       // Il NON_RISPOSTO aspetta il sollecito (fino a 30h dall'apertura) e poi 24h la
       // risposta. Numero non idoneo (3199, pausa qualita', non HIGH, tetto del giorno)
       // = si chiude subito, come prima.
-      if (action === 'non_risposto' && sollecito) {
+      // A/B del touch: si conta anche il controllo (che chiude come oggi); il braccio touch
+      // aspetta il touch (fino a 30h dall'apertura) e poi 24h la risposta.
+      if (action === 'non_risposto' && touchAb && touchAb.nelTest(c)) {
+        if (idoneaTouchAb(rows, now)) await touchAb.segnaAssegnata(c, 'chiusura');
+        if (touchAb.braccio(c.id) === 'touch') {
+          const d = decidiChiusura({ nowMs: now, msgs: rows, sids: touchSids, puoRicevere: touchAb.puoInviare });
+          if (d === 'aspetta') {
+            report.push({ id: c.id, action: 'attesa_touch_ab' });
+            continue;
+          }
+        }
+      } else if (
+        action === 'non_risposto' && touchSids.length > 0
+        && decidiChiusura({ nowMs: now, msgs: rows, sids: touchSids, puoRicevere: false }) === 'aspetta'
+      ) {
+        // Touch gia' partito (test poi fermato o finito): le sue 24h per rispondere restano.
+        report.push({ id: c.id, action: 'attesa_touch_ab' });
+        continue;
+      } else if (action === 'non_risposto' && sollecito) {
         const puo = await sollecito.idoneo(c.wa_number as string | null);
         const d = decidiChiusura({ nowMs: now, msgs: rows, sids: sollecito.sids, puoRicevere: puo.ok });
         if (d === 'aspetta') {
@@ -506,9 +531,10 @@ export async function GET(req: NextRequest) {
   }
 
   // Follow-up agenda (singolo, idempotente) a chi ha ricevuto l'agenda e non ha preso.
-  // Sospeso dal PO il 24/09/2026 per la qualita' dei numeri: riparte solo con '1'.
-  let agendaFollowup = { sent: 0, skipped: 0 };
-  if (process.env.AGENDA_FOLLOWUP_ENABLED === '1') {
+  // Sospeso dal PO il 24/09/2026 per la qualita' dei numeri; riacceso il 07/11/2026 con lo
+  // stop per numero sotto HIGH. Interruttore in app_settings.agenda_followup (poi l'env).
+  let agendaFollowup: Awaited<ReturnType<typeof runAgendaFollowups>> = { sent: 0, skipped: 0 };
+  if (await agendaFollowupAcceso(supabase)) {
     try {
       agendaFollowup = await runAgendaFollowups(supabase, new Date(now));
     } catch (e) {
