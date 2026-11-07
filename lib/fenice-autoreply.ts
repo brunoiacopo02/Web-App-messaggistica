@@ -43,7 +43,7 @@ import type { LancioInfo } from './lancio-crm';
 import { mittenteDiConversazione } from './mittente';
 import { brochureContextNote, professioniContextNote, professioniVince, richiestaSchedaFuoriFunnel, schedaDaInviare, schedaSubito } from './professioni-nota';
 import { isSlugProfessione, PROVENIENZA_PROFESSIONI } from './professioni';
-import { blackFridayContextNote, blackFridayVince, funnelBlackFridayAttivo, isMarkerBlackFriday, leggiSettingsBlackFriday, PROVENIENZA_BLACK_FRIDAY, type SettingsBlackFriday } from './black-friday';
+import { blackFridayContextNote, blackFridayVince, funnelBlackFridayAttivo, haAperturaSbagliata, isMarkerBlackFriday, leggiSettingsBlackFriday, PROVENIENZA_BLACK_FRIDAY, type SettingsBlackFriday } from './black-friday';
 import { inviaScheda } from './scheda-invio';
 import { fissatoIlDi } from './noemi-quando';
 import {
@@ -924,11 +924,18 @@ export async function drainMarioReplies(
       // BLACK FRIDAY o col messaggio del link in cronologia, a funnel acceso, con le stesse
       // condizioni di Professioni (niente lancio in corso, niente call GDO da fare). Vince
       // anche su Professioni. Le impostazioni si leggono solo se la chat ne ha il segno.
-      const segnoBlackFriday = crmFunnelRiga === PROVENIENZA_BLACK_FRIDAY
-        || rows.some((m) => m.direction === 'in' && isMarkerBlackFriday(m.body));
+      const fraseLinkBlackFriday = rows.some((m) => m.direction === 'in' && isMarkerBlackFriday(m.body));
+      const segnoBlackFriday = crmFunnelRiga === PROVENIENZA_BLACK_FRIDAY || fraseLinkBlackFriday;
+      // Lead delle inserzioni Black Friday (PO 07/11/2026): crm_funnel BLACK FRIDAY senza la
+      // frase del link. Il primo messaggio l'abbiamo mandato noi, e il funnel vale da subito
+      // (prima del 9/11 la nota dice che l'offerta parte lunedi' 9).
+      const ingressoBlackFriday: 'link' | 'inserzione' = !fraseLinkBlackFriday && crmFunnelRiga === PROVENIENZA_BLACK_FRIDAY ? 'inserzione' : 'link';
       settingsBlackFriday = segnoBlackFriday ? (settingsBlackFriday ?? await leggiSettingsBlackFriday(supabase)) : settingsBlackFriday;
       const vinceBlackFriday = segnoBlackFriday && blackFridayVince({
-        attivo: funnelBlackFridayAttivo({ env: process.env.BLACK_FRIDAY_FUNNEL, nowMs: Date.now(), scadenzaAtMs: settingsBlackFriday?.scadenza?.atMs ?? null }),
+        attivo: funnelBlackFridayAttivo({
+          env: process.env.BLACK_FRIDAY_FUNNEL, nowMs: Date.now(), scadenzaAtMs: settingsBlackFriday?.scadenza?.atMs ?? null,
+          anticipato: ingressoBlackFriday === 'inserzione',
+        }),
         crmFunnel: crmFunnelRiga,
         testiInbound: rows.filter((m) => m.direction === 'in').map((m) => m.body),
         lancioSlug: lancio.lancio_slug, lancioFase: lancio.lancio_fase,
@@ -1180,6 +1187,8 @@ export async function drainMarioReplies(
             scadenza: settingsBlackFriday?.scadenza ?? null,
             posti: settingsBlackFriday?.posti ?? null,
             nowMs: Date.now(),
+            ingresso: ingressoBlackFriday,
+            aperturaSbagliata: haAperturaSbagliata(rows),
           }), notaPrimo].filter(Boolean).join('\n\n')
         : null;
       const notaProfessioni = vinceProfessioni

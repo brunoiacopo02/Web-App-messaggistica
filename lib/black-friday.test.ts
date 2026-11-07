@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   blackFridayContextNote, blackFridayVince, FINE_BLACK_FRIDAY_DEFAULT_MS, funnelBlackFridayAttivo,
-  INIZIO_BLACK_FRIDAY_MS, isMarkerBlackFriday, parsePosti, parseScadenza, TESTO_LINK_BLACK_FRIDAY,
+  INIZIO_BLACK_FRIDAY_MS, haAperturaSbagliata, isCrmFunnelBlackFriday, isMarkerBlackFriday, parsePosti, parseScadenza, TESTO_LINK_BLACK_FRIDAY,
 } from './black-friday';
 import { classificaPrimoMessaggio } from './primo-messaggio';
 
@@ -182,5 +182,39 @@ describe('blackFridayContextNote', () => {
     const n = blackFridayContextNote({ vslLink: null, scadenza: null, posti: null, nowMs: NOW });
     expect(n).toContain('primo trimestre del 2027');
     expect(n).toContain('Non aggiungere numeri');
+  });
+});
+
+describe('lead Black Friday dalle inserzioni (PO 07/11/2026)', () => {
+  const SABATO_7 = Date.parse('2026-11-07T12:00:00+01:00');
+  it("il funnel vale gia' il 7/11 per i lead delle inserzioni, non per il link", () => {
+    expect(funnelBlackFridayAttivo({ env: undefined, nowMs: SABATO_7 })).toBe(false);
+    expect(funnelBlackFridayAttivo({ env: undefined, nowMs: SABATO_7, anticipato: true })).toBe(true);
+    expect(funnelBlackFridayAttivo({ env: '0', nowMs: SABATO_7, anticipato: true })).toBe(false);
+    expect(funnelBlackFridayAttivo({ env: undefined, nowMs: FINE_BLACK_FRIDAY_DEFAULT_MS + 1, anticipato: true })).toBe(false);
+  });
+  it("prima del 9/11: offerta da lunedi' 9 e call solo da lunedi' 9", () => {
+    const n = blackFridayContextNote({ vslLink: null, scadenza: null, posti: 30, nowMs: SABATO_7, ingresso: 'inserzione' });
+    expect(n).toContain('inserzione del Black Friday');
+    expect(n).toContain("parte lunedi' 9 novembre");
+    expect(n).toContain("CALL DA LUNEDI' 9");
+    expect(n).toContain('ALLA SUA PRIMA RISPOSTA');
+    expect(n).not.toMatch(/tablet/i);
+  });
+  it('dal 9/11 niente righe sulla partenza', () => {
+    const n = blackFridayContextNote({ vslLink: null, scadenza: null, posti: 30, nowMs: INIZIO_BLACK_FRIDAY_MS + 3600_000, ingresso: 'inserzione' });
+    expect(n).not.toContain("CALL DA LUNEDI' 9");
+  });
+  it("scuse solo se un nostro template ha parlato d'altro", () => {
+    expect(haAperturaSbagliata([{ direction: 'out', template_sid: 'HX1', body: "L'accesso al canale Telegram ti arriva via email" }])).toBe(true);
+    expect(haAperturaSbagliata([{ direction: 'out', template_sid: 'HX1', body: 'Buongiorno, sono Mario tutor di Fenice Academy' }])).toBe(false);
+    expect(haAperturaSbagliata([{ direction: 'in', template_sid: null, body: 'le 10 ore?' }])).toBe(false);
+    const n = blackFridayContextNote({ vslLink: null, scadenza: null, posti: null, nowMs: SABATO_7, ingresso: 'inserzione', aperturaSbagliata: true });
+    expect(n).toContain('MESSAGGIO SBAGLIATO');
+  });
+  it('isCrmFunnelBlackFriday', () => {
+    expect(isCrmFunnelBlackFriday(' black friday ')).toBe(true);
+    expect(isCrmFunnelBlackFriday('TELEGRAM')).toBe(false);
+    expect(isCrmFunnelBlackFriday(null)).toBe(false);
   });
 });

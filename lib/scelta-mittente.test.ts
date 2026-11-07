@@ -84,6 +84,26 @@ describe('scegliMittenteNuovo', () => {
     expect(r).toMatchObject({ from: N8061, secondario: true, motivo: 'scelto' });
   });
 
+  it('Black Friday: HIGH meno carico anche oltre il tetto, mai un LOW ne un numero a riposo (PO 07/11/2026)', async () => {
+    tetti({ [P]: 15, [ELIXIR]: 50, [N8061]: 15, [N0047]: 0 });
+    // Tutti oltre il tetto; l'8061 e' il meno carico ma LOW, il 0047 e' a riposo.
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === N8061 ? 1 : n === ELIXIR ? 60 : n === P ? 30 : 0));
+    qualita({ ...tutti('HIGH'), '+393520158061': { [OGGI]: 'LOW' } });
+    const { s, eventi } = supa();
+    const r = await scegli(s, { senzaTettiSoloHigh: true, includiPrimario: true });
+    expect(r).toMatchObject({ from: P, motivo: 'scelto' });
+    expect(eventi.find((e) => e.type === 'mittente_black_friday')?.payload.numero).toBe(P);
+  });
+
+  it('Black Friday senza nessun numero HIGH: regola di sempre', async () => {
+    tetti({ [ELIXIR]: 150, [N8061]: 150, [N0047]: 0 });
+    qualita(tutti('LOW'));
+    const { s } = supa();
+    const r = await scegli(s, { senzaTettiSoloHigh: true });
+    expect(r.motivo).toBe('scelto');
+    expect([ELIXIR, N8061]).toContain(r.from);
+  });
+
   it('a parita vince l ordine della lista', async () => {
     tetti({ [ELIXIR]: 150, [N8061]: 150 });
     expect((await scegli(supa().s)).from).toBe(ELIXIR);

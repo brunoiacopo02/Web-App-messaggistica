@@ -36,6 +36,21 @@ export function isMarkerBlackFriday(t: string | null | undefined): boolean {
   return MARKER.test(t ?? '');
 }
 
+/** La chat e' arrivata dal CRM come BLACK FRIDAY (lead delle inserzioni, PO 07/11/2026). */
+export function isCrmFunnelBlackFriday(f: string | null | undefined): boolean {
+  return (f ?? '').trim().toUpperCase() === PROVENIENZA_BLACK_FRIDAY;
+}
+
+/**
+ * Un nostro template in questa chat ha parlato d'altro (aperture per funnel: 10 ore,
+ * Telegram, simulatore; o il lancio): per un lead Black Friday e' stato un errore nostro
+ * (Cristina, conv 26723, 07/11/2026) e alla prima risposta Mario si scusa.
+ */
+const APERTURA_SBAGLIATA = /\b10 ore\b|canale telegram|simulatore|web developer ai/i;
+export function haAperturaSbagliata(rows: readonly { direction: string; body: string | null; template_sid?: string | null }[]): boolean {
+  return rows.some((m) => m.direction === 'out' && !!m.template_sid && APERTURA_SBAGLIATA.test(m.body ?? ''));
+}
+
 export const SETTING_SCADENZA = 'black_friday_scadenza' as const;
 export const SETTING_POSTI = 'black_friday_posti' as const;
 
@@ -92,12 +107,18 @@ export function funnelBlackFridayAttivo(i: {
   env?: string | null;
   nowMs: number;
   scadenzaAtMs?: number | null;
+  /**
+   * Lead delle inserzioni Black Friday (crm_funnel BLACK FRIDAY, PO 07/11/2026): arrivano
+   * gia' dal 7/11, prima dell'offerta. Per loro il funnel vale da subito (la nota dice che
+   * l'offerta parte lunedi' 9) fino alla scadenza.
+   */
+  anticipato?: boolean;
 }): boolean {
   const v = (i.env ?? '').trim().toLowerCase();
   if (['0', 'false', 'off'].includes(v)) return false;
   if (['1', 'true', 'on'].includes(v)) return true;
   const fine = i.scadenzaAtMs ?? FINE_BLACK_FRIDAY_DEFAULT_MS;
-  return i.nowMs >= INIZIO_BLACK_FRIDAY_MS && i.nowMs <= fine;
+  return (i.anticipato || i.nowMs >= INIZIO_BLACK_FRIDAY_MS) && i.nowMs <= fine;
 }
 
 /**
@@ -144,11 +165,19 @@ export function blackFridayContextNote(i: {
   scadenza: ScadenzaBlackFriday | null;
   posti: number | null;
   nowMs: number;
+  /** 'inserzione' = lead delle inserzioni Black Friday: il primo messaggio l'abbiamo mandato noi. */
+  ingresso?: 'link' | 'inserzione';
+  /** Un nostro template in chat ha parlato d'altro (10 ore, Telegram...): Mario si scusa. */
+  aperturaSbagliata?: boolean;
 }): string {
   const scadenza = i.scadenza && i.scadenza.atMs > i.nowMs ? i.scadenza : null;
   const vsl = i.vslLink?.trim() || null;
+  const daInserzione = i.ingresso === 'inserzione';
+  const primaDellInizio = i.nowMs < INIZIO_BLACK_FRIDAY_MS;
   const righe = [
-    "CONTESTO FUNNEL BLACK FRIDAY: questo lead ci ha scritto per primo dal link dell'email del Black Friday e vuole sapere com'e' l'offerta.",
+    daInserzione
+      ? "CONTESTO FUNNEL BLACK FRIDAY: questo lead ha lasciato i suoi contatti da una nostra inserzione del Black Friday (non dal link dell'email): il primo messaggio gliel'abbiamo mandato noi. E' interessato all'offerta Black Friday sui nostri percorsi."
+      : "CONTESTO FUNNEL BLACK FRIDAY: questo lead ci ha scritto per primo dal link dell'email del Black Friday e vuole sapere com'e' l'offerta.",
     "I FATTI DELL'OFFERTA sono SOLO questi. Non aggiungerne altri, non inventare condizioni, eccezioni, numeri o date:",
     "- PREZZO: con il Black Friday i percorsi, che normalmente costano dai 2.000 ai 4.000 euro, costano dai 1.000 ai 3.000 euro a seconda del percorso, e si possono rateizzare. Mai cifre di rata ne' numero di rate (per questo funnel non vale la cifra indicativa dei 100 euro al mese del manuale, e niente esempi tipo caffe' e cornetto), mai percentuali di sconto, mai il prezzo di un singolo percorso: quello lo vede col consulente in call.",
     "- GARANZIA \"COLLOCATO O RIMBORSATO\": e' scritta nero su bianco nel contratto: se non trova lavoro grazie al nostro corso, lo rimborsiamo. Se ti chiede condizioni, tempi, requisiti o dettagli, resta sul generico: le condizioni precise gliele spiega il consulente in call. Non inventare durate, requisiti o percentuali.",
@@ -167,8 +196,21 @@ export function blackFridayContextNote(i: {
   if (i.posti || scadenza) {
     righe.push(`URGENZA VERA: per questo lead ${[i.posti ? 'i posti limitati' : null, scadenza ? 'la scadenza' : null].filter(Boolean).join(' e ')} sono fatti veri e li puoi usare come leva per fissare la call adesso e non fra qualche settimana, in deroga alla regola generale su fretta e scarsita'. Restano vietati il senso di colpa e qualunque fatto che non sia scritto qui.`);
   }
+  if (primaDellInizio) {
+    righe.push(
+      "QUANDO PARTE: l'offerta Black Friday parte lunedi' 9 novembre. Oggi non e' ancora attiva: puoi raccontarla (sono i fatti qui sopra) dicendo che parte lunedi' 9.",
+      "CALL DA LUNEDI' 9: la videocall col consulente si fissa SOLO da lunedi' 9 novembre in poi, perche' e' da lunedi' che si puo' bloccare il posto con le condizioni del Black Friday. Non proporre ne' accettare giorni prima di lunedi' 9 (niente oggi, niente domenica 8): se chiede prima, spiegagli che l'offerta parte lunedi' e proponi lunedi' 9 o i giorni subito dopo.",
+    );
+  }
+  if (i.aperturaSbagliata) {
+    righe.push(
+      "MESSAGGIO SBAGLIATO: il nostro primo messaggio in questa chat parlava d'altro (10 ore gratuite, canale Telegram, simulatore o live) ed era un errore nostro. Alla sua prima risposta scusati in una riga, senza drammi (es. \"Scusami, il messaggio di prima era sbagliato: ti sei registrato per l'offerta Black Friday\"), poi prosegui col flusso qui sotto. Non promettere accessi, corsi gratuiti o canali di cui parlava quel messaggio.",
+    );
+  }
   righe.push(
-    "QUANDO TI CHIEDE DELL'OFFERTA (di solito nel suo primo messaggio, con la frase del link): rispondi subito a quello che ha chiesto, senza aspettare il pitch. In poche righe gli dici che il Black Friday e' attivo e cosa comprende (prezzo ridotto, garanzia scritta nel contratto, corso IA in regalo), poi UNA domanda sulla sua situazione per capire quale percorso fa per lui (es. \"Per capire quale percorso fa per te: oggi lavori o stai cercando?\"). Il regalo dell'Exclusive lo nomini solo piu' avanti o se ti chiede dei regali.",
+    daInserzione
+      ? "ALLA SUA PRIMA RISPOSTA: digli in poche righe che ti ha lasciato i contatti per l'offerta Black Friday e cosa comprende (prezzo ridotto, garanzia scritta nel contratto, corso IA in regalo), poi UNA domanda sulla sua situazione per capire quale percorso fa per lui (es. \"Per capire quale percorso fa per te: oggi lavori o stai cercando?\"). Se ti chiede chi sei o perche' gli scrivi, rispondi a quello prima. Il regalo dell'Exclusive lo nomini solo piu' avanti o se ti chiede dei regali."
+      : "QUANDO TI CHIEDE DELL'OFFERTA (di solito nel suo primo messaggio, con la frase del link): rispondi subito a quello che ha chiesto, senza aspettare il pitch. In poche righe gli dici che il Black Friday e' attivo e cosa comprende (prezzo ridotto, garanzia scritta nel contratto, corso IA in regalo), poi UNA domanda sulla sua situazione per capire quale percorso fa per lui (es. \"Per capire quale percorso fa per te: oggi lavori o stai cercando?\"). Il regalo dell'Exclusive lo nomini solo piu' avanti o se ti chiede dei regali.",
     "FLUSSO: dopo aver risposto sull'offerta fai la qualifica COMPLETA come con tutti gli altri lead (stesse domande del manuale, non saltarne), poi proponi la videocall col consulente. Presentala come il momento in cui scegliete il percorso, vedete le condizioni della garanzia e fa l'iscrizione per bloccare il posto con il prezzo del Black Friday. Mai \"se ti convince\", \"se ti interessa\", \"eventualmente\": la chiusura si da' per scontata. Per giorni, orari, Noemi, form e tag segui il manuale come sempre.",
   );
   if (vsl) {

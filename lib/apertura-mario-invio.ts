@@ -3,6 +3,7 @@ import { sendTemplate, getTemplateBody } from './twilio';
 import { feniceOpening } from './fenice-opening';
 import { normalizeFunnel, variantIndexFor, openingEnvKey, openingBody, openingWaysFor } from './persona';
 import { firstNameOf, templateName } from './name';
+import { isCrmFunnelBlackFriday } from './black-friday';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -98,7 +99,9 @@ export async function inviaAperturaMario(
     logOpeningConfigError: (key: string) => Promise<void>;
   },
 ): Promise<EsitoAperturaMario> {
-  if (process.env.NEW_OPENING_ENABLED === '1') {
+  // Black Friday dalle inserzioni (PO 07/11/2026): l'apertura neutra legacy, mai quelle
+  // per funnel (10 ore / Telegram / simulatore). Vedi fenice-enroll.ts.
+  if (process.env.NEW_OPENING_ENABLED === '1' && !isCrmFunnelBlackFriday(a.funnel)) {
     const funnel = normalizeFunnel(a.funnel);
     const ways = openingWaysFor(funnel, (k) => Boolean(process.env[k]));
     const variant = variantIndexFor(a.conversationId, ways);

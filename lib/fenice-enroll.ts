@@ -15,6 +15,7 @@ import { contaBenvenutiUltimaOra } from './lancio-db';
 import { mittenteDiConversazione, numeroPrimario } from './mittente';
 import { mittenteBenvenutoLancio } from './lancio-mittente';
 import { scegliMittenteNuovo, sidAperturaMario, chatEsistente, registraAperturaMario } from './scelta-mittente';
+import { isCrmFunnelBlackFriday } from './black-friday';
 import { HANDOFF_VERGINI, HANDOFF_CRM_NON_DEL_BOT } from './lancio-vergini';
 import { lancioInCorso } from './lancio-fase';
 
@@ -194,11 +195,17 @@ export async function enrollLeadIntoMario(
   // `numeroBot` e `riscaldamento` del CRM non forzano piu' niente. Vedi
   // lib/scelta-mittente.ts. Su una chat che esiste gia' la scelta non ha effetto:
   // `findOrCreateLeadConversation` tiene il suo numero.
+  // Lead Black Friday dalle inserzioni (PO 07/11/2026): apertura neutra (il template
+  // legacy di Mario, "ci hai lasciato i tuoi contatti in una nostra pubblicita'") e
+  // numero HIGH meno carico senza tetto giornaliero. Le aperture A/B per funnel
+  // parlerebbero di 10 ore, Telegram o simulatore: promesse sbagliate per questi lead.
+  const blackFriday = isCrmFunnelBlackFriday(args.crmFunnel);
   const scelta = await scegliMittenteNuovo(supabase, {
-    templateSids: sidAperturaMario(),
+    templateSids: blackFriday ? [templateSid] : sidAperturaMario(),
     chiave: args.phone,
     crmLeadId: args.crmLeadId ?? null,
     includiPrimario: true,
+    senzaTettiSoloHigh: blackFriday,
   });
   const mittenteImposto: string | undefined = scelta.from;
   // Il tetto di ogni numero conta le chat che NASCONO qui (PO 06/11/2026): si guarda
@@ -418,7 +425,7 @@ export async function enrollLeadIntoMario(
   const cleanName = firstNameOf(firstName);
   let variables: Record<string, string> = cleanName ? { '3': cleanName } : {};
   let bodyOverride = feniceOpening(firstName);
-  if (process.env.NEW_OPENING_ENABLED === '1') {
+  if (process.env.NEW_OPENING_ENABLED === '1' && !blackFriday) {
     const funnel = normalizeFunnel(args.crmFunnel);
     const ways = openingWaysFor(funnel, (k) => Boolean(process.env[k]));
     const variant = variantIndexFor(conversationId, ways);

@@ -221,6 +221,42 @@ export function sidAperturaMario(): string[] {
   return legacy ? [legacy] : [];
 }
 
+/**
+ * Il numero HIGH (oggi, o ieri se oggi non c'e' ancora la lettura) e fuori pausa con meno
+ * aperture di Mario oggi, ignorando il tetto giornaliero ma non il riposo (tetto 0).
+ * null = nessuno utilizzabile o stato qualita' illeggibile.
+ */
+async function sceltaHighMenoCarico(
+  supabase: Supa,
+  i: { templateSids: string[]; adesso?: Date; primario: string },
+): Promise<{ numero: string; oggi: number } | null> {
+  const [tetti, stato] = await Promise.all([getTettiNumeri(supabase), getStatoQualitaNumeri(supabase)]);
+  if (!tetti || !stato) return null;
+  const adesso = i.adesso ?? new Date();
+  const oggiG = giornoRomaDi(adesso);
+  const ieriG = giornoRomaDi(new Date(adesso.getTime() - 24 * 3600 * 1000));
+  const numeri = [...numeriSecondari(), i.primario];
+  const ok: { numero: string; oggi: number; ordine: number }[] = [];
+  for (const [ordine, numero] of numeri.entries()) {
+    if (tettoDi(tetti, numero) <= 0) continue;
+    if (!eHighEFuoriPausa(stato, numero, oggiG, ieriG)) continue;
+    if (numero !== i.primario) {
+      if (eSuAltroAccount(numero) && credenzialiPerMittente(numero)?.sid === process.env.TWILIO_ACCOUNT_SID) continue;
+      let spedibile = true;
+      for (const sid of i.templateSids) {
+        if (!(await spedibileDa(sid, numero)).ok) { spedibile = false; break; }
+      }
+      if (!spedibile) continue;
+    }
+    const n = await apertureMarioOggi(supabase as never, numero, i.adesso);
+    if (n === null) continue;
+    ok.push({ numero, oggi: n, ordine });
+  }
+  if (ok.length === 0) return null;
+  ok.sort((a, b) => (a.oggi - b.oggi) || (a.ordine - b.ordine));
+  return { numero: ok[0].numero, oggi: ok[0].oggi };
+}
+
 export async function scegliMittenteNuovo(
   supabase: Supa,
   i: {
@@ -233,6 +269,13 @@ export async function scegliMittenteNuovo(
     includiPrimario?: boolean;
     /** Lead della coda marketing; assente = lo dice il contesto (`conCodaMarketing`). */
     codaMarketing?: boolean;
+    /**
+     * Lead Black Friday (PO 07/11/2026): senza tetti giornalieri, mai in coda. Si prende
+     * il numero HIGH e fuori pausa meno carico oggi, primario compreso, fra quelli non a
+     * riposo (tetto > 0) e da cui il template e' spedibile. Nessuno cosi' = regola di
+     * sempre qui sotto.
+     */
+    senzaTettiSoloHigh?: boolean;
   },
 ): Promise<SceltaMittente> {
   const codaMarketing = i.codaMarketing ?? inCodaMarketing();
@@ -241,6 +284,17 @@ export async function scegliMittenteNuovo(
   const base = { chiave: i.chiave, crmLeadId: i.crmLeadId ?? null };
   const alPrimario = (motivo: SceltaMittente['motivo'], scartati: Scarto[] = []): SceltaMittente =>
     ({ from: primario, secondario: false, scartati, motivo });
+
+  if (i.senzaTettiSoloHigh && i.templateSids.length > 0) {
+    const scelto = await sceltaHighMenoCarico(supabase, { ...i, primario });
+    if (scelto) {
+      await log(supabase, 'mittente_black_friday', 'info', { ...base, numero: scelto.numero, oggi: scelto.oggi },
+        `[numeri] lead Black Friday su ${scelto.numero} (${scelto.oggi} aperture oggi, senza tetto)`);
+      return scelto.numero === primario
+        ? alPrimario('scelto')
+        : { from: scelto.numero, secondario: true, scartati: [], motivo: 'scelto' };
+    }
+  }
 
   const secondari = numeriSecondari();
   if (secondari.length === 0) return alPrimario('nessun_secondario');
