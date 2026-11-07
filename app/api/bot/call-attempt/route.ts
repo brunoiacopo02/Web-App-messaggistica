@@ -441,6 +441,7 @@ async function scriviMessaggioLibero(
   const result = await generateMarioReply(history, {
     personaName: PERSONA_NAME[persona],
     contextNote: notaRecuperoNr(quando, ctx.tentativo),
+    conversationId: ctx.conversationId,
     timeoutMs: BUDGET_MODELLO_MS,
     maxRetries: RETRY_MODELLO,
   });

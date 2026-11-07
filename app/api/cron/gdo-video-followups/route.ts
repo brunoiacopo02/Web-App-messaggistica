@@ -297,6 +297,7 @@ export async function GET(req: NextRequest) {
         const history = buildSollecitoHistory(rows);
         const result = await generateMarioReply(history, {
           personaName: 'Marta',
+          conversationId: c.id,
           contextNote: gdoContextNote({
             gdoVideoSentAt: c.gdo_video_sent_at,
             gdoVideoWatchedAt: c.gdo_video_watched_at,

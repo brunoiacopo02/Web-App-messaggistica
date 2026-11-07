@@ -50,19 +50,29 @@ describe('prezzo', () => {
     expect(p).toContain('troviamo una soluzione praticamente con tutti');
   });
 
-  it('vieta qualunque cifra di rata o numero di rate', () => {
-    expect(p).toContain('MAI CIFRE DI RATA');
+  // Decisione PO 07/11/2026: la rata si puo' dire, ma solo come cifra indicativa
+  // ("circa 100 euro al mese") e solo sull'obiezione dei soldi, mai nel pitch.
+  it('rata: cifra indicativa di 100 euro solo all\'occorrenza, mai precisa, mai il numero di rate', () => {
+    expect(p).not.toContain('MAI CIFRE DI RATA');
+    expect(p).toContain("RATA SOLO ALL'OCCORRENZA: le rate partono da circa 100 euro al mese");
+    expect(p).toContain('NON fa parte del pitch e non la dici di tua iniziativa');
+    expect(p).toContain('Mai una cifra precisa, mai una cifra diversa da questa, mai quante rate sono');
     expect(p).not.toMatch(/\d+\s*rate\b/i);
-    // L'unica cifra "al mese" ammessa nel prompt è la forbice di guadagno
-    // post-corso nella sezione CHI SIAMO. Qualunque altra sarebbe una rata.
-    const alMese = p.match(/[\d.]+\s*(?:euro|€)\s*al mese/gi) ?? [];
-    expect(alMese).toEqual(['5.000 euro al mese']);
+    // Le uniche cifre "al mese": la forbice di guadagno post-corso (CHI SIAMO) e i 100
+    // euro indicativi della rata. Qualunque altra sarebbe una rata inventata.
+    const alMese = [...new Set(p.match(/[\d.]+\s*(?:euro|€)\s*al mese/gi) ?? [])];
+    expect(alMese.sort()).toEqual(['100 euro al mese', '5.000 euro al mese']);
   });
 
-  it('vieta le analogie di frazionamento del prezzo', () => {
-    expect(p).toContain('come un caffè al giorno');
-    expect(p).toContain('meno di un pacchetto di sigarette');
-    expect(p).toMatch(/non fare paragoni tipo/i);
+  it('la cifra della rata NON sta nel pitch', () => {
+    const pitch = p.slice(p.indexOf('FASE 5, PITCH'), p.indexOf('FASE 6, APPUNTAMENTO'));
+    expect(pitch).toContain('si può rateizzare');
+    expect(pitch).not.toMatch(/100 euro/);
+  });
+
+  it('ammette l\'esempio caffè e cornetto, non le sigarette', () => {
+    expect(p).toContain('un caffè e un cornetto al giorno');
+    expect(p).not.toMatch(/sigarette/i);
   });
 
   it('propone la call subito dopo aver detto la quota', () => {
@@ -72,7 +82,27 @@ describe('prezzo', () => {
   it('lascia fare il conto al lead invece di minimizzare la spesa', () => {
     expect(p).toContain('quanto vale per te arrivarci?');
     expect(p).toContain('Il conto lo deve fare lui');
-    expect(p).toMatch(/vietate frasi come "è solo", "è poco", "è un piccolo sacrificio"/);
+    expect(p).toMatch(/vietate frasi come "è solo", "è poco"/);
+  });
+
+  // Decisione PO 07/11/2026: "non ho soldi" non e' piu' un esempio di scarto.
+  it('"non ho soldi" non è uno scarto: si esplora e si presenta la rata come sacrificio sostenibile', () => {
+    const scarto = p.split('\n').find((r) => r.startsWith('- Obiezione ferrea'))!;
+    expect(scarto).not.toMatch(/es\. "non ho soldi"/);
+    expect(scarto).toContain('"Non ho soldi" detto da solo NON è uno scarto');
+    expect(p).toContain('"Non ho soldi / non arrivo a fine mese / non posso spendere" → NON è uno scarto');
+    expect(p).toContain('un investimento su di sé e un sacrificio sostenibile');
+    expect(p).toContain('davvero senza nessun reddito e senza nessun margine, neanche per una rata');
+  });
+});
+
+describe('"sei un bot?"', () => {
+  const p = buildMarioSystem('Mario');
+  it('resta vago: mai "sistema automatico" e simili', () => {
+    expect(p).toContain('ti scrivo io da Fenice per ottimizzare i tempi');
+    expect(p).toContain('non dire mai "sistema automatico", "risposte automatiche", "bot", "assistente virtuale" o "intelligenza artificiale" parlando di te');
+    expect(p).toContain("Non tirare fuori tu l'argomento");
+    expect(p).toContain('Non affermare di essere una persona reale');
   });
 });
 

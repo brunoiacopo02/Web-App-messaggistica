@@ -1278,6 +1278,7 @@ export async function drainMarioReplies(
       const result = await generateMarioReply(history, {
         personaName: PERSONA_NAME[persona],
         giorniPieni,
+        conversationId,
         // I promemoria pendenti (video non confermato, Noemi non ancora spiegata)
         // viaggiano dentro il contesto: il modello li integra nel discorso invece di
         // farli arrivare come un messaggio programmato addosso. Sui lead adottati la
@@ -1375,6 +1376,7 @@ export async function drainMarioReplies(
           const retry = await generateMarioReply(history, {
             personaName: PERSONA_NAME[persona],
             giorniPieni,
+            conversationId,
             contextNote: [gdoContextNote({
               gdoVideoSentAt: gdoVideoSentAt,
               gdoVideoWatchedAt: watchedAt, // appena confermato: sopprime NOTA_VIDEO nella nota
@@ -1724,7 +1726,7 @@ export async function drainMarioReplies(
 
       await supabase.from('event_log').insert({
         type: 'fenice_ai_reply',
-        payload: { conversationId, phone, appointmentFixed: fissatoNelTurno, appuntamentoScartato: motivoScarto, passToHuman: passaAPersona, ...(result.spostaAt !== undefined ? { spostaAt: result.spostaAt, spostamentoFatto } : {}) } as never,
+        payload: { conversationId, phone, appointmentFixed: fissatoNelTurno, appuntamentoScartato: motivoScarto, passToHuman: passaAPersona, ...(result.spostaAt !== undefined ? { spostaAt: result.spostaAt, spostamentoFatto } : {}), ...(result.braccio ? { braccio: result.braccio, modello: result.modello ?? null, ...(result.ripiego ? { ripiego: result.ripiego } : {}), token: result.token ?? null, cache: result.cache ?? null } : {}) } as never,
         message: `Mario ha risposto a ${phone}`, level: 'info',
       });
 

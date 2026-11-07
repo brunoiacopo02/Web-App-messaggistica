@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const create = vi.fn();
 vi.mock('./mario', () => ({
-  MARIO_MODEL: 'claude-sonnet-5',
+  MARIO_MODEL: 'claude-sonnet-5-5',
+  PARAMETRI_SONNET_SENZA_RAGIONAMENTO: { thinking: { type: 'between_tools' }, output_config: { effort: 'high' } },
   MEDIA_SENZA_TESTO: '[il lead ha inviato un contenuto senza testo]',
   getAnthropicClient: () => ({ messages: { create } }),
 }));
@@ -20,7 +21,9 @@ describe('generateLancioReply', () => {
     );
     expect(r).toEqual({ classe: 'domanda', passToHuman: false, visibleReply: 'È gratuita.', lancioTag: null });
     const params = create.mock.calls[0][0];
-    expect(params.model).toBe('claude-sonnet-5');
+    expect(params.model).toBe('claude-sonnet-5-5');
+    // Sonnet 5.5 rifiuta thinking 'disabled' con un 400: il minimo e' between_tools.
+    expect(params.thinking).toEqual({ type: 'between_tools' });
     expect(params.system).toMatch(/assistente virtuale di Fenice Academy/);
     expect(params.system).not.toMatch(/jotform/i);
     expect(params.system).toMatch(/Adesso in Italia è/);

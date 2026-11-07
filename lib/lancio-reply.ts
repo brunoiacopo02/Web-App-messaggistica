@@ -1,5 +1,5 @@
 import type Anthropic from '@anthropic-ai/sdk';
-import { getAnthropicClient, MARIO_MODEL, MEDIA_SENZA_TESTO, type MarioTurn } from './mario';
+import { getAnthropicClient, MARIO_MODEL, MEDIA_SENZA_TESTO, PARAMETRI_SONNET_SENZA_RAGIONAMENTO, type MarioTurn } from './mario';
 import { buildLancioSystem, type LancioPromptInput } from './lancio-prompt';
 import { parseLancioReply, type LancioReplyParsed } from './lancio-classifica';
 import { parseLancioTag, stripLancioTags, type LancioTag } from './lancio-scelta';
@@ -33,10 +33,10 @@ export async function generateLancioReply(
   const response = await getAnthropicClient().messages.create({
     model: MARIO_MODEL,
     max_tokens: 520,
-    thinking: { type: 'disabled' },
+    ...PARAMETRI_SONNET_SENZA_RAGIONAMENTO,
     system,
     messages,
-  } as Anthropic.MessageCreateParamsNonStreaming);
+  } as unknown as Anthropic.MessageCreateParamsNonStreaming);
 
   const textBlock = response.content.find((b) => b.type === 'text');
   const raw = textBlock && 'text' in textBlock ? textBlock.text : '';

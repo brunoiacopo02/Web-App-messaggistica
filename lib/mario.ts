@@ -6,8 +6,56 @@ import { sanitizeOutbound } from './outbound-sanitize';
 import { isoWithOffset } from './bot-contract';
 import { isSlugProfessione, type SlugProfessione } from './professioni';
 import { getSupabaseAdmin } from './supabase/admin';
+import { braccioConversazione, MODELLO_DEL_BRACCIO, MODELLO_SONNET, type BraccioMario } from './mario-braccio';
+import { BLOCCO_OPUS } from './mario-blocco-opus';
 
-export const MARIO_MODEL = 'claude-sonnet-5';
+/** Il modello base di Mario (braccio `sonnet` dell'A/B, e il lancio). Fino al 07/11/2026
+ *  era claude-sonnet-5. */
+export const MARIO_MODEL = MODELLO_SONNET;
+
+/**
+ * Il ragionamento "spento" di Sonnet 5.5. `thinking: {type:'disabled'}` su claude-sonnet-5-5
+ * e' un 400: il minimo e' `between_tools` (nessun ragionamento esteso), accettato solo con
+ * effort `high` o piu' basso. `high` e' il default che Sonnet 5 usava senza dirlo.
+ */
+export const PARAMETRI_SONNET_SENZA_RAGIONAMENTO = {
+  thinking: { type: 'between_tools' },
+  output_config: { effort: 'high' },
+} as const;
+
+/** I parametri della richiesta per un braccio: modello, ragionamento, system, messaggi.
+ *  Esportata perche' la prova a secco usi gli stessi byte della produzione. */
+export function parametriMario(
+  braccio: BraccioMario,
+  p: { systemStabile: string; systemVariabile: string; messages: MarioTurn[] },
+): Anthropic.MessageCreateParamsNonStreaming {
+  if (braccio === 'opus') {
+    // Il blocco sta nella parte stabile, dentro la cache: e' uguale per tutti i lead.
+    // Opus 5.5 non spegne il ragionamento: effort medio, come nella prova del 03/11.
+    // max_tokens comprende i token del ragionamento (in prova ~660 di uscita in media).
+    return {
+      model: MODELLO_DEL_BRACCIO.opus,
+      max_tokens: 16000,
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'medium' },
+      system: [
+        { type: 'text', text: `${p.systemStabile}\n\n${BLOCCO_OPUS}`, cache_control: { type: 'ephemeral' } },
+        { type: 'text', text: p.systemVariabile },
+      ],
+      messages: p.messages,
+    } as unknown as Anthropic.MessageCreateParamsNonStreaming;
+  }
+  return {
+    model: MODELLO_DEL_BRACCIO.sonnet,
+    max_tokens: 1400,
+    ...PARAMETRI_SONNET_SENZA_RAGIONAMENTO,
+    system: [
+      { type: 'text', text: p.systemStabile, cache_control: { type: 'ephemeral' } },
+      { type: 'text', text: p.systemVariabile },
+    ],
+    messages: p.messages,
+  } as unknown as Anthropic.MessageCreateParamsNonStreaming;
+}
 
 export type MarioTurn = { role: 'user' | 'assistant'; content: string };
 export type MarioOutcome = 'APPUNTAMENTO' | 'RICHIAMO' | 'DA_SCARTARE' | 'INTERROTTO';
@@ -34,6 +82,14 @@ export type MarioResult = {
    *  `letti` a zero su tutte le risposte significa che il prefisso non e' stabile.
    *  Lo riempie solo `generateMarioReply`. */
   cache?: { letti: number; scritti: number };
+  /** Braccio dell'A/B e modello che ha scritto DAVVERO questa risposta (se Opus rifiuta
+   *  o fallisce si ripiega su Sonnet: `braccio` resta 'opus', `modello` dice Sonnet e
+   *  `ripiego` il perche'). Lo riempie solo `generateMarioReply`. */
+  braccio?: BraccioMario;
+  modello?: string;
+  ripiego?: string;
+  /** Token della risposta, per il costo per braccio. */
+  token?: { input: number; output: number };
   /** Scheda del corso che Mario chiede di inviare al lead (tag `[SCHEDA:<slug>]`). Solo
    *  slug del catalogo: un valore inventato va in `schedaNonValida`, non qui. */
   schedaRichiesta?: SlugProfessione;
@@ -196,6 +252,8 @@ export async function generateMarioReply(
     giorniPieni?: readonly string[];
     timeoutMs?: number;
     maxRetries?: number;
+    /** La conversazione: decide il braccio dell'A/B (lib/mario-braccio.ts). Senza, Sonnet. */
+    conversationId?: number;
   },
 ): Promise<MarioResult> {
   // Un media senza didascalia (foto, sticker, documento) entra in `messages` con body
@@ -252,26 +310,68 @@ export async function generateMarioReply(
     ...(opts?.maxRetries !== undefined ? { maxRetries: opts.maxRetries } : {}),
   };
 
-  const response = await getClient().messages.create(
-    {
-      model: MARIO_MODEL,
-      max_tokens: 1400,
-      thinking: { type: 'disabled' },
-      system: [
-        { type: 'text', text: systemStabile, cache_control: { type: 'ephemeral' } },
-        { type: 'text', text: systemVariabile },
-      ],
-      messages,
-    } as Anthropic.MessageCreateParamsNonStreaming,
-    Object.keys(requestOptions).length > 0 ? requestOptions : undefined,
-  );
+  const braccio: BraccioMario = opts?.conversationId !== undefined
+    ? await braccioConversazione(getSupabaseAdmin(), opts.conversationId)
+    : 'sonnet';
+  const opzioni = Object.keys(requestOptions).length > 0 ? requestOptions : undefined;
+  const chiama = (b: BraccioMario) =>
+    getClient().messages.create(parametriMario(b, { systemStabile, systemVariabile, messages }), opzioni);
+
+  let response: Anthropic.Message;
+  let ripiego: string | undefined;
+  if (braccio === 'opus') {
+    // Opus non deve mai lasciare il lead senza risposta: un rifiuto (stop_reason
+    // 'refusal'), una risposta senza testo o un errore dell'API ripiegano su Sonnet.
+    // L'errore ripiega solo se il chiamante non ha un budget di tempo suo (call-attempt):
+    // li' un secondo giro intero sforerebbe il maxDuration.
+    try {
+      const r = await chiama('opus');
+      const testo = r.content.some((b) => b.type === 'text' && b.text.trim() !== '');
+      if (r.stop_reason === 'refusal' || !testo) {
+        ripiego = r.stop_reason === 'refusal' ? 'rifiuto' : 'senza_testo';
+        response = await chiama('sonnet');
+      } else {
+        response = r;
+      }
+    } catch (err) {
+      if (opts?.timeoutMs !== undefined) throw err;
+      ripiego = `errore: ${err instanceof Error ? err.message.slice(0, 160) : 'sconosciuto'}`;
+      response = await chiama('sonnet');
+    }
+    if (ripiego) await logRipiegoOpus(opts?.conversationId, ripiego);
+  } else {
+    response = await chiama('sonnet');
+  }
 
   const textBlock = response.content.find((b) => b.type === 'text');
   const raw = textBlock && 'text' in textBlock ? textBlock.text : '';
   // Serve a verificare che la cache stia davvero lavorando: se `letti` resta 0 su
   // tutte le risposte, il prefisso non e' stabile e la modifica va tolta, non lasciata
   // a meta'. Si legge dall'evento `fenice_ai_reply`.
-  const u = response.usage as { cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
+  const u = response.usage as { cache_read_input_tokens?: number; cache_creation_input_tokens?: number; input_tokens?: number; output_tokens?: number };
   const cache = { letti: u?.cache_read_input_tokens ?? 0, scritti: u?.cache_creation_input_tokens ?? 0 };
-  return { ...parseMarioReply(raw), bookingDays: [giorni.day1.date, giorni.day2.date], cache };
+  const token = { input: u?.input_tokens ?? 0, output: u?.output_tokens ?? 0 };
+  return {
+    ...parseMarioReply(raw),
+    bookingDays: [giorni.day1.date, giorni.day2.date],
+    cache,
+    braccio,
+    modello: response.model ?? MODELLO_DEL_BRACCIO[braccio],
+    ...(ripiego ? { ripiego } : {}),
+    token,
+  };
+}
+
+/** Traccia un ripiego da Opus a Sonnet. Un log che fallisce non ferma la risposta. */
+async function logRipiegoOpus(conversationId: number | undefined, motivo: string): Promise<void> {
+  try {
+    await getSupabaseAdmin().from('event_log').insert({
+      type: 'mario_opus_ripiego',
+      payload: { conversationId: conversationId ?? null, motivo } as never,
+      message: `Opus non ha risposto (${motivo}): risposta scritta da Sonnet`,
+      level: 'warn',
+    });
+  } catch {
+    // niente: il log e' un di piu'
+  }
 }

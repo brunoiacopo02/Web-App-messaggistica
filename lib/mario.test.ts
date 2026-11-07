@@ -12,7 +12,14 @@ vi.mock('./supabase/admin', () => ({
   getSupabaseAdmin: () => ({ from: () => ({ insert: eventInsert }) }),
 }));
 
+const braccioFinto = vi.fn(async (_s: unknown, _id: number): Promise<'sonnet' | 'opus'> => 'sonnet');
+vi.mock('./mario-braccio', async (orig) => ({
+  ...(await orig<typeof import('./mario-braccio')>()),
+  braccioConversazione: (s: unknown, id: number) => braccioFinto(s, id),
+}));
+
 import { parseMarioReply, generateMarioReply, GDO_CONTEXT_NOTE } from './mario';
+import { BLOCCO_OPUS } from './mario-blocco-opus';
 import { MARIO_SYSTEM_PROMPT, buildMarioSystem } from './mario-prompt';
 
 beforeEach(() => {
@@ -59,7 +66,12 @@ describe('generateMarioReply', () => {
     const out = await generateMarioReply([{ role: 'user', content: 'ciao' }]);
     expect(out.visibleReply).toBe('Ciao! Sono Mario 😊');
     const arg = messagesCreate.mock.calls[0][0];
-    expect(arg.model).toBe('claude-sonnet-5');
+    expect(arg.model).toBe('claude-sonnet-5-5');
+    // Sonnet 5.5 rifiuta thinking 'disabled' con un 400: il minimo e' between_tools,
+    // che vuole effort high o piu' basso.
+    expect(arg.thinking).toEqual({ type: 'between_tools' });
+    expect(arg.output_config).toEqual({ effort: 'high' });
+    expect(out.braccio).toBe('sonnet');
     expect(arg.messages).toEqual([{ role: 'user', content: 'ciao' }]);
     expect(Array.isArray(arg.system)).toBe(true);
   });
@@ -331,5 +343,79 @@ describe('generateMarioReply — i giorni prenotabili escono col risultato', () 
     });
     // Sabato 12 e lunedì 14: domenica 13 non è mai prenotabile.
     expect(r.bookingDays).toEqual(['2026-09-12', '2026-09-14']);
+  });
+});
+
+describe('generateMarioReply — A/B Sonnet 5.5 / Opus 5.5 (PO 07/11/2026)', () => {
+  beforeEach(() => { braccioFinto.mockReset(); braccioFinto.mockResolvedValue('sonnet'); });
+
+  it('senza conversationId non chiede il braccio e usa Sonnet', async () => {
+    messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'ok' }], model: 'claude-sonnet-5-5' });
+    const r = await generateMarioReply([{ role: 'user', content: 'ciao' }]);
+    expect(braccioFinto).not.toHaveBeenCalled();
+    expect(r.braccio).toBe('sonnet');
+    expect(messagesCreate.mock.calls[0][0].model).toBe('claude-sonnet-5-5');
+  });
+
+  it('braccio opus: Opus 5.5 col ragionamento e il blocco dentro la parte in cache', async () => {
+    braccioFinto.mockResolvedValue('opus');
+    messagesCreate.mockResolvedValueOnce({
+      content: [{ type: 'thinking', thinking: '' }, { type: 'text', text: 'Ciao!' }],
+      model: 'claude-opus-5-5', stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 300 },
+    });
+    const r = await generateMarioReply([{ role: 'user', content: 'ciao' }], { conversationId: 77 });
+    const arg = messagesCreate.mock.calls[0][0];
+    expect(braccioFinto.mock.calls[0][1]).toBe(77);
+    expect(arg.model).toBe('claude-opus-5-5');
+    expect(arg.thinking).toEqual({ type: 'adaptive' });
+    expect(arg.output_config).toEqual({ effort: 'medium' });
+    expect(arg.max_tokens).toBe(16000);
+    expect(arg.system[0].cache_control).toEqual({ type: 'ephemeral' });
+    expect(arg.system[0].text).toBe(`${buildMarioSystem('Mario')}\n\n${BLOCCO_OPUS}`);
+    expect(r.visibleReply).toBe('Ciao!');
+    expect(r).toMatchObject({ braccio: 'opus', modello: 'claude-opus-5-5', token: { input: 10, output: 300 } });
+    expect(r.ripiego).toBeUndefined();
+  });
+
+  it('il blocco NON va nel braccio sonnet', async () => {
+    messagesCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'ok' }] });
+    await generateMarioReply([{ role: 'user', content: 'ciao' }], { conversationId: 5 });
+    expect(systemDi()).not.toContain('COME RAGIONARE PRIMA DI OGNI RISPOSTA');
+  });
+
+  it('Opus rifiuta: risponde Sonnet e resta traccia del ripiego', async () => {
+    braccioFinto.mockResolvedValue('opus');
+    messagesCreate
+      .mockResolvedValueOnce({ content: [], stop_reason: 'refusal', model: 'claude-opus-5-5' })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: 'eccomi' }], model: 'claude-sonnet-5-5' });
+    const r = await generateMarioReply([{ role: 'user', content: 'ciao' }], { conversationId: 9 });
+    expect(messagesCreate.mock.calls[1][0].model).toBe('claude-sonnet-5-5');
+    expect(r).toMatchObject({ visibleReply: 'eccomi', braccio: 'opus', modello: 'claude-sonnet-5-5', ripiego: 'rifiuto' });
+    expect(eventInsert.mock.calls.some(([row]) => row.type === 'mario_opus_ripiego')).toBe(true);
+  });
+
+  it('Opus va in errore: ripiega su Sonnet, ma non se il chiamante ha un budget di tempo suo', async () => {
+    braccioFinto.mockResolvedValue('opus');
+    messagesCreate
+      .mockRejectedValueOnce(new Error('overloaded'))
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: 'eccomi' }], model: 'claude-sonnet-5-5' });
+    const r = await generateMarioReply([{ role: 'user', content: 'ciao' }], { conversationId: 9 });
+    expect(r.ripiego).toMatch(/^errore: overloaded/);
+
+    messagesCreate.mockReset();
+    messagesCreate.mockRejectedValueOnce(new Error('timeout'));
+    await expect(generateMarioReply([{ role: 'user', content: 'ciao' }], { conversationId: 9, timeoutMs: 20_000 })).rejects.toThrow('timeout');
+    expect(messagesCreate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('blocco Opus', () => {
+  it('su "ci penso" chiede prima cosa lo frena, non quando risentirsi (caso d_cipenso-24524)', () => {
+    expect(BLOCCO_OPUS).toContain('"CI PENSO / TI FACCIO SAPERE": la prima volta che te lo dice, la tua risposta è SEMPRE una domanda sola su cosa lo frena davvero');
+    expect(BLOCCO_OPUS).toContain('mai come risposta a un "ci penso"');
+  });
+  it('rimanda al manuale per rata e "sei un bot?"', () => {
+    expect(BLOCCO_OPUS).toContain('rata, passaggi a persona e su cosa rispondere se ti chiede se sei un bot vale sempre il manuale');
+    expect(BLOCCO_OPUS).not.toContain('Le cifre di rata non le dici mai');
   });
 });
