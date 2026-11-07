@@ -154,6 +154,7 @@ export function blackFridayContextNote(i: {
     "- GARANZIA \"COLLOCATO O RIMBORSATO\": e' scritta nero su bianco nel contratto: se non trova lavoro grazie al nostro corso, lo rimborsiamo. Se ti chiede condizioni, tempi, requisiti o dettagli, resta sul generico: le condizioni precise gliele spiega il consulente in call. Non inventare durate, requisiti o percentuali.",
     "- REGALO PER TUTTI GLI ISCRITTI: un corso sull'intelligenza artificiale che insegna a usare l'IA nella professione che sceglie, per dominare il mercato.",
     "- PERCORSO EXCLUSIVE: chi lo sceglie riceve un regalo in piu', e se ne parla in call. Al massimo puoi dire che e' un regalo tech, fisico, che gli arriva direttamente a casa. Non dire mai che oggetto e', non descriverlo e non dare indizi; se prova a indovinare non confermare e non smentire: \"e' una sorpresa, te la svela il consulente in call\".",
+    "- PERCHE' ADESSO: questo e' il momento migliore per formarsi, perche' il primo trimestre del 2027 e' decisivo per le assunzioni: con la ripartenza di inizio anno le aziende assumono di piu', e chi si forma adesso arriva pronto. Puoi usarlo come leva per non rimandare. Non aggiungere numeri, percentuali, nomi di aziende o studi a sostegno.",
   ];
   if (i.posti) {
     righe.push(`- POSTI: i posti con le condizioni del Black Friday sono solo ${i.posti}, perche' vogliamo essere sicuri di poter garantire il lavoro a tutti quelli che entrano. Puoi dirlo, sempre con questa motivazione. Non dire mai quanti posti sono rimasti o quanti sono gia' stati presi: non lo sai.`);

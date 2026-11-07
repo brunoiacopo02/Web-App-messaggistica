@@ -178,4 +178,9 @@ describe('blackFridayContextNote', () => {
     expect(tutte[0]).toContain("fa l'iscrizione per bloccare il posto");
     expect(tutte[0]).toContain('Mai "se ti convince"');
   });
+  it("perche' adesso: primo trimestre 2027 sempre presente, senza numeri inventati", () => {
+    const n = blackFridayContextNote({ vslLink: null, scadenza: null, posti: null, nowMs: NOW });
+    expect(n).toContain('primo trimestre del 2027');
+    expect(n).toContain('Non aggiungere numeri');
+  });
 });
