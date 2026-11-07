@@ -18,6 +18,7 @@ import {
   decideSollecitoRichiamo, sollecitoRichiamoText, conversazioniParcheggiate,
   claimSollecitoRichiamo, rilasciaSollecitoRichiamo, ESITO_PARCHEGGIATO,
 } from '@/lib/conf-richiamo';
+import { verificaAccesa, inCoorteVerifica, verificaRaggiungibile } from '@/lib/verifica-presenza';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -116,7 +117,7 @@ async function promemoriaBot(supabase: Supa, now: number): Promise<EsitoRamo> {
   // Appuntamenti fissati (terminali) la cui data cade nella finestra utile ai promemoria.
   const { data: convData, error: convErr } = await supabase
     .from('conversations')
-    .select('id, bot_scheduled_at, wa_number, leads(phone_e164, first_name)')
+    .select('id, bot_scheduled_at, wa_number, crm_lead_id, leads(phone_e164, first_name)')
     .eq('bot_outcome', 'APPUNTAMENTO')
     // Fermo manuale dal pannello: nessun invio automatico su una chat presa in
     // carico da una persona, promemoria pre-call compresi.
@@ -142,6 +143,10 @@ async function promemoriaBot(supabase: Supa, now: number): Promise<EsitoRamo> {
     const convIds = convs.map((c) => c.id as number);
     // Lead parcheggiati dalle Conferme: la call che il promemoria ricorda non c'è più.
     const parcheggiate = await conversazioniParcheggiate(supabase, convIds);
+    // Lead confermati dalle Conferme il giorno prima: un'ora prima della call ricevono la
+    // verifica presenza (lib/verifica-presenza.ts), che ricorda la call e chiede di
+    // confermare. Il T-3h, stesso contenuto due ore prima, su di loro tace.
+    const verificaDopo = await convConVerificaInArrivo(supabase, convIds, now);
 
     // Un'unica query per sapere quali promemoria sono già stati inviati su queste
     // conversazioni: idempotenza derivata da messages.template_sid. Le righe
@@ -199,6 +204,11 @@ async function promemoriaBot(supabase: Supa, now: number): Promise<EsitoRamo> {
       const already = sentByConv.get(c.id as number) ?? [];
       const kind = dueReminder(scheduledAt, now, already);
       if (!kind) {
+        skipped++;
+        continue;
+      }
+      const verifica = verificaDopo.get(c.id as number);
+      if (kind === 'r3' && verifica && verifica.leadId === c.crm_lead_id && verifica.callMs === scheduledAt) {
         skipped++;
         continue;
       }
@@ -581,4 +591,32 @@ async function promemoriaRichiamo(supabase: Supa, now: number): Promise<EsitoRam
     });
   }
   return { sent, skipped };
+}
+
+/**
+ * Le chat (fra `convIds`) i cui lead riceveranno la verifica presenza un'ora prima:
+ * confermati dalle Conferme il giorno prima, ramo acceso, call ancora raggiungibile.
+ * Una lettura fallita torna vuota: si manda il T-3h come sempre.
+ */
+async function convConVerificaInArrivo(
+  supabase: Supa,
+  convIds: number[],
+  now: number,
+): Promise<Map<number, { leadId: string; callMs: number }>> {
+  const out = new Map<number, { leadId: string; callMs: number }>();
+  if (!verificaAccesa() || !process.env.VERIFICA_1H_TEMPLATE_SID || convIds.length === 0) return out;
+  const { data, error } = await supabase
+    .from('crm_lead_status')
+    .select('lead_id, conversation_id, appointment_date, conferme_outcome, conferme_outcome_at')
+    .in('conversation_id', convIds)
+    .eq('conferme_outcome', 'confermato');
+  if (error) return out;
+  for (const r of (data ?? []) as Array<{ lead_id: string; conversation_id: number; appointment_date: string | null; conferme_outcome: string | null; conferme_outcome_at: string | null }>) {
+    const callMs = r.appointment_date ? Date.parse(r.appointment_date) : NaN;
+    if (Number.isNaN(callMs)) continue;
+    if (!inCoorteVerifica({ confermeOutcome: r.conferme_outcome, confermeOutcomeAt: r.conferme_outcome_at, appointmentAt: r.appointment_date })) continue;
+    if (!verificaRaggiungibile(callMs, now)) continue;
+    out.set(r.conversation_id, { leadId: r.lead_id, callMs });
+  }
+  return out;
 }

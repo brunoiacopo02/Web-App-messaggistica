@@ -32,6 +32,7 @@ import { pushLeadEntrante } from '@/lib/lead-entrante';
 import { segnaProfessione } from '@/lib/professione-chat';
 import { eNumeroDelBot } from '@/lib/mittente';
 import { segnaRispostaDopoSollecito } from '@/lib/sollecito-parcheggio';
+import { registraRispostaVerifica, verificaAccesa } from '@/lib/verifica-presenza';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -659,6 +660,14 @@ export async function POST(req: NextRequest) {
       // Dopo la risposta a Twilio: la rete del CRM non deve rallentare il webhook.
       if (conv?.crm_lead_id) {
         after(segnalaRispostaDopoTerzoNr(supabase, conversationId, conv.crm_lead_id));
+      }
+
+      // Risposta alla verifica presenza un'ora prima (lib/verifica-presenza.ts): fuori da
+      // `shouldAutoReply` per la stessa ragione di sopra, una chat con l'appuntamento in
+      // piedi puo' essere 'booked' o ferma a mano. Registra l'esito e avvisa il CRM, non
+      // risponde al lead: la chat la porta avanti chi la porta sempre.
+      if (conv?.crm_lead_id && verificaAccesa()) {
+        after(registraRispostaVerifica(supabase, conversationId, messageBody));
       }
 
       // Lead del lancio gia' restituito al pool (B5, ruling C8): non si riapre, il bot
