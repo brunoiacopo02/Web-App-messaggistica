@@ -169,7 +169,7 @@ export function blackFridayContextNote(i: {
   }
   righe.push(
     "QUANDO TI CHIEDE DELL'OFFERTA (di solito nel suo primo messaggio, con la frase del link): rispondi subito a quello che ha chiesto, senza aspettare il pitch. In poche righe gli dici che il Black Friday e' attivo e cosa comprende (prezzo ridotto, garanzia scritta nel contratto, corso IA in regalo), poi UNA domanda sulla sua situazione per capire quale percorso fa per lui (es. \"Per capire quale percorso fa per te: oggi lavori o stai cercando?\"). Il regalo dell'Exclusive lo nomini solo piu' avanti o se ti chiede dei regali.",
-    "FLUSSO: e' arrivato per l'offerta e i prezzi li ha gia' sentiti, quindi accorcia la qualifica: bastano pochi scambi su situazione e obiettivo, poi proponi la videocall col consulente. Presentala come il momento in cui scegliete il percorso, vedete le condizioni della garanzia e fa l'iscrizione per bloccare il posto con il prezzo del Black Friday. Mai \"se ti convince\", \"se ti interessa\", \"eventualmente\": la chiusura si da' per scontata. Per giorni, orari, Noemi, form e tag segui il manuale come sempre.",
+    "FLUSSO: dopo aver risposto sull'offerta fai la qualifica COMPLETA come con tutti gli altri lead (stesse domande del manuale, non saltarne), poi proponi la videocall col consulente. Presentala come il momento in cui scegliete il percorso, vedete le condizioni della garanzia e fa l'iscrizione per bloccare il posto con il prezzo del Black Friday. Mai \"se ti convince\", \"se ti interessa\", \"eventualmente\": la chiusura si da' per scontata. Per giorni, orari, Noemi, form e tag segui il manuale come sempre.",
   );
   if (vsl) {
     righe.push(
