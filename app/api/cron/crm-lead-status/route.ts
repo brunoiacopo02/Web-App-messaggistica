@@ -6,6 +6,7 @@ import {
   toRow,
   mergeLatched,
   prossimoCursore,
+  corpoRichiesta,
   type CrmLeadStatus,
   type CrmLeadStatusRow,
 } from '@/lib/crm-lead-status';
@@ -45,7 +46,9 @@ export async function GET(req: NextRequest) {
   const started = Date.now();
 
   // Il cursore vive in `app_settings`: sopravvive ai deploy e non dipende dall'ultima
-  // riga scritta, che potrebbe essere stata scartata.
+  // riga scritta, che potrebbe essere stata scartata. Dal 07/11/2026 (CRM v1.14) e' il
+  // cursore composto `<ISO us>|<leadId>`; un valore vecchio (solo data) si manda come
+  // `since` e al primo giro viene sostituito da quello composto.
   const { data: settings } = await admin
     .from('app_settings').select('value').eq('key', CURSOR_KEY).maybeSingle();
   const partenza = typeof settings?.value === 'string' ? settings.value : PRIMO_SINCE;
@@ -62,7 +65,7 @@ export async function GET(req: NextRequest) {
   let errore: string | null = null;
 
   while (pagine < MAX_PAGINE && Date.now() - started < BUDGET_MS) {
-    const rawBody = JSON.stringify({ since, limit: LIMIT });
+    const rawBody = JSON.stringify(corpoRichiesta(since, LIMIT));
     let json: unknown;
     try {
       const res = await fetch(url, {

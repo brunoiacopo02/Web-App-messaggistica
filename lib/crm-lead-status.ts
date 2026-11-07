@@ -56,6 +56,9 @@ export type ContattoUmanoStatus = {
 export type LeadStatusPage = {
   leads: CrmLeadStatus[];
   nextSince: string | null;
+  /** Cursore composto `<ISO al microsecondo>|<leadId>` (contratto v1.14). Assente da un
+   *  CRM vecchio: allora si ripiega su `nextSince`. */
+  nextCursor?: string | null;
   hasMore: boolean;
   /** Righe buttate perche' senza `leadId` o senza `updatedAt`. Vanno loggate, non ignorate. */
   scartate: number;
@@ -135,7 +138,9 @@ export function parseLeadStatusPage(
   const nextSince = testo(raw.nextSince)
     ?? leads.reduce<string | null>((max, l) => (max === null || l.updatedAt > max ? l.updatedAt : max), null);
 
-  return { ok: true, page: { leads, nextSince, hasMore: raw.hasMore === true, scartate } };
+  const nextCursor = testo(raw.nextCursor);
+
+  return { ok: true, page: { leads, nextSince, nextCursor, hasMore: raw.hasMore === true, scartate } };
 }
 
 /** Dal payload del CRM alle colonne di `crm_lead_status`. */
@@ -192,16 +197,46 @@ export function mergeLatched<T extends Latchabile>(esistente: Latchabile | null,
   };
 }
 
+/** Il cursore salvato e' del formato composto (v1.14)? Il `since` vecchio non ha `|`. */
+export function eCursoreComposto(v: string): boolean {
+  return v.includes('|');
+}
+
+/** Il body da mandare al CRM: `cursor` se l'abbiamo, altrimenti il `since` di sempre. */
+export function corpoRichiesta(
+  corrente: string,
+  limit: number,
+): { cursor: string; limit: number } | { since: string; limit: number } {
+  return eCursoreComposto(corrente) ? { cursor: corrente, limit } : { since: corrente, limit };
+}
+
 /**
- * Dove riparte il giro. Un cursore che non avanza (stesso istante, o piu' indietro di
- * dove siamo) chiude il giro invece di rileggere la stessa pagina all'infinito: succede
- * quando piu' righe del `limit` condividono lo stesso `updatedAt`.
+ * Dove riparte il giro. Col cursore composto (CRM v1.14) ogni pagina avanza anche dentro
+ * un blocco di righe con lo stesso `updatedAt`. Un cursore che non avanza (uguale, o
+ * piu' indietro di dove siamo) chiude il giro invece di rileggere la stessa pagina
+ * all'infinito. Senza `nextCursor` (CRM vecchio) vale la regola di prima su `nextSince`,
+ * che si blocca quando piu' righe del `limit` condividono lo stesso `updatedAt`.
  */
 export function prossimoCursore(
   corrente: string,
   page: LeadStatusPage,
 ): { since: string; continua: boolean; bloccato: boolean } {
-  if (page.leads.length === 0 || !page.nextSince) {
+  if (page.leads.length === 0) {
+    return { since: corrente, continua: false, bloccato: false };
+  }
+  if (page.nextCursor && eCursoreComposto(page.nextCursor)) {
+    if (eCursoreComposto(corrente)) {
+      // L'ordine fra id dentro lo stesso istante lo decide la collation del CRM: qui
+      // si controlla solo che l'istante non torni indietro e che il cursore cambi.
+      const tsNext = page.nextCursor.slice(0, page.nextCursor.indexOf('|'));
+      const tsCorr = corrente.slice(0, corrente.indexOf('|'));
+      if (page.nextCursor === corrente || tsNext < tsCorr) {
+        return { since: corrente, continua: false, bloccato: true };
+      }
+    }
+    return { since: page.nextCursor, continua: page.hasMore, bloccato: false };
+  }
+  if (!page.nextSince) {
     return { since: corrente, continua: false, bloccato: false };
   }
   if (page.nextSince <= corrente) {

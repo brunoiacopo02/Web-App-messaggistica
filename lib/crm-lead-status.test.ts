@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseLeadStatusPage, toRow, mergeLatched, prossimoCursore } from './crm-lead-status';
+import { parseLeadStatusPage, toRow, mergeLatched, prossimoCursore, corpoRichiesta } from './crm-lead-status';
 
 const LEAD = {
   leadId: 'abc',
@@ -223,5 +223,71 @@ describe('prossimoCursore', () => {
     const r = prossimoCursore('2026-08-01T00:00:00.000Z', pagina(null, true, 0));
     expect(r.since).toBe('2026-08-01T00:00:00.000Z');
     expect(r.continua).toBe(false);
+  });
+});
+
+describe('cursore composto (CRM v1.14)', () => {
+  const ISTANTE = '2026-10-19T13:09:33.289260Z';
+  const paginaC = (nextCursor: string, hasMore: boolean) => ({
+    leads: [{ leadId: 'x', updatedAt: '2026-10-19T13:09:33.289Z' }] as any,
+    nextSince: '2026-10-19T13:09:33.289Z',
+    nextCursor,
+    hasMore,
+    scartate: 0,
+  });
+
+  it('parse legge nextCursor', () => {
+    const r = parseLeadStatusPage({ leads: [LEAD], nextSince: 'a', nextCursor: `${ISTANTE}|L1`, hasMore: true });
+    expect(r.ok && r.page.nextCursor).toBe(`${ISTANTE}|L1`);
+  });
+
+  it('il since vecchio va come since, il composto come cursor', () => {
+    expect(corpoRichiesta('2026-10-24T10:00:00.000Z', 200)).toEqual({ since: '2026-10-24T10:00:00.000Z', limit: 200 });
+    expect(corpoRichiesta(`${ISTANTE}|L1`, 200)).toEqual({ cursor: `${ISTANTE}|L1`, limit: 200 });
+  });
+
+  it('dal since vecchio passa al cursore composto', () => {
+    const r = prossimoCursore('2026-10-19T00:00:00.000Z', paginaC(`${ISTANTE}|L200`, true));
+    expect(r).toEqual({ since: `${ISTANTE}|L200`, continua: true, bloccato: false });
+  });
+
+  it('avanza dentro un blocco con lo stesso updatedAt (il caso del 19/10)', () => {
+    const r = prossimoCursore(`${ISTANTE}|L200`, paginaC(`${ISTANTE}|L400`, true));
+    expect(r).toEqual({ since: `${ISTANTE}|L400`, continua: true, bloccato: false });
+  });
+
+  it('cursore identico o istante che torna indietro: si ferma, non cicla', () => {
+    expect(prossimoCursore(`${ISTANTE}|L200`, paginaC(`${ISTANTE}|L200`, true)).bloccato).toBe(true);
+    expect(prossimoCursore(`${ISTANTE}|L200`, paginaC('2026-10-18T00:00:00.000000Z|Z', true)).bloccato).toBe(true);
+  });
+
+  it('1.000 righe nello stesso istante: 5 pagine da 200 consumate tutte', () => {
+    const ids = Array.from({ length: 1000 }, (_, i) => `L${String(i).padStart(4, '0')}`);
+    // CRM finto: (updatedAt, id) > cursore, stesso ordine.
+    const crm = (corrente: string) => {
+      const dopo = corrente.includes('|') ? ids.filter((id) => id > corrente.split('|')[1]) : ids;
+      const page = dopo.slice(0, 200);
+      return {
+        leads: page.map((leadId) => ({ leadId, updatedAt: '2026-10-19T13:09:33.289Z' })) as any,
+        nextSince: '2026-10-19T13:09:33.289Z',
+        nextCursor: page.length ? `${ISTANTE}|${page[page.length - 1]}` : corrente,
+        hasMore: dopo.length > 200,
+        scartate: 0,
+      };
+    };
+    let since = '2026-10-19T00:00:00.000Z';
+    const visti = new Set<string>();
+    let pagine = 0;
+    for (;;) {
+      const p = crm(since);
+      pagine++;
+      p.leads.forEach((l: { leadId: string }) => visti.add(l.leadId));
+      const a = prossimoCursore(since, p);
+      since = a.since;
+      expect(a.bloccato).toBe(false);
+      if (!a.continua) break;
+    }
+    expect(pagine).toBe(5);
+    expect(visti.size).toBe(1000);
   });
 });
