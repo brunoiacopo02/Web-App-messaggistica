@@ -3,7 +3,8 @@ import { sendTemplate, getTemplateBody } from './twilio';
 import { feniceOpening } from './fenice-opening';
 import { normalizeFunnel, variantIndexFor, openingEnvKey, openingBody, openingWaysFor } from './persona';
 import { firstNameOf, templateName } from './name';
-import { isCrmFunnelBlackFriday } from './black-friday';
+import { aperturaBlackFridayText, isCrmFunnelBlackFriday } from './black-friday';
+import { aperturaBlackFriday } from './black-friday-apertura';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -80,7 +81,9 @@ export async function sendSequenceTemplate(
 export type EsitoAperturaMario =
   | { ok: boolean; capped?: boolean; error?: string; tentato: true }
   /** Nessun invio: manca il SID dell'apertura legacy (gia' segnalato con `logConfigError`). */
-  | { ok: false; tentato: false; error: 'config_mancante' };
+  | { ok: false; tentato: false; error: 'config_mancante' }
+  /** Black Friday: si aspetta l'approvazione del template BF (`bf_apertura_attesa_fino`). */
+  | { ok: false; tentato: false; error: 'attesa_template_bf' };
 
 /**
  * L'apertura di Mario: con `NEW_OPENING_ENABLED=1` la variante per funnel (persona
@@ -99,6 +102,17 @@ export async function inviaAperturaMario(
     logOpeningConfigError: (key: string) => Promise<void>;
   },
 ): Promise<EsitoAperturaMario> {
+  if (isCrmFunnelBlackFriday(a.funnel)) {
+    const bf = await aperturaBlackFriday(supabase, a.from);
+    if (bf.scelta === 'attesa') return { ok: false, tentato: false, error: 'attesa_template_bf' };
+    if (bf.scelta === 'template_bf' && bf.sid) {
+      const r = await sendSequenceTemplate(
+        supabase, a.conversationId, a.phone, bf.sid, 'Apertura Black Friday', a.from,
+        { '1': templateName(a.firstName) }, aperturaBlackFridayText(templateName(a.firstName)),
+      );
+      return { ...r, tentato: true };
+    }
+  }
   // Black Friday dalle inserzioni (PO 07/11/2026): l'apertura neutra legacy, mai quelle
   // per funnel (10 ore / Telegram / simulatore). Vedi fenice-enroll.ts.
   if (process.env.NEW_OPENING_ENABLED === '1' && !isCrmFunnelBlackFriday(a.funnel)) {

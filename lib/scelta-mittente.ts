@@ -226,7 +226,7 @@ export function sidAperturaMario(): string[] {
  * aperture di Mario oggi, ignorando il tetto giornaliero ma non il riposo (tetto 0).
  * null = nessuno utilizzabile o stato qualita' illeggibile.
  */
-async function sceltaHighMenoCarico(
+export async function sceltaHighMenoCarico(
   supabase: Supa,
   i: { templateSids: string[]; adesso?: Date; primario: string },
 ): Promise<{ numero: string; oggi: number } | null> {

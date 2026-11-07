@@ -15,7 +15,8 @@ import { contaBenvenutiUltimaOra } from './lancio-db';
 import { mittenteDiConversazione, numeroPrimario } from './mittente';
 import { mittenteBenvenutoLancio } from './lancio-mittente';
 import { scegliMittenteNuovo, sidAperturaMario, chatEsistente, registraAperturaMario } from './scelta-mittente';
-import { isCrmFunnelBlackFriday } from './black-friday';
+import { aperturaBlackFridayText, isCrmFunnelBlackFriday } from './black-friday';
+import { aperturaBlackFriday } from './black-friday-apertura';
 import { HANDOFF_VERGINI, HANDOFF_CRM_NON_DEL_BOT } from './lancio-vergini';
 import { lancioInCorso } from './lancio-fase';
 
@@ -355,12 +356,18 @@ export async function enrollLeadIntoMario(
   // La fascia qui è quella LARGA (07:00-23:00, `inOpeningWindow`) e non quella dei
   // touch: è il primo messaggio a chi ha appena lasciato il numero, e una risposta
   // se l'aspetta. Vedi il commento su `inOpeningWindow` per i numeri.
-  if (!inOpeningWindow(Date.now())) {
+  // Black Friday (PO 07/11/2026): il template BF se approvato sull'account del numero;
+  // in attesa dell'approvazione l'apertura si differisce come di notte (la manda il cron
+  // sequence-touches appena il template e' approvato, o il neutro a fine attesa).
+  const aperturaBf = blackFriday ? await aperturaBlackFriday(supabase, from) : null;
+  if (!inOpeningWindow(Date.now()) || aperturaBf?.scelta === 'attesa') {
     await supabase.from('conversations').update(convUpdate).eq('id', conversationId);
     await supabase.from('event_log').insert({
       type: 'fenice_enroll_deferred',
-      payload: { phone: args.phone, conversationId, crmLeadId: args.crmLeadId ?? null } as never,
-      message: `Lead arruolato (Mario), apertura differita in fascia: ${args.phone}`,
+      payload: { phone: args.phone, conversationId, crmLeadId: args.crmLeadId ?? null, ...(aperturaBf?.scelta === 'attesa' ? { attesaTemplateBf: true } : {}) } as never,
+      message: aperturaBf?.scelta === 'attesa'
+        ? `Lead Black Friday arruolato (Mario), apertura in attesa del template BF: ${args.phone}`
+        : `Lead arruolato (Mario), apertura differita in fascia: ${args.phone}`,
       level: 'info',
     });
     return { ok: true, conversationId, deferred: true };
@@ -425,7 +432,12 @@ export async function enrollLeadIntoMario(
   const cleanName = firstNameOf(firstName);
   let variables: Record<string, string> = cleanName ? { '3': cleanName } : {};
   let bodyOverride = feniceOpening(firstName);
-  if (process.env.NEW_OPENING_ENABLED === '1' && !blackFriday) {
+  if (aperturaBf?.scelta === 'template_bf' && aperturaBf.sid) {
+    sendSid = aperturaBf.sid;
+    sendLabel = 'Apertura Black Friday';
+    variables = { '1': templateName(firstName) };
+    bodyOverride = aperturaBlackFridayText(templateName(firstName));
+  } else if (process.env.NEW_OPENING_ENABLED === '1' && !blackFriday) {
     const funnel = normalizeFunnel(args.crmFunnel);
     const ways = openingWaysFor(funnel, (k) => Boolean(process.env[k]));
     const variant = variantIndexFor(conversationId, ways);

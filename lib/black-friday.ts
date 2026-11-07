@@ -36,6 +36,38 @@ export function isMarkerBlackFriday(t: string | null | undefined): boolean {
   return MARKER.test(t ?? '');
 }
 
+/**
+ * Apertura Black Friday (PO 07/11/2026): template proprio, `fenice_apertura_black_friday_v1`,
+ * creato su tutti e tre gli account (scripts/crea-template-apertura-black-friday.ts). Il SID
+ * dell'account principale sta in `BF_OPENING_TEMPLATE_SID`; gli altri account lo ritrovano
+ * per nome. Testo: solo la richiesta del lead, nessuna cifra, nessun posto, nessun regalo,
+ * e nessun "e' attiva" (vale anche prima del 9/11). {{1}} = nome proprio.
+ */
+export const NOME_TEMPLATE_APERTURA_BF = 'fenice_apertura_black_friday_v1';
+/** Pezzo fisso del testo: riconosce in cronologia un'apertura BF gia' partita. */
+export const MARKER_TESTO_APERTURA_BF = "richiesta di informazioni sull'offerta Black Friday";
+export function aperturaBlackFridayText(nome: string): string {
+  // Nessun nome di persona: arriva anche su chat aperte da Marta (Cristina, conv 26723).
+  return `Ciao ${nome}, ti scrivo da Fenice Academy per la tua richiesta di informazioni sull'offerta Black Friday sui nostri percorsi. Prima di raccontarti come funziona, una domanda per capire cosa fa per te: oggi lavori o stai cercando lavoro?`;
+}
+
+/**
+ * Stand-by delle aperture BF (PO 07/11/2026): nessuna apertura, nemmeno la neutra, finche'
+ * il template BF non e' approvato da Meta sull'account del numero; poi parte da solo.
+ * Interruttore manuale `app_settings.bf_apertura_modo`:
+ *  - assente / 'auto': si aspetta l'approvazione;
+ *  - 'neutra': si apre subito col neutro `aperturabotchat` (se il template non arriva).
+ */
+export const SETTING_MODO_APERTURA = 'bf_apertura_modo' as const;
+
+export type SceltaAperturaBf = 'template_bf' | 'attesa' | 'neutra';
+
+/** Puro: template BF approvato = quello; altrimenti stand-by, salvo interruttore 'neutra'. */
+export function sceltaAperturaBf(i: { approvato: boolean; modo: string | null }): SceltaAperturaBf {
+  if (i.approvato) return 'template_bf';
+  return (i.modo ?? '').trim().toLowerCase() === 'neutra' ? 'neutra' : 'attesa';
+}
+
 /** La chat e' arrivata dal CRM come BLACK FRIDAY (lead delle inserzioni, PO 07/11/2026). */
 export function isCrmFunnelBlackFriday(f: string | null | undefined): boolean {
   return (f ?? '').trim().toUpperCase() === PROVENIENZA_BLACK_FRIDAY;

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendOutcome } from '@/lib/bot-outcome';
 import { caricaContesto as caricaContestoSollecito, decidiChiusura } from '@/lib/sollecito-parcheggio';
+import { isCrmFunnelBlackFriday } from '@/lib/black-friday';
 import { decideFollowupAction, esitoAperturaMaiPartita, esitoMaiConsegnato, haLettoUnNostroMessaggio, postinoGdo, serveCronologia, ultimaAttivitaMs, puoAverScrittoPrimaDellAvvio, scrittiSenzaRispostaPrimaDellAvvio, ARRUOLAMENTO_BUFFER_MS } from '@/lib/bot-followups';
 import { classifyInterrupted } from '@/lib/interrotto-note';
 import { buildConfermaPersaNote } from '@/lib/bot-outcome-rules';
@@ -120,7 +121,7 @@ export async function GET(req: NextRequest) {
   for (let from = 0; ; from += 1000) {
     const { data, error } = await supabase
       .from('conversations')
-      .select('id, ai_status, ai_lock_at, ai_started_at, created_at, last_message_at, last_inbound_at, crm_lead_id, bot_outcome, bot_followups_sent, gdo_agenda_at, gdo_appuntamento_at, lancio_slug, lancio_fase, wa_number, leads(phone_e164)')
+      .select('id, ai_status, ai_lock_at, ai_started_at, created_at, last_message_at, last_inbound_at, crm_lead_id, crm_funnel, bot_outcome, bot_followups_sent, gdo_agenda_at, gdo_appuntamento_at, lancio_slug, lancio_fase, wa_number, leads(phone_e164)')
       .not('crm_lead_id', 'is', null)
       .in('ai_status', ['active', 'replying', 'handed_off', 'booked'])
       // Fermo manuale dal pannello: fuori dal giro del cron per intero — niente
@@ -317,7 +318,10 @@ export async function GET(req: NextRequest) {
         // Oggi ridondante (il blocco 2a-bis ha gia' fatto `continue`), e resta: la
         // guardia del modulo puro non deve dipendere dall'ordine dei blocchi qui.
         lancio: lancioInCorso(c),
-        arruolatoAtMs: c.ai_started_at ? Date.parse(c.ai_started_at) : null,
+        // Black Friday in stand-by (PO 07/11/2026): finche' il template BF non e' approvato
+        // la chat non riceve aperture, e non deve tornare al CRM come "apertura mai partita".
+        arruolatoAtMs: c.ai_started_at && !isCrmFunnelBlackFriday((c as { crm_funnel?: string | null }).crm_funnel)
+          ? Date.parse(c.ai_started_at) : null,
       });
 
       // Ci aveva scritto lui, prima dell'arruolamento, e nessuno gli aveva risposto: e' la

@@ -2,7 +2,24 @@ import { describe, it, expect } from 'vitest';
 import {
   blackFridayContextNote, blackFridayVince, FINE_BLACK_FRIDAY_DEFAULT_MS, funnelBlackFridayAttivo,
   INIZIO_BLACK_FRIDAY_MS, haAperturaSbagliata, isCrmFunnelBlackFriday, isMarkerBlackFriday, parsePosti, parseScadenza, TESTO_LINK_BLACK_FRIDAY,
+  aperturaBlackFridayText, MARKER_TESTO_APERTURA_BF, sceltaAperturaBf,
 } from './black-friday';
+
+describe('apertura Black Friday in stand-by (PO 07/11/2026)', () => {
+  it('approvato = template BF; altrimenti attesa, salvo interruttore neutra', () => {
+    expect(sceltaAperturaBf({ approvato: true, modo: null })).toBe('template_bf');
+    expect(sceltaAperturaBf({ approvato: false, modo: null })).toBe('attesa');
+    expect(sceltaAperturaBf({ approvato: false, modo: 'auto' })).toBe('attesa');
+    expect(sceltaAperturaBf({ approvato: false, modo: ' Neutra ' })).toBe('neutra');
+    expect(sceltaAperturaBf({ approvato: true, modo: 'neutra' })).toBe('template_bf');
+  });
+  it('testo: nome, richiesta, nessuna cifra/posti/regalo/attiva; marker riconoscibile', () => {
+    const t = aperturaBlackFridayText('Giulia');
+    expect(t.startsWith('Ciao Giulia,')).toBe(true);
+    expect(t).toContain(MARKER_TESTO_APERTURA_BF);
+    expect(t).not.toMatch(/\d|tablet|posti|regalo|attiv|Mario|Marta/i);
+  });
+});
 import { classificaPrimoMessaggio } from './primo-messaggio';
 
 describe('isMarkerBlackFriday', () => {

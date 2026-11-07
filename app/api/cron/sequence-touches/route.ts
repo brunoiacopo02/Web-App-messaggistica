@@ -31,6 +31,7 @@ import { mittenteDiConversazione } from '@/lib/mittente';
 import { formatRomeDateTime } from '@/lib/rome-time';
 import { caricaContesto, decidiInvio, sidPerConversazione } from '@/lib/sollecito-parcheggio';
 import { caricaTouchAb, idoneaTouchAb, sidTouchPerPersona } from '@/lib/touch-ab';
+import { isCrmFunnelBlackFriday } from '@/lib/black-friday';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -241,6 +242,10 @@ export async function GET(req: NextRequest) {
       if (!hasInbound) {
         // ── Track A: mai risposto ─────────────────────────────────────────
         trackA++;
+        // Black Friday (PO 07/11/2026): le chat BF mai risposte le apre SOLO il cron
+        // bf-aperture col template BF approvato. Qui niente apertura (nemmeno neutra),
+        // niente touch e niente "apertura mai partita": in stand-by restano al bot.
+        if (isCrmFunnelBlackFriday(c.crm_funnel)) { skipped++; continue; }
         // Il touch "Ti ho scritto ieri" e' MARKETING a chi non ha mai risposto: sospeso
         // dal PO il 24/09/2026 per la qualita' dei numeri. Riparte solo con '1'.
         const action = decideTrackA({
