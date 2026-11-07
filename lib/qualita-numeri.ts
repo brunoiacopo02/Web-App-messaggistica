@@ -13,6 +13,10 @@
  *   Mario al giorno (PO 06/11/2026: il 3199 resta basso apposta, e' uno dei due numeri
  *   del trabocco). Non sale piu' da solo: il gradino a 100000 del 29/10 e' tolto. Se
  *   scende sotto HIGH in qualunque momento esce subito e si riparte da capo.
+ * - Promozioni una tantum (PO 07/11/2026, `PROMOZIONI_TETTI`): 2245 e 2508 da 30 a 50
+ *   dopo 3 giorni HIGH di fila, il 3199 da 15 a 30 dopo 7. Mai verso il basso, mai
+ *   due volte, mai su altri numeri; evento `tetto_promosso` col totale da mettere a mano
+ *   in BOT_TETTO_GIORNALIERO del CRM.
  *
  * Stato in `app_settings.qualita_numeri_stato` (storico per giorno = la lettura
  * peggiore del giorno, pause in corso). I numeri a tetto 0 messi a mano (non in
@@ -40,7 +44,28 @@ export type StatoQualita = {
   pause: Record<string, { fino: string; tettoPrima: number; dal: string }>;
   /** Il 3199 in rientro: a 30 dal giorno `dal`, in attesa dei 4 giorni HIGH per tornare a regime. */
   primario?: { fase: 'trenta'; dal: string } | null;
+  /** Promozioni una tantum gia' fatte (numero senza `whatsapp:`): non si rifanno mai. */
+  promozioni?: Record<string, { giorno: string; da: number; a: number }>;
 };
+
+/**
+ * Promozioni automatiche una tantum dei tetti (PO 07/11/2026): quando il numero e' HIGH
+ * da `giorniHigh` giorni di fila (oggi compreso), il suo tetto sale ad `a`. Una volta
+ * sola per numero (segnata in `stato.promozioni`), mai verso il basso, mai su un numero
+ * in pausa o a tetto 0 (fermo per mano di una persona o uscito), nessun altro numero.
+ * Il CRM ha un suo tetto somma (BOT_TETTO_GIORNALIERO) che va alzato a mano: per questo
+ * ogni promozione scrive un evento `tetto_promosso` col nuovo totale suggerito.
+ */
+export const PROMOZIONI_TETTI: { numero: string; a: number; giorniHigh: number }[] = [
+  { numero: '+393522622245', a: 50, giorniHigh: 3 },
+  { numero: '+393522782508', a: 50, giorniHigh: 3 },
+  { numero: '+393520413199', a: 30, giorniHigh: 7 },
+];
+
+/** Somma di tutti i tetti di `tetti_numeri`: e' il numero da mettere in BOT_TETTO_GIORNALIERO (07/11: 190). */
+export function sommaTetti(tetti: Record<string, number>): number {
+  return Object.values(tetti).reduce((s, v) => s + (typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : 0), 0);
+}
 
 export const GIORNI_PAUSA = 3;
 /** Giorni HIGH di fila per ogni gradino del rientro del 3199 (PO 29/10/2026 sera). */
@@ -89,7 +114,8 @@ export type Azione =
   | { tipo: 'ripresa'; numero: string; tetto: number }
   | { tipo: 'rientro_primario'; numero: string; tetto: number }
   | { tipo: 'regime_primario'; numero: string; tetto: number }
-  | { tipo: 'uscita_primario'; numero: string; qualita: Qualita };
+  | { tipo: 'uscita_primario'; numero: string; qualita: Qualita }
+  | { tipo: 'tetto_promosso'; numero: string; da: number; a: number; giorniHigh: number };
 
 /**
  * Le decisioni di oggi. Puro: prende le letture, lo stato e i tetti; ritorna il
@@ -110,6 +136,7 @@ export function decidi(args: {
     storico: structuredClone(args.stato.storico ?? {}),
     pause: structuredClone(args.stato.pause ?? {}),
     primario: args.stato.primario ? { ...args.stato.primario } : null,
+    promozioni: structuredClone(args.stato.promozioni ?? {}),
   };
   // I tetti si scrivono con le chiavi come le trovo (con o senza `whatsapp:`).
   const tetti: Record<string, number> = { ...args.tetti };
@@ -181,6 +208,23 @@ export function decidi(args: {
     azioni.push({ tipo: 'rientro_primario', numero: primario, tetto: TETTO_RIENTRO_PRIMARIO });
   }
 
+  // 5. Promozioni una tantum (PO 07/11/2026), dopo pause e uscite di oggi.
+  const promozioni = (stato.promozioni ??= {});
+  for (const p of PROMOZIONI_TETTI) {
+    const num = soloNumero(p.numero);
+    if (promozioni[num]) continue; // gia' fatta: mai piu'
+    if (stato.pause[num]) continue;
+    const tetto = tettoDi(num);
+    if (tetto <= 0 || tetto >= p.a) continue; // fermo, uscito, o gia' a quel tetto: non si tocca
+    const giorni = stato.storico[num] ?? {};
+    let tuttiHighN = true;
+    for (let k = 0; k < p.giorniHigh; k++) if (giorni[piuGiorni(oggi, -k)] !== 'HIGH') { tuttiHighN = false; break; }
+    if (!tuttiHighN) continue;
+    tetti[chiaveDi(num)] = p.a;
+    promozioni[num] = { giorno: oggi, da: tetto, a: p.a };
+    azioni.push({ tipo: 'tetto_promosso', numero: num, da: tetto, a: p.a, giorniHigh: p.giorniHigh });
+  }
+
   return { stato, tetti, azioni };
 }
 
@@ -239,7 +283,7 @@ export async function eseguiControlloQualita(supabase: Supa, adesso: Date = new 
   // pause e i tetti no.
   const statoDaScrivere: StatoQualita = auto
     ? r.stato
-    : { storico: r.stato.storico, pause: statoPrima.pause ?? {}, primario: statoPrima.primario ?? null };
+    : { storico: r.stato.storico, pause: statoPrima.pause ?? {}, primario: statoPrima.primario ?? null, promozioni: statoPrima.promozioni ?? {} };
   await supabase.from('app_settings').upsert({ key: KEY_STATO, value: statoDaScrivere as never, updated_at: adesso.toISOString() });
   const cambiaTetti = auto && JSON.stringify(r.tetti) !== JSON.stringify(tetti);
   if (cambiaTetti) {
@@ -252,6 +296,19 @@ export async function eseguiControlloQualita(supabase: Supa, adesso: Date = new 
     message: `[qualita-numeri] ${Object.entries(letture).map(([n, q]) => `${n.slice(-4)}=${q}`).join(' ')}`,
   });
   for (const a of r.azioni) {
+    if (a.tipo === 'tetto_promosso' && auto) {
+      // Evento a parte, col totale da riportare a mano nel CRM (BOT_TETTO_GIORNALIERO).
+      const totaleSuggerito = sommaTetti(r.tetti);
+      await supabase.from('event_log').insert({
+        type: 'tetto_promosso', level: 'info',
+        payload: {
+          ...a, totalePrima: sommaTetti(tetti), totaleSuggerito, tettiDopo: r.tetti,
+          azione_crm: `BOT_TETTO_GIORNALIERO = ${totaleSuggerito}`,
+        } as never,
+        message: `[qualita-numeri] tetto ${a.numero} da ${a.da} a ${a.a} (HIGH da ${a.giorniHigh} giorni di fila): alzare BOT_TETTO_GIORNALIERO nel CRM a ${totaleSuggerito}`,
+      });
+      continue;
+    }
     await supabase.from('event_log').insert({
       type: `qualita_numeri_${a.tipo}`,
       level: a.tipo === 'pausa' || a.tipo === 'pausa_negata_ultimo' || a.tipo === 'uscita_primario' || a.tipo === 'pausa_allungata' ? 'warn' : 'info',
