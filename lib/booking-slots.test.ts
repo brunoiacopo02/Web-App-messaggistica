@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { computeBookingDays, bookingSlotsContext, NOVE_SOLO_EMERGENZA } from './booking-slots';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { computeBookingDays, bookingSlotsContext, NOVE_SOLO_EMERGENZA, domenicaComeSabato } from './booking-slots';
 import { checkDataAppuntamento } from './bot-outcome-rules';
 import { romeHour } from './rome-time';
 
@@ -385,5 +385,53 @@ describe('le 9 solo in emergenza', () => {
     const giorni = [day1.date, day2.date];
     expect(checkDataAppuntamento('2026-10-29T09:00:00+01:00', now.getTime(), [], giorni)).toEqual({ ok: true });
     expect(checkDataAppuntamento('2026-10-29T08:30:00+01:00', now.getTime(), [], giorni)).toEqual({ ok: false, motivo: 'fuori_fascia' });
+  });
+});
+
+describe('domenica come sabato (PO 07/11/2026)', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('domenica mattina e pomeriggio: lunedì e poi martedì', () => {
+    for (const t of ['2026-11-08T08:00:00+01:00', '2026-11-08T19:59:00+01:00']) {
+      const { day1, day2, day1Imminente } = computeBookingDays(new Date(t), []);
+      expect([day1.date, day2.date]).toEqual(['2026-11-09', '2026-11-10']);
+      expect(day1Imminente).toBe(true);
+    }
+  });
+
+  it('domenica sera tardi, interruttore spento: ruota come il form (martedì e mercoledì)', () => {
+    vi.stubEnv('BOOKING_DOMENICA_COME_SABATO', '');
+    const { day1, day2 } = computeBookingDays(new Date('2026-11-08T22:30:00+01:00'), []);
+    expect([day1.date, day2.date]).toEqual(['2026-11-10', '2026-11-11']);
+  });
+
+  it('domenica sera tardi, interruttore acceso: lunedì e poi martedì, come il sabato sera', () => {
+    vi.stubEnv('BOOKING_DOMENICA_COME_SABATO', 'true');
+    const dom = computeBookingDays(new Date('2026-11-08T22:30:00+01:00'), []);
+    const sab = computeBookingDays(new Date('2026-11-07T22:30:00+01:00'), []);
+    expect([dom.day1.date, dom.day2.date]).toEqual(['2026-11-09', '2026-11-10']);
+    expect([sab.day1.date, sab.day2.date]).toEqual(['2026-11-09', '2026-11-10']);
+    // e la guardia accetta lunedì
+    expect(checkDataAppuntamento('2026-11-09T18:00:00+01:00', Date.parse('2026-11-08T22:30:00+01:00'), []).ok).toBe(true);
+  });
+
+  it('interruttore acceso: il resto della settimana ruota alle 20 come prima', () => {
+    vi.stubEnv('BOOKING_DOMENICA_COME_SABATO', 'true');
+    const { day1, day2 } = computeBookingDays(new Date('2026-11-09T21:00:00+01:00'), []);
+    expect([day1.date, day2.date]).toEqual(['2026-11-11', '2026-11-12']);
+  });
+
+  it('domenica con lunedì chiuso: martedì e mercoledì', () => {
+    vi.stubEnv('BOOKING_DOMENICA_COME_SABATO', 'true');
+    const r = computeBookingDays(new Date('2026-11-08T22:30:00+01:00'), [{ from: '2026-11-09', to: '2026-11-09' }]);
+    expect([r.day1.date, r.day2.date]).toEqual(['2026-11-10', '2026-11-11']);
+    expect(r.chiusuraPrimaDiDay1?.date).toBe('2026-11-09');
+  });
+
+  it('domenicaComeSabato legge solo "true"', () => {
+    expect(domenicaComeSabato('true')).toBe(true);
+    expect(domenicaComeSabato(' TRUE ')).toBe(true);
+    expect(domenicaComeSabato(undefined)).toBe(false);
+    expect(domenicaComeSabato('1')).toBe(false);
   });
 });

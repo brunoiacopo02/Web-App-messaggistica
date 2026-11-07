@@ -100,6 +100,19 @@ const toBookingDay = (v: Ymd): BookingDay => ({ label: labelIt(v), date: isoDate
 /** Ora (Europe/Rome) da cui il form di prenotazione si comporta come se fosse il giorno dopo. */
 export const ORA_SCATTO_FORM = 20;
 
+/**
+ * La domenica sera si fissa come il sabato: lunedì e poi martedì, anche dopo le 20 (PO
+ * 07/11/2026). Di giorno la domenica il calcolo dà già lunedì e martedì; è il form JotForm
+ * che la domenica non offre il lunedì (27/09-01/11: 65 call su 65 spostate dal bot su
+ * martedì dopo che il lead diceva «non mi fa scegliere lunedì»). Finché il form la
+ * domenica sera ruota sul martedì, togliere la rotazione qui farebbe proporre al bot un
+ * giorno che il form non ha (caso Guaman, 28/10): per questo si accende solo con
+ * `BOOKING_DOMENICA_COME_SABATO=true`, quando anche il form la domenica tiene lunedì.
+ */
+export function domenicaComeSabato(env: string | undefined = process.env.BOOKING_DOMENICA_COME_SABATO): boolean {
+  return env?.trim().toLowerCase() === 'true';
+}
+
 /** I due (e soli due) giorni prenotabili a partire da `now`: niente domeniche, niente giorni chiusi. */
 export function computeBookingDays(now: Date, ranges?: BlackoutRange[], pieni?: GiorniPieni): BookingDays {
   const chiusure = ranges ?? bookingBlackout(process.env.BOOKING_BLACKOUT);
@@ -108,7 +121,9 @@ export function computeBookingDays(now: Date, ranges?: BlackoutRange[], pieni?: 
   // ma mercoledì e giovedì. Il 24/10 la rotazione era stata tolta solo qui, il form
   // ha continuato a ruotare, e la sera il bot proponeva un giorno che il form non aveva
   // (caso Guaman). Prompt, guardia e link del form usano tutti questo calcolo.
-  const today = romeHour(now) >= ORA_SCATTO_FORM ? addDays(romeYmd(now), 1) : romeYmd(now);
+  const oggi = romeYmd(now);
+  const ruota = romeHour(now) >= ORA_SCATTO_FORM && !(oggi.wd === 0 && domenicaComeSabato());
+  const today = ruota ? addDays(oggi, 1) : oggi;
 
   const s1 = nextBookable(today, chiusure, pieni);
   const s2 = nextBookable(s1.day, chiusure, pieni);
