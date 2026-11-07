@@ -131,14 +131,9 @@ describe('decidiChat', () => {
   it('ci ha scritto lui: saltata', () => {
     expect(decidiChat(chat(1, '2026-11-05T01:00:00Z'), { out: 0, in: 2 }, ADESSO)).toEqual({ azione: 'salta', motivo: 'ha_scritto_lui' });
   });
-  it('oltre 5 giorni dall\'arruolamento (PO 07/11): si invia lo stesso, segnata come oltre', () => {
-    const now = Date.parse('2026-11-08T07:00:00Z');
-    expect(decidiChat(chat(1, '2026-11-03T01:00:00Z'), nessuno, now)).toEqual({ azione: 'invia', oltreCinqueGiorni: true });
+  it('oltre 5 giorni dall\'arruolamento = restituisci (PO 07/11: resta a 5)', () => {
+    expect(decidiChat(chat(1, '2026-11-03T01:00:00Z'), nessuno, Date.parse('2026-11-08T01:01:00Z'))).toEqual({ azione: 'restituisci' });
     expect(decidiChat(chat(1, '2026-11-03T01:00:00Z'), nessuno, Date.parse('2026-11-08T00:59:00Z'))).toEqual({ azione: 'invia', oltreCinqueGiorni: false });
-  });
-  it('oltre 14 giorni dall\'arruolamento = restituisci', () => {
-    expect(decidiChat(chat(1, '2026-11-03T01:00:00Z'), nessuno, Date.parse('2026-11-17T01:01:00Z'))).toEqual({ azione: 'restituisci' });
-    expect(decidiChat(chat(1, '2026-11-03T01:00:00Z'), nessuno, Date.parse('2026-11-17T00:59:00Z'))).toEqual({ azione: 'invia', oltreCinqueGiorni: true });
   });
   it('senza telefono: saltata', () => {
     expect(decidiChat(chat(1, '2026-11-05T01:00:00Z', { phone: null }), nessuno, ADESSO)).toEqual({ azione: 'salta', motivo: 'senza_telefono' });
@@ -320,7 +315,7 @@ describe('eseguiRecupero', () => {
     expect(deps.restituisci).not.toHaveBeenCalled();
   });
 
-  it('oltre 14 giorni: restituita al CRM (evento dedicato), anche a tetto esaurito', async () => {
+  it('oltre 5 giorni: restituita al CRM (evento dedicato), anche a tetto esaurito', async () => {
     const vecchia = chat(9, '2026-11-01T06:00:00Z');
     const now = Date.parse('2026-11-16T10:00:00Z');
     const { deps, eventi } = finti({ coda: [vecchia], giaOggi: 40 });
@@ -331,27 +326,13 @@ describe('eseguiRecupero', () => {
     expect(eventi.find((e) => e.type === EVENTO_RECUPERO_RESTITUITA)?.payload.conversationId).toBe(9);
   });
 
-  it('oltre 14 giorni ma il CRM la sta lavorando: non si restituisce', async () => {
+  it('oltre 5 giorni ma il CRM la sta lavorando: non si restituisce', async () => {
     const vecchia = chat(9, '2026-11-01T06:00:00Z');
     const { deps, eventi } = finti({ coda: [vecchia], lavorati: { 'crm-9': 'crm_in_progress' } });
     const r = await eseguiRecupero(CFG, deps, Date.parse('2026-11-16T10:00:00Z'));
     expect(r.restituite).toBe(0);
     expect(deps.restituisci).not.toHaveBeenCalled();
     expect(eventi.find((e) => e.type === EVENTO_RECUPERO_SALTATA)?.payload.motivo).toBe('crm_in_progress');
-  });
-
-  it('oltre 5 giorni (PO 07/11): si scrive, dopo quelle entro i 5, e si conta a parte', async () => {
-    const vecchia = chat(9, '2026-11-01T06:00:00Z'); // 5g 9h al momento di ADESSO
-    const coda = [...codaDi(2), vecchia];
-    const { deps, eventi } = finti({ coda });
-    const r = await eseguiRecupero(CFG, deps, ADESSO);
-    expect(r.inviate).toBe(3);
-    expect(r.inviateOltreCinque).toBe(1);
-    expect(r.restituite).toBe(0);
-    expect(deps.restituisci).not.toHaveBeenCalled();
-    const inviati = (deps.invia as ReturnType<typeof vi.fn>).mock.calls.map((c) => (c[0] as ChatCoda).id);
-    expect(inviati[inviati.length - 1]).toBe(9);
-    expect(eventi.find((e) => e.type === EVENTO_RECUPERO_INVIATA && e.payload.conversationId === 9)?.payload.oltreCinqueGiorni).toBe(true);
   });
 
   it('lead gia\' lavorato dal CRM o numero non WhatsApp: saltati col motivo, non consumano il lotto', async () => {

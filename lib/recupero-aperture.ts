@@ -24,10 +24,8 @@
  *   tetto > 0 e qualita' UNKNOWN mai valutata (nessuna lettura diversa da UNKNOWN) e'
  *   ammesso: sono i numeri nuovi, in prova con pochi invii. MEDIUM/LOW/pausa mai. Prima dell'invio la chat passa a quel
  *   numero: lecito, nessun messaggio e' mai partito, non c'e' un thread da spezzare.
- * - Oltre RECUPERO_MAX_GIORNI (5) dall'arruolamento si scrive LO STESSO (PO 07/11: "i GDO
- *   non hanno tutta questa capienza, facciamogli scrivere dal bot prima"), dopo quelle
- *   entro i 5 giorni e dalla piu' fresca alla piu' vecchia (vedi `ordinaCoda`), con lo
- *   stesso tetto giornaliero. Solo oltre RECUPERO_MAX_GIORNI_ASSOLUTO (14) la chat torna
+ * - Oltre RECUPERO_MAX_GIORNI_ASSOLUTO (= RECUPERO_MAX_GIORNI, 5: deciso dal PO il 07/11
+ *   dopo una prova a 14 la mattina stessa) la chat torna
  *   al CRM come lead mai contattato, con lo stesso esito della rete
  *   (`esitoAperturaMaiPartita`), evento `recupero_apertura_restituita`.
  * - Prima di ogni invio (e di ogni restituzione) si guarda la copia locale del CRM: un
@@ -49,8 +47,8 @@ export const RECUPERO_FINO_AL_MS = APERTURA_MAI_PARTITA_DAL_MS;
 export const RECUPERO_CODA_DAL_MS = Date.parse('2026-11-01T00:00:00Z');
 /** Entro questa eta' (dall'arruolamento) un lead e' "recente": passa per primo. */
 export const RECUPERO_MAX_GIORNI = 5;
-/** Oltre questa eta' non si apre piu': si restituisce al CRM (PO 07/11; prima era a 5). */
-export const RECUPERO_MAX_GIORNI_ASSOLUTO = 14;
+/** Oltre questa eta' non si apre piu': si restituisce al CRM (PO 07/11 pomeriggio: resta a 5, i follow-up stanno comunque dentro i 5 giorni). */
+export const RECUPERO_MAX_GIORNI_ASSOLUTO = RECUPERO_MAX_GIORNI;
 /** Errori Twilio che dicono che il telefono non e' raggiungibile su WhatsApp, per sempre. */
 export const ERRORI_DESTINATARIO_DEFINITIVI = [63024, 63003, 21211, 21614];
 /** Tetto per giro di cron (il cron gira ogni 20'). */
