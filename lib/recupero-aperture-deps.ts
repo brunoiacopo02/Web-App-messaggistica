@@ -16,8 +16,11 @@ import { sidAperturaMario } from './scelta-mittente';
 import { credenzialiPerMittente, eSuAltroAccount } from './twilio-account';
 import { spedibileDa } from './spedibilita';
 import {
+  ERRORI_DESTINATARIO_DEFINITIVI,
   EVENTO_RECUPERO_INVIATA,
   EVENTO_RECUPERO_SALTATA,
+  motivoLavoratoDalCrm,
+  type StatoCrmRecupero,
   RECUPERO_CODA_DAL_MS,
   RECUPERO_FINO_AL_MS,
   qualitaAmmessaRecupero,
@@ -119,6 +122,45 @@ export function depsRecupero(supabase: Supa, cfg: ConfigRecupero, adesso: Date):
     },
 
     stopCrm: (crmLeadId) => stopDalCrmPerLead(supabase, crmLeadId),
+
+    lavoratoDalCrm: async (crmLeadId) => {
+      if (!crmLeadId) return null;
+      try {
+        const { data, error } = await supabase
+          .from('crm_lead_status')
+          .select('status, appointment_date, recall_at, conferme_outcome')
+          .eq('lead_id', crmLeadId)
+          .maybeSingle();
+        if (error) return 'crm_illeggibile';
+        return motivoLavoratoDalCrm(data as StatoCrmRecupero | null);
+      } catch {
+        return 'crm_illeggibile';
+      }
+    },
+
+    numeroNonWhatsapp: async (phone) => {
+      try {
+        const { data: leads, error: e1 } = await supabase.from('leads').select('id').eq('phone_e164', phone);
+        if (e1) return null;
+        const leadIds = (leads ?? []).map((l) => (l as { id: number }).id);
+        if (leadIds.length === 0) return false;
+        const { data: convs, error: e2 } = await supabase.from('conversations').select('id').in('lead_id', leadIds);
+        if (e2) return null;
+        const convIds = (convs ?? []).map((c) => (c as { id: number }).id);
+        if (convIds.length === 0) return false;
+        const { data: errati, error: e3 } = await supabase
+          .from('messages')
+          .select('id')
+          .in('conversation_id', convIds)
+          .eq('direction', 'out')
+          .in('twilio_error_code', ERRORI_DESTINATARIO_DEFINITIVI)
+          .limit(1);
+        if (e3) return null;
+        return (errati ?? []).length > 0;
+      } catch {
+        return null;
+      }
+    },
 
     numeriUtilizzabili: async () => {
       const ok: NumeroRecupero[] = [];

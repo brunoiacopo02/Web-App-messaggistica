@@ -24,9 +24,18 @@
  *   tetto > 0 e qualita' UNKNOWN mai valutata (nessuna lettura diversa da UNKNOWN) e'
  *   ammesso: sono i numeri nuovi, in prova con pochi invii. MEDIUM/LOW/pausa mai. Prima dell'invio la chat passa a quel
  *   numero: lecito, nessun messaggio e' mai partito, non c'e' un thread da spezzare.
- * - Oltre RECUPERO_MAX_GIORNI dall'arruolamento non si apre piu': la chat torna al CRM
- *   come lead mai contattato, con lo stesso esito della rete (`esitoAperturaMaiPartita`),
- *   evento `recupero_apertura_restituita`.
+ * - Oltre RECUPERO_MAX_GIORNI (5) dall'arruolamento si scrive LO STESSO (PO 07/11: "i GDO
+ *   non hanno tutta questa capienza, facciamogli scrivere dal bot prima"), dopo quelle
+ *   entro i 5 giorni e dalla piu' fresca alla piu' vecchia (vedi `ordinaCoda`), con lo
+ *   stesso tetto giornaliero. Solo oltre RECUPERO_MAX_GIORNI_ASSOLUTO (14) la chat torna
+ *   al CRM come lead mai contattato, con lo stesso esito della rete
+ *   (`esitoAperturaMaiPartita`), evento `recupero_apertura_restituita`.
+ * - Prima di ogni invio (e di ogni restituzione) si guarda la copia locale del CRM: un
+ *   lead che il CRM ha gia' lavorato (stato diverso da NEW, appuntamento, richiamo, esito
+ *   Conferme) non riceve un'apertura a freddo. Prima di ogni invio, un telefono che su
+ *   qualunque chat ha gia' avuto un errore definitivo di destinatario (63024 = non e' su
+ *   WhatsApp, 63003, 21211, 21614) non si riprova. 63016 (fuori finestra 24h) non dice
+ *   niente del numero: non esclude.
  * - Stesso template e stesso percorso dell'apertura differita (lib/apertura-mario-invio.ts).
  */
 import { APERTURA_MAI_PARTITA_DAL_MS, romeMinutes } from './sequence';
@@ -38,8 +47,12 @@ const D = 24 * H;
 export const RECUPERO_FINO_AL_MS = APERTURA_MAI_PARTITA_DAL_MS;
 /** Limite basso della coda: l'incidente comincia il 03/11. Le chat piu' vecchie non si toccano. */
 export const RECUPERO_CODA_DAL_MS = Date.parse('2026-11-01T00:00:00Z');
-/** Oltre questa eta' (dall'arruolamento) un lead non e' piu' "recente": si restituisce. */
+/** Entro questa eta' (dall'arruolamento) un lead e' "recente": passa per primo. */
 export const RECUPERO_MAX_GIORNI = 5;
+/** Oltre questa eta' non si apre piu': si restituisce al CRM (PO 07/11; prima era a 5). */
+export const RECUPERO_MAX_GIORNI_ASSOLUTO = 14;
+/** Errori Twilio che dicono che il telefono non e' raggiungibile su WhatsApp, per sempre. */
+export const ERRORI_DESTINATARIO_DEFINITIVI = [63024, 63003, 21211, 21614];
 /** Tetto per giro di cron (il cron gira ogni 20'). */
 export const RECUPERO_MAX_PER_GIRO = 8;
 /** Restituzioni al CRM per giro: un tetto solo per tenere corto il run. */
@@ -138,7 +151,7 @@ export type ChatCoda = {
 export type ConteggioMessaggi = { out: number; in: number };
 
 export type DecisioneChat =
-  | { azione: 'invia' }
+  | { azione: 'invia'; oltreCinqueGiorni: boolean }
   | { azione: 'restituisci' }
   | { azione: 'ignora'; motivo: 'gia_aperta' | 'fuori_coda' }
   | { azione: 'salta'; motivo: 'ha_scritto_lui' | 'senza_telefono' | 'senza_arruolamento' };
@@ -153,9 +166,32 @@ export function decidiChat(c: ChatCoda, m: ConteggioMessaggi, nowMs: number): De
   // Ci ha scritto lui senza risposta: non e' un'apertura da mandare a freddo, e la chat
   // e' legata al numero a cui ha scritto.
   if (m.in > 0) return { azione: 'salta', motivo: 'ha_scritto_lui' };
-  if (nowMs - arr > RECUPERO_MAX_GIORNI * D) return { azione: 'restituisci' };
+  if (nowMs - arr > RECUPERO_MAX_GIORNI_ASSOLUTO * D) return { azione: 'restituisci' };
   if (!c.phone) return { azione: 'salta', motivo: 'senza_telefono' };
-  return { azione: 'invia' };
+  return { azione: 'invia', oltreCinqueGiorni: nowMs - arr > RECUPERO_MAX_GIORNI * D };
+}
+
+/** La copia locale dello stato CRM (`crm_lead_status`) che serve qui. */
+export type StatoCrmRecupero = {
+  status: string | null;
+  appointment_date: string | null;
+  recall_at: string | null;
+  conferme_outcome: string | null;
+};
+
+/**
+ * Pura: il CRM ha gia' lavorato questo lead? Allora non gli si scrive a freddo (ne' lo si
+ * restituisce: ce l'ha gia' una persona). Riga assente = nessun fatto noto = si scrive,
+ * come in lib/stop-crm.ts.
+ */
+export function motivoLavoratoDalCrm(s: StatoCrmRecupero | null | undefined): string | null {
+  if (!s) return null;
+  if (s.appointment_date) return 'crm_appuntamento';
+  if (s.conferme_outcome) return 'crm_esito_conferme';
+  if (s.recall_at) return 'crm_richiamo';
+  const st = (s.status ?? '').trim().toUpperCase();
+  if (st !== '' && st !== 'NEW') return `crm_${st.toLowerCase()}`;
+  return null;
 }
 
 export type NumeroRecupero = {
@@ -178,13 +214,33 @@ export function scegliNumeroRecupero(numeri: NumeroRecupero[]): string | null {
   return liberi[0].numero;
 }
 
-/** Pura: la coda dalla piu' vecchia (per arruolamento) alla piu' recente; a parita' l'id. */
-export function ordinaCoda(coda: ChatCoda[]): ChatCoda[] {
-  const t = (c: ChatCoda) => {
+/**
+ * Pura: l'ordine della coda, a parita' l'id.
+ * 1. Entro i 5 giorni, dalla piu' vecchia alla piu' recente (PO 06/11: si salvano prima
+ *    quelle vicine ai 5 giorni; sono comunque le piu' fresche di tutta la coda).
+ * 2. Oltre i 5 giorni, dalla piu' RECENTE alla piu' vecchia: li' non c'e' piu' una
+ *    scadenza da battere e un lead perde valore col passare dei giorni (il 94% di chi
+ *    compra lo fa entro 14 giorni), quindi il posto del giorno va a chi ne ha di piu'.
+ * Senza arruolamento in fondo.
+ */
+export function ordinaCoda(coda: ChatCoda[], nowMs: number): ChatCoda[] {
+  const limite = nowMs - RECUPERO_MAX_GIORNI * D;
+  const t = (c: ChatCoda): number | null => {
     const v = c.ai_started_at ? Date.parse(c.ai_started_at) : NaN;
-    return Number.isNaN(v) ? Number.MAX_SAFE_INTEGER : v;
+    return Number.isNaN(v) ? null : v;
   };
-  return [...coda].sort((a, b) => (t(a) - t(b)) || (a.id - b.id));
+  const fascia = (c: ChatCoda) => {
+    const v = t(c);
+    return v === null ? 2 : v >= limite ? 0 : 1;
+  };
+  return [...coda].sort((a, b) => {
+    const fa = fascia(a);
+    const fb = fascia(b);
+    if (fa !== fb) return fa - fb;
+    const ta = t(a) ?? 0;
+    const tb = t(b) ?? 0;
+    return (fa === 1 ? tb - ta : ta - tb) || (a.id - b.id);
+  });
 }
 
 export type EsitoInvio = { ok: boolean; capped?: boolean; error?: string };
@@ -197,6 +253,10 @@ export type DepsRecupero = {
   /** Messaggi di sempre per chat. Una chat assente dalla mappa = nessun messaggio. null = lettura fallita. */
   contaMessaggi: (ids: number[]) => Promise<Map<number, ConteggioMessaggi> | null>;
   stopCrm: (crmLeadId: string | null) => Promise<string | null>;
+  /** Il lead e' gia' in mano al CRM? Motivo (`crm_...`) o null. Lettura fallita = 'crm_illeggibile'. */
+  lavoratoDalCrm: (crmLeadId: string | null) => Promise<string | null>;
+  /** Il telefono ha gia' avuto un errore definitivo di destinatario? null = lettura fallita. */
+  numeroNonWhatsapp: (phone: string) => Promise<boolean | null>;
   /** Numeri ammessi oggi, col carico; gli scarti finiscono nel riepilogo del run. */
   numeriUtilizzabili: () => Promise<{ ok: NumeroRecupero[]; scarti: { numero: string; motivo: string }[] }>;
   riassegnaNumero: (id: number, numero: string) => Promise<boolean>;
@@ -211,6 +271,8 @@ export type ReportRecupero = {
   disabled?: true;
   fuoriFinestra?: true;
   inviate: number;
+  /** Di cui oltre i 5 giorni dall'arruolamento. */
+  inviateOltreCinque: number;
   restituite: number;
   saltate: Record<string, number>;
   gia_aperte: number;
@@ -220,7 +282,7 @@ export type ReportRecupero = {
 };
 
 export async function eseguiRecupero(cfg: ConfigRecupero, deps: DepsRecupero, nowMs: number): Promise<ReportRecupero> {
-  const report: ReportRecupero = { inviate: 0, restituite: 0, saltate: {}, gia_aperte: 0, inCoda: 0, residuoOggi: 0 };
+  const report: ReportRecupero = { inviate: 0, inviateOltreCinque: 0, restituite: 0, saltate: {}, gia_aperte: 0, inCoda: 0, residuoOggi: 0 };
   if (cfg.tetto <= 0) return { ...report, disabled: true };
   if (!inFinestraRecupero(nowMs)) return { ...report, fuoriFinestra: true };
 
@@ -237,7 +299,7 @@ export async function eseguiRecupero(cfg: ConfigRecupero, deps: DepsRecupero, no
   let residuo = giaOggi === null ? 0 : Math.max(0, cfg.tetto - giaOggi);
   let perGiro = cfg.maxPerGiro;
 
-  const coda = ordinaCoda(await deps.caricaCoda());
+  const coda = ordinaCoda(await deps.caricaCoda(), nowMs);
   const msgs = await deps.contaMessaggi(coda.map((c) => c.id));
   if (msgs === null) {
     await deps.log(EVENTO_RECUPERO_RUN, 'warn', { errore: 'lettura_messaggi_fallita' },
@@ -258,12 +320,14 @@ export async function eseguiRecupero(cfg: ConfigRecupero, deps: DepsRecupero, no
       if (report.restituite >= RECUPERO_MAX_RESTITUZIONI_PER_GIRO) continue;
       const stop = await deps.stopCrm(c.crm_lead_id);
       if (stop) { await saltata(c, `stop_crm_${stop}`); continue; }
+      const lavorato = await deps.lavoratoDalCrm(c.crm_lead_id);
+      if (lavorato) { await saltata(c, lavorato); continue; }
       const r = await deps.restituisci(c);
       if (r.sent) report.restituite++;
       await deps.log(EVENTO_RECUPERO_RESTITUITA, r.sent ? 'info' : 'warn', {
         conversationId: c.id, crmLeadId: c.crm_lead_id, aiStartedAt: c.ai_started_at,
         sent: r.sent, status: r.status ?? null, error: r.error ?? null,
-      }, `[recupero-aperture] conv ${c.id}: oltre ${RECUPERO_MAX_GIORNI} giorni senza apertura, restituita al CRM come mai contattata (${r.sent ? 'ok' : r.error ?? r.status ?? 'errore'})`);
+      }, `[recupero-aperture] conv ${c.id}: oltre ${RECUPERO_MAX_GIORNI_ASSOLUTO} giorni senza apertura, restituita al CRM come mai contattata (${r.sent ? 'ok' : r.error ?? r.status ?? 'errore'})`);
       continue;
     }
 
@@ -273,6 +337,10 @@ export async function eseguiRecupero(cfg: ConfigRecupero, deps: DepsRecupero, no
 
     const stop = await deps.stopCrm(c.crm_lead_id);
     if (stop) { await saltata(c, `stop_crm_${stop}`); continue; }
+    const lavorato = await deps.lavoratoDalCrm(c.crm_lead_id);
+    if (lavorato) { await saltata(c, lavorato); continue; }
+    const nonWa = await deps.numeroNonWhatsapp(c.phone as string);
+    if (nonWa !== false) { await saltata(c, nonWa === null ? 'errori_illeggibili' : 'numero_non_whatsapp'); continue; }
 
     if (numeri === null) {
       const n = await deps.numeriUtilizzabili();
@@ -307,6 +375,7 @@ export async function eseguiRecupero(cfg: ConfigRecupero, deps: DepsRecupero, no
       continue;
     }
     report.inviate++;
+    if (d.oltreCinqueGiorni) report.inviateOltreCinque++;
     residuo--;
     perGiro--;
     const voce = numeri.find((x) => x.numero === numero);
@@ -314,6 +383,7 @@ export async function eseguiRecupero(cfg: ConfigRecupero, deps: DepsRecupero, no
     await deps.log(EVENTO_RECUPERO_INVIATA, 'info', {
       conversationId: c.id, crmLeadId: c.crm_lead_id, numero, numeroPrima,
       aiStartedAt: c.ai_started_at,
+      oltreCinqueGiorni: d.oltreCinqueGiorni,
       oreDallArruolamento: c.ai_started_at ? Math.round((nowMs - Date.parse(c.ai_started_at)) / H) : null,
     }, `[recupero-aperture] conv ${c.id}: apertura recuperata da ${numero}${numeroPrima && soloNum(numeroPrima) !== soloNum(numero) ? ` (era ${numeroPrima})` : ''}`);
   }
