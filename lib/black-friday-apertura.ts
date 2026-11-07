@@ -1,6 +1,7 @@
 import type { getSupabaseAdmin } from './supabase/admin';
 import { traduciTemplate } from './template-account';
 import { credenzialiPerMittente } from './twilio-account';
+import { spedibileDa } from './spedibilita';
 import { sceltaAperturaBf, SETTING_MODO_APERTURA, type SceltaAperturaBf } from './black-friday';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
@@ -32,6 +33,9 @@ export async function templateBfApprovatoSu(numero: string): Promise<{ ok: boole
       const j = r.ok ? await r.json() : null;
       ok = j?.whatsapp?.status === 'approved';
     }
+    // Approvato non basta: il presidio UTILITY_ONLY rifiuta un MARKETING non in elenco
+    // (07/11: Meta l'ha approvato MARKETING e i primi 6 invii sono falliti prima di Twilio).
+    if (ok) ok = (await spedibileDa(sid, numero)).ok;
   } catch {
     ok = false;
   }

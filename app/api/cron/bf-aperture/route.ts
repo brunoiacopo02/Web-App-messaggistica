@@ -84,12 +84,15 @@ export async function GET(req: NextRequest) {
     if (!phone) continue;
     const da = c.ai_started_at ? new Date(Date.parse(c.ai_started_at) - 5 * 60_000).toISOString() : '1970-01-01T00:00:00Z';
     const { data: msgs } = await supabase.from('messages')
-      .select('direction, body').eq('conversation_id', c.id).gte('created_at', da);
-    const righe = (msgs ?? []) as { direction: string; body: string | null }[];
+      .select('direction, body, twilio_sid').eq('conversation_id', c.id).gte('created_at', da);
+    const righe = (msgs ?? []) as { direction: string; body: string | null; twilio_sid: string | null }[];
     if (righe.some((m) => m.direction === 'in')) { risposto++; continue; }
-    if (righe.some((m) => m.direction === 'out' && (m.body ?? '').includes(MARKER_TESTO_APERTURA_BF))) { giaFatti++; continue; }
+    // Solo un invio PARTITO (con SID) conta come fatto: un fallito prima di Twilio si ritenta.
+    if (righe.some((m) => m.direction === 'out' && !!m.twilio_sid && (m.body ?? '').includes(MARKER_TESTO_APERTURA_BF))) { giaFatti++; continue; }
+    // Il claim e' un lucchetto contro due run sovrapposti, non un "fatto": vale 15 minuti.
     const { count: claim } = await supabase.from('event_log').select('id', { count: 'exact', head: true })
-      .eq('type', 'bf_apertura_claim').eq('payload->>conversationId', String(c.id));
+      .eq('type', 'bf_apertura_claim').eq('payload->>conversationId', String(c.id))
+      .gte('created_at', new Date(now - 15 * 60_000).toISOString());
     if ((claim ?? 0) > 0) { giaFatti++; continue; }
 
     // Il numero: quello della chat se HIGH, altrimenti il HIGH meno carico.
@@ -105,7 +108,7 @@ export async function GET(req: NextRequest) {
     if (!ok.ok || !ok.sid) {
       // Interruttore `bf_apertura_modo` = 'neutra': chi non ha ancora ricevuto niente
       // riceve subito l'apertura neutra; il template BF arrivera' quando approvato.
-      const nessunOut = !righe.some((m) => m.direction === 'out');
+      const nessunOut = !righe.some((m) => m.direction === 'out' && !!m.twilio_sid);
       if ((modo ?? '').trim().toLowerCase() === 'neutra' && nessunOut && fascia && inviati < MAX_PER_GIRO) {
         const r = await inviaAperturaMario(supabase, {
           conversationId: c.id, phone, firstName: c.leads?.first_name ?? null, funnel: 'BLACK FRIDAY', from: numero,
