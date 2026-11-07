@@ -276,6 +276,31 @@ describe('gdoReminderVars e gdoReminderText', () => {
     expect(v['3']).toBe('domani, qualche ora prima');
   });
 
+  it('call venerdì alle 18 fissata martedì, adesso giovedì alle 18: oggi, e se non ti trova domani (PO 07/11)', () => {
+    const v = gdoReminderVars({
+      nome: null, call: new Date('2026-10-23T16:00:00Z'), nowMs: at('2026-10-22T16:00:00Z'),
+      fissatoIl: new Date('2026-10-20T14:00:00Z'),
+    });
+    expect(v['3']).toBe('oggi, e se non ti trova domani, qualche ora prima');
+    expect(gdoReminderText(v)).toContain('Prima ti chiama Noemi, una collega, oggi, e se non ti trova domani, qualche ora prima da un numero di cellulare: rispondi');
+  });
+
+  it('call lunedì alle 18 fissata giovedì, adesso sabato: oggi (sabato), e se non ti trova lunedì', () => {
+    const v = gdoReminderVars({
+      nome: null, call: new Date('2026-11-09T17:00:00Z'), nowMs: at('2026-11-07T17:00:00Z'),
+      fissatoIl: new Date('2026-11-05T14:00:00Z'),
+    });
+    expect(v['3']).toBe('oggi, e se non ti trova lunedì 9, qualche ora prima');
+  });
+
+  it('pomeriggio con anticipo ma giorno prima già passato: resta il giorno stesso', () => {
+    const v = gdoReminderVars({
+      nome: null, call: new Date('2026-10-23T16:00:00Z'), nowMs: at('2026-10-23T08:00:00Z'),
+      fissatoIl: new Date('2026-10-20T14:00:00Z'),
+    });
+    expect(v['3']).toBe('oggi, qualche ora prima');
+  });
+
   it('il testo libero è il template con le variabili al loro posto', () => {
     expect(gdoReminderText({ '1': 'Mario', '2': 'venerdì 23 ottobre alle 10:00', '3': 'oggi pomeriggio' })).toBe(
       "Ciao Mario, ti ricordo la tua videochiamata con Fenice Academy: venerdì 23 ottobre alle 10:00. Prima ti chiama Noemi, una collega, oggi pomeriggio da un numero di cellulare: rispondi, serve a confermare la videochiamata. Se non l'hai ancora fatto, guarda il video che ti ho mandato qui.",

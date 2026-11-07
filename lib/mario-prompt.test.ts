@@ -159,8 +159,10 @@ describe('conferme: anticipo e micro-impegni', () => {
   // Visto in produzione il 22/10: per una call delle 16 il modello scriveva "ti chiama
   // sabato nel primo mattino". Dal 27/10/2026 (PO 24/10) Noemi attacca alle 9 e le call del
   // mattino si chiamano la mattina stessa: le forme di [QUANDO] diventano quattro (cinque dal 24/10 sera: le 9 fissate a sera).
-  it('[QUANDO] ha cinque forme, una per caso, e il pomeriggio resta com era', () => {
-    expect(p).toContain('[QUANDO] ha sempre e solo una di queste cinque forme');
+  // Sei dal 07/11/2026: il pomeriggio fissato con anticipo ha la 1ª chiamata il giorno prima.
+  it('[QUANDO] ha sei forme, una per caso, compreso il pomeriggio con anticipo', () => {
+    expect(p).toContain('[QUANDO] ha sempre e solo una di queste sei forme');
+    expect(p).toContain('e se non ti trova venerdì 23 nel pomeriggio, qualche ora prima della videochiamata');
     expect(p).toContain('alle 9 in punto, appena attacca');
     expect(p).toContain('Le 9:00 comunque non le proponi mai tu');
     expect(p).not.toContain('presto la mattina');

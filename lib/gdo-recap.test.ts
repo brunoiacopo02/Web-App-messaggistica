@@ -17,6 +17,10 @@ describe('testi del recap GDO', () => {
     expect(quandoNoemi(new Date('2026-10-23T09:00:00+02:00'), gio)).toBe('giovedì 22'));
   it('quandoNoemi: call dalle 15 → stesso giorno', () =>
     expect(quandoNoemi(new Date('2026-10-23T18:00:00+02:00'), gio)).toBe('venerdì 23, qualche ora prima'));
+  it('quandoNoemi: call dalle 15 fissata con anticipo → il giorno prima, poi il giorno stesso (PO 07/11)', () =>
+    expect(quandoNoemi(new Date('2026-10-23T18:00:00+02:00'), mer)).toBe('già giovedì 22, e se non ti trova venerdì 23, qualche ora prima'));
+  it('quandoNoemi: domenica per martedì pomeriggio → già lunedì, mai la domenica', () =>
+    expect(quandoNoemi(new Date('2026-11-10T17:00:00+01:00'), new Date('2026-11-08T11:00:00+01:00'))).toBe('già lunedì 9, e se non ti trova martedì 10, qualche ora prima'));
   it('recap completo: una bolla con data, Noemi, video e FATTO', () => {
     const t = gdoRecapText({ nome: 'Luca Rossi', call, videoLink: 'https://corso.feniceacademy.it/conferenza-bx', fissatoIl: gio });
     expect(t).toContain('Ciao Luca');

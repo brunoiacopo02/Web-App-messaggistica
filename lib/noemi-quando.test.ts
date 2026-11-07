@@ -5,9 +5,11 @@ import { romeDayKey } from './rome-time';
 const lun = new Date('2026-10-26T11:00:00+01:00');
 
 describe('pianoNoemi: quando chiama Noemi (PO 24/10/2026)', () => {
-  it('dalle 15 in poi: lo stesso giorno, qualche ora prima', () => {
+  it('dalle 15 in poi fissata il giorno prima: lo stesso giorno, qualche ora prima', () => {
     expect(pianoNoemi(new Date('2026-10-27T15:00:00+01:00'), lun).caso).toBe('pomeriggio');
-    expect(pianoNoemi(new Date('2026-10-30T18:00:00+01:00'), lun).caso).toBe('pomeriggio');
+    expect(pianoNoemi(new Date('2026-10-27T21:00:00+01:00'), lun).caso).toBe('pomeriggio');
+    // fissata il giorno stesso
+    expect(pianoNoemi(new Date('2026-10-26T18:00:00+01:00'), lun).caso).toBe('pomeriggio');
   });
 
   it('mattina di domani fissata oggi: la mattina stessa', () => {
@@ -76,5 +78,44 @@ describe('fissatoIlDi: l ultimo gesto del GDO sulla call', () => {
     expect(fissatoIlDi({ gdo_agenda_at: 'boh', gdo_appuntamento_set_at: '2026-10-21T10:00:00Z' })?.toISOString()).toBe('2026-10-21T10:00:00.000Z');
     expect(fissatoIlDi({ gdo_agenda_at: null, gdo_appuntamento_set_at: null })).toBeUndefined();
     expect(fissatoIlDi({})).toBeUndefined();
+  });
+});
+
+describe('pianoNoemi: pomeriggio fissato con anticipo (PO 07/11/2026, CRM 88d73bd)', () => {
+  it('fissata lunedì per mercoledì 18: 1ª chiamata martedì, poi il giorno stesso', () => {
+    const p = pianoNoemi(new Date('2026-10-28T18:00:00+01:00'), lun);
+    expect(p.caso).toBe('giorno-prima-poi-pomeriggio');
+    expect(romeDayKey(p.giornoPrima)).toBe('2026-10-27');
+    expect(pianoNoemi(new Date('2026-10-30T18:00:00+01:00'), lun).caso).toBe('giorno-prima-poi-pomeriggio');
+  });
+
+  it('domenica per lunedì pomeriggio: lunedì è il prossimo giorno lavorativo, il giorno stesso', () => {
+    const dom = new Date('2026-11-08T21:30:00+01:00');
+    expect(pianoNoemi(new Date('2026-11-09T16:00:00+01:00'), dom).caso).toBe('pomeriggio');
+  });
+
+  it('domenica per martedì pomeriggio: 1ª chiamata lunedì', () => {
+    const dom = new Date('2026-11-08T11:00:00+01:00');
+    const p = pianoNoemi(new Date('2026-11-10T17:00:00+01:00'), dom);
+    expect(p.caso).toBe('giorno-prima-poi-pomeriggio');
+    expect(romeDayKey(p.giornoPrima)).toBe('2026-11-09');
+  });
+
+  it('sabato per lunedì pomeriggio: il giorno stesso; venerdì per lunedì: 1ª chiamata sabato, mai domenica', () => {
+    const lunPom = new Date('2026-11-09T18:00:00+01:00');
+    expect(pianoNoemi(lunPom, new Date('2026-11-07T12:00:00+01:00')).caso).toBe('pomeriggio');
+    const p = pianoNoemi(lunPom, new Date('2026-11-06T12:00:00+01:00'));
+    expect(p.caso).toBe('giorno-prima-poi-pomeriggio');
+    expect(romeDayKey(p.giornoPrima)).toBe('2026-11-07');
+  });
+
+  it('domenica per martedì mattina: il giorno lavorativo prima è lunedì, poi la mattina stessa', () => {
+    const p = pianoNoemi(new Date('2026-11-10T11:00:00+01:00'), new Date('2026-11-08T11:00:00+01:00'));
+    expect(p.caso).toBe('giorno-prima-poi-mattina');
+    expect(romeDayKey(p.giornoPrima)).toBe('2026-11-09');
+  });
+
+  it('domenica per lunedì mattina: la mattina stessa', () => {
+    expect(pianoNoemi(new Date('2026-11-09T11:00:00+01:00'), new Date('2026-11-08T11:00:00+01:00')).caso).toBe('mattina-stessa');
   });
 });

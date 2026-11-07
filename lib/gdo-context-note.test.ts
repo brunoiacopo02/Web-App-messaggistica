@@ -159,12 +159,18 @@ describe('nota Noemi: dipende dall ora dell appuntamento e da quanto manca', () 
     expect(n).toContain('il giorno prima, sabato 24');
   });
 
-  it('dalle 15 in poi: lo stesso giorno, qualche ora prima (invariato)', () => {
-    for (const iso of ['2026-10-27T15:00:00+01:00', '2026-10-27T18:00:00+01:00', '2026-10-28T16:00:00+01:00']) {
+  it('dalle 15 in poi fissata il giorno lavorativo prima: lo stesso giorno, qualche ora prima', () => {
+    for (const iso of ['2026-10-27T15:00:00+01:00', '2026-10-27T18:00:00+01:00']) {
       const n = nota(iso);
       expect(n).toContain('lo stesso giorno');
       expect(n).not.toContain('il giorno prima');
     }
+  });
+
+  it('dalle 15 fissata con anticipo: il giorno prima, poi il giorno stesso (PO 07/11)', () => {
+    const n = nota('2026-10-29T18:00:00+01:00');
+    expect(n).toContain('già il giorno prima, mercoledì 28');
+    expect(n).toContain('giovedì 29, qualche ora prima della call');
   });
 
   it('non dice più che Noemi la mattina non chiama', () => {
@@ -175,7 +181,7 @@ describe('nota Noemi: dipende dall ora dell appuntamento e da quanto manca', () 
 
   it('vince la data piu recente fra le due colonne', () => {
     const n = nota('2026-10-27T10:00:00+01:00', { gdoAppuntamentoAt: '2026-10-28T16:00:00+01:00' });
-    expect(n).toContain('lo stesso giorno');
+    expect(n).toContain('la call è mercoledì 28 alle 16:00');
   });
 
   it('senza nessuna data non inventa un orario', () => {

@@ -253,7 +253,8 @@ COSA FA: Noemi fa la PRESELEZIONE, non la trattativa. Sono 5-10 minuti al telefo
 I 5-10 minuti sono di Noemi, non della call. La call è di 30/40 minuti: non venderla mai dicendo che sono cinque minuti, e non usare la brevità di Noemi per far sembrare corto l'appuntamento.
 QUANDO CHIAMA: non chiama all'ora della call e non chiama pochi minuti prima. Chiama con anticipo, e l'anticipo dipende da quando è la call.
 Noemi attacca alle 9:00 e prima di quell'ora non chiama mai.
-call dalle 15:00 in poi: chiama lo stesso giorno, qualche ora prima. Per una call alle 16 chiama nel primo pomeriggio, per una alle 19 un paio d'ore prima.
+call dalle 15:00 in poi DOMANI rispetto a oggi: chiama lo stesso giorno, qualche ora prima. Per una call alle 16 chiama nel primo pomeriggio, per una alle 19 un paio d'ore prima.
+call dalle 15:00 in poi PIÙ IN LÀ (oltre il prossimo giorno lavorativo): lo sente già il giorno prima, e se non lo trova lo richiama il giorno della call, qualche ora prima. Digli di tenere il telefono a portata già dal giorno prima.
 call del mattino (10:00-14:00) DOMANI rispetto a oggi: chiama la mattina stessa, dalle 9, prima della videochiamata. A chi ha la call domani mattina di' di tenere il telefono a portata dalle 9.
 call del mattino (10:00-14:00) PIÙ IN LÀ (oltre il prossimo giorno lavorativo): lo sente già il giorno prima, e se non lo trova lo richiama la mattina stessa dalle 9. Digli di tenere il telefono a portata già dal giorno prima.
 call alle 9:00: chiama il giorno prima, perché alle 9 Noemi attacca proprio e prima della call non farebbe in tempo.
@@ -273,8 +274,9 @@ Se quello che dice non ti torna, non affermare nessuna data e non dirgli che que
 2. "*Ti chiama Noemi, una nostra collega, [QUANDO]* da un numero di cellulare. Sono 5-10 minuti e serve a confermare la videochiamata.
 Rispondi, perché se non rispondi la videochiamata non è confermata. Se ti scappa la chiamata, richiamala subito su quel numero"
 
-Al posto di [QUANDO] scrivi il giorno col numero e la fascia, calcolandolo dal giorno e dall'ora della call e con la regola del blocco CHI È NOEMI E QUANDO CHIAMA. [QUANDO] ha sempre e solo una di queste cinque forme:
-call DALLE 15:00 IN POI → "<giorno della call, col numero> nel pomeriggio, qualche ora prima della videochiamata". Es. call sabato 24 alle 16: "*Ti chiama Noemi, una nostra collega, sabato 24 nel pomeriggio, qualche ora prima della videochiamata*".
+Al posto di [QUANDO] scrivi il giorno col numero e la fascia, calcolandolo dal giorno e dall'ora della call e con la regola del blocco CHI È NOEMI E QUANDO CHIAMA. [QUANDO] ha sempre e solo una di queste sei forme:
+call DALLE 15:00 IN POI DOMANI (o oggi) → "<giorno della call, col numero> nel pomeriggio, qualche ora prima della videochiamata". Es. oggi è venerdì 23, call sabato 24 alle 16: "*Ti chiama Noemi, una nostra collega, sabato 24 nel pomeriggio, qualche ora prima della videochiamata*". Vale anche dal sabato al lunedì.
+call DALLE 15:00 IN POI PIÙ IN LÀ → "<giorno prima della call, col numero>, e se non ti trova <giorno della call> nel pomeriggio, qualche ora prima della videochiamata". Es. oggi è mercoledì 21, call venerdì 23 alle 18: "*Ti chiama Noemi, una nostra collega, già giovedì 22, e se non ti trova venerdì 23 nel pomeriggio, qualche ora prima della videochiamata*".
 call DEL MATTINO (10:00-14:00) DOMANI → "<giorno della call, col numero> in mattinata, dalle 9, prima della videochiamata". Es. oggi è giovedì 22, call venerdì 23 alle 11: "*Ti chiama Noemi, una nostra collega, venerdì 23 in mattinata, dalle 9, prima della videochiamata*". Vale anche dal sabato al lunedì: oggi è sabato 31, call lunedì 2 alle 11: "*Ti chiama Noemi, una nostra collega, lunedì 2 in mattinata, dalle 9, prima della videochiamata*".
 call DEL MATTINO (10:00-14:00) PIÙ IN LÀ → "<giorno prima della call, col numero>, e se non ti trova <giorno della call> in mattinata, dalle 9". Es. oggi è mercoledì 21, call venerdì 23 alle 11: "*Ti chiama Noemi, una nostra collega, già giovedì 22, e se non ti trova venerdì 23 in mattinata, dalle 9*".
 call ALLE 9:00 fissata prima delle 19:00 del giorno prima → "<giorno prima della call, col numero>". Es. call venerdì 23 alle 9: "*Ti chiama Noemi, una nostra collega, giovedì 22*".

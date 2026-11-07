@@ -242,6 +242,11 @@ function noemiRelativo(call: Date, nowMs: number, fissatoIl: Date): string {
   const mattina = `${relativo(call)} in mattinata dalle 9`;
   switch (caso) {
     case 'pomeriggio': return `${relativo(call)}, qualche ora prima`;
+    case 'giorno-prima-poi-pomeriggio':
+      // Come la mattina: passato il giorno prima resta solo la chiamata del giorno stesso.
+      return romeDaysBetween(now, giornoPrima) < 0
+        ? `${relativo(call)}, qualche ora prima`
+        : `${relativo(giornoPrima)}, e se non ti trova ${relativo(call)}, qualche ora prima`;
     case 'mattina-stessa': return mattina;
     case 'giorno-prima': return relativo(giornoPrima);
     case 'nove-in-punto': return `${relativo(call)} alle 9 in punto`;

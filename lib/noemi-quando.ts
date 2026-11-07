@@ -5,7 +5,10 @@ import { romeDayKey, romeHour } from './rome-time';
  * Noemi attacca alle 9 e la regola è quella della board Conferme del CRM
  * (src/lib/conferme/boardWindow.ts nel repo del CRM):
  *
- * - call dalle 15 in poi: lo stesso giorno, qualche ora prima (invariato);
+ * - call dalle 15 in poi fissata il giorno lavorativo prima o lo stesso giorno: lo stesso
+ *   giorno, qualche ora prima;
+ * - call dalle 15 in poi fissata con più anticipo (PO 07/11/2026, CRM 88d73bd): la 1ª
+ *   chiamata il giorno lavorativo prima, le altre il giorno stesso, qualche ora prima;
  * - call del mattino (10-14) fissata il giorno lavorativo prima o lo stesso giorno: la
  *   mattina stessa, dalle 9;
  * - call del mattino fissata con più anticipo: il giorno prima, e se non risponde di nuovo
@@ -19,7 +22,7 @@ import { romeDayKey, romeHour } from './rome-time';
  * al giorno del fissaggio. Il giorno prima di un lunedì è il sabato: la domenica non si
  * lavora.
  */
-export type NoemiCaso = 'pomeriggio' | 'mattina-stessa' | 'giorno-prima-poi-mattina' | 'giorno-prima' | 'nove-in-punto';
+export type NoemiCaso = 'pomeriggio' | 'giorno-prima-poi-pomeriggio' | 'mattina-stessa' | 'giorno-prima-poi-mattina' | 'giorno-prima' | 'nove-in-punto';
 
 export interface PianoNoemi {
   caso: NoemiCaso;
@@ -43,18 +46,16 @@ export function giornoLavorativoPrima(d: Date): Date {
   return g;
 }
 
-/** Il giorno lavorativo dopo `d` (Roma), come 'YYYY-MM-DD': dopo il sabato c'è il lunedì. */
-function giornoLavorativoDopo(d: Date): string {
-  const g = mezzogiorno(romeDayKey(d));
-  g.setUTCDate(g.getUTCDate() + 1);
-  if (g.getUTCDay() === 0) g.setUTCDate(g.getUTCDate() + 1);
-  return g.toISOString().slice(0, 10);
-}
-
 export function pianoNoemi(call: Date, fissatoIl: Date): PianoNoemi {
   const giornoPrima = giornoLavorativoPrima(call);
   const ora = romeHour(call);
-  if (ora >= NOEMI_POMERIGGIO_DALLE) return { caso: 'pomeriggio', giornoPrima };
+  // 'YYYY-MM-DD' si confronta come stringa: l'ordine è quello del calendario. "Con
+  // anticipo" = fissata prima del giorno lavorativo che precede la call (la regola
+  // `primaChiamataIlGiornoPrima` della board Conferme del CRM).
+  const conAnticipo = romeDayKey(fissatoIl) < romeDayKey(giornoPrima);
+  if (ora >= NOEMI_POMERIGGIO_DALLE) {
+    return { caso: conAnticipo ? 'giorno-prima-poi-pomeriggio' : 'pomeriggio', giornoPrima };
+  }
   if (ora <= NOEMI_ATTACCA) {
     // Fissata il giorno prima dopo le 19, o in un giorno ancora successivo (il sabato per
     // il lunedì: la domenica non conta): niente chiamata del giorno prima.
@@ -64,8 +65,6 @@ export function pianoNoemi(call: Date, fissatoIl: Date): PianoNoemi {
       giorniDopo > keyPrima || (giorniDopo === keyPrima && romeHour(fissatoIl) >= NOEMI_ULTIMA_ORA_GIORNO_PRIMA);
     return { caso: tardi ? 'nove-in-punto' : 'giorno-prima', giornoPrima };
   }
-  // 'YYYY-MM-DD' si confronta come stringa: l'ordine è quello del calendario.
-  const conAnticipo = romeDayKey(call) > giornoLavorativoDopo(fissatoIl);
   return { caso: conAnticipo ? 'giorno-prima-poi-mattina' : 'mattina-stessa', giornoPrima };
 }
 

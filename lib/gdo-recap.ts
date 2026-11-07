@@ -18,7 +18,9 @@ export type RecapOccasione = 'turno-video' | 'registrato' | 'spostato';
 
 /**
  * "venerdì 23 in mattinata dalle 9", "già giovedì 22, e se non ti trova venerdì 23 in
- * mattinata dalle 9", "giovedì 22" (call alle 9) oppure "venerdì 23, qualche ora prima".
+ * mattinata dalle 9", "giovedì 22" (call alle 9), "venerdì 23, qualche ora prima" oppure
+ * "già giovedì 22, e se non ti trova venerdì 23, qualche ora prima" (pomeriggio fissato
+ * con anticipo).
  * La regola sta in lib/noemi-quando.ts; `fissatoIl` è quando è arrivata l'agenda.
  */
 export function quandoNoemi(call: Date, fissatoIl: Date = new Date()): string {
@@ -27,6 +29,7 @@ export function quandoNoemi(call: Date, fissatoIl: Date = new Date()): string {
   const prima = giornoRoma(giornoPrima);
   switch (caso) {
     case 'pomeriggio': return `${giorno}, qualche ora prima`;
+    case 'giorno-prima-poi-pomeriggio': return `già ${prima}, e se non ti trova ${giorno}, qualche ora prima`;
     case 'mattina-stessa': return `${giorno} in mattinata dalle 9`;
     case 'giorno-prima-poi-mattina': return `già ${prima}, e se non ti trova ${giorno} in mattinata dalle 9`;
     case 'giorno-prima': return prima;

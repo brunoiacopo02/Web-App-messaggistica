@@ -94,7 +94,8 @@ describe('testi', () => {
     });
     expect(t.split('\n')[0]).toBe('Fatto Luca, la tua videochiamata ora è *venerdì 30 alle 18:00*.');
     expect(t).toContain('una volta sola');
-    expect(t).toContain('*Ti chiama Noemi, una nostra collega, venerdì 30, qualche ora prima*');
+    // Spostata mercoledì per venerdì pomeriggio: 1ª chiamata giovedì (PO 07/11/2026).
+    expect(t).toContain('*Ti chiama Noemi, una nostra collega, già giovedì 29, e se non ti trova venerdì 30, qualche ora prima*');
     expect(t).toContain("Il video l'hai già visto? Se no, guardalo prima della videochiamata 👉 https://x.it/v");
   });
   it('conferma: video già visto → niente riga del video', () => {

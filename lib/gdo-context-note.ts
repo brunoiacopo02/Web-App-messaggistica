@@ -88,6 +88,8 @@ export function quandoChiamaNoemi(quando: Date | null, fissatoIl: Date = new Dat
       return ` Digli QUANDO lo chiama: la call è ${call}, quindi Noemi lo chiama la mattina stessa, ${giorno} dalle 9, prima della videochiamata. Scrivilo col giorno e il numero, dagli la finestra e mai un orario al minuto.`;
     case 'giorno-prima-poi-mattina':
       return ` Digli QUANDO lo chiama: la call è ${call}, quindi Noemi lo sente già il giorno prima, ${prima}, e se non lo trova lo richiama la mattina stessa, ${giorno} dalle 9. Scrivilo così, col giorno e il numero, e digli di tenere il telefono a portata già da ${prima}.`;
+    case 'giorno-prima-poi-pomeriggio':
+      return ` Digli QUANDO lo chiama: la call è ${call}, quindi Noemi lo sente già il giorno prima, ${prima}, e se non lo trova lo richiama ${giorno}, qualche ora prima della call. Scrivilo così, col giorno e il numero, e digli di tenere il telefono a portata già da ${prima}.`;
     case 'pomeriggio':
       return ` Digli QUANDO lo chiama: la call è ${call}, quindi Noemi chiama lo stesso giorno, ${giorno}, qualche ora prima. Scrivilo col giorno e il numero, dagli la finestra e mai un orario al minuto.`;
   }
