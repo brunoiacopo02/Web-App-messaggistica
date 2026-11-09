@@ -1,5 +1,6 @@
 import { romeHour, romeOffset } from './rome-time';
 import { bookingBlackout, isBookableDate, type BlackoutRange } from './booking-blackout';
+import { bloccoOreDistribuite, type OreOccupate } from './ore-occupate';
 
 // Calcolo degli unici due giorni in cui Mario può fissare l'appuntamento:
 // "il giorno dopo" e "il giorno dopo ancora", saltando SEMPRE la domenica e i
@@ -220,8 +221,19 @@ const UNO_ALLA_VOLTA = (primo: string) =>
  */
 export function bookingSlotsContext(
   now: Date,
-  opts?: { ranges?: BlackoutRange[]; pieni?: GiorniPieni; days?: BookingDays },
+  opts?: { ranges?: BlackoutRange[]; pieni?: GiorniPieni; days?: BookingDays; oreOccupate?: OreOccupate | null },
 ): string {
+  // Le ore meno piene dal CRM (PO 09/11/2026) vanno in coda, in tutte e tre le forme.
+  // Senza dati dal CRM il blocco è parola per parola quello di prima.
+  const base = bookingSlotsBase(now, opts);
+  const ore = opts?.oreOccupate ? bloccoOreDistribuite([base.day1, base.day2], opts.oreOccupate) : null;
+  return ore ? `${base.testo}\n${ore}` : base.testo;
+}
+
+function bookingSlotsBase(
+  now: Date,
+  opts?: { ranges?: BlackoutRange[]; pieni?: GiorniPieni; days?: BookingDays },
+): { testo: string; day1: BookingDay; day2: BookingDay } {
   // `days` già calcolati: serve a chi deve tenersi i due giorni che il modello ha
   // visto e farli viaggiare fino alla guardia (`checkDataAppuntamento`). Ricalcolarli
   // là è la cosa che rompeva le sere quando l'ancora ruotava alle 20:00 (oggi ruota solo
@@ -235,9 +247,10 @@ export function bookingSlotsContext(
   const fuso = off1 === off2 ? `fuso ${off1}` : `fuso ${off1} per ${day1.date} e ${off2} per ${day2.date}`;
   const tag = `Nel tag [ESITO:APPUNTAMENTO|...] usa la data ISO 8601 del giorno scelto (${day1.date} oppure ${day2.date}) con l'ora concordata e ${fuso}.`;
 
+  const giorni = { day1, day2 };
   // Forma A — la chiusura si apre subito dopo day1: quel giorno è l'ultimo utile prima dello stop.
   if (chiusuraDopoDay1) {
-    return [
+    return { ...giorni, testo: [
       INTESTAZIONE,
       `- ${day1.label}, ${FASCIA}`,
       `CHIUSURA: dopo ${day1.label} siamo chiusi fino a ${chiusuraDopoDay1.label} compreso, si riparte ${day2.label}.`,
@@ -247,12 +260,12 @@ export function bookingSlotsContext(
       ORE_PIENE_E_FORM(day1.label),
       tag,
       AMBITO,
-    ].join('\n');
+    ].join('\n') };
   }
 
   // Forma B — siamo dentro la chiusura: si riparte da day1, e il perché si dice.
   if (chiusuraPrimaDiDay1) {
-    return [
+    return { ...giorni, testo: [
       INTESTAZIONE,
       `- PROPONI SEMPRE PRIMA questo: ${day1.label}, ${FASCIA}`,
       `- SOLO se il lead proprio non riesce nel giorno sopra: ${day2.label}, ${FASCIA}`,
@@ -263,11 +276,11 @@ export function bookingSlotsContext(
       ORE_PIENE_E_FORM(day1.label),
       tag,
       AMBITO,
-    ].join('\n');
+    ].join('\n') };
   }
 
   // Forma normale — nessuna chiusura in vista: parola per parola com'è sempre stato.
-  return [
+  return { ...giorni, testo: [
     INTESTAZIONE,
     `- PROPONI SEMPRE PRIMA questo: ${day1.label}, ${FASCIA}`,
     `- SOLO se il lead proprio non riesce nel giorno sopra: ${day2.label}, ${FASCIA}`,
@@ -277,5 +290,5 @@ export function bookingSlotsContext(
     ORE_PIENE_E_FORM(day1.label),
     tag,
     AMBITO,
-  ].join('\n');
+  ].join('\n') };
 }

@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { buildMarioSystem } from './mario-prompt';
 import { romeNowContext } from './rome-time';
 import { bookingSlotsContext, computeBookingDays } from './booking-slots';
+import type { OreOccupate } from './ore-occupate';
 import { sanitizeOutbound } from './outbound-sanitize';
 import { isoWithOffset } from './bot-contract';
 import { isSlugProfessione, type SlugProfessione } from './professioni';
@@ -250,6 +251,8 @@ export async function generateMarioReply(
     personaName?: string;
     contextNote?: string;
     giorniPieni?: readonly string[];
+    /** Ore gia' piene dal CRM (lib/ore-occupate.ts): Mario propone le meno piene. Senza, prompt come prima. */
+    oreOccupate?: OreOccupate | null;
     timeoutMs?: number;
     maxRetries?: number;
     /** La conversazione: decide il braccio dell'A/B (lib/mario-braccio.ts). Senza, Sonnet. */
@@ -303,7 +306,7 @@ export async function generateMarioReply(
   // stessa identica stringa di prima — i `\n\n` di giunzione stanno in testa al
   // secondo blocco — quindi il modello legge esattamente gli stessi byte.
   const systemStabile = buildMarioSystem(opts?.personaName ?? 'Mario');
-  const systemVariabile = `\n\n${romeNowContext(now)}\n\n${bookingSlotsContext(now, { days: giorni })}${contextNote}`;
+  const systemVariabile = `\n\n${romeNowContext(now)}\n\n${bookingSlotsContext(now, { days: giorni, oreOccupate: opts?.oreOccupate })}${contextNote}`;
 
   const requestOptions = {
     ...(opts?.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : {}),

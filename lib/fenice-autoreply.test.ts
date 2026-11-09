@@ -4,6 +4,8 @@ import { shouldAutoReply, shouldReopen, revocaCongedoLancio, shouldAdoptInbound,
 vi.mock('./mario', () => ({ generateMarioReply: vi.fn(), GDO_CONTEXT_NOTE: 'CONTESTO-GDO' }));
 vi.mock('./twilio', () => ({ sendFreeText: vi.fn(async () => ({ sid: 'SM_fake', status: 'queued' })) }));
 vi.mock('./bot-report', () => ({ generateBotReport: vi.fn(async () => ({})) }));
+// Le ore occupate vengono dal CRM con una fetch: qui niente CRM, Mario va senza il blocco.
+vi.mock('./ore-occupate', () => ({ leggiOreOccupate: vi.fn(async () => null) }));
 vi.mock('./bot-outcome', () => ({
   sendOutcome: vi.fn(async () => ({ sent: true })),
   inviaNotaAlCrm: vi.fn(async () => ({ sent: true })),

@@ -1,6 +1,7 @@
 import type { getSupabaseAdmin } from './supabase/admin';
 import { generateMarioReply, type MarioTurn } from './mario';
 import { datePiene, tettoGiornaliero } from './booking-capienza';
+import { leggiOreOccupate, type OreOccupate } from './ore-occupate';
 import { gdoContextNote, oraAppuntamento, serveNoemi, type GdoNoteInput } from './gdo-context-note';
 import {
   accodaDomanda, decidiDomanda, domandaInAttesa, eRispostaDaNotare, motivoRiscaldamento, notaDomandaGiaFatta, notaRisposta,
@@ -19,7 +20,7 @@ import { generateBotReport } from './bot-report';
 import { registraEsitoSenzaLeadId, sendOutcome, inviaNotaAlCrm } from './bot-outcome';
 import { stopDalCrmPerLead, vuolePassaggioAUmano } from './stop-crm';
 import { buildScriveDopoLaCallNote, motivoScartoAppuntamento, TESTO_DATA_DA_VERIFICARE, unisciGiorni } from './bot-outcome-rules';
-import { giorniDelLinkForm } from './booking-slots';
+import { computeBookingDays, giorniDelLinkForm } from './booking-slots';
 import { paroleDellaRichiesta } from './contatti-umani';
 import { bookingBlackout } from './booking-blackout';
 import type { BotOutcome } from './bot-contract';
@@ -738,6 +739,17 @@ export async function drainMarioReplies(
   // Giornate già al completo: il bot non le propone. Si legge una volta per drain,
   // non per turno. Senza BOOKING_DAILY_CAP la lista è vuota e non si tocca il DB.
   const giorniPieni = await datePiene(supabase, tettoGiornaliero(process.env.BOOKING_DAILY_CAP), new Date());
+  // Ore gia' piene dei due giorni prenotabili, dal CRM (PO 09/11/2026): Mario propone le
+  // meno piene. Si chiede solo se il turno arriva a Mario, una volta per drain; null se il
+  // CRM non risponde, e il prompt resta quello di prima.
+  let oreOccupate: Promise<OreOccupate | null> | undefined;
+  const leggiOre = (): Promise<OreOccupate | null> => {
+    if (!oreOccupate) {
+      const { day1, day2 } = computeBookingDays(new Date());
+      oreOccupate = leggiOreOccupate([day1.date, day2.date]);
+    }
+    return oreOccupate;
+  };
 
   // Lancio Web Developer AI, dopo il follow-up (spec §5.5): la chat e' di Mario standard e
   // il video di preparazione e' la live editata. Il link si legge una volta per drain, e
@@ -1308,6 +1320,7 @@ export async function drainMarioReplies(
       const result = await generateMarioReply(history, {
         personaName: PERSONA_NAME[persona],
         giorniPieni,
+        oreOccupate: await leggiOre(),
         conversationId,
         // I promemoria pendenti (video non confermato, Noemi non ancora spiegata)
         // viaggiano dentro il contesto: il modello li integra nel discorso invece di
@@ -1406,6 +1419,7 @@ export async function drainMarioReplies(
           const retry = await generateMarioReply(history, {
             personaName: PERSONA_NAME[persona],
             giorniPieni,
+            oreOccupate: await leggiOre(),
             conversationId,
             contextNote: [gdoContextNote({
               gdoVideoSentAt: gdoVideoSentAt,
