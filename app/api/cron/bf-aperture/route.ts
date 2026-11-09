@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendSequenceTemplate, inviaAperturaMario } from '@/lib/apertura-mario-invio';
 import { templateBfApprovatoSu, leggiModoAperturaBf } from '@/lib/black-friday-apertura';
-import { aperturaBlackFridayText, MARKER_TESTO_APERTURA_BF } from '@/lib/black-friday';
+import { aperturaBlackFridayText, MARKER_TESTO_APERTURA_BF, EVENTO_BF_SU_APPUNTAMENTO } from '@/lib/black-friday';
 import { getStatoQualitaNumeri, eHighEFuoriPausa } from '@/lib/tetti-numeri';
 import { numeroPrimario } from '@/lib/mittente';
 import { sceltaHighMenoCarico } from '@/lib/scelta-mittente';
@@ -30,6 +30,8 @@ export const maxDuration = 300;
  * - Fascia 07-23 (`inOpeningWindow`), al massimo MAX_PER_GIRO invii a giro.
  */
 const MAX_PER_GIRO = 40;
+/** Oltre questa eta' una richiesta di apertura BF su chat con appuntamento si lascia cadere. */
+const FINESTRA_RICHIESTA_H = 72;
 const H = 3600_000;
 
 function authorized(req: NextRequest): boolean {
@@ -70,6 +72,39 @@ export async function GET(req: NextRequest) {
   }
   const convs = (data ?? []) as unknown as Conv[];
 
+  // Chat con APPUNTAMENTO del bot a cui e' arrivato un lead BF (PO 09/11/2026): la
+  // richiesta la scrive l'arruolamento in event_log. L'appuntamento resta com'e' (chat
+  // 'closed' o 'active', esito e `ai_started_at` intatti): qui si manda solo l'apertura,
+  // e "ha risposto" si misura dalla richiesta, non dall'inizio della chat (la cronologia
+  // contiene la conversazione in cui ha fissato).
+  const daRichiesta = new Map<number, string>();
+  const { data: richieste } = await supabase.from('event_log')
+    .select('payload, created_at')
+    .eq('type', EVENTO_BF_SU_APPUNTAMENTO)
+    .gte('created_at', new Date(now - FINESTRA_RICHIESTA_H * H).toISOString())
+    .order('created_at', { ascending: true })
+    .limit(500);
+  for (const r of (richieste ?? []) as { payload: { conversationId?: string } | null; created_at: string }[]) {
+    const id = Number(r.payload?.conversationId);
+    if (Number.isFinite(id) && !daRichiesta.has(id)) daRichiesta.set(id, r.created_at);
+  }
+  if (daRichiesta.size > 0) {
+    const { data: suApp, error: erroreApp } = await supabase
+      .from('conversations')
+      .select('id, ai_started_at, wa_number, ai_status, leads(phone_e164, first_name)')
+      .in('id', [...daRichiesta.keys()])
+      .ilike('crm_funnel', 'black friday')
+      .eq('bot_outcome', 'APPUNTAMENTO')
+      .is('ai_paused_at', null)
+      .is('gdo_agenda_at', null);
+    if (erroreApp) await logCronQueryError(supabase, 'bf_aperture_query_error', erroreApp);
+    const gia = new Set(convs.map((c) => c.id));
+    for (const c of ((suApp ?? []) as unknown as (Conv & { ai_status: string | null })[])) {
+      if (c.ai_status === 'handed_off' || gia.has(c.id)) continue;
+      convs.push(c);
+    }
+  }
+
   let inviati = 0, giaFatti = 0, risposto = 0, inAttesa = 0, falliti = 0, senzaNumero = 0;
   const dettaglio: Record<string, unknown>[] = [];
   const fascia = inOpeningWindow(now);
@@ -82,7 +117,10 @@ export async function GET(req: NextRequest) {
   for (const c of convs) {
     const phone = c.leads?.phone_e164;
     if (!phone) continue;
-    const da = c.ai_started_at ? new Date(Date.parse(c.ai_started_at) - 5 * 60_000).toISOString() : '1970-01-01T00:00:00Z';
+    const richiestaAt = daRichiesta.get(c.id);
+    const da = richiestaAt
+      ? richiestaAt
+      : c.ai_started_at ? new Date(Date.parse(c.ai_started_at) - 5 * 60_000).toISOString() : '1970-01-01T00:00:00Z';
     const { data: msgs } = await supabase.from('messages')
       .select('direction, body, twilio_sid').eq('conversation_id', c.id).gte('created_at', da);
     const righe = (msgs ?? []) as { direction: string; body: string | null; twilio_sid: string | null }[];

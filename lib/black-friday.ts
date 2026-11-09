@@ -1,3 +1,4 @@
+import { formatRomeDateTime } from './rome-time';
 import type { getSupabaseAdmin } from './supabase/admin';
 import { liberaDaLancioEAgenda } from './professioni-nota';
 
@@ -58,6 +59,10 @@ export function aperturaBlackFridayText(nome: string): string {
  *  - assente / 'auto': si aspetta l'approvazione;
  *  - 'neutra': si apre subito col neutro `aperturabotchat` (se il template non arriva).
  */
+/** In `event_log`: la richiesta di mandare l'apertura BF a una chat con APPUNTAMENTO del
+ *  bot (PO 09/11/2026). La scrive l'arruolamento, la legge `bf-aperture` (che manda), fa
+ *  da guardia ai ritenti dell'intake e dice a Mario che la call c'era gia'. */
+export const EVENTO_BF_SU_APPUNTAMENTO = 'bf_apertura_su_appuntamento' as const;
 export const SETTING_MODO_APERTURA = 'bf_apertura_modo' as const;
 
 export type SceltaAperturaBf = 'template_bf' | 'attesa' | 'neutra';
@@ -201,6 +206,9 @@ export function blackFridayContextNote(i: {
   ingresso?: 'link' | 'inserzione';
   /** Un nostro template in chat ha parlato d'altro (10 ore, Telegram...): Mario si scusa. */
   aperturaSbagliata?: boolean;
+  /** La chat ha gia' un APPUNTAMENTO del bot (PO 09/11/2026): data della call (ISO, null =
+   *  non nota). Mario parla del BF senza fissarne un'altra ne' disdire quella. */
+  callGiaFissata?: { atIso: string | null } | null;
 }): string {
   const scadenza = i.scadenza && i.scadenza.atMs > i.nowMs ? i.scadenza : null;
   const vsl = i.vslLink?.trim() || null;
@@ -225,19 +233,45 @@ export function blackFridayContextNote(i: {
   } else {
     righe.push("- SCADENZA: non ne abbiamo una da dire. Non citare date di fine offerta e non dire che scade a breve.");
   }
+  const call = i.callGiaFissata ?? null;
   if (i.posti || scadenza) {
-    righe.push(`URGENZA VERA: per questo lead ${[i.posti ? 'i posti limitati' : null, scadenza ? 'la scadenza' : null].filter(Boolean).join(' e ')} sono fatti veri e li puoi usare come leva per fissare la call adesso e non fra qualche settimana, in deroga alla regola generale su fretta e scarsita'. Restano vietati il senso di colpa e qualunque fatto che non sia scritto qui.`);
+    if (call) righe.push(`URGENZA VERA: per questo lead ${[i.posti ? 'i posti limitati' : null, scadenza ? 'la scadenza' : null].filter(Boolean).join(' e ')} sono fatti veri: puoi usarli per dirgli che conviene non saltare la call che ha gia' fissato, perche' e' li' che blocca il posto con le condizioni del Black Friday. Restano vietati il senso di colpa e qualunque fatto che non sia scritto qui.`);
+    else righe.push(`URGENZA VERA: per questo lead ${[i.posti ? 'i posti limitati' : null, scadenza ? 'la scadenza' : null].filter(Boolean).join(' e ')} sono fatti veri e li puoi usare come leva per fissare la call adesso e non fra qualche settimana, in deroga alla regola generale su fretta e scarsita'. Restano vietati il senso di colpa e qualunque fatto che non sia scritto qui.`);
   }
-  if (primaDellInizio) {
+  if (primaDellInizio && !call) {
     righe.push(
       "QUANDO PARTE: l'offerta Black Friday parte lunedi' 9 novembre. Oggi non e' ancora attiva: puoi raccontarla (sono i fatti qui sopra) dicendo che parte lunedi' 9.",
       "CALL DA LUNEDI' 9: la videocall col consulente si fissa SOLO da lunedi' 9 novembre in poi, perche' e' da lunedi' che si puo' bloccare il posto con le condizioni del Black Friday. Non proporre ne' accettare giorni prima di lunedi' 9 (niente oggi, niente domenica 8): se chiede prima, spiegagli che l'offerta parte lunedi' e proponi lunedi' 9 o i giorni subito dopo.",
     );
   }
-  if (i.aperturaSbagliata) {
+  if (i.aperturaSbagliata && !call) {
     righe.push(
       "MESSAGGIO SBAGLIATO: il nostro primo messaggio in questa chat parlava d'altro (10 ore gratuite, canale Telegram, simulatore o live) ed era un errore nostro. Alla sua prima risposta scusati in una riga, senza drammi (es. \"Scusami, il messaggio di prima era sbagliato: ti sei registrato per l'offerta Black Friday\"), poi prosegui col flusso qui sotto. Non promettere accessi, corsi gratuiti o canali di cui parlava quel messaggio.",
     );
+  }
+  if (call) {
+    const atMs = call.atIso ? Date.parse(call.atIso) : NaN;
+    const quando = Number.isNaN(atMs) ? null : formatRomeDateTime(call.atIso as string);
+    const passata = !Number.isNaN(atMs) && atMs <= i.nowMs;
+    righe.push(
+      quando
+        ? (passata
+          ? `CALL GIA' FISSATA: questo lead aveva gia' una videocall col consulente fissata per ${quando} (gia' passata). Ha lasciato i contatti anche per il Black Friday e gli abbiamo scritto noi per questo.`
+          : `CALL GIA' FISSATA: questo lead ha gia' una videocall col consulente fissata per ${quando}. Ha lasciato i contatti anche per il Black Friday e gli abbiamo scritto noi per questo.`)
+        : "CALL GIA' FISSATA: questo lead ha gia' una videocall col consulente fissata (la data la trovi nella cronologia). Ha lasciato i contatti anche per il Black Friday e gli abbiamo scritto noi per questo.",
+      "ALLA SUA PRIMA RISPOSTA: rispondi a quello che chiede, digli in poche righe cosa comprende l'offerta Black Friday (prezzo ridotto, garanzia scritta nel contratto, corso IA in regalo) e ricordagli la sua call" + (quando ? ` (${quando})` : '') + ": e' li' che il consulente gli spiega l'offerta e blocca il posto con le condizioni del Black Friday.",
+      "REGOLE SULLA CALL: NON fissare un'altra videocall, NON proporre giorni o orari, NON mandare il link del form, NON disdire e NON spostare la call di tua iniziativa. Niente qualifica completa: la call c'e' gia'. Se e' lui a chiedere di spostarla o disdirla, segui il manuale come sempre per una call gia' fissata.",
+      ...(passata
+        ? ["SE LA CALL E' GIA' PASSATA: non fissarne un'altra tu. Digli che segnali al consulente che vuole risentirlo per l'offerta Black Friday, e scrivilo nella nota."]
+        : []),
+    );
+    if (vsl) {
+      righe.push(
+        `VIDEO: se non gliel'hai gia' mandato, puoi mandargli UNA volta il video dell'offerta Black Friday da guardare prima della call: ${vsl}`,
+        "Invito e link sulla stessa riga: \"*Prima della videochiamata guarda questo video* 👉 <link>\". Non dire quanto dura.",
+      );
+    }
+    return righe.join('\n');
   }
   righe.push(
     daInserzione

@@ -19,9 +19,9 @@ vi.mock('./black-friday-apertura', () => ({
   aperturaBlackFriday: vi.fn(async () => ({ scelta: 'template_bf', sid: 'HX_BF' })),
 }));
 
-import { enrollLeadIntoMario, riapreChatPerBlackFriday } from './fenice-enroll';
+import { aperturaBfSuAppuntamento, enrollLeadIntoMario, riapreChatPerBlackFriday } from './fenice-enroll';
 import { sendTemplateAndLog } from './messaging';
-import { MARKER_TESTO_APERTURA_BF } from './black-friday';
+import { MARKER_TESTO_APERTURA_BF, EVENTO_BF_SU_APPUNTAMENTO, blackFridayContextNote } from './black-friday';
 
 const ORA = Date.parse('2026-11-08T14:07:00Z'); // 15:07 Roma, come il push di Elvi
 const H = 3600_000;
@@ -31,6 +31,9 @@ type Chat = {
   crmLeadId: string | null; crmFunnel?: string | null; aiStatus?: string | null; botOutcome?: string | null;
   lastInboundAt?: string | null; ultimoMessaggioAt?: string | null; ultimoOutboundAt?: string | null;
   bfPartita?: boolean; aiPausedAt?: string | null; gdoAppuntamentoAt?: string | null;
+  gdoAgendaAt?: string | null; botScheduledAt?: string | null;
+  /** Una richiesta `bf_apertura_su_appuntamento` gia' in event_log (ritento). */
+  richiestaGia?: boolean;
 };
 
 /** Fake Supabase: la riga della chat e le letture dei messaggi che l'arruolamento fa. */
@@ -41,6 +44,7 @@ function fake(chat: Chat) {
     crm_funnel: chat.crmFunnel ?? null, bot_outcome: chat.botOutcome ?? null,
     ai_paused_at: chat.aiPausedAt ?? null, gdo_appuntamento_at: chat.gdoAppuntamentoAt ?? null,
     lancio_slug: null, lancio_fase: null, last_inbound_at: chat.lastInboundAt ?? null,
+    gdo_agenda_at: chat.gdoAgendaAt ?? null, bot_scheduled_at: chat.botScheduledAt ?? null,
   };
   const supabase: any = {
     from(table: string) {
@@ -83,7 +87,13 @@ function fake(chat: Chat) {
           },
         };
       }
-      return { insert(p: any) { calls.events.push(p); return Promise.resolve({}); } };
+      return {
+        insert(p: any) { calls.events.push(p); return Promise.resolve({}); },
+        select() {
+          const c: any = { eq: () => c, limit: async () => ({ data: chat.richiestaGia ? [{ id: 1 }] : [], error: null }) };
+          return c;
+        },
+      };
     },
   };
   return { supabase, calls };
@@ -158,19 +168,47 @@ describe('enrollLeadIntoMario — lead Black Friday su una chat che esiste gia (
     for (const u of calls.updates) expect(u).not.toHaveProperty('ai_started_at');
   });
 
-  it('APPUNTAMENTO sulla chat → niente riapertura, esito intatto', async () => {
+  it('APPUNTAMENTO sulla chat (PO 09/11) → apertura BF richiesta, appuntamento e lead intatti', async () => {
     const { supabase, calls } = fake({
-      crmLeadId: 'LEAD-VECCHIO', crmFunnel: 'PROFESSIONI', aiStatus: 'closed', botOutcome: 'APPUNTAMENTO',
-      lastInboundAt: fa(50), ultimoMessaggioAt: fa(50), ultimoOutboundAt: fa(50),
+      crmLeadId: 'LEAD-APP', crmFunnel: 'CORSO 10 ORE', aiStatus: 'closed', botOutcome: 'APPUNTAMENTO',
+      botScheduledAt: '2026-11-10T10:00:00Z',
+      lastInboundAt: fa(30), ultimoMessaggioAt: fa(30), ultimoOutboundAt: fa(30),
     });
     const res = await enrollLeadIntoMario(supabase, ARGS);
-    expect(res).toMatchObject({ duplicato: true });
+    expect(res).toMatchObject({ ok: true, conversationId: 8727, duplicato: true });
+    // L'apertura la manda bf-aperture, non l'intake.
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+    // Un solo update: il funnel. Niente esito, data, ai_started_at, crm_lead_id, stato.
+    expect(calls.updates).toEqual([{ crm_funnel: 'BLACK FRIDAY' }]);
+    const ev = calls.events.find((e: any) => e.type === EVENTO_BF_SU_APPUNTAMENTO);
+    expect(ev?.payload).toMatchObject({ conversationId: '8727', crmLeadIdBf: 'LEAD-BF', crmLeadIdAppuntamento: 'LEAD-APP' });
+    expect(calls.events.map((e: any) => e.type)).not.toContain('fenice_enroll_bf_riapertura');
+  });
+
+  it('APPUNTAMENTO, ritento dello stesso intake (richiesta gia registrata) → nessuna seconda richiesta, esito intatto', async () => {
+    const { supabase, calls } = fake({
+      crmLeadId: 'LEAD-APP', crmFunnel: 'BLACK FRIDAY', aiStatus: 'closed', botOutcome: 'APPUNTAMENTO',
+      lastInboundAt: fa(30), ultimoMessaggioAt: fa(30), ultimoOutboundAt: fa(30), richiestaGia: true,
+    });
+    await enrollLeadIntoMario(supabase, ARGS);
+    expect(calls.events.map((e: any) => e.type)).not.toContain(EVENTO_BF_SU_APPUNTAMENTO);
     expect(sendTemplateAndLog).not.toHaveBeenCalled();
     for (const u of calls.updates) {
       expect(u).not.toHaveProperty('bot_outcome');
+      expect(u).not.toHaveProperty('bot_scheduled_at');
       expect(u).not.toHaveProperty('ai_started_at');
     }
-    expect(calls.events.map((e: any) => e.type)).not.toContain('fenice_enroll_bf_riapertura');
+  });
+
+  it('APPUNTAMENTO con il lead che sta scrivendo (3 ore fa) → nessuna apertura, esito intatto', async () => {
+    const { supabase, calls } = fake({
+      crmLeadId: 'LEAD-APP', crmFunnel: 'CORSO 10 ORE', aiStatus: 'closed', botOutcome: 'APPUNTAMENTO',
+      lastInboundAt: fa(3), ultimoMessaggioAt: fa(3), ultimoOutboundAt: fa(3),
+    });
+    await enrollLeadIntoMario(supabase, ARGS);
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+    expect(calls.events.map((e: any) => e.type)).not.toContain(EVENTO_BF_SU_APPUNTAMENTO);
+    for (const u of calls.updates) expect(u).not.toHaveProperty('bot_outcome');
   });
 
   it('ritento dello stesso intake BF (chat gia BF, stesso leadId) → idempotente, nessuna riapertura', async () => {
@@ -190,6 +228,57 @@ describe('enrollLeadIntoMario — lead Black Friday su una chat che esiste gia (
     const res = await enrollLeadIntoMario(supabase, { ...ARGS, crmFunnel: 'PROFESSIONI' });
     expect(res).toMatchObject({ duplicato: true });
     expect(calls.events.map((e: any) => e.type)).not.toContain('fenice_enroll_bf_riapertura');
+  });
+});
+
+describe('aperturaBfSuAppuntamento — regole', () => {
+  const base = {
+    blackFriday: true, crmLeadIdPrima: 'A' as string | null | undefined, crmLeadIdNuovo: 'B' as string | null,
+    crmFunnelPrima: 'CORSO 10 ORE' as string | null, aiStatus: 'closed' as string | null, botOutcome: 'APPUNTAMENTO' as string | null,
+    aiPausedAt: null as string | null, gdoAgendaAt: null as string | null, lancio: false, giaRichiesta: false, aperturaBfGiaPartita: false,
+    ultimoInboundMs: ORA - 30 * H as number | null, ultimoOutboundMs: ORA - 30 * H as number | null, nowMs: ORA,
+  };
+  it('caso base → si', () => expect(aperturaBfSuAppuntamento(base)).toBe(true));
+  it('solo con APPUNTAMENTO', () => {
+    expect(aperturaBfSuAppuntamento({ ...base, botOutcome: 'INTERROTTO' })).toBe(false);
+    expect(aperturaBfSuAppuntamento({ ...base, botOutcome: null })).toBe(false);
+  });
+  it('no: ritento, apertura BF gia partita, chat gia BF con lo stesso lead', () => {
+    expect(aperturaBfSuAppuntamento({ ...base, giaRichiesta: true })).toBe(false);
+    expect(aperturaBfSuAppuntamento({ ...base, aperturaBfGiaPartita: true })).toBe(false);
+    expect(aperturaBfSuAppuntamento({ ...base, crmLeadIdPrima: 'B', crmFunnelPrima: 'BLACK FRIDAY' })).toBe(false);
+  });
+  it('no: chat viva, persona in carico, postino GDO, lancio, lettura fallita, non BF', () => {
+    expect(aperturaBfSuAppuntamento({ ...base, ultimoInboundMs: ORA - 2 * H })).toBe(false);
+    expect(aperturaBfSuAppuntamento({ ...base, ultimoOutboundMs: ORA - 2 * H })).toBe(false);
+    expect(aperturaBfSuAppuntamento({ ...base, aiStatus: 'handed_off' })).toBe(false);
+    expect(aperturaBfSuAppuntamento({ ...base, aiPausedAt: '2026-11-01T00:00:00Z' })).toBe(false);
+    expect(aperturaBfSuAppuntamento({ ...base, gdoAgendaAt: '2026-11-01T00:00:00Z' })).toBe(false);
+    expect(aperturaBfSuAppuntamento({ ...base, lancio: true })).toBe(false);
+    expect(aperturaBfSuAppuntamento({ ...base, crmLeadIdPrima: undefined })).toBe(false);
+    expect(aperturaBfSuAppuntamento({ ...base, blackFriday: false })).toBe(false);
+  });
+});
+
+describe('blackFridayContextNote — call gia fissata (PO 09/11)', () => {
+  const NOTA = { vslLink: 'https://lp.example/vsl', scadenza: null, posti: 30, nowMs: ORA, ingresso: 'inserzione' as const };
+  it('call futura: data e ora, niente nuova call, niente form, niente qualifica', () => {
+    const t = blackFridayContextNote({ ...NOTA, callGiaFissata: { atIso: '2026-11-10T10:00:00Z' } });
+    expect(t).toContain("CALL GIA' FISSATA");
+    expect(t).toContain('alle 11:00');
+    expect(t).toContain("NON fissare un'altra videocall");
+    expect(t).not.toContain('FLUSSO:');
+    expect(t).not.toContain("SE LA CALL E' GIA' PASSATA");
+  });
+  it('call passata: non ne fissa un altra, la segnala nella nota', () => {
+    const t = blackFridayContextNote({ ...NOTA, callGiaFissata: { atIso: '2026-11-08T10:00:00Z' } });
+    expect(t).toContain("(gia' passata)");
+    expect(t).toContain("SE LA CALL E' GIA' PASSATA");
+  });
+  it('senza call: la nota di sempre', () => {
+    const t = blackFridayContextNote(NOTA);
+    expect(t).not.toContain("CALL GIA' FISSATA");
+    expect(t).toContain('FLUSSO:');
   });
 });
 

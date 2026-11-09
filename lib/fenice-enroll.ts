@@ -15,7 +15,7 @@ import { contaBenvenutiUltimaOra } from './lancio-db';
 import { mittenteDiConversazione, numeroPrimario } from './mittente';
 import { mittenteBenvenutoLancio } from './lancio-mittente';
 import { scegliMittenteNuovo, sidAperturaMario, chatEsistente, registraAperturaMario } from './scelta-mittente';
-import { aperturaBlackFridayText, isCrmFunnelBlackFriday, MARKER_TESTO_APERTURA_BF } from './black-friday';
+import { aperturaBlackFridayText, isCrmFunnelBlackFriday, MARKER_TESTO_APERTURA_BF, EVENTO_BF_SU_APPUNTAMENTO } from './black-friday';
 import { aperturaBlackFriday } from './black-friday-apertura';
 import { HANDOFF_VERGINI, HANDOFF_CRM_NON_DEL_BOT } from './lancio-vergini';
 import { lancioInCorso } from './lancio-fase';
@@ -230,6 +230,55 @@ export function riapreChatPerBlackFriday(g: {
   return true;
 }
 
+export { EVENTO_BF_SU_APPUNTAMENTO };
+
+/**
+ * Pure: un lead Black Friday arriva su una chat che ha gia' un APPUNTAMENTO del bot.
+ * Gli si manda l'apertura BF lasciando intatto l'appuntamento?
+ *
+ * Decisione PO 09/11/2026: chi lascia i contatti per il Black Friday riceve comunque
+ * l'apertura BF, anche con un appuntamento attivo col bot (si valuta dopo se confonde).
+ * L'APPUNTAMENTO resta terminale: niente reset di esito, data, `ai_started_at`,
+ * `crm_lead_id` (le note di Mario devono continuare ad arrivare al lead che ha la call),
+ * promemoria pre-call. Cambia solo `crm_funnel` (Mario parla del BF sapendo della call)
+ * e parte UNA apertura BF dal cron `bf-aperture`, con le sue regole.
+ *
+ * Si manda solo se:
+ * - l'intake e' BF e la richiesta e' nuova (leadId diverso, o chat non ancora BF) e non
+ *   e' gia' stata registrata (`giaRichiesta`: il ritento non duplica);
+ * - l'apertura BF non e' gia' partita in questa chat;
+ * - la chat non e' viva (stesse soglie di `riapreChatPerBlackFriday`): se il lead sta
+ *   scrivendo, basta il cambio funnel;
+ * - nessuna persona ce l'ha in mano (handed_off, fermo manuale), non e' una chat postino
+ *   di un GDO (`gdo_agenda_at`: li' il bot fa solo il postino) e non c'e' un lancio.
+ */
+export function aperturaBfSuAppuntamento(g: {
+  blackFriday: boolean;
+  crmLeadIdPrima: string | null | undefined;
+  crmLeadIdNuovo: string | null;
+  crmFunnelPrima: string | null;
+  aiStatus: string | null;
+  botOutcome: string | null;
+  aiPausedAt: string | null;
+  gdoAgendaAt: string | null;
+  lancio: boolean;
+  giaRichiesta: boolean;
+  aperturaBfGiaPartita: boolean;
+  ultimoInboundMs: number | null;
+  ultimoOutboundMs: number | null;
+  nowMs: number;
+}): boolean {
+  if (!g.blackFriday || !g.crmLeadIdNuovo || g.crmLeadIdPrima === undefined) return false;
+  if (g.botOutcome !== 'APPUNTAMENTO') return false;
+  const leadDiverso = g.crmLeadIdPrima !== null && g.crmLeadIdPrima !== g.crmLeadIdNuovo;
+  if (!leadDiverso && isCrmFunnelBlackFriday(g.crmFunnelPrima)) return false;
+  if (g.giaRichiesta || g.aperturaBfGiaPartita) return false;
+  if (g.aiStatus === 'handed_off' || g.aiPausedAt || g.gdoAgendaAt || g.lancio) return false;
+  if (g.ultimoInboundMs !== null && g.nowMs - g.ultimoInboundMs <= BF_INBOUND_VIVO_MS) return false;
+  if (g.ultimoOutboundMs !== null && g.nowMs - g.ultimoOutboundMs <= BF_OUTBOUND_RECENTE_MS) return false;
+  return true;
+}
+
 /** I campi da scrivere quando `azzeraEsitoPerLeadNuovo` dice si'. */
 const ESITO_AZZERATO = { bot_outcome: null, bot_outcome_at: null, bot_scheduled_at: null } as const;
 
@@ -305,6 +354,8 @@ export async function enrollLeadIntoMario(
   let chatFerma = false;
   // Lead Black Friday su una chat vecchia non viva (vedi `riapreChatPerBlackFriday`).
   let riaperturaBf = false;
+  // Lead Black Friday su una chat con APPUNTAMENTO (vedi `aperturaBfSuAppuntamento`).
+  let bfSuAppuntamento = false;
   {
     // Se una delle due letture non si sa com'è andata, l'apertura PARTE: un lead che
     // resta muto per sempre è peggio di un'apertura di troppo.
@@ -319,14 +370,14 @@ export async function enrollLeadIntoMario(
     // della select si controlla: "non lo so" non è "è nullo", e nel dubbio si apre.
     const { data: convRow, error: erroreConv } = await supabase
       .from('conversations')
-      .select('ai_owner, ai_status, crm_lead_id, crm_funnel, bot_outcome, ai_paused_at, gdo_appuntamento_at, lancio_slug, lancio_fase, last_inbound_at')
+      .select('ai_owner, ai_status, crm_lead_id, crm_funnel, bot_outcome, ai_paused_at, gdo_appuntamento_at, gdo_agenda_at, lancio_slug, lancio_fase, last_inbound_at')
       .eq('id', conversationId).single();
     const { count: partiti } = await supabase
       .from('messages').select('id', { count: 'exact', head: true })
       .eq('conversation_id', conversationId).eq('direction', 'out').not('twilio_sid', 'is', null);
     const riga = convRow as {
       crm_lead_id?: string | null; crm_funnel?: string | null; bot_outcome?: string | null; ai_status?: string | null;
-      ai_paused_at?: string | null; gdo_appuntamento_at?: string | null; last_inbound_at?: string | null;
+      ai_paused_at?: string | null; gdo_appuntamento_at?: string | null; gdo_agenda_at?: string | null; last_inbound_at?: string | null;
       lancio_slug?: string | null; lancio_fase?: string | null;
     } | null;
     crmLeadIdPrima = erroreConv ? undefined : (riga?.crm_lead_id ?? null);
@@ -375,8 +426,16 @@ export async function enrollLeadIntoMario(
         ultimoInboundMs: riga?.last_inbound_at ? Date.parse(riga.last_inbound_at) : null,
         nowMs,
       };
-      if (riapreChatPerBlackFriday({ ...condizioniBf, aperturaBfGiaPartita: false, ultimoOutboundMs: null })) {
-        const [ultimoOut, bfPartita] = await Promise.all([
+      const condizioniApp = {
+        ...condizioniBf,
+        gdoAgendaAt: riga?.gdo_agenda_at ?? null,
+      };
+      const forseRiapre = riapreChatPerBlackFriday({ ...condizioniBf, aperturaBfGiaPartita: false, ultimoOutboundMs: null });
+      const forseSuApp = !forseRiapre && aperturaBfSuAppuntamento({
+        ...condizioniApp, giaRichiesta: false, aperturaBfGiaPartita: false, ultimoOutboundMs: null,
+      });
+      if (forseRiapre || forseSuApp) {
+        const [ultimoOut, bfPartita, richiesta] = await Promise.all([
           supabase.from('messages').select('created_at')
             .eq('conversation_id', conversationId).eq('direction', 'out').not('twilio_sid', 'is', null)
             .order('created_at', { ascending: false })
@@ -385,16 +444,43 @@ export async function enrollLeadIntoMario(
             .eq('conversation_id', conversationId).eq('direction', 'out').not('twilio_sid', 'is', null)
             .ilike('body', `%${MARKER_TESTO_APERTURA_BF}%`)
             .limit(1),
+          // Solo per la chat con APPUNTAMENTO: la richiesta gia' registrata da un intake
+          // precedente (ritento): non se ne scrive una seconda.
+          forseSuApp
+            ? supabase.from('event_log').select('id')
+              .eq('type', EVENTO_BF_SU_APPUNTAMENTO).eq('payload->>conversationId', String(conversationId))
+              .limit(1)
+            : Promise.resolve({ data: [] as unknown[], error: null }),
         ]);
-        if (!ultimoOut.error && !bfPartita.error) {
+        if (!ultimoOut.error && !bfPartita.error && !richiesta.error) {
           const at = (ultimoOut.data as { created_at: string }[] | null)?.[0]?.created_at;
-          riaperturaBf = riapreChatPerBlackFriday({
-            ...condizioniBf,
+          const letture = {
             aperturaBfGiaPartita: ((bfPartita.data as unknown[] | null) ?? []).length > 0,
             ultimoOutboundMs: at ? Date.parse(at) : null,
+          };
+          if (forseRiapre) riaperturaBf = riapreChatPerBlackFriday({ ...condizioniBf, ...letture });
+          else bfSuAppuntamento = aperturaBfSuAppuntamento({
+            ...condizioniApp, ...letture, giaRichiesta: ((richiesta.data as unknown[] | null) ?? []).length > 0,
           });
         }
       }
+    }
+    // Chat con APPUNTAMENTO del bot (PO 09/11/2026): l'appuntamento non si tocca. Si
+    // segna solo il funnel e si chiede l'apertura BF a `bf-aperture`; `crm_lead_id`
+    // resta quello del lead che ha la call, cosi' note e disdette arrivano li'.
+    if (bfSuAppuntamento) {
+      await supabase.from('conversations').update({ crm_funnel: args.crmFunnel }).eq('id', conversationId);
+      await supabase.from('event_log').insert({
+        type: EVENTO_BF_SU_APPUNTAMENTO,
+        payload: {
+          phone: args.phone, conversationId: String(conversationId), crmLeadIdBf: args.crmLeadId ?? null,
+          crmLeadIdAppuntamento: crmLeadIdPrima ?? null, funnelPrima: riga?.crm_funnel ?? null,
+          aiStatusPrima: riga?.ai_status ?? null,
+        } as never,
+        message: `[bf] conv ${conversationId}: lead Black Friday ${args.crmLeadId} su chat con APPUNTAMENTO, apertura BF richiesta (appuntamento intatto)`,
+        level: 'info',
+      });
+      return { ok: true, conversationId, duplicato: true };
     }
     if (riaperturaBf) {
       await supabase.from('event_log').insert({

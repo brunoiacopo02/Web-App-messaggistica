@@ -1,7 +1,7 @@
 import type { getSupabaseAdmin } from './supabase/admin';
 import { generateMarioReply, type MarioTurn } from './mario';
 import { datePiene, tettoGiornaliero } from './booking-capienza';
-import { gdoContextNote, serveNoemi, type GdoNoteInput } from './gdo-context-note';
+import { gdoContextNote, oraAppuntamento, serveNoemi, type GdoNoteInput } from './gdo-context-note';
 import {
   accodaDomanda, decidiDomanda, domandaInAttesa, eRispostaDaNotare, motivoRiscaldamento, notaDomandaGiaFatta, notaRisposta,
   parlaDAltro, parlaDiDisdireOSpostare, riscaldamentoInerte, RISCALDAMENTO_CHIUSO, testoRispostaCompleto, togliDomandaRifatta,
@@ -43,7 +43,7 @@ import type { LancioInfo } from './lancio-crm';
 import { mittenteDiConversazione } from './mittente';
 import { brochureContextNote, professioniContextNote, professioniVince, richiestaSchedaFuoriFunnel, schedaDaInviare, schedaSubito } from './professioni-nota';
 import { isSlugProfessione, PROVENIENZA_PROFESSIONI } from './professioni';
-import { blackFridayContextNote, blackFridayVince, funnelBlackFridayAttivo, haAperturaSbagliata, isMarkerBlackFriday, leggiSettingsBlackFriday, PROVENIENZA_BLACK_FRIDAY, type SettingsBlackFriday } from './black-friday';
+import { blackFridayContextNote, blackFridayVince, funnelBlackFridayAttivo, haAperturaSbagliata, isMarkerBlackFriday, leggiSettingsBlackFriday, PROVENIENZA_BLACK_FRIDAY, EVENTO_BF_SU_APPUNTAMENTO, type SettingsBlackFriday } from './black-friday';
 import { inviaScheda } from './scheda-invio';
 import { fissatoIlDi } from './noemi-quando';
 import {
@@ -1181,6 +1181,14 @@ export async function drainMarioReplies(
           // Mario lo legge dalla nota Professioni (`appenaInviata`, qui sotto).
         }
       }
+      // Lead BF arrivato su una chat che aveva gia' l'APPUNTAMENTO (PO 09/11/2026): solo
+      // se l'apertura BF e' stata chiesta sopra la call (`bf_apertura_su_appuntamento`).
+      // Un lead BF che ha fissato nel suo flusso normale resta col manuale di sempre.
+      const bfSopraCall = vinceBlackFriday && esitoInPiedi === 'APPUNTAMENTO'
+        ? ((await supabase.from('event_log').select('id')
+          .eq('type', EVENTO_BF_SU_APPUNTAMENTO).eq('payload->>conversationId', String(conversationId))
+          .limit(1)).data ?? []).length > 0
+        : false;
       const notaBlackFriday = vinceBlackFriday
         ? [blackFridayContextNote({
             vslLink: vslBlackFriday,
@@ -1189,6 +1197,11 @@ export async function drainMarioReplies(
             nowMs: Date.now(),
             ingresso: ingressoBlackFriday,
             aperturaSbagliata: haAperturaSbagliata(rows),
+            // Chat con APPUNTAMENTO del bot (PO 09/11/2026): Mario parla del BF sapendo della
+            // call, senza fissarne un'altra. Data: la piu' recente fra la nostra e quella del CRM.
+            callGiaFissata: bfSopraCall
+              ? { atIso: oraAppuntamento(dataInPiedi, gdoAppuntamentoAt)?.toISOString() ?? null }
+              : null,
           }), notaPrimo].filter(Boolean).join('\n\n')
         : null;
       const notaProfessioni = vinceProfessioni
