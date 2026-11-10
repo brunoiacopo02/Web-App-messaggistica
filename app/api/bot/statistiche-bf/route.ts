@@ -15,7 +15,7 @@ const VALIDITA_MS = 5 * 60 * 1000;
 const PAGINA = 1000;
 const BLOCCO_IN = 150;
 
-const CONV_COLS = 'id, crm_lead_id, lead_id, created_at, last_message_at, wa_number, mario_braccio, bot_outcome, bot_outcome_at, ai_status';
+const CONV_COLS = 'id, crm_lead_id, lead_id, created_at, last_message_at, wa_number, mario_braccio, bot_outcome, bot_outcome_at, ai_status, scheda_inviata_at, professione';
 
 function blocchi<T>(a: T[], n = BLOCCO_IN): T[][] {
   const out: T[][] = [];

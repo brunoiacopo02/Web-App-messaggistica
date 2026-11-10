@@ -46,6 +46,8 @@ export interface ConvRiga {
   bot_outcome: string | null;
   bot_outcome_at: string | null;
   ai_status: string | null;
+  scheda_inviata_at: string | null;
+  professione: string | null;
 }
 
 export interface MsgRiga {
@@ -70,6 +72,10 @@ export interface StatoLeadBf {
   bot_outcome: string | null;
   ai_status: string | null;
   eta_ore: number;
+  /** Invio della scheda del corso (funnel Professioni), dalla chat; null = mai inviata o nessuna chat. */
+  scheda_inviata_at: string | null;
+  /** Corso del funnel Professioni scritto dal bot sulla chat; null se assente. */
+  professione: string | null;
 }
 
 export interface RigaFunnelBot {
@@ -104,7 +110,7 @@ export function statoLead(
     return {
       crm_lead_id: lead.id, conversation_id: null, trovata_per: null, chat_nuova: null,
       con_chat: false, consegnato: false, risposto: false, wa_number: null, mario_braccio: null,
-      bot_outcome: null, ai_status: null, eta_ore: eta,
+      bot_outcome: null, ai_status: null, eta_ore: eta, scheda_inviata_at: null, professione: null,
     };
   }
   const suoi = messaggi.filter((m) => m.conversation_id === conv.id);
@@ -123,6 +129,8 @@ export function statoLead(
     bot_outcome: conv.bot_outcome && Number.isFinite(esitoAt) && esitoAt >= ingresso ? conv.bot_outcome : null,
     ai_status: conv.ai_status,
     eta_ore: eta,
+    scheda_inviata_at: conv.scheda_inviata_at ?? null,
+    professione: conv.professione ?? null,
   };
 }
 

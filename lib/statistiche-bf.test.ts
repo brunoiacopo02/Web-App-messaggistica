@@ -3,7 +3,8 @@ import { convPrincipale, leggiRichiesta, riepilogoPerFunnel, statoLead, type Con
 
 const conv = (p: Partial<ConvRiga> = {}): ConvRiga => ({
   id: 1, crm_lead_id: 'L1', lead_id: 10, created_at: '2026-11-08T10:00:00Z', last_message_at: '2026-11-08T11:00:00Z',
-  wa_number: 'whatsapp:+393520158061', mario_braccio: 'sonnet', bot_outcome: null, bot_outcome_at: null, ai_status: 'active', ...p,
+  wa_number: 'whatsapp:+393520158061', mario_braccio: 'sonnet', bot_outcome: null, bot_outcome_at: null, ai_status: 'active',
+  scheda_inviata_at: null, professione: null, ...p,
 });
 const msg = (direction: string, created_at: string, twilio_status: string | null = 'delivered', conversation_id = 1): MsgRiga =>
   ({ conversation_id, direction, twilio_status, created_at });
@@ -40,6 +41,13 @@ describe('statoLead', () => {
     const nuovo = statoLead(LEAD, conv({ bot_outcome: 'APPUNTAMENTO', bot_outcome_at: '2026-11-08T12:00:00Z' }), 'crm_lead_id', [], ADESSO);
     expect(vecchio.bot_outcome).toBeNull();
     expect(nuovo.bot_outcome).toBe('APPUNTAMENTO');
+  });
+
+  it('scheda inviata e professione dalla chat; null senza chat', () => {
+    const s = statoLead(LEAD, conv({ scheda_inviata_at: '2026-11-08T10:00:20Z', professione: 'Video Editor' }), 'crm_lead_id', [], ADESSO);
+    expect(s).toMatchObject({ scheda_inviata_at: '2026-11-08T10:00:20Z', professione: 'Video Editor' });
+    expect(statoLead(LEAD, conv(), 'crm_lead_id', [], ADESSO)).toMatchObject({ scheda_inviata_at: null, professione: null });
+    expect(statoLead(LEAD, null, null, [], ADESSO)).toMatchObject({ scheda_inviata_at: null, professione: null });
   });
 
   it('ignora i messaggi di altre chat', () => {
