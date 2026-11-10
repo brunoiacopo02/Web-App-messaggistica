@@ -6,6 +6,8 @@ import { firstNameOf, templateName } from './name';
 import { aperturaBlackFridayText, isCrmFunnelBlackFriday } from './black-friday';
 import { aperturaBlackFriday } from './black-friday-apertura';
 import { isCrmFunnelProfessioni } from './professioni';
+import { aperturaScheda, segnaSchedaDaTemplate } from './scheda-template-invio';
+import { templateSchedaAcceso } from './scheda-template';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -98,6 +100,8 @@ export async function inviaAperturaMario(
     phone: string;
     firstName: string | null;
     funnel: string | null | undefined;
+    /** Corso della chat (`conversations.professione`), per il template della scheda. */
+    professione?: string | null;
     from: string;
     logConfigError: (key: string) => Promise<void>;
     logOpeningConfigError: (key: string) => Promise<void>;
@@ -111,6 +115,26 @@ export async function inviaAperturaMario(
         supabase, a.conversationId, a.phone, bf.sid, 'Apertura Black Friday', a.from,
         { '1': templateName(a.firstName) }, aperturaBlackFridayText(templateName(a.firstName)),
       );
+      return { ...r, tentato: true };
+    }
+  }
+  // Professioni dalla campagna brochure (PO 10/11/2026): il template della scheda se acceso
+  // e approvato sul numero (vedi scheda-template-invio.ts), altrimenti il neutro qui sotto.
+  if (isCrmFunnelProfessioni(a.funnel) && templateSchedaAcceso()) {
+    // Il corso si rilegge dalla chat se il chiamante non lo passa (cron e recupero).
+    let professione = a.professione;
+    if (professione === undefined) {
+      const { data } = await supabase.from('conversations').select('professione').eq('id', a.conversationId).maybeSingle();
+      professione = (data as { professione?: string | null } | null)?.professione ?? null;
+    }
+    const apSch = await aperturaScheda({ from: a.from, firstName: a.firstName, professione }).catch(() => null);
+    if (apSch) {
+      const r = await sendSequenceTemplate(
+        supabase, a.conversationId, a.phone, apSch.sid,
+        apSch.tipo === 'scheda' ? 'Apertura scheda del corso' : 'Apertura scelta del corso', a.from,
+        apSch.variabili, apSch.testo,
+      );
+      if (r.ok) await segnaSchedaDaTemplate(supabase, { conversationId: a.conversationId, apertura: apSch });
       return { ...r, tentato: true };
     }
   }

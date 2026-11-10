@@ -20,6 +20,7 @@ import { aperturaBlackFriday } from './black-friday-apertura';
 import { HANDOFF_VERGINI, HANDOFF_CRM_NON_DEL_BOT } from './lancio-vergini';
 import { lancioInCorso } from './lancio-fase';
 import { isCrmFunnelProfessioni, type SlugProfessione } from './professioni';
+import { aperturaScheda, segnaSchedaDaTemplate } from './scheda-template-invio';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -666,11 +667,22 @@ export async function enrollLeadIntoMario(
   const cleanName = firstNameOf(firstName);
   let variables: Record<string, string> = cleanName ? { '3': cleanName } : {};
   let bodyOverride = feniceOpening(firstName);
+  // Lead della campagna brochure (PO 10/11/2026): il template della scheda al posto del
+  // neutro, col PDF se il corso e' noto. Spento finche' SCHEDA_TEMPLATE_ENABLED!=1 o il
+  // template non e' approvato sull'account del numero: null = neutro di sempre.
+  const apSch = !blackFriday && isCrmFunnelProfessioni(args.crmFunnel)
+    ? await aperturaScheda({ from, firstName, professione: args.professione }).catch(() => null)
+    : null;
   if (aperturaBf?.scelta === 'template_bf' && aperturaBf.sid) {
     sendSid = aperturaBf.sid;
     sendLabel = 'Apertura Black Friday';
     variables = { '1': templateName(firstName) };
     bodyOverride = aperturaBlackFridayText(templateName(firstName));
+  } else if (apSch) {
+    sendSid = apSch.sid;
+    sendLabel = apSch.tipo === 'scheda' ? 'Apertura scheda del corso' : 'Apertura scelta del corso';
+    variables = apSch.variabili;
+    bodyOverride = apSch.testo;
   } else if (process.env.NEW_OPENING_ENABLED === '1' && !aperturaNeutra) {
     const funnel = normalizeFunnel(args.crmFunnel);
     const ways = openingWaysFor(funnel, (k) => Boolean(process.env[k]));
@@ -697,6 +709,7 @@ export async function enrollLeadIntoMario(
   );
 
   await supabase.from('conversations').update(convUpdate).eq('id', conversationId);
+  if (res.ok && apSch) await segnaSchedaDaTemplate(supabase, { conversationId, apertura: apSch });
 
   await supabase.from('event_log').insert({
     type: res.ok ? 'fenice_enroll' : 'send_error',
