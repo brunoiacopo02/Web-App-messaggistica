@@ -1,5 +1,6 @@
 import { decideTrackA, decideTrackB, APERTURA_MAI_PARTITA_DAL_MS, APERTURA_MAI_PARTITA_H, FAST_FAIL_H, SEQUENCE_END_DAYS, TRACKB_GIVEUP_H, type MsgLite } from './sequence';
 import { lancioInCorso } from './lancio-fase';
+import { regolaSubitoPerFunnel } from './senza-whatsapp';
 
 const H = 3600_000;
 
@@ -29,6 +30,8 @@ export type CronConvRow = {
   gdo_appuntamento_at?: string | null;
   lancio_slug?: string | null;
   lancio_fase?: string | null;
+  /** Funnel CRM della chat: decide la restituzione immediata "senza WhatsApp" (lib/senza-whatsapp.ts). */
+  crm_funnel?: string | null;
 };
 
 const ms = (iso: string | null | undefined): number | null => {
@@ -129,6 +132,10 @@ export function serveCronologia(c: CronConvRow, nowMs: number): boolean {
   if (inboundDopoArruolamento) return nowMs - inbound >= TRACKB_GIVEUP_H * H;
   if (arruolamento === null) return true;
   if (nowMs - arruolamento >= TRACKA_MIN_CLASSIFY_H * H) return true;
+  // Numero senza WhatsApp (PO 10/11/2026): per i funnel della regola la restituzione puo'
+  // scattare appena l'apertura fallisce, quindi la cronologia serve da subito. Sono pochi
+  // (BLACK FRIDAY): una query in piu' a chat per giro.
+  if (regolaSubitoPerFunnel(c.crm_funnel) && !nessunOutboundDopoArruolamento(c, arruolamento)) return true;
   // Rete "apertura mai partita" (06/11/2026): fra 12h e la soglia di sopra serve la
   // cronologia solo per la chat che non ha MAI avuto un messaggio in uscita. Dalle
   // colonne: `last_message_at` vuoto o anteriore all'arruolamento (l'enroll inserisce
@@ -176,6 +183,9 @@ export function decideFollowupAction(input: {
   lancio?: boolean;
   /** `ai_started_at` in ms: serve alla rete "apertura mai partita" del Track A. */
   arruolatoAtMs?: number | null;
+  /** Funnel della regola e cronologia tutta fallita con errore definitivo
+   *  (`numeroSenzaWhatsapp`, PO 10/11/2026): al GDO subito, senza le 24 ore. */
+  senzaWhatsappSubito?: boolean;
 }): FollowupAction {
   // Chat del lancio Web Dev AI: l'esito lo decide il flusso del lancio (B5). Una
   // classificazione di Mario qui restituirebbe al CRM un lead che sta aspettando il 5/10.
@@ -202,6 +212,9 @@ export function decideFollowupAction(input: {
     });
     return b.kind === 'classify' ? 'interrotto_classify' : 'none';
   }
+
+  // Numero senza WhatsApp: niente puo' arrivargli, inutile aspettare la fine sequenza.
+  if (input.senzaWhatsappSubito === true && !input.hasInbound) return 'mai_consegnato';
 
   // Track A: mai risposto.
   const a = decideTrackA({

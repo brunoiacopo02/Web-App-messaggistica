@@ -5,6 +5,7 @@ import { caricaContesto as caricaContestoSollecito, decidiChiusura } from '@/lib
 import { isCrmFunnelBlackFriday } from '@/lib/black-friday';
 import { decideFollowupAction, esitoAperturaMaiPartita, esitoMaiConsegnato, haLettoUnNostroMessaggio, postinoGdo, serveCronologia, ultimaAttivitaMs, puoAverScrittoPrimaDellAvvio, scrittiSenzaRispostaPrimaDellAvvio, ARRUOLAMENTO_BUFFER_MS } from '@/lib/bot-followups';
 import { classifyInterrupted } from '@/lib/interrotto-note';
+import { numeroSenzaWhatsapp, regolaSubitoPerFunnel, EVENTO_SENZA_WHATSAPP, HANDOFF_SENZA_WHATSAPP } from '@/lib/senza-whatsapp';
 import { buildConfermaPersaNote } from '@/lib/bot-outcome-rules';
 import { paroleDellaRichiesta } from '@/lib/contatti-umani';
 import { buildRichiamoRestituitoNote } from '@/lib/richiamo-fasce';
@@ -304,6 +305,10 @@ export async function GET(req: NextRequest) {
         return r.direction === 'in' ? Date.parse(r.created_at) : null;
       }, null);
 
+      // Numero senza WhatsApp (PO 10/11/2026): rete della callback Twilio, e unica strada
+      // per gli errori sincroni (21211/21614) che una callback non la mandano.
+      const senzaWhatsappSubito = regolaSubitoPerFunnel(c.crm_funnel) && numeroSenzaWhatsapp(rows);
+
       // phone non serve qui: sendOutcome fa solo callback CRM, non invia WhatsApp.
       let action = decideFollowupAction({
         nowMs: now,
@@ -322,6 +327,7 @@ export async function GET(req: NextRequest) {
         // la chat non riceve aperture, e non deve tornare al CRM come "apertura mai partita".
         arruolatoAtMs: c.ai_started_at && !isCrmFunnelBlackFriday((c as { crm_funnel?: string | null }).crm_funnel)
           ? Date.parse(c.ai_started_at) : null,
+        senzaWhatsappSubito,
       });
 
       // Ci aveva scritto lui, prima dell'arruolamento, e nessuno gli aveva risposto: e' la
@@ -405,8 +411,24 @@ export async function GET(req: NextRequest) {
         // nota che parlava di 14 giorni, quando la soglia vera è la fine sequenza
         // (SEQUENCE_END_DAYS: 24h dal 02/10/2026, prima 4 giorni; il fast-fail a 48h oggi
         // non arriva mai prima). Vedi `esitoMaiConsegnato`.
-        await sendOutcome(supabase, c.id, esitoMaiConsegnato(rows));
-        report.push({ id: c.id, action });
+        const r = await sendOutcome(supabase, c.id, senzaWhatsappSubito ? { ...esitoMaiConsegnato(rows), letto: false } : esitoMaiConsegnato(rows));
+        if (senzaWhatsappSubito) {
+          if (r.sent) {
+            await supabase.from('conversations')
+              .update({ handed_off_reason: HANDOFF_SENZA_WHATSAPP, handed_off_at: new Date(now).toISOString() })
+              .eq('id', c.id);
+          }
+          await supabase.from('event_log').insert({
+            type: EVENTO_SENZA_WHATSAPP,
+            payload: {
+              conversationId: c.id, crmLeadId: c.crm_lead_id ?? null, funnel: c.crm_funnel ?? null,
+              origine: 'cron', sent: r.sent, status: r.status ?? null, error: r.error ?? null,
+            } as never,
+            message: `[bot-followups] conv ${c.id}: numero senza WhatsApp, restituita al CRM da chiamare (${r.sent ? 'ok' : r.error ?? r.status ?? 'errore'})`,
+            level: r.sent ? 'info' : 'warn',
+          });
+        }
+        report.push({ id: c.id, action, ...(senzaWhatsappSubito ? { senzaWhatsapp: true } : {}) });
       } else if (action === 'non_risposto') {
         // Quanti messaggi il lead ha DAVVERO ricevuto (delivered/read), non inviati.
         const nDelivered = rows.filter(

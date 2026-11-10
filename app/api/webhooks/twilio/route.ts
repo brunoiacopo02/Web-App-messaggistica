@@ -8,6 +8,7 @@ import { getAutoReply } from '@/lib/fenice-settings';
 import { shouldAutoReply, shouldReopen, shouldAdoptInbound, drainMarioReplies, revocaCongedoLancio } from '@/lib/fenice-autoreply';
 import { isAudioInbound, transcribeTwilioAudio } from '@/lib/transcribe';
 import { handleGdoDeliveryUpdate } from '@/lib/send-agenda-gdo';
+import { restituisciSeSenzaWhatsapp } from '@/lib/senza-whatsapp-db';
 import { sendCrmNota } from '@/lib/bot-outcome';
 import { notaRiscrittoSeDovuta } from '@/lib/bot-riscritto';
 import { segnalaRispostaDopoTerzoNr } from '@/lib/risposta-post-nr';
@@ -97,6 +98,11 @@ export async function POST(req: NextRequest) {
     // altrimenti quel lead resta per sempre in uno stato ambiguo col reinvio bloccato.
     // Dopo la risposta a Twilio: la callback non deve aspettare il loro endpoint.
     after(handleGdoDeliveryUpdate(supabase, { sid: params.MessageSid, status: params.MessageStatus }));
+    // Numero senza WhatsApp (63024 e gli altri errori definitivi, PO 10/11/2026): se niente
+    // e' mai arrivato il lead torna subito al GDO, senza aspettare le 24 ore (lib/senza-whatsapp.ts).
+    if ((params.MessageStatus === 'undelivered' || params.MessageStatus === 'failed') && params.ErrorCode) {
+      after(restituisciSeSenzaWhatsapp(supabase, { sid: params.MessageSid, errorCode: parseInt(params.ErrorCode, 10) }));
+    }
     return new NextResponse(TWIML_OK, { status: 200, headers: TWIML_HEADERS });
   }
 

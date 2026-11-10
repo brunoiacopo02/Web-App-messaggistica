@@ -521,3 +521,39 @@ describe('rete "apertura mai partita" (06/11/2026)', () => {
     expect(/^\W*whats\s*-?\s*app\W*\s*mai\s+consegnat[oa]/i.test(e.note.trim())).toBe(true);
   });
 });
+
+describe('numero senza WhatsApp: al GDO subito (PO 10/11/2026)', () => {
+  it('flag acceso e nessun inbound → mai_consegnato anche a 10 minuti dall apertura', () => {
+    expect(decide({ msgs: [out(10 * 60_000, 'undelivered')], senzaWhatsappSubito: true })).toBe('mai_consegnato');
+  });
+
+  it('senza flag la stessa chat aspetta le 24 ore come prima', () => {
+    expect(decide({ msgs: [out(10 * 60_000, 'undelivered')] })).toBe('none');
+  });
+
+  it('il flag non scavalca le guardie: esito gia dato, postino, lancio', () => {
+    const msgs = [out(10 * 60_000, 'undelivered')];
+    expect(decide({ msgs, senzaWhatsappSubito: true, botOutcome: 'APPUNTAMENTO' })).toBe('none');
+    expect(decide({ msgs, senzaWhatsappSubito: true, gdoPostino: true })).toBe('none');
+    expect(decide({ msgs, senzaWhatsappSubito: true, lancio: true })).toBe('none');
+  });
+
+  it('un lead che ha scritto non e senza WhatsApp', () => {
+    expect(decide({ msgs: [inb(H)], hasInbound: true, lastInboundAtMs: NOW - H, senzaWhatsappSubito: true })).toBe('none');
+  });
+
+  it('serveCronologia: un BF con l apertura partita si legge subito', () => {
+    const c = conv({ crm_funnel: 'BLACK FRIDAY', ai_started_at: at(20 * 60_000), created_at: at(20 * 60_000), last_message_at: at(18 * 60_000) });
+    expect(serveCronologia(c, NOW)).toBe(true);
+  });
+
+  it('serveCronologia: un altro funnel alla stessa eta no (regola solo BF per ora)', () => {
+    const c = conv({ crm_funnel: 'CORSO 10 ORE', ai_started_at: at(20 * 60_000), created_at: at(20 * 60_000), last_message_at: at(18 * 60_000) });
+    expect(serveCronologia(c, NOW)).toBe(false);
+  });
+
+  it('serveCronologia: BF senza ancora nessun messaggio in uscita non si legge', () => {
+    const c = conv({ crm_funnel: 'BLACK FRIDAY', ai_started_at: at(20 * 60_000), created_at: at(20 * 60_000), last_message_at: null });
+    expect(serveCronologia(c, NOW)).toBe(false);
+  });
+});
