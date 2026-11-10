@@ -282,7 +282,8 @@ export function richiamoNonESpostamento(i: {
   return i.soloPresaDAtto || FRASE_CHE_CONFERMA.test(normalizzaFrase(i.testoLead));
 }
 
-const LINK_VIDEO_RE = /https?:\/\/corso\.feniceacademy\.it\/conferenza-[A-Za-z0-9_-]+/g;
+// Anche la VSL dell'offerta (funnel Black Friday e lead evergreen dal 10/11/2026).
+const LINK_VIDEO_RE = /https?:\/\/(?:corso\.feniceacademy\.it\/conferenza-[A-Za-z0-9_-]+|lp\.feniceacademy\.it\/vsl-offerta[A-Za-z0-9_\/-]*)/g;
 
 /**
  * L'ultimo link del video uscito in chat (call fissate dal bot, che non hanno

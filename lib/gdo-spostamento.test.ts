@@ -158,6 +158,11 @@ describe('origine dello spostamento (PO 29/10/2026)', () => {
     ])).toBe('https://corso.feniceacademy.it/conferenza-bx');
     expect(ultimoLinkVideo([{ direction: 'out', body: 'niente link' }])).toBeNull();
   });
+  it('la VSL dell\'offerta conta come video (Black Friday e lead evergreen, PO 10/11/2026)', () => {
+    expect(ultimoLinkVideo([
+      { direction: 'out', body: '*Prima della videochiamata guarda questo video* 👉 https://lp.feniceacademy.it/vsl-offerta' },
+    ])).toBe('https://lp.feniceacademy.it/vsl-offerta');
+  });
 });
 
 describe('spostamento non fatto: testo e niente doppioni (lead c91081be, 30/10/2026)', () => {

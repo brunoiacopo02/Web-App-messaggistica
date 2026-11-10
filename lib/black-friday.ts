@@ -24,6 +24,10 @@ type Supa = ReturnType<typeof getSupabaseAdmin>;
  */
 export const PROVENIENZA_BLACK_FRIDAY = 'BLACK FRIDAY' as const;
 
+/** Il pezzo fisso dell'URL della VSL dell'offerta (`offerta_del_mese_link`): riconosce il
+ *  video gia' uscito in chat nei promemoria e nella conferma dello spostamento. */
+export const VSL_OFFERTA_PATH = 'lp.feniceacademy.it/vsl-offerta' as const;
+
 /** Testo precompilato del link wa.me consegnato al marketing il 28/10/2026. */
 export const TESTO_LINK_BLACK_FRIDAY = "Ciao, sono interessato a saperne di più sull'offerta Black Friday";
 
@@ -193,6 +197,31 @@ export function blackFridayVince(i: {
 }
 
 /**
+ * I fatti dell'offerta Black Friday (PO 06/11/2026), gli stessi in ogni contesto: il funnel
+ * BF e, dal 10/11, il pitch dei lead evergreen (lib/offerta-bf-evergreen.ts). Posti e
+ * scadenza solo se ci sono (scadenza gia' filtrata: null = passata o assente).
+ */
+export function righeFattiOffertaBlackFriday(i: { posti: number | null; scadenza: ScadenzaBlackFriday | null }): string[] {
+  const fatti = [
+    "I FATTI DELL'OFFERTA sono SOLO questi. Non aggiungerne altri, non inventare condizioni, eccezioni, numeri o date:",
+    "- PREZZO: con il Black Friday i percorsi, che normalmente costano dai 2.000 ai 4.000 euro, costano dai 1.000 ai 3.000 euro a seconda del percorso, e si possono rateizzare. Mai cifre di rata ne' numero di rate (per questo funnel non vale la cifra indicativa dei 100 euro al mese del manuale, e niente esempi tipo caffe' e cornetto), mai percentuali di sconto, mai il prezzo di un singolo percorso: quello lo vede col consulente in call.",
+    "- GARANZIA \"COLLOCATO O RIMBORSATO\": e' scritta nero su bianco nel contratto: se non trova lavoro grazie al nostro corso, lo rimborsiamo. Se ti chiede condizioni, tempi, requisiti o dettagli, resta sul generico: le condizioni precise gliele spiega il consulente in call. Non inventare durate, requisiti o percentuali.",
+    "- REGALO PER TUTTI GLI ISCRITTI: un corso sull'intelligenza artificiale che insegna a usare l'IA nella professione che sceglie, per dominare il mercato.",
+    "- PERCORSO EXCLUSIVE: chi lo sceglie riceve un regalo in piu', e se ne parla in call. Al massimo puoi dire che e' un regalo tech, fisico, che gli arriva direttamente a casa. Non dire mai che oggetto e', non descriverlo e non dare indizi; se prova a indovinare non confermare e non smentire: \"e' una sorpresa, te la svela il consulente in call\".",
+    "- PERCHE' ADESSO: questo e' il momento migliore per formarsi, perche' il primo trimestre del 2027 e' decisivo per le assunzioni: con la ripartenza di inizio anno le aziende assumono di piu', e chi si forma adesso arriva pronto. Puoi usarlo come leva per non rimandare. Non aggiungere numeri, percentuali, nomi di aziende o studi a sostegno.",
+  ];
+  if (i.posti) {
+    fatti.push(`- POSTI: i posti con le condizioni del Black Friday sono solo ${i.posti}, perche' vogliamo essere sicuri di poter garantire il lavoro a tutti quelli che entrano. Puoi dirlo, sempre con questa motivazione. Non dire mai quanti posti sono rimasti o quanti sono gia' stati presi: non lo sai.`);
+  }
+  if (i.scadenza) {
+    fatti.push(`- SCADENZA: l'offerta vale fino a ${i.scadenza.etichetta} compreso. Non citare altre date di fine.`);
+  } else {
+    fatti.push("- SCADENZA: non ne abbiamo una da dire. Non citare date di fine offerta e non dire che scade a breve.");
+  }
+  return fatti;
+}
+
+/**
  * Nota di contesto del funnel (parte variabile del prompt: manuale e cache intatti).
  * Mai il nome dell'oggetto regalato con l'Exclusive: il modello non lo sa, cosi' non lo
  * puo' dire.
@@ -218,21 +247,8 @@ export function blackFridayContextNote(i: {
     daInserzione
       ? "CONTESTO FUNNEL BLACK FRIDAY: questo lead ha lasciato i suoi contatti da una nostra inserzione del Black Friday (non dal link dell'email): il primo messaggio gliel'abbiamo mandato noi. E' interessato all'offerta Black Friday sui nostri percorsi."
       : "CONTESTO FUNNEL BLACK FRIDAY: questo lead ci ha scritto per primo dal link dell'email del Black Friday e vuole sapere com'e' l'offerta.",
-    "I FATTI DELL'OFFERTA sono SOLO questi. Non aggiungerne altri, non inventare condizioni, eccezioni, numeri o date:",
-    "- PREZZO: con il Black Friday i percorsi, che normalmente costano dai 2.000 ai 4.000 euro, costano dai 1.000 ai 3.000 euro a seconda del percorso, e si possono rateizzare. Mai cifre di rata ne' numero di rate (per questo funnel non vale la cifra indicativa dei 100 euro al mese del manuale, e niente esempi tipo caffe' e cornetto), mai percentuali di sconto, mai il prezzo di un singolo percorso: quello lo vede col consulente in call.",
-    "- GARANZIA \"COLLOCATO O RIMBORSATO\": e' scritta nero su bianco nel contratto: se non trova lavoro grazie al nostro corso, lo rimborsiamo. Se ti chiede condizioni, tempi, requisiti o dettagli, resta sul generico: le condizioni precise gliele spiega il consulente in call. Non inventare durate, requisiti o percentuali.",
-    "- REGALO PER TUTTI GLI ISCRITTI: un corso sull'intelligenza artificiale che insegna a usare l'IA nella professione che sceglie, per dominare il mercato.",
-    "- PERCORSO EXCLUSIVE: chi lo sceglie riceve un regalo in piu', e se ne parla in call. Al massimo puoi dire che e' un regalo tech, fisico, che gli arriva direttamente a casa. Non dire mai che oggetto e', non descriverlo e non dare indizi; se prova a indovinare non confermare e non smentire: \"e' una sorpresa, te la svela il consulente in call\".",
-    "- PERCHE' ADESSO: questo e' il momento migliore per formarsi, perche' il primo trimestre del 2027 e' decisivo per le assunzioni: con la ripartenza di inizio anno le aziende assumono di piu', e chi si forma adesso arriva pronto. Puoi usarlo come leva per non rimandare. Non aggiungere numeri, percentuali, nomi di aziende o studi a sostegno.",
+    ...righeFattiOffertaBlackFriday({ posti: i.posti, scadenza }),
   ];
-  if (i.posti) {
-    righe.push(`- POSTI: i posti con le condizioni del Black Friday sono solo ${i.posti}, perche' vogliamo essere sicuri di poter garantire il lavoro a tutti quelli che entrano. Puoi dirlo, sempre con questa motivazione. Non dire mai quanti posti sono rimasti o quanti sono gia' stati presi: non lo sai.`);
-  }
-  if (scadenza) {
-    righe.push(`- SCADENZA: l'offerta vale fino a ${scadenza.etichetta} compreso. Non citare altre date di fine.`);
-  } else {
-    righe.push("- SCADENZA: non ne abbiamo una da dire. Non citare date di fine offerta e non dire che scade a breve.");
-  }
   const call = i.callGiaFissata ?? null;
   if (i.posti || scadenza) {
     if (call) righe.push(`URGENZA VERA: per questo lead ${[i.posti ? 'i posti limitati' : null, scadenza ? 'la scadenza' : null].filter(Boolean).join(' e ')} sono fatti veri: puoi usarli per dirgli che conviene non saltare la call che ha gia' fissato, perche' e' li' che blocca il posto con le condizioni del Black Friday. Restano vietati il senso di colpa e qualunque fatto che non sia scritto qui.`);

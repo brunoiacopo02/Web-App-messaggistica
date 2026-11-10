@@ -45,6 +45,10 @@ import { mittenteDiConversazione } from './mittente';
 import { brochureContextNote, professioniContextNote, professioniVince, richiestaSchedaFuoriFunnel, schedaDaInviare, schedaSubito } from './professioni-nota';
 import { isSlugProfessione, PROVENIENZA_PROFESSIONI } from './professioni';
 import { blackFridayContextNote, blackFridayVince, funnelBlackFridayAttivo, haAperturaSbagliata, isMarkerBlackFriday, leggiSettingsBlackFriday, PROVENIENZA_BLACK_FRIDAY, EVENTO_BF_SU_APPUNTAMENTO, type SettingsBlackFriday } from './black-friday';
+import {
+  EVENTO_OFFERTA_BF_EVERGREEN, leggiSettingsOffertaBfEvergreen, notaAppuntamentoConOfferta, offertaBfEvergreenAttiva,
+  offertaBfEvergreenContextNote, offertaBfEvergreenVale, videoConferenzaInVsl, type SettingsOffertaBfEvergreen,
+} from './offerta-bf-evergreen';
 import { inviaScheda } from './scheda-invio';
 import { fissatoIlDi } from './noemi-quando';
 import {
@@ -560,6 +564,10 @@ export async function drainMarioReplies(
   const funnelProfessioni = (claimed as { crm_funnel?: string | null }).crm_funnel === PROVENIENZA_PROFESSIONI;
   // Black Friday: scadenza e posti, letti una volta per drain e solo sulle chat col segno.
   let settingsBlackFriday: SettingsBlackFriday | undefined;
+  // Offerta BF ai lead evergreen (PO 10/11/2026): impostazioni e "gia' presentata", una
+  // lettura per drain.
+  let settingsOffertaEvergreen: SettingsOffertaBfEvergreen | undefined;
+  let offertaEvergreenGiaPresentata: boolean | undefined;
   let schedaInviataAt = (claimed as { scheda_inviata_at?: string | null }).scheda_inviata_at ?? null;
 
   // Il mittente e' quello della chat (vedi lib/mittente.ts). Si risolve DOPO il claim
@@ -975,6 +983,35 @@ export async function drainMarioReplies(
           level: 'warn',
         });
       }
+      // Offerta Black Friday ai lead evergreen (PO 10/11/2026, lib/offerta-bf-evergreen.ts):
+      // fuori dal funnel BF, dal lancio, dagli studenti e dal postino, Mario presenta
+      // l'offerta nel pitch e manda la VSL al posto dei conferenza-*. Mai a chi ha gia' un
+      // video conferenza in chat, mai su una call fissata prima (senza l'evento).
+      const altroFlussoEvergreen = postino || vinceBlackFriday || !!lancio.lancio_slug || lancioStandard
+        || eStudenteOfferta(lancio.lancio_info);
+      if (!altroFlussoEvergreen && !settingsOffertaEvergreen) {
+        settingsOffertaEvergreen = await leggiSettingsOffertaBfEvergreen(supabase);
+      }
+      const attivaEvergreen = !altroFlussoEvergreen && !!settingsOffertaEvergreen && offertaBfEvergreenAttiva({
+        interruttore: settingsOffertaEvergreen.interruttore,
+        env: process.env.BLACK_FRIDAY_FUNNEL,
+        nowMs: Date.now(),
+        scadenzaAtMs: settingsOffertaEvergreen.scadenza?.atMs ?? null,
+      });
+      const vslEvergreen = attivaEvergreen ? (await leggiSettingsLancio()).offertaDelMeseLink : null;
+      if (attivaEvergreen && esitoInPiedi === 'APPUNTAMENTO' && offertaEvergreenGiaPresentata === undefined) {
+        offertaEvergreenGiaPresentata = ((await supabase.from('event_log').select('id')
+          .eq('type', EVENTO_OFFERTA_BF_EVERGREEN).contains('payload', { conversationId })
+          .limit(1)).data ?? []).length > 0;
+      }
+      const offertaEvergreen = offertaBfEvergreenVale({
+        attiva: attivaEvergreen,
+        vslLink: vslEvergreen,
+        altroFlusso: altroFlussoEvergreen,
+        esitoInPiedi,
+        giaPresentata: offertaEvergreenGiaPresentata ?? false,
+        rows,
+      });
       // Chi e' entrato dal link "professione dello Sviluppatore AI" (PO 24/09/2026): prima
       // della live non c'e' nessuna registrazione da mandare, e nessun avviso da scrivere
       // perche' manca — i video restano i classici e Mario non nomina la live.
@@ -989,7 +1026,8 @@ export async function drainMarioReplies(
         ? eventoLancioPassato((await leggiSettingsLancio()).eventoAt, Date.now())
         : true;
       const videoLive = lancioStandard && eventoPassato ? await leggiVideoLive() : null;
-      const videoExtra: string[] = videoLive ? [videoLive] : vslBlackFriday ? [vslBlackFriday] : [];
+      const videoExtra: string[] = videoLive ? [videoLive] : vslBlackFriday ? [vslBlackFriday]
+        : offertaEvergreen && vslEvergreen ? [vslEvergreen] : [];
       const linkExtra: string[] = [...videoExtra, ...(gdoVideoUrl ? [gdoVideoUrl] : [])];
       // Un link del video già uscito in questa chat: serve sia alla patch del blocco
       // conferma, sia alla rete di sicurezza sul FATTO qui sotto.
@@ -1317,6 +1355,26 @@ export async function drainMarioReplies(
       // Sulle call del bot il blocco va in coda alla nota del turno, qualunque sia; sul
       // postino sta gia' in coda alla nota GDO (qui sotto).
       const notaSpostaBot = origineSposta === 'bot' ? notaSposta : null;
+      // Offerta BF evergreen: in coda alla nota del funnel (Professioni) o del primo
+      // contatto. Il lancio, gli studenti e il postino non arrivano qui (`altroFlusso`).
+      const notaOffertaEvergreen = offertaEvergreen && vslEvergreen && settingsOffertaEvergreen && !notaLancioCompleta && !notaStudente
+        ? offertaBfEvergreenContextNote({
+            vslLink: vslEvergreen,
+            settings: settingsOffertaEvergreen,
+            nowMs: Date.now(),
+            callGiaFissata: esitoInPiedi === 'APPUNTAMENTO',
+          })
+        : null;
+      if (notaOffertaEvergreen && !offertaEvergreenGiaPresentata) {
+        await alertUnaVolta(supabase, {
+          type: EVENTO_OFFERTA_BF_EVERGREEN,
+          conversationId,
+          payload: { crmLeadId, crmFunnel: crmFunnelRiga },
+          message: `[offerta-bf-evergreen] conv ${conversationId}: offerta Black Friday nel prompt del lead evergreen`,
+          level: 'info',
+        });
+        offertaEvergreenGiaPresentata = true;
+      }
       const result = await generateMarioReply(history, {
         personaName: PERSONA_NAME[persona],
         giorniPieni,
@@ -1336,9 +1394,9 @@ export async function drainMarioReplies(
             : notaBlackFriday
             ? { contextNote: [notaBlackFriday, notaBrochure, notaSpostaBot].filter(Boolean).join('\n\n') }
             : notaProfessioni
-            ? { contextNote: [notaProfessioni, notaSpostaBot].filter(Boolean).join('\n\n') }
-            : notaPrimo || notaBrochure || notaSpostaBot
-              ? { contextNote: [notaPrimo, notaBrochure, notaSpostaBot].filter(Boolean).join('\n\n') }
+            ? { contextNote: [notaProfessioni, notaOffertaEvergreen, notaSpostaBot].filter(Boolean).join('\n\n') }
+            : notaPrimo || notaBrochure || notaOffertaEvergreen || notaSpostaBot
+              ? { contextNote: [notaPrimo, notaBrochure, notaOffertaEvergreen, notaSpostaBot].filter(Boolean).join('\n\n') }
               : {}),
       });
 
@@ -1637,6 +1695,22 @@ export async function drainMarioReplies(
         presaRecap = bolla.presa;
         bollaRecap = bolla.presa ? bolla.body : null;
         parts = [...parts, bolla.body];
+      }
+
+      // Dove vale la VSL dell'offerta (funnel BF, lead evergreen dal 10/11/2026) il video e'
+      // uno solo: un conferenza-* scritto per abitudine del manuale diventa la VSL.
+      const vslDelTurno = vslBlackFriday ?? (offertaEvergreen ? vslEvergreen : null);
+      if (vslDelTurno && !videoLive) {
+        const sostituzione = videoConferenzaInVsl(parts, vslDelTurno);
+        if (sostituzione.sostituiti > 0) {
+          parts = sostituzione.parts;
+          await supabase.from('event_log').insert({
+            type: 'video_conferenza_sostituito_vsl',
+            payload: { conversationId, sostituiti: sostituzione.sostituiti } as never,
+            message: `[offerta-bf] conv ${conversationId}: link conferenza del modello sostituito con la VSL dell'offerta`,
+            level: 'warn',
+          });
+        }
       }
 
       // Link Fenice che il modello si è inventato (es. `conferenza-zx`): il lead lo
@@ -1945,7 +2019,11 @@ export async function drainMarioReplies(
             outcome: result.outcome,
             date: result.scheduledAt,
             discardReason: result.discardReason,
-            note: result.note,
+            // Offerta BF evergreen (PO 10/11/2026): in testa alla nota dell'appuntamento, che
+            // il CRM salva come nota dell'appuntamento per Conferme e venditore.
+            note: offertaEvergreen && !soloNota && result.outcome === 'APPUNTAMENTO'
+              ? notaAppuntamentoConOfferta(result.note)
+              : result.note,
             // `note` e `discardReason` sono la sintesi del modello. Le Conferme hanno
             // chiesto anche le parole vere del lead: sono l'ultimo turno della
             // cronologia, l'unica cosa che non e' una parafrasi.

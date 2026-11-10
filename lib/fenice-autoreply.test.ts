@@ -28,7 +28,15 @@ vi.mock('./black-friday', async (orig) => ({
   leggiSettingsBlackFriday: vi.fn(async () => ({ scadenza: null, posti: null })),
 }));
 
+// Offerta BF ai lead evergreen (PO 10/11/2026): interruttore in `app_settings`, qui spento
+// di default; i test del blocco dedicato lo accendono.
+vi.mock('./offerta-bf-evergreen', async (orig) => ({
+  ...(await orig<typeof import('./offerta-bf-evergreen')>()),
+  leggiSettingsOffertaBfEvergreen: vi.fn(async () => ({ interruttore: null, scadenza: null, posti: null })),
+}));
+
 import { generateMarioReply, GDO_CONTEXT_NOTE } from './mario';
+import { leggiSettingsOffertaBfEvergreen } from './offerta-bf-evergreen';
 import { sendOutcome, inviaNotaAlCrm, registraEsitoSenzaLeadId } from './bot-outcome';
 import { NOTA_VIDEO, NOTA_NOEMI } from './gdo-context-note';
 import { OPENING_ENV_KEYS, personaForConversation } from './persona';
@@ -4095,5 +4103,126 @@ describe('drainMarioReplies — funnel Black Friday (PO 06/11/2026)', () => {
     await drainMarioReplies(supabase, 90, '+391234567890', () => 0, 0);
 
     expect(notaDelTurno()).not.toContain('BLACK FRIDAY');
+  }, 20_000);
+});
+
+describe('drainMarioReplies — offerta Black Friday ai lead evergreen (PO 10/11/2026)', () => {
+  const VSL = 'https://lp.feniceacademy.it/vsl-offerta';
+  const RISPOSTA: FakeMsgRow = { direction: 'in', body: 'Si lavoro in un magazzino', template_sid: null, created_at: '2026-11-10T10:00:00Z' };
+  const APERTURA: FakeMsgRow = { direction: 'out', body: 'Ciao, ti scrivo per il corso di 10 ore', template_sid: 'HXapertura', created_at: '2026-11-10T09:00:00Z' };
+  const riga = (extra: Partial<ClaimedRow> = {}): ClaimedRow => ({
+    id: 91, ai_started_at: null, crm_lead_id: 'crm91', bot_outcome: null, professione: null, scheda_inviata_at: null, crm_funnel: 'CORSO 10 ORE', ...extra,
+  });
+  const settingsConVsl = {
+    attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null,
+    offertaDelMeseLink: VSL, eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti', sender: 'principale', quotaSecondario: 0,
+  } as never;
+  const notaDelTurno = () => (vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string }).contextNote ?? '';
+  const accendi = (interruttore: unknown = 'on') => vi.mocked(leggiSettingsOffertaBfEvergreen).mockResolvedValue({
+    interruttore, scadenza: { atMs: Date.parse('2026-11-30T23:59:59+01:00'), etichetta: 'lunedì 30 novembre' }, posti: 30,
+  });
+  const risposta = (extra: Record<string, unknown> = {}) => vi.mocked(generateMarioReply).mockResolvedValueOnce({
+    visibleReply: 'Perfetto', appointmentFixed: false, passToHuman: false, videoWatched: false, ...extra,
+  } as never);
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-10T12:00:00+01:00'));
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(sendOutcome).mockClear();
+    vi.mocked(getLancioSettings).mockResolvedValue(settingsConVsl);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+    vi.mocked(getLancioSettings).mockReset();
+    vi.mocked(leggiSettingsOffertaBfEvergreen).mockReset();
+    vi.mocked(leggiSettingsOffertaBfEvergreen).mockResolvedValue({ interruttore: null, scadenza: null, posti: null });
+  });
+
+  it('acceso: nota dell\'offerta con la VSL, evento una volta, la VSL non e\' un link inventato', async () => {
+    accendi();
+    risposta({ visibleReply: `Fatto\n*Prima della videochiamata guarda questo video* 👉 ${VSL}` });
+    const { supabase, calls } = makeDrainSupabase(riga(), [APERTURA, RISPOSTA]);
+
+    await drainMarioReplies(supabase, 91, '+391234567890', () => 0, 0);
+
+    const nota = notaDelTurno();
+    expect(nota).toContain('OFFERTA BLACK FRIDAY ATTIVA');
+    expect(nota).toContain(VSL);
+    expect(nota).not.toContain('CONTESTO FUNNEL BLACK FRIDAY');
+    expect(calls.events.filter((e: { type: string }) => e.type === 'offerta_bf_evergreen_presentata')).toHaveLength(1);
+    expect(calls.events.some((e: { type: string }) => e.type === 'unknown_fenice_link')).toBe(false);
+  }, 20_000);
+
+  it('interruttore spento: prompt di prima', async () => {
+    accendi('off');
+    risposta();
+    const { supabase } = makeDrainSupabase(riga(), [APERTURA, RISPOSTA]);
+    await drainMarioReplies(supabase, 91, '+391234567890', () => 0, 0);
+    expect(notaDelTurno()).not.toContain('BLACK FRIDAY');
+  }, 20_000);
+
+  it('dopo la scadenza si spegne da solo', async () => {
+    accendi();
+    vi.setSystemTime(new Date('2026-12-01T10:00:00+01:00'));
+    risposta();
+    const { supabase } = makeDrainSupabase(riga(), [APERTURA, RISPOSTA]);
+    await drainMarioReplies(supabase, 91, '+391234567890', () => 0, 0);
+    expect(notaDelTurno()).not.toContain('BLACK FRIDAY');
+  }, 20_000);
+
+  it('ha gia\' ricevuto un video conferenza: niente offerta, niente secondo video', async () => {
+    accendi();
+    risposta();
+    const { supabase } = makeDrainSupabase(riga(), [
+      APERTURA,
+      { direction: 'out', body: 'Prima della videochiamata guarda questo video 👉 https://corso.feniceacademy.it/conferenza-bx', template_sid: null, created_at: '2026-11-10T09:30:00Z' },
+      RISPOSTA,
+    ]);
+    await drainMarioReplies(supabase, 91, '+391234567890', () => 0, 0);
+    expect(notaDelTurno()).not.toContain('BLACK FRIDAY');
+  }, 20_000);
+
+  it('call fissata prima (APPUNTAMENTO senza evento): resta il flusso di prima', async () => {
+    accendi();
+    risposta();
+    const { supabase } = makeDrainSupabase(riga({ bot_outcome: 'APPUNTAMENTO' }), [APERTURA, RISPOSTA]);
+    await drainMarioReplies(supabase, 91, '+391234567890', () => 0, 0);
+    expect(notaDelTurno()).not.toContain('BLACK FRIDAY');
+  }, 20_000);
+
+  it('funnel Black Friday: vince la sua nota, non questa', async () => {
+    accendi();
+    vi.stubEnv('BLACK_FRIDAY_FUNNEL', '1');
+    risposta();
+    const { supabase } = makeDrainSupabase(riga({ crm_funnel: 'BLACK FRIDAY' }), [APERTURA, RISPOSTA]);
+    await drainMarioReplies(supabase, 91, '+391234567890', () => 0, 0);
+    expect(notaDelTurno()).toContain('CONTESTO FUNNEL BLACK FRIDAY');
+    expect(notaDelTurno()).not.toContain('OFFERTA BLACK FRIDAY ATTIVA');
+  }, 20_000);
+
+  it('il modello scrive un conferenza-* per abitudine: al lead parte la VSL', async () => {
+    accendi();
+    vi.mocked(sendFreeText).mockClear();
+    risposta({ visibleReply: '*Prima della videochiamata guarda questo video*, dura 20 minuti 👉 https://corso.feniceacademy.it/conferenza-bx' });
+    const { supabase, calls } = makeDrainSupabase(riga(), [APERTURA, RISPOSTA]);
+    await drainMarioReplies(supabase, 91, '+391234567890', () => 0, 0);
+    const corpi = vi.mocked(sendFreeText).mock.calls.map((c) => (c[0] as { body: string }).body).join(' | ');
+    expect(corpi).toContain(VSL);
+    expect(corpi).not.toContain('conferenza-');
+    expect(corpi).not.toContain('20 minuti');
+    expect(calls.events.some((e: { type: string }) => e.type === 'video_conferenza_sostituito_vsl')).toBe(true);
+  }, 20_000);
+
+  it('APPUNTAMENTO: la nota al CRM dice a Conferme e venditore che l\'offerta e\' stata presentata', async () => {
+    accendi();
+    risposta({ appointmentFixed: true, outcome: 'APPUNTAMENTO', scheduledAt: '2026-11-11T18:00:00+01:00', note: 'Magazziniere, vuole cambiare' });
+    const { supabase } = makeDrainSupabase(riga(), [APERTURA, RISPOSTA]);
+    await drainMarioReplies(supabase, 91, '+391234567890', () => 0, 0);
+    const nota = (vi.mocked(sendOutcome).mock.calls[0][2] as { note?: string }).note ?? '';
+    expect(nota.startsWith('OFFERTA BLACK FRIDAY presentata in chat dal bot')).toBe(true);
+    expect(nota).toContain('Magazziniere, vuole cambiare');
   }, 20_000);
 });

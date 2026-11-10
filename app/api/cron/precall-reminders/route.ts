@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { VSL_OFFERTA_PATH } from '@/lib/black-friday';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendTemplateAndLog } from '@/lib/messaging';
 import {
@@ -226,15 +227,24 @@ async function promemoriaBot(supabase: Supa, now: number): Promise<EsitoRamo> {
           .eq('payload->>conversationId', String(c.id))
           .limit(1);
 
-        const { data: videoMsg } = await supabase
+        // Il video e' un conferenza-* oppure la VSL dell'offerta (funnel Black Friday e,
+        // dal 10/11/2026, lead evergreen): vale l'ultimo dei due.
+        const ultimoVideo = async (pattern: string) => (await supabase
           .from('messages')
           .select('created_at')
           .eq('conversation_id', c.id)
           .eq('direction', 'out')
-          .ilike('body', '%corso.feniceacademy.it/conferenza-%')
+          .ilike('body', pattern)
           .order('created_at', { ascending: false })
           .limit(1)
-          .maybeSingle();
+          .maybeSingle()).data as { created_at: string } | null;
+        const [videoConferenza, videoVsl] = await Promise.all([
+          ultimoVideo('%corso.feniceacademy.it/conferenza-%'),
+          ultimoVideo(`%${VSL_OFFERTA_PATH}%`),
+        ]);
+        const videoMsg = [videoConferenza, videoVsl]
+          .filter((v): v is { created_at: string } => !!v?.created_at)
+          .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0] ?? null;
 
         let inboundAfterVideoMs: number | null = null;
         if (videoMsg?.created_at) {
