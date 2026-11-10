@@ -117,6 +117,7 @@ vi.mock('@/lib/bot-outcome', async (originale) => ({
   ...(await originale<Record<string, unknown>>()),
   sendCrmNota: vi.fn(async () => ({ sent: true })),
 }));
+vi.mock('@/lib/scheda-invio', () => ({ inviaScheda: vi.fn(async () => 'inviata') }));
 // `after()` fuori da una richiesta Next lancerebbe: qui la promessa e' gia' stata creata
 // (e' quello che si vuole verificare), basta consumarla.
 vi.mock('next/server', async (originale) => ({
@@ -132,6 +133,7 @@ import { TESTO_PULSANTE_WEBINAR, TESTO_LINK_SVILUPPATORE } from '@/lib/primo-mes
 import { sendCrmNota } from '@/lib/bot-outcome';
 import { drainMarioReplies } from '@/lib/fenice-autoreply';
 import { getAutoReply } from '@/lib/fenice-settings';
+import { inviaScheda } from '@/lib/scheda-invio';
 
 const FENICE = 'whatsapp:+390000000000';
 
@@ -717,6 +719,57 @@ describe('congedato che riscrive (Task 3)', () => {
     await attendiAfter();
     expect(stato.updates.some((u) => u.valori.ai_status === 'active')).toBe(true);
     expect(eventi('lancio_congedo_revocato_nota_fallita')).toHaveLength(1);
+    expect(drainMarioReplies).toHaveBeenCalledTimes(1);
+  });
+});
+
+// PO 10/11/2026, caso Naomi (conv 29726): chat handed_off, lead che manda la frase del link.
+describe('scheda su chat handed_off / booked / in pausa (PO 10/11/2026)', () => {
+  const LINK = 'Ciao, sono interessato alla professione di Video Editor e vorrei ricevere la scheda del corso';
+  beforeEach(() => {
+    vi.mocked(sendCrmNota).mockClear();
+    vi.mocked(drainMarioReplies).mockClear();
+    vi.mocked(inviaScheda).mockClear();
+    stato.conv = {
+      ai_owner: 'mario', ai_status: 'handed_off', ai_paused_at: null, handed_off_at: '2026-10-31T17:00:00Z',
+      handed_off_reason: 'Non mi avete chiamato', crm_lead_id: 'f29b2f62', bot_outcome: 'APPUNTAMENTO',
+      lancio_slug: null, lancio_fase: null, lancio_ingresso: null, lancio_info: null, professione: 'video_editor',
+    };
+  });
+
+  it('handed_off + frase del link: parte la scheda dal numero a cui ha scritto, nota al CRM, Mario zitto', async () => {
+    await inbound(LINK);
+    await vi.waitFor(() => expect(sendCrmNota).toHaveBeenCalledTimes(1));
+    expect(inviaScheda).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(inviaScheda).mock.calls[0][1]).toMatchObject({ slug: 'video_editor', from: FENICE, momento: 'fuori_turno' });
+    expect(String(vi.mocked(sendCrmNota).mock.calls[0][2])).toContain('Video Editor');
+    expect(drainMarioReplies).not.toHaveBeenCalled();
+    expect(eventi('scheda_fuori_turno')[0].payload).toMatchObject({ esito: 'inviata', aiStatus: 'handed_off' });
+  });
+
+  it('booked o in pausa + "mi mandi il pdf?": stessa cosa', async () => {
+    stato.conv.ai_status = 'booked';
+    await inbound('mi mandi il pdf?');
+    await vi.waitFor(() => expect(inviaScheda).toHaveBeenCalledTimes(1));
+    stato.conv.ai_status = 'active';
+    stato.conv.ai_paused_at = '2026-11-10T09:00:00Z';
+    await inbound('mi mandi il pdf?');
+    await vi.waitFor(() => expect(inviaScheda).toHaveBeenCalledTimes(2));
+    expect(drainMarioReplies).not.toHaveBeenCalled();
+  });
+
+  it('handed_off senza richiesta ("siete spariti"): niente scheda, niente nota', async () => {
+    await inbound('siete spariti');
+    await new Promise((r) => setTimeout(r, 10));
+    expect(inviaScheda).not.toHaveBeenCalled();
+    expect(eventi('scheda_fuori_turno')).toHaveLength(0);
+  });
+
+  it('chat attiva: la scheda resta al drain di Mario', async () => {
+    stato.conv.ai_status = 'active';
+    await inbound(LINK);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(inviaScheda).not.toHaveBeenCalled();
     expect(drainMarioReplies).toHaveBeenCalledTimes(1);
   });
 });

@@ -31,6 +31,8 @@ import { getLancioSettings } from '@/lib/lancio-settings';
 import { blackFridayAttivoPer } from '@/lib/black-friday';
 import { pushLeadEntrante } from '@/lib/lead-entrante';
 import { segnaProfessione } from '@/lib/professione-chat';
+import { notaSchedaFuoriTurno, schedaFuoriTurno } from '@/lib/scheda-fuori-turno';
+import { inviaScheda } from '@/lib/scheda-invio';
 import { eNumeroDelBot } from '@/lib/mittente';
 import { segnaRispostaDopoSollecito } from '@/lib/sollecito-parcheggio';
 import { registraRispostaVerifica, verificaAccesa } from '@/lib/verifica-presenza';
@@ -619,6 +621,47 @@ export async function POST(req: NextRequest) {
       if (conv && !markerPulsante) {
         const slug = await segnaProfessione(supabase, conversationId, messageBody);
         if (slug) conv.professione = slug;
+      }
+
+      // La scheda su una chat dove Mario non risponde (PO 10/11/2026, caso Naomi conv
+      // 29726): handed_off, booked o col fermo manuale. Se il lead manda la frase del link
+      // o chiede la scheda, il PDF parte lo stesso (la finestra delle 24 ore e' aperta: ha
+      // appena scritto, e si risponde dal numero a cui ha scritto); Mario resta zitto e chi
+      // ha il lead riceve una nota. Una volta sola per chat (CAS di `inviaScheda`).
+      const fuoriTurno = conv && !markerPulsante && params.To ? schedaFuoriTurno({
+        aiOwner: conv.ai_owner,
+        aiStatus: conv.ai_status,
+        aiPausedAt: conv.ai_paused_at,
+        professione: conv.professione,
+        testo: messageBody,
+      }) : null;
+      if (conv && fuoriTurno && params.To) {
+        const daNumero = params.To;
+        const testoLead = messageBody;
+        const crmLeadIdChat = conv.crm_lead_id;
+        const statoChat = conv.ai_status;
+        after((async () => {
+          const esito = fuoriTurno.slug
+            ? await inviaScheda(supabase, { conversationId, phone, from: daNumero, slug: fuoriTurno.slug, momento: 'fuori_turno' })
+            : 'senza_corso' as const;
+          await supabase.from('event_log').insert({
+            type: 'scheda_fuori_turno',
+            payload: { conversationId, crmLeadId: crmLeadIdChat, slug: fuoriTurno.slug, esito, aiStatus: statoChat } as never,
+            message: `[professioni] conv ${conversationId} (${statoChat}): richiesta della scheda, esito ${esito}, Mario non risponde`,
+            level: 'info',
+          });
+          if (crmLeadIdChat) {
+            const r = await sendCrmNota(supabase, conversationId, notaSchedaFuoriTurno(esito, fuoriTurno.slug, testoLead));
+            if (!r.sent) {
+              await supabase.from('event_log').insert({
+                type: 'scheda_fuori_turno_nota_fallita',
+                payload: { conversationId, status: r.status ?? null, errore: r.error ?? null } as never,
+                message: `[professioni] conv ${conversationId}: nota della scheda fuori turno NON arrivata al CRM (${r.error ?? r.status ?? '?'})`,
+                level: 'warn',
+              });
+            }
+          }
+        })());
       }
 
       // Link "professione dello Sviluppatore AI" (PO 24/09/2026): chi ci scrive da li'
