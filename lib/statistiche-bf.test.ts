@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { convPrincipale, leggiRichiesta, riepilogoPerFunnel, statoLead, type ConvRiga, type MsgRiga } from './statistiche-bf';
+import { convPrincipale, schedaDellaPersona, leggiRichiesta, riepilogoPerFunnel, statoLead, type ConvRiga, type MsgRiga } from './statistiche-bf';
 
 const conv = (p: Partial<ConvRiga> = {}): ConvRiga => ({
   id: 1, crm_lead_id: 'L1', lead_id: 10, created_at: '2026-11-08T10:00:00Z', last_message_at: '2026-11-08T11:00:00Z',
@@ -82,5 +82,32 @@ describe('leggiRichiesta', () => {
     expect(ok?.leads[0]).toEqual({ id: 'a', ingresso: '2026-11-08T10:00:00Z', telefono: '333' });
     expect(leggiRichiesta({ ts: 'x', dal: '2026-11-06', leads: [] })).toBeNull();
     expect(leggiRichiesta({ ts: '2026-11-09T10:00:00Z', dal: '2026-11-06', leads: [{ id: 'a' }] })).toBeNull();
+  });
+});
+
+describe('scheda della persona per telefono (PO 10/11/2026, caso Ana Padilla)', () => {
+  it('nessuna chat col suo id: la chat del telefono, agganciata al lead BF, ha la scheda e conta', () => {
+    const chatBf = conv({ id: 31185, crm_lead_id: '6b7c3c2d', scheda_inviata_at: '2026-11-05T05:51:31Z', professione: 'graphic_designer' });
+    const s = statoLead(LEAD, chatBf, 'telefono', [], ADESSO, [chatBf]);
+    expect(s).toMatchObject({ trovata_per: 'telefono', scheda_inviata_at: '2026-11-05T05:51:31Z', professione: 'graphic_designer', scheda_trovata_per: 'chat' });
+  });
+  it('chat col suo id senza scheda, scheda su un altra chat dello stesso telefono: conta, per telefono', () => {
+    const sua = conv({ id: 1, scheda_inviata_at: null });
+    const altra = conv({ id: 2, crm_lead_id: 'altro', scheda_inviata_at: '2026-11-05T05:51:31Z', professione: 'copywriter' });
+    const s = statoLead(LEAD, sua, 'crm_lead_id', [], ADESSO, [sua, altra]);
+    expect(s).toMatchObject({ conversation_id: 1, scheda_inviata_at: '2026-11-05T05:51:31Z', professione: 'copywriter', scheda_trovata_per: 'telefono' });
+  });
+  it('la scheda della sua chat vince; nessuna scheda da nessuna parte = null', () => {
+    const sua = conv({ id: 1, scheda_inviata_at: '2026-11-08T10:00:20Z', professione: 'video_editor' });
+    const altra = conv({ id: 2, scheda_inviata_at: '2026-11-01T10:00:00Z', professione: 'copywriter' });
+    expect(statoLead(LEAD, sua, 'crm_lead_id', [], ADESSO, [sua, altra])).toMatchObject({ scheda_inviata_at: '2026-11-08T10:00:20Z', scheda_trovata_per: 'chat' });
+    expect(statoLead(LEAD, conv(), 'crm_lead_id', [], ADESSO, [conv({ id: 9 })])).toMatchObject({ scheda_inviata_at: null, scheda_trovata_per: null });
+  });
+  it('schedaDellaPersona: il primo invio fra le chat del telefono', () => {
+    expect(schedaDellaPersona([])).toBeNull();
+    expect(schedaDellaPersona([
+      conv({ id: 1, scheda_inviata_at: '2026-11-06T10:00:00Z', professione: 'a' }),
+      conv({ id: 2, scheda_inviata_at: '2026-11-05T10:00:00Z', professione: 'b' }),
+    ])).toEqual({ scheda_inviata_at: '2026-11-05T10:00:00Z', professione: 'b' });
   });
 });

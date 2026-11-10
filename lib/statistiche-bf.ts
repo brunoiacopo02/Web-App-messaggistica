@@ -76,6 +76,9 @@ export interface StatoLeadBf {
   scheda_inviata_at: string | null;
   /** Corso del funnel Professioni scritto dal bot sulla chat; null se assente. */
   professione: string | null;
+  /** Dove si e' trovata la scheda: sulla chat del lead o su un'altra chat dello stesso
+   *  telefono (agganciata a un altro lead della stessa persona). null = nessuna scheda. */
+  scheda_trovata_per: 'chat' | 'telefono' | null;
 }
 
 export interface RigaFunnelBot {
@@ -97,20 +100,43 @@ export function convPrincipale(convs: ConvRiga[]): ConvRiga | null {
   )[0];
 }
 
+/**
+ * La scheda ricevuta dalla PERSONA (PO 10/11/2026, caso Ana Padilla): la scheda sta su una
+ * chat sola per telefono, ma quella chat puo' essere agganciata a un altro lead della
+ * stessa persona (Ana: lead brochure 18640253, scheda sulla chat 31185 oggi del suo lead
+ * BF 6b7c3c2d). Fra le chat dello stesso telefono vale il primo invio.
+ */
+export function schedaDellaPersona(convs: readonly ConvRiga[]): { scheda_inviata_at: string; professione: string | null } | null {
+  const con = convs.filter((c) => !!c.scheda_inviata_at && Number.isFinite(ms(c.scheda_inviata_at)));
+  if (con.length === 0) return null;
+  const prima = [...con].sort((a, b) => ms(a.scheda_inviata_at) - ms(b.scheda_inviata_at))[0];
+  return { scheda_inviata_at: prima.scheda_inviata_at!, professione: prima.professione ?? null };
+}
+
 export function statoLead(
   lead: LeadRichiesto,
   conv: ConvRiga | null,
   trovataPer: 'crm_lead_id' | 'telefono' | null,
   messaggi: MsgRiga[],
   adesso: Date,
+  /** Le chat dello stesso telefono: per la scheda ricevuta su una chat di un altro lead. */
+  chatTelefono: readonly ConvRiga[] = [],
 ): StatoLeadBf {
+  const persona = conv?.scheda_inviata_at ? null : schedaDellaPersona(chatTelefono);
+  const scheda = conv?.scheda_inviata_at
+    ? { at: conv.scheda_inviata_at, professione: conv.professione ?? null, per: 'chat' as const }
+    : persona
+      ? { at: persona.scheda_inviata_at, professione: persona.professione ?? conv?.professione ?? null, per: 'telefono' as const }
+      : null;
   const ingresso = ms(lead.ingresso);
   const eta = Math.round(((adesso.getTime() - ingresso) / ORA_MS) * 10) / 10;
   if (!conv) {
     return {
       crm_lead_id: lead.id, conversation_id: null, trovata_per: null, chat_nuova: null,
       con_chat: false, consegnato: false, risposto: false, wa_number: null, mario_braccio: null,
-      bot_outcome: null, ai_status: null, eta_ore: eta, scheda_inviata_at: null, professione: null,
+      bot_outcome: null, ai_status: null, eta_ore: eta,
+      scheda_inviata_at: scheda?.at ?? null, professione: scheda?.professione ?? null,
+      scheda_trovata_per: scheda?.per ?? null,
     };
   }
   const suoi = messaggi.filter((m) => m.conversation_id === conv.id);
@@ -129,8 +155,9 @@ export function statoLead(
     bot_outcome: conv.bot_outcome && Number.isFinite(esitoAt) && esitoAt >= ingresso ? conv.bot_outcome : null,
     ai_status: conv.ai_status,
     eta_ore: eta,
-    scheda_inviata_at: conv.scheda_inviata_at ?? null,
-    professione: conv.professione ?? null,
+    scheda_inviata_at: scheda?.at ?? null,
+    professione: scheda?.professione ?? conv.professione ?? null,
+    scheda_trovata_per: scheda?.per ?? null,
   };
 }
 

@@ -75,8 +75,11 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 2. Ripiego per telefono, solo per chi non ha una chat col suo id.
-    const senza = richiesta.leads.filter((l) => !perId.has(l.id) && toE164(l.telefono));
+    // 2. Ripiego per telefono: per chi non ha una chat col suo id (la chat), e per chi ce
+    // l'ha ma senza scheda (la scheda puo' stare sulla chat di un altro lead della stessa
+    // persona, PO 10/11/2026, caso Ana Padilla).
+    const senza = richiesta.leads.filter((l) => toE164(l.telefono)
+      && !(convPrincipale(perId.get(l.id) ?? [])?.scheda_inviata_at));
     const perTelefono = new Map<string, ConvRiga[]>();
     if (senza.length > 0) {
       const telefoni = [...new Set(senza.map((l) => toE164(l.telefono)!))];
@@ -98,10 +101,10 @@ export async function POST(req: NextRequest) {
 
     const scelte = richiesta.leads.map((l) => {
       const daId = convPrincipale(perId.get(l.id) ?? []);
-      if (daId) return { l, conv: daId, per: 'crm_lead_id' as const };
       const tel = toE164(l.telefono);
+      if (daId) return { l, conv: daId, per: 'crm_lead_id' as const, tel };
       const daTel = tel ? convPrincipale(perTelefono.get(tel) ?? []) : null;
-      return { l, conv: daTel, per: daTel ? ('telefono' as const) : null };
+      return { l, conv: daTel, per: daTel ? ('telefono' as const) : null, tel };
     });
 
     // 3. Messaggi delle chat scelte, dal primo ingresso (meno il margine): solo direzione, stato e ora.
@@ -126,7 +129,7 @@ export async function POST(req: NextRequest) {
       {
         ok: true,
         letto_alle: adesso.toISOString(),
-        leads: scelte.map((s) => statoLead(s.l, s.conv, s.per, messaggi, adesso)),
+        leads: scelte.map((s) => statoLead(s.l, s.conv, s.per, messaggi, adesso, s.tel ? perTelefono.get(s.tel) ?? [] : [])),
         riepilogo: { dal: richiesta.dal.toISOString(), funnel: riepilogoPerFunnel(nuove, adesso) },
       },
       { headers: { 'cache-control': 'no-store' } },
