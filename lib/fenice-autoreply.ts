@@ -1350,7 +1350,13 @@ export async function drainMarioReplies(
       }
       const giorniSposta = giorniSpostamento(new Date(), rangesSpostamento);
       const notaSposta = motivoNoSposta === null && giorniSposta.length > 0 && callSpostabileAt
-        ? notaSpostamentoPrompt({ giorni: giorniSposta, callAt: new Date(callSpostabileAt) })
+        ? notaSpostamentoPrompt({
+            giorni: giorniSposta,
+            callAt: new Date(callSpostabileAt),
+            // Le ore meno piene dei giorni dello spostamento (PO 10/11/2026): criterio
+            // secondario dopo l'orario sicuro per il lead. Null se il CRM non risponde.
+            oreOccupate: await leggiOreOccupate(giorniSposta),
+          })
         : null;
       // Sulle call del bot il blocco va in coda alla nota del turno, qualunque sia; sul
       // postino sta gia' in coda alla nota GDO (qui sotto).

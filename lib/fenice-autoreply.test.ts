@@ -5,7 +5,10 @@ vi.mock('./mario', () => ({ generateMarioReply: vi.fn(), GDO_CONTEXT_NOTE: 'CONT
 vi.mock('./twilio', () => ({ sendFreeText: vi.fn(async () => ({ sid: 'SM_fake', status: 'queued' })) }));
 vi.mock('./bot-report', () => ({ generateBotReport: vi.fn(async () => ({})) }));
 // Le ore occupate vengono dal CRM con una fetch: qui niente CRM, Mario va senza il blocco.
-vi.mock('./ore-occupate', () => ({ leggiOreOccupate: vi.fn(async () => null) }));
+vi.mock('./ore-occupate', async (orig) => ({
+  ...(await orig<typeof import('./ore-occupate')>()),
+  leggiOreOccupate: vi.fn(async () => null),
+}));
 vi.mock('./bot-outcome', () => ({
   sendOutcome: vi.fn(async () => ({ sent: true })),
   inviaNotaAlCrm: vi.fn(async () => ({ sent: true })),
@@ -37,6 +40,7 @@ vi.mock('./offerta-bf-evergreen', async (orig) => ({
 
 import { generateMarioReply, GDO_CONTEXT_NOTE } from './mario';
 import { leggiSettingsOffertaBfEvergreen } from './offerta-bf-evergreen';
+import { leggiOreOccupate } from './ore-occupate';
 import { sendOutcome, inviaNotaAlCrm, registraEsitoSenzaLeadId } from './bot-outcome';
 import { NOTA_VIDEO, NOTA_NOEMI } from './gdo-context-note';
 import { OPENING_ENV_KEYS, personaForConversation } from './persona';
@@ -3767,6 +3771,22 @@ describe('drainMarioReplies — il bot sposta la call del lead GDO (PO 28/10/202
     vi.mocked(sendOutcome).mockClear();
   });
   afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
+
+  it('orario sicuro (PO 10/11/2026): conferma esplicita nel blocco e ore meno piene dei giorni dello spostamento come criterio secondario', async () => {
+    vi.mocked(leggiOreOccupate).mockImplementation(async (giorni) => ({
+      soglia: 8, giorni: Object.fromEntries(giorni.map((g) => [g, { '10': 9, '15': 9 }])),
+    }));
+    const { supabase } = makeDrainSupabase(postino(), [RECAP, SPOSTA]);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Giovedi che turno fai? Dimmi un ora in cui sei sicuro di esserci'));
+
+    await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+    expect(contesto()).toContain('CONFERMA PRIMA DI SPOSTARE');
+    expect(contesto()).toContain('ORE MENO PIENE (criterio secondario');
+    expect(contesto()).toContain('già piene: 10:00, 15:00');
+    vi.mocked(leggiOreOccupate).mockReset();
+    vi.mocked(leggiOreOccupate).mockResolvedValue(null);
+  });
 
   it('data buona e sì del CRM: una bolla di conferma scritta dal codice, chat sulla data nuova, nessuna nota', async () => {
     const f = fetchCrm(200, { ok: true, rescheduled: true });

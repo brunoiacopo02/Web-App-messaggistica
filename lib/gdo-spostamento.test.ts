@@ -88,6 +88,37 @@ describe('testi', () => {
     expect(t).toContain('[ESITO:RICHIAMO|');
     expect(t).toContain('giovedì 29 alle 18:00');
   });
+  it('orario sicuro (PO 10/11/2026): niente fasce al buio, si parte dai suoi impegni', () => {
+    const t = notaSpostamentoPrompt({ giorni: ['2026-10-29', '2026-10-30'], callAt: new Date(CALL) });
+    expect(t).toContain('è CERTO di esserci');
+    expect(t).toContain('non dargli fasce generiche ("dalle 10 in poi"');
+    expect(t).toContain('lavoro, turni, figli o impegni');
+    expect(t).toContain('questi sono i limiti, non una proposta');
+  });
+  it('conferma esplicita prima del [SPOSTA], e niente spostamento se tentenna', () => {
+    const t = notaSpostamentoPrompt({ giorni: ['2026-10-29'], callAt: new Date(CALL) });
+    expect(t).toContain('a quell\'ora sei sicuro di esserci');
+    expect(t).toContain('NON spostare subito');
+    expect(t).toContain('"penso di sì"');
+    // Il tag arriva solo dopo la conferma.
+    expect(t.indexOf('CONFERMA PRIMA DI SPOSTARE')).toBeLessThan(t.indexOf('scrivi SOLO il tag [SPOSTA|'));
+    expect(t).toContain('Quando ti ha confermato in modo chiaro');
+  });
+  it('ore meno piene solo come criterio secondario, e solo se il CRM risponde', () => {
+    const senza = notaSpostamentoPrompt({ giorni: ['2026-10-29'], callAt: new Date(CALL) });
+    expect(senza).not.toContain('ORE MENO PIENE');
+    const t = notaSpostamentoPrompt({
+      giorni: ['2026-10-29', '2026-10-30'],
+      callAt: new Date(CALL),
+      oreOccupate: { soglia: 8, giorni: { '2026-10-29': { '10': 12, '11': 1, '12': 0, '13': 0, '15': 9, '18': 3 } } },
+    });
+    expect(t).toContain('criterio secondario, solo fra orari che per lui sono ugualmente sicuri');
+    expect(t).toContain('giovedì 29: la mattina 12:00 o 13:00');
+    expect(t).toContain('(già piene: 10:00, 15:00)');
+    // Il giorno senza dati dal CRM non compare.
+    expect(t).not.toContain('venerdì 30: la mattina');
+    expect(t).toContain("va bene quella anche se è fra le già piene");
+  });
   it('conferma: data nuova, Noemi, domanda sul video col link', () => {
     const t = testoSpostamentoFatto({
       nome: 'Luca Rossi', call: new Date('2026-10-30T18:00:00+01:00'), fissatoIl: MER_15, videoVisto: false, videoLink: 'https://x.it/v',

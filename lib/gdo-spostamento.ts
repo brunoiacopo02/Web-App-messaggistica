@@ -4,6 +4,7 @@ import { quandoNoemi } from './gdo-recap';
 import { firstNameOf } from './name';
 import { giornoRoma, oraRoma, romeDayKey, romeHour, romeMinute, sameInstant } from './rome-time';
 import { parlaDiDisdireOSpostare } from './gdo-warmup';
+import { FASCE, oreAffollate, oreDaProporre, type OreOccupate } from './ore-occupate';
 
 /**
  * Il bot sposta lui la call di un lead GDO (PO 28/10/2026, contratto v1.9 esito
@@ -170,16 +171,42 @@ export function elencoGiorni(giorni: string[]): string {
  * Il blocco per il prompt, appeso alla nota GDO solo quando lo spostamento si può fare.
  * Prevale sulla regola "giorno e ora di una call già fissata non li sposti tu", e SOLO
  * per questo lead e solo per lo spostamento: il tono assertivo resta qui dentro.
+ *
+ * ORARIO SICURO (PO 10/11/2026): chi sposta ha già saltato o sta per saltare una call.
+ * Il nuovo orario deve essere uno in cui il lead è CERTO di esserci, ragionato sui suoi
+ * impegni, e confermato esplicitamente prima del [SPOSTA]: niente orari proposti al buio
+ * ("dalle 10 in poi", conv 6111) che il lead accetta per cortesia e poi salta. Le ore meno
+ * piene (`oreOccupate`, lo stesso dato del fissaggio) contano solo come criterio secondario
+ * fra orari ugualmente sicuri per lui.
  */
-export function notaSpostamentoPrompt(i: { giorni: string[]; callAt: Date }): string {
+export function notaSpostamentoPrompt(i: { giorni: string[]; callAt: Date; oreOccupate?: OreOccupate | null }): string {
   const giorni = elencoGiorni(i.giorni);
   const call = `${giornoRoma(i.callAt)} alle ${oraRoma(i.callAt)}`;
+  const menoPiene = righeOreMenoPiene(i.giorni, i.oreOccupate ?? null);
   return [
     `SPOSTAMENTO DELLA CALL (vale solo per questo lead e solo se ti chiede di spostare): la sua videochiamata è ${call}. Qui lo spostamento lo fai TU, una volta sola, e questa regola prevale su "GIORNO E ORA DI UNA CALL GIÀ FISSATA NON LI SPOSTI TU" e su "il giorno nuovo lo sistemi con Noemi".`,
-    `Se ti chiede di spostare, o ti dice che non ce la fa, rispondi con tono deciso ma gentile, frasi corte e parole semplici. Fagli sentire che aveva preso un impegno, per esempio: "Avevi preso un impegno e la videochiamata era riservata a te. Si può spostare una volta sola: dimmi giorno e ora in cui sei sicuro di esserci." Puoi spostarla solo a ${giorni}, dalle 10:00 alle 21:00. Le 9:00 non proporle mai: accettale solo se ti dice che è l'unico orario possibile. Una domanda sola: giorno e ora.`,
-    `Quando ti dà un giorno e un'ora dentro quei giorni e quella fascia, scrivi SOLO il tag [SPOSTA|<data e ora in ISO 8601 con fuso, es. 2026-10-30T18:00:00+01:00>] e nient'altro: il messaggio di conferma, con Noemi e il video, lo manda il sistema. Se ti dà solo il giorno, chiedigli l'ora; se ti dà solo l'ora, chiedigli il giorno.`,
+    `Se ti chiede di spostare, o ti dice che non ce la fa, rispondi con tono deciso ma gentile, frasi corte e parole semplici. Fagli sentire che aveva preso un impegno, per esempio: "Avevi preso un impegno e la videochiamata era riservata a te. Si può spostare una volta sola: dimmi giorno e ora in cui sei sicuro di esserci." Puoi spostarla solo a ${giorni}, dalle 10:00 alle 21:00: questi sono i limiti, non una proposta da fargli. Le 9:00 non proporle mai: accettale solo se ti dice che è l'unico orario possibile.`,
+    `ORARIO SICURO: lo scopo non è un orario qualsiasi, è un orario in cui è CERTO di esserci. Non proporgli tu orari al buio e non dargli fasce generiche ("dalle 10 in poi", "dalle 10 alle 21", "quando vuoi"): chi li accetta per cortesia poi salta di nuovo. Chiedigli quando è davvero sicuro di poterci essere, partendo da quello che ti ha raccontato di lavoro, turni, figli o impegni (es. "Giovedì che turno fai? Dimmi un'ora in cui sei sicuro di essere libero e col telefono in mano"). Se ti chiede di proporre tu, prima chiedigli che impegni ha in quei giorni, poi proponi due ore precise che stanno sicuramente fuori da quegli impegni. Una domanda alla volta.`,
+    `CONFERMA PRIMA DI SPOSTARE: quando ti dà un giorno e un'ora dentro quei giorni e quella fascia, NON spostare subito. Prima chiedigli una conferma esplicita, una domanda sola, richiamando l'impegno che ti ha detto se c'è (es. "Giovedì 29 alle 18: a quell'ora sei sicuro di esserci, anche col turno che finisce alle 17?"). Se nello stesso messaggio ti aveva già detto lui che a quell'ora è sicuro di esserci, la conferma c'è già. Se tentenna ("penso di sì", "dovrei", "spero", "salvo imprevisti", "vediamo") non spostare: chiedigli cosa potrebbe impedirglielo e cercate insieme un orario davvero sicuro.`,
+    ...(menoPiene ? [
+      `ORE MENO PIENE (criterio secondario, solo fra orari che per lui sono ugualmente sicuri: la sicurezza viene prima): ${menoPiene}. Se è lui a dirti un'ora sicura, va bene quella anche se è fra le già piene: non dirgli che è piena e non provare a spostarla.`,
+    ] : []),
+    `Quando ti ha confermato in modo chiaro che a quel giorno e a quell'ora c'è di sicuro, scrivi SOLO il tag [SPOSTA|<data e ora in ISO 8601 con fuso, es. 2026-10-30T18:00:00+01:00>] e nient'altro: il messaggio di conferma, con Noemi e il video, lo manda il sistema. Se ti dà solo il giorno, chiedigli l'ora; se ti dà solo l'ora, chiedigli il giorno.`,
     `Se il giorno che vuole è fuori da quei giorni, diglielo una volta: si può spostare solo a ${giorni}. Se ti dice che non può prima, o parla di settimane o mesi, o resta vago ("non so", "ti faccio sapere"), NON usare [SPOSTA]: fai come nella sezione SE VUOLE SPOSTARE O DISDIRE (il nuovo orario lo sistema con Noemi) e chiudi con [ESITO:RICHIAMO|...]. Se vuole rinunciare del tutto, vale [ESITO:SCARTO|...] come sempre.`,
   ].join('\n');
+}
+
+/** "giovedì 29: la mattina 11:00 o 12:00, ... (già piene: 10:00)" per i giorni dello spostamento. */
+export function righeOreMenoPiene(giorni: readonly string[], dati: OreOccupate | null): string | null {
+  if (!dati) return null;
+  const hh = (h: number) => `${String(h).padStart(2, '0')}:00`;
+  const righe = giorni.filter((g) => dati.giorni[g]).map((g) => {
+    const conta = dati.giorni[g];
+    const fasce = FASCE.map((f) => `${f.nome} ${oreDaProporre(conta, f.ore).map(hh).join(' o ')}`).join(', ');
+    const piene = oreAffollate(conta, dati.soglia);
+    return `${giornoRoma(new Date(`${g}T12:00:00Z`))}: ${fasce}${piene.length > 0 ? ` (già piene: ${piene.map(hh).join(', ')})` : ''}`;
+  });
+  return righe.length > 0 ? righe.join('; ') : null;
 }
 
 /** Il lead ha già confermato di aver visto il video? Decide la riga del video nella conferma. */
