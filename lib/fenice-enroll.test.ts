@@ -1695,11 +1695,12 @@ describe('enrollLeadIntoMario — apertura doppia fermata con un leadId nuovo', 
     expect(calls.updates[1]).toEqual({ ai_status: 'active' });
   });
 
-  it('APPUNTAMENTO sulla chat: il leadId passa, l esito resta e la chat non si riapre', async () => {
+  it('APPUNTAMENTO sulla chat (PO 10/11/2026): il leadId NON passa, il lead nuovo e rifiutato', async () => {
     vi.setSystemTime(MEZZOGIORNO);
     const { supabase, calls } = makeSupabaseLeggibile({ crmLeadId: 'LEAD-VECCHIO', outboundRecenti: 1, botOutcome: 'APPUNTAMENTO' });
-    await enrollLeadIntoMario(supabase, { phone: '+393330000203', crmLeadId: 'LEAD-NUOVO' });
-    expect(calls.updates).toEqual([{ crm_lead_id: 'LEAD-NUOVO' }]);
+    const res = await enrollLeadIntoMario(supabase, { phone: '+393330000203', crmLeadId: 'LEAD-NUOVO' });
+    expect(res.rifiuto).toMatchObject({ motivo: 'chat_con_appuntamento', leadIdAppuntamento: 'LEAD-VECCHIO' });
+    expect(calls.updates).toEqual([]);
   });
 
   it('stesso leadId (ritento vero): nessuna scrittura sulla chat', async () => {
@@ -1814,7 +1815,7 @@ describe('enrollLeadIntoMario — chat ferma da oltre 96h con un lead nuovo (buc
     expect(calls.events.map((e: any) => e.type)).not.toContain('fenice_enroll_duplicato');
   });
 
-  it('B: chat chiusa con APPUNTAMENTO → resta duplicato, esito intatto', async () => {
+  it('B: chat chiusa con APPUNTAMENTO di un altro lead → rifiuto (PO 10/11/2026), esito intatto', async () => {
     vi.setSystemTime(MEZZOGIORNO);
     const seiGiorniFa = new Date(Date.now() - 6 * 24 * 3600_000).toISOString();
     const { supabase, calls } = makeSupabaseLeggibile({
@@ -1822,7 +1823,7 @@ describe('enrollLeadIntoMario — chat ferma da oltre 96h con un lead nuovo (buc
       lastInboundAt: seiGiorniFa, ultimoMessaggioAt: seiGiorniFa,
     });
     const res = await enrollLeadIntoMario(supabase, { phone: '+393330000304', crmLeadId: 'LEAD-NUOVO' });
-    expect(res).toMatchObject({ duplicato: true });
+    expect(res.rifiuto?.motivo).toBe('chat_con_appuntamento');
     expect(sendTemplateAndLog).not.toHaveBeenCalled();
     for (const u of calls.updates) expect(u).not.toHaveProperty('bot_outcome');
   });

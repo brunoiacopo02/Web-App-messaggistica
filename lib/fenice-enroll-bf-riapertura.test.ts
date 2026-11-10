@@ -19,7 +19,7 @@ vi.mock('./black-friday-apertura', () => ({
   aperturaBlackFriday: vi.fn(async () => ({ scelta: 'template_bf', sid: 'HX_BF' })),
 }));
 
-import { aperturaBfSuAppuntamento, enrollLeadIntoMario, riapreChatPerBlackFriday } from './fenice-enroll';
+import { aperturaBfSuAppuntamento, enrollLeadIntoMario, restituisciPerChatConAppuntamento, riapreChatPerBlackFriday } from './fenice-enroll';
 import { sendTemplateAndLog } from './messaging';
 import { MARKER_TESTO_APERTURA_BF, EVENTO_BF_SU_APPUNTAMENTO, blackFridayContextNote } from './black-friday';
 
@@ -168,47 +168,79 @@ describe('enrollLeadIntoMario — lead Black Friday su una chat che esiste gia (
     for (const u of calls.updates) expect(u).not.toHaveProperty('ai_started_at');
   });
 
-  it('APPUNTAMENTO sulla chat (PO 09/11) → apertura BF richiesta, appuntamento e lead intatti', async () => {
+  // PO 10/11/2026: APPUNTAMENTO del bot su un ALTRO lead → il lead nuovo non si prende,
+  // torna subito ai GDO (accettato:false, chat_con_appuntamento). La chat non si tocca.
+  it('APPUNTAMENTO di un altro lead, chat ferma (Sara conv 11221) → rifiuto, chat intatta', async () => {
     const { supabase, calls } = fake({
       crmLeadId: 'LEAD-APP', crmFunnel: 'CORSO 10 ORE', aiStatus: 'closed', botOutcome: 'APPUNTAMENTO',
+      botScheduledAt: '2026-09-12T14:00:00Z',
+      lastInboundAt: fa(30), ultimoMessaggioAt: fa(30), ultimoOutboundAt: fa(30),
+    });
+    const res = await enrollLeadIntoMario(supabase, ARGS);
+    expect(res).toEqual({
+      ok: true, conversationId: 8727,
+      rifiuto: { motivo: 'chat_con_appuntamento', leadIdAppuntamento: 'LEAD-APP', appuntamento: '2026-09-12T14:00:00Z' },
+    });
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+    expect(calls.updates).toEqual([]);
+    const tipi = calls.events.map((e: any) => e.type);
+    expect(tipi).toEqual(['fenice_enroll_rifiuto_chat_con_appuntamento']);
+  });
+
+  it('APPUNTAMENTO di un altro lead, ritento dello stesso intake → stesso rifiuto, nessuna scrittura', async () => {
+    const { supabase, calls } = fake({
+      crmLeadId: 'LEAD-APP', crmFunnel: 'BLACK FRIDAY', aiStatus: 'closed', botOutcome: 'APPUNTAMENTO',
+      lastInboundAt: fa(30), ultimoMessaggioAt: fa(30), ultimoOutboundAt: fa(30), richiestaGia: true,
+    });
+    const res = await enrollLeadIntoMario(supabase, ARGS);
+    expect(res.rifiuto?.motivo).toBe('chat_con_appuntamento');
+    expect(calls.updates).toEqual([]);
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+  });
+
+  it('APPUNTAMENTO di un altro lead con un nostro messaggio di 2 ore fa (Enrico conv 31724) → rifiuto, crm_lead_id NON passa', async () => {
+    const { supabase, calls } = fake({
+      crmLeadId: 'LEAD-APP', crmFunnel: 'BLACK FRIDAY', aiStatus: 'booked', botOutcome: 'APPUNTAMENTO',
+      lastInboundAt: fa(3), ultimoMessaggioAt: fa(2), ultimoOutboundAt: fa(2),
+    });
+    const res = await enrollLeadIntoMario(supabase, ARGS);
+    expect(res.rifiuto).toMatchObject({ motivo: 'chat_con_appuntamento', leadIdAppuntamento: 'LEAD-APP' });
+    expect(calls.updates).toEqual([]);
+    expect(calls.events.map((e: any) => e.type)).not.toContain('fenice_enroll_duplicato');
+  });
+
+  it('APPUNTAMENTO di un altro lead anche su un funnel che non e BF → stesso rifiuto', async () => {
+    const { supabase, calls } = fake({
+      crmLeadId: 'LEAD-APP', crmFunnel: 'TELEGRAM', aiStatus: 'closed', botOutcome: 'APPUNTAMENTO',
+      lastInboundAt: fa(300), ultimoMessaggioAt: fa(300), ultimoOutboundAt: fa(300),
+    });
+    const res = await enrollLeadIntoMario(supabase, { ...ARGS, crmFunnel: 'CORSO 10 ORE' });
+    expect(res.rifiuto?.motivo).toBe('chat_con_appuntamento');
+    expect(calls.updates).toEqual([]);
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+  });
+
+  it('APPUNTAMENTO dello STESSO lead, chat non ancora BF (PO 09/11) → apertura BF richiesta, nessun rifiuto', async () => {
+    const { supabase, calls } = fake({
+      crmLeadId: 'LEAD-BF', crmFunnel: 'CORSO 10 ORE', aiStatus: 'closed', botOutcome: 'APPUNTAMENTO',
       botScheduledAt: '2026-11-10T10:00:00Z',
       lastInboundAt: fa(30), ultimoMessaggioAt: fa(30), ultimoOutboundAt: fa(30),
     });
     const res = await enrollLeadIntoMario(supabase, ARGS);
     expect(res).toMatchObject({ ok: true, conversationId: 8727, duplicato: true });
-    // L'apertura la manda bf-aperture, non l'intake.
-    expect(sendTemplateAndLog).not.toHaveBeenCalled();
-    // Un solo update: il funnel. Niente esito, data, ai_started_at, crm_lead_id, stato.
+    expect(res).not.toHaveProperty('rifiuto');
     expect(calls.updates).toEqual([{ crm_funnel: 'BLACK FRIDAY' }]);
     const ev = calls.events.find((e: any) => e.type === EVENTO_BF_SU_APPUNTAMENTO);
-    expect(ev?.payload).toMatchObject({ conversationId: '8727', crmLeadIdBf: 'LEAD-BF', crmLeadIdAppuntamento: 'LEAD-APP' });
-    expect(calls.events.map((e: any) => e.type)).not.toContain('fenice_enroll_bf_riapertura');
+    expect(ev?.payload).toMatchObject({ conversationId: '8727', crmLeadIdBf: 'LEAD-BF', crmLeadIdAppuntamento: 'LEAD-BF' });
   });
 
-  it('APPUNTAMENTO, ritento dello stesso intake (richiesta gia registrata) → nessuna seconda richiesta, esito intatto', async () => {
-    const { supabase, calls } = fake({
-      crmLeadId: 'LEAD-APP', crmFunnel: 'BLACK FRIDAY', aiStatus: 'closed', botOutcome: 'APPUNTAMENTO',
-      lastInboundAt: fa(30), ultimoMessaggioAt: fa(30), ultimoOutboundAt: fa(30), richiestaGia: true,
+  it('chat adottata senza leadId con APPUNTAMENTO (il lead stesso che il CRM conosce adesso) → nessun rifiuto', async () => {
+    const { supabase } = fake({
+      crmLeadId: null, crmFunnel: 'BLACK FRIDAY', aiStatus: 'booked', botOutcome: 'APPUNTAMENTO',
+      lastInboundAt: fa(1), ultimoMessaggioAt: fa(1), ultimoOutboundAt: fa(1),
     });
-    await enrollLeadIntoMario(supabase, ARGS);
-    expect(calls.events.map((e: any) => e.type)).not.toContain(EVENTO_BF_SU_APPUNTAMENTO);
-    expect(sendTemplateAndLog).not.toHaveBeenCalled();
-    for (const u of calls.updates) {
-      expect(u).not.toHaveProperty('bot_outcome');
-      expect(u).not.toHaveProperty('bot_scheduled_at');
-      expect(u).not.toHaveProperty('ai_started_at');
-    }
-  });
-
-  it('APPUNTAMENTO con il lead che sta scrivendo (3 ore fa) → nessuna apertura, esito intatto', async () => {
-    const { supabase, calls } = fake({
-      crmLeadId: 'LEAD-APP', crmFunnel: 'CORSO 10 ORE', aiStatus: 'closed', botOutcome: 'APPUNTAMENTO',
-      lastInboundAt: fa(3), ultimoMessaggioAt: fa(3), ultimoOutboundAt: fa(3),
-    });
-    await enrollLeadIntoMario(supabase, ARGS);
-    expect(sendTemplateAndLog).not.toHaveBeenCalled();
-    expect(calls.events.map((e: any) => e.type)).not.toContain(EVENTO_BF_SU_APPUNTAMENTO);
-    for (const u of calls.updates) expect(u).not.toHaveProperty('bot_outcome');
+    const res = await enrollLeadIntoMario(supabase, ARGS);
+    expect(res).not.toHaveProperty('rifiuto');
   });
 
   it('ritento dello stesso intake BF (chat gia BF, stesso leadId) → idempotente, nessuna riapertura', async () => {
@@ -228,6 +260,20 @@ describe('enrollLeadIntoMario — lead Black Friday su una chat che esiste gia (
     const res = await enrollLeadIntoMario(supabase, { ...ARGS, crmFunnel: 'PROFESSIONI' });
     expect(res).toMatchObject({ duplicato: true });
     expect(calls.events.map((e: any) => e.type)).not.toContain('fenice_enroll_bf_riapertura');
+  });
+});
+
+describe('restituisciPerChatConAppuntamento — regole (PO 10/11/2026)', () => {
+  it('APPUNTAMENTO di un altro lead → si', () => {
+    expect(restituisciPerChatConAppuntamento({ crmLeadIdPrima: 'A', crmLeadIdNuovo: 'B', botOutcome: 'APPUNTAMENTO' })).toBe(true);
+  });
+  it('no: stesso lead, chat adottata, lettura fallita, intake senza leadId, esito diverso', () => {
+    expect(restituisciPerChatConAppuntamento({ crmLeadIdPrima: 'B', crmLeadIdNuovo: 'B', botOutcome: 'APPUNTAMENTO' })).toBe(false);
+    expect(restituisciPerChatConAppuntamento({ crmLeadIdPrima: null, crmLeadIdNuovo: 'B', botOutcome: 'APPUNTAMENTO' })).toBe(false);
+    expect(restituisciPerChatConAppuntamento({ crmLeadIdPrima: undefined, crmLeadIdNuovo: 'B', botOutcome: 'APPUNTAMENTO' })).toBe(false);
+    expect(restituisciPerChatConAppuntamento({ crmLeadIdPrima: 'A', crmLeadIdNuovo: null, botOutcome: 'APPUNTAMENTO' })).toBe(false);
+    expect(restituisciPerChatConAppuntamento({ crmLeadIdPrima: 'A', crmLeadIdNuovo: 'B', botOutcome: 'INTERROTTO' })).toBe(false);
+    expect(restituisciPerChatConAppuntamento({ crmLeadIdPrima: 'A', crmLeadIdNuovo: 'B', botOutcome: null })).toBe(false);
   });
 });
 

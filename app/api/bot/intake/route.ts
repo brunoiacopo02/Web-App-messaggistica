@@ -24,7 +24,7 @@ export const dynamic = 'force-dynamic';
  * più un `motivo`, così la loro colonna "lavorato dal bot" torna vera senza che nessuno
  * debba riconciliare a mano.
  */
-type Motivo = 'telefono_non_valido' | 'arruolamento_fallito' | 'apertura_non_partita';
+type Motivo = 'telefono_non_valido' | 'arruolamento_fallito' | 'apertura_non_partita' | 'chat_con_appuntamento';
 
 /**
  * Perché il soffitto sta a 600/minuto (dal 09/09/2026).
@@ -128,6 +128,18 @@ export async function POST(req: NextRequest) {
       message: `[bot-fissatore] intake lead ${p.leadId} → conv ${res.conversationId}`,
       level: 'info',
     });
+
+    // Il numero ha gia' una chat con un APPUNTAMENTO del bot su un altro lead (contratto
+    // v1.16, PO 10/11/2026): questo lead non lo prendiamo, il CRM lo da' subito a un GDO.
+    // Niente `duplicato` nel corpo: il CRM legge `accettato:false` solo senza quel flag.
+    if (res.rifiuto) {
+      return NextResponse.json({
+        ok: true, accettato: false, motivo: res.rifiuto.motivo satisfies Motivo,
+        conversationId: res.conversationId,
+        leadIdAppuntamento: res.rifiuto.leadIdAppuntamento,
+        ...(res.rifiuto.appuntamento ? { appuntamento: res.rifiuto.appuntamento } : {}),
+      });
+    }
 
     // Ritento dello stesso leadId (429 o timeout del loro AbortSignal a 5s): l'apertura
     // era già partita al primo giro. Il lead è preso in carico — `accettato:true` — ma

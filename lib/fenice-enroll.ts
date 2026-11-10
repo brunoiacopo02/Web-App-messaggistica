@@ -47,6 +47,9 @@ export type EnrollResult = {
   ok: boolean; conversationId: number; sid?: string; error?: string; deferred?: boolean; duplicato?: boolean;
   /** L'apertura non e' partita perche' ricoprirebbe una chat gia' viva (`apreSopraChatViva`). */
   aperturaSaltata?: boolean;
+  /** Il lead NON e' stato preso: la rotta risponde `accettato:false` col motivo e il CRM lo
+   *  da' subito ai GDO (vedi `restituisciPerChatConAppuntamento`). Nessuna scrittura sulla chat. */
+  rifiuto?: { motivo: typeof MOTIVO_CHAT_CON_APPUNTAMENTO; leadIdAppuntamento: string; appuntamento: string | null };
 };
 
 /**
@@ -242,6 +245,9 @@ export { EVENTO_BF_SU_APPUNTAMENTO };
  *
  * Decisione PO 09/11/2026: chi lascia i contatti per il Black Friday riceve comunque
  * l'apertura BF, anche con un appuntamento attivo col bot (si valuta dopo se confonde).
+ * Dal 10/11/2026 (PO) vale solo quando l'APPUNTAMENTO e' dello STESSO lead (o la chat e'
+ * adottata senza leadId): con un leadId diverso il lead nuovo torna subito ai GDO
+ * (`restituisciPerChatConAppuntamento`), perche' qui restava fermo per sempre.
  * L'APPUNTAMENTO resta terminale: niente reset di esito, data, `ai_started_at`,
  * `crm_lead_id` (le note di Mario devono continuare ad arrivare al lead che ha la call),
  * promemoria pre-call. Cambia solo `crm_funnel` (Mario parla del BF sapendo della call)
@@ -281,6 +287,43 @@ export function aperturaBfSuAppuntamento(g: {
   if (g.ultimoInboundMs !== null && g.nowMs - g.ultimoInboundMs <= BF_INBOUND_VIVO_MS) return false;
   if (g.ultimoOutboundMs !== null && g.nowMs - g.ultimoOutboundMs <= BF_OUTBOUND_RECENTE_MS) return false;
   return true;
+}
+
+/** Motivo di `accettato:false` (contratto v1.16): la chat del numero ha un APPUNTAMENTO del
+ *  bot su un altro lead. Il CRM lo da' subito ai GDO con la nota del motivo. */
+export const MOTIVO_CHAT_CON_APPUNTAMENTO = 'chat_con_appuntamento' as const;
+
+/**
+ * Pure: il lead nuovo arriva su una chat che ha gia' un APPUNTAMENTO del bot sotto un ALTRO
+ * leadId del CRM. Va rifiutato e restituito subito ai GDO?
+ *
+ * Il caso (09-10/11/2026, Sara 1e6c1430 conv 11221, Massimiliano 62089433 conv 8728, tania
+ * 0fce48cb conv 7400, Enrico 388a0d18 conv 31724): noi deduplichiamo per numero, quindi il
+ * lead nuovo cade sulla chat vecchia, e quella chat non si puo' riaprire per lui:
+ * APPUNTAMENTO e' terminale assoluto (regola 1), su quella riga leggono promemoria,
+ * statistiche del fissaggio e note verso le Conferme. Prima di questa regola:
+ * - con la chat ferma, l'arruolamento chiedeva l'apertura BF lasciando `crm_lead_id` sul lead
+ *   vecchio: il lead nuovo non riceveva mai un esito e restava NEW sul bot per sempre;
+ * - con un nostro messaggio recente (guardia `apertura_recente`), `crm_lead_id` passava al
+ *   lead nuovo con l'APPUNTAMENTO addosso: l'appuntamento cambiava padrone e il lead nuovo
+ *   restava fermo lo stesso (Enrico, conv 31724).
+ * Ora il lead nuovo non si prende: `accettato:false` con `motivo: chat_con_appuntamento`, e il
+ * CRM lo da' subito a un GDO con il motivo in chiaro. La chat non si tocca (niente esito,
+ * `crm_lead_id`, funnel, stato, aperture): resta del lead che ha la call. Il ritento dello
+ * stesso intake ritrova la chat com'era e risponde allo stesso modo.
+ *
+ * Solo con un leadId diverso e noto da entrambe le parti: la chat adottata senza leadId
+ * (`crmLeadIdPrima` nullo) e' quella del lead stesso che il CRM sta conoscendo adesso, e una
+ * lettura fallita (`undefined`) non decide niente.
+ */
+export function restituisciPerChatConAppuntamento(g: {
+  crmLeadIdPrima: string | null | undefined;
+  crmLeadIdNuovo: string | null;
+  botOutcome: string | null;
+}): boolean {
+  if (!g.crmLeadIdNuovo || !g.crmLeadIdPrima) return false;
+  if (g.crmLeadIdPrima === g.crmLeadIdNuovo) return false;
+  return g.botOutcome === 'APPUNTAMENTO';
 }
 
 /** I campi da scrivere quando `azzeraEsitoPerLeadNuovo` dice si'. */
@@ -379,17 +422,37 @@ export async function enrollLeadIntoMario(
     // della select si controlla: "non lo so" non è "è nullo", e nel dubbio si apre.
     const { data: convRow, error: erroreConv } = await supabase
       .from('conversations')
-      .select('ai_owner, ai_status, crm_lead_id, crm_funnel, bot_outcome, ai_paused_at, gdo_appuntamento_at, gdo_agenda_at, lancio_slug, lancio_fase, last_inbound_at')
+      .select('ai_owner, ai_status, crm_lead_id, crm_funnel, bot_outcome, bot_scheduled_at, ai_paused_at, gdo_appuntamento_at, gdo_agenda_at, lancio_slug, lancio_fase, last_inbound_at')
       .eq('id', conversationId).single();
     const { count: partiti } = await supabase
       .from('messages').select('id', { count: 'exact', head: true })
       .eq('conversation_id', conversationId).eq('direction', 'out').not('twilio_sid', 'is', null);
     const riga = convRow as {
       crm_lead_id?: string | null; crm_funnel?: string | null; bot_outcome?: string | null; ai_status?: string | null;
-      ai_paused_at?: string | null; gdo_appuntamento_at?: string | null; gdo_agenda_at?: string | null; last_inbound_at?: string | null;
+      bot_scheduled_at?: string | null; ai_paused_at?: string | null; gdo_appuntamento_at?: string | null; gdo_agenda_at?: string | null; last_inbound_at?: string | null;
       lancio_slug?: string | null; lancio_fase?: string | null;
     } | null;
     crmLeadIdPrima = erroreConv ? undefined : (riga?.crm_lead_id ?? null);
+    // Chat con APPUNTAMENTO del bot su un altro lead: il lead nuovo non si attacca qui, torna
+    // subito al CRM (vedi `restituisciPerChatConAppuntamento`). Prima di ogni scrittura.
+    if (restituisciPerChatConAppuntamento({
+      crmLeadIdPrima,
+      crmLeadIdNuovo: args.crmLeadId ?? null,
+      botOutcome: riga?.bot_outcome ?? null,
+    })) {
+      const leadIdAppuntamento = crmLeadIdPrima as string;
+      const appuntamento = riga?.bot_scheduled_at ?? null;
+      await supabase.from('event_log').insert({
+        type: 'fenice_enroll_rifiuto_chat_con_appuntamento',
+        payload: {
+          phone: args.phone, conversationId, crmLeadId: args.crmLeadId ?? null, crmFunnel: args.crmFunnel ?? null,
+          leadIdAppuntamento, appuntamento, aiStatus: riga?.ai_status ?? null, funnelChat: riga?.crm_funnel ?? null,
+        } as never,
+        message: `[bot-fissatore] conv ${conversationId}: APPUNTAMENTO del lead ${leadIdAppuntamento}, lead nuovo ${args.crmLeadId} non preso (chat_con_appuntamento): torna ai GDO`,
+        level: 'info',
+      });
+      return { ok: true, conversationId, rifiuto: { motivo: MOTIVO_CHAT_CON_APPUNTAMENTO, leadIdAppuntamento, appuntamento } };
+    }
     azzeraEsito = !erroreConv && azzeraEsitoPerLeadNuovo({
       crmLeadIdPrima: riga?.crm_lead_id ?? null,
       crmLeadIdNuovo: args.crmLeadId ?? null,
