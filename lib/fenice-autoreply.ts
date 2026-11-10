@@ -42,7 +42,7 @@ import { leggiHoldoutGdo, braccioHoldout, segnaBraccioHoldout } from './holdout-
 import { alertUnaVolta } from './alert-una-volta';
 import type { LancioInfo } from './lancio-crm';
 import { mittenteDiConversazione } from './mittente';
-import { brochureContextNote, professioniContextNote, professioniVince, richiestaSchedaFuoriFunnel, schedaDaInviare, schedaSubito } from './professioni-nota';
+import { brochureContextNote, ingressoProfessioni, professioniContextNote, professioniVince, richiestaSchedaFuoriFunnel, schedaDaInviare, schedaSubito } from './professioni-nota';
 import { isSlugProfessione, PROVENIENZA_PROFESSIONI } from './professioni';
 import { blackFridayContextNote, blackFridayVince, funnelBlackFridayAttivo, haAperturaSbagliata, isMarkerBlackFriday, leggiSettingsBlackFriday, PROVENIENZA_BLACK_FRIDAY, EVENTO_BF_SU_APPUNTAMENTO, type SettingsBlackFriday } from './black-friday';
 import {
@@ -1214,8 +1214,14 @@ export async function drainMarioReplies(
       // quando la chiede, la scheda parte PRIMA della risposta di Mario, una volta sola
       // (CAS su `scheda_inviata_at` in `inviaScheda`). La nota poi gli dice che e' gia' sopra.
       const idxTurno = nextUnansweredInboundIndex(rows);
+      // Chat PROFESSIONI nata da AC (campagna brochure, PO 10/11/2026): niente frase del
+      // link, il PDF l'ha chiesto nel form e parte alla prima risposta.
+      const ingressoProf = ingressoProfessioni({
+        crmFunnel: crmFunnelRiga,
+        testiInbound: rows.filter((m) => m.direction === 'in').map((m) => m.body),
+      });
       const slugSubito = schedaSubito({
-        vinceProfessioni, professione, schedaInviataAt,
+        vinceProfessioni, professione, schedaInviataAt, ingresso: ingressoProf,
         testiTurno: idxTurno >= 0 ? rows.slice(idxTurno).filter((m) => m.direction === 'in').map((m) => m.body ?? '') : [],
       });
       let schedaAppenaInviata = false;
@@ -1255,7 +1261,7 @@ export async function drainMarioReplies(
           }), notaPrimo].filter(Boolean).join('\n\n')
         : null;
       const notaProfessioni = vinceProfessioni
-        ? [professioniContextNote(isSlugProfessione(professione) ? professione : null, { schedaInviata: !!schedaInviataAt, appenaInviata: schedaAppenaInviata }), notaPrimo].filter(Boolean).join('\n\n')
+        ? [professioniContextNote(isSlugProfessione(professione) ? professione : null, { schedaInviata: !!schedaInviataAt, appenaInviata: schedaAppenaInviata, ingresso: ingressoProf }), notaPrimo].filter(Boolean).join('\n\n')
         : null;
       // Brochure su richiesta fuori dal funnel Professioni (PO 28/10/2026): solo se il lead
       // la chiede (in questo turno o, pendente, poco prima), mai nel postino ne' nel lancio.

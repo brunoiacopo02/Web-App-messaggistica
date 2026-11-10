@@ -1,4 +1,5 @@
 import { LANCIO_SLUG } from './lancio-fase';
+import { isSlugProfessione, type SlugProfessione } from './professioni';
 
 export interface BotIntakePayload {
   leadId: string;
@@ -39,6 +40,12 @@ export interface BotIntakePayload {
    * alla pari i lead della coda fra quei numeri. Vedi lib/scelta-mittente.ts.
    */
   codaMarketing?: boolean;
+  /**
+   * Corso del funnel PROFESSIONI quando il CRM lo conosce (PO 10/11/2026): i lead AC
+   * della campagna brochure lo portano nell'utm_content. Solo uno slug noto vale;
+   * assente o sconosciuto = Mario chiede il corso.
+   */
+  professione?: SlugProfessione | null;
 }
 
 /** Come e' arrivato il lead del lancio: dalla lista AC 132 o dal pulsante della live. */
@@ -205,6 +212,9 @@ export function parseIntakePayload(
       numeroBot: o.numeroBot === 2 ? 2 : 1,
       // Solo `true` vale: assente o sporco = lead ordinario.
       codaMarketing: o.codaMarketing === true,
+      // Solo uno slug dei sei corsi: qualunque altra cosa = corso non noto (campo assente).
+      ...(typeof o.professione === 'string' && isSlugProfessione(o.professione.trim())
+        ? { professione: o.professione.trim() as SlugProfessione } : {}),
     },
   };
 }

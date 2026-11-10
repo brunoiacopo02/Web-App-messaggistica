@@ -120,6 +120,7 @@ export async function POST(req: NextRequest) {
       lancio: p.lancio ?? null,
       riscaldamento: p.riscaldamento === true,
       numeroBot: p.numeroBot === 2 ? 2 : 1,
+      professione: p.professione ?? null,
     }));
     await supabase.from('event_log').insert({
       type: 'bot_intake',

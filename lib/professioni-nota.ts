@@ -12,7 +12,7 @@ import { oraAppuntamento } from './gdo-context-note';
  */
 export function professioniContextNote(
   slug: SlugProfessione | null,
-  opts?: { schedaInviata?: boolean; appenaInviata?: boolean },
+  opts?: { schedaInviata?: boolean; appenaInviata?: boolean; ingresso?: IngressoProfessioni },
 ): string {
   const corso = slug
     ? `Il corso che ha scelto e' ${nomeProfessione(slug)}.`
@@ -21,7 +21,9 @@ export function professioniContextNote(
   const inviata = !!(opts?.schedaInviata || opts?.appenaInviata);
   const flusso = 'Poi segui il flusso normale (situazione, famiglia, motivazioni, pitch con i prezzi, call, Noemi).';
   return [
-    'CONTESTO FUNNEL PROFESSIONI: questo lead ci ha scritto per primo dalla pagina delle professioni e ha chiesto la scheda del corso.',
+    opts?.ingresso === 'inserzione'
+      ? "CONTESTO FUNNEL PROFESSIONI: questo lead ha lasciato i suoi contatti dall'inserzione della brochure gratuita e ha chiesto la scheda del corso. Il primo messaggio gliel'abbiamo mandato noi."
+      : 'CONTESTO FUNNEL PROFESSIONI: questo lead ci ha scritto per primo dalla pagina delle professioni e ha chiesto la scheda del corso.',
     corso,
     ...(opts?.appenaInviata && slug
       ? [`LA SCHEDA GLI E' APPENA ARRIVATA: e' partita in automatico qui sopra, prima del tuo messaggio (il PDF con "Ecco la scheda del corso di ${nomeProfessione(slug)} 👇"). Non dire che gliela mandi e non ripetere "ecco la scheda": in mezza riga digli di darci un'occhiata con calma e passa subito alla prima domanda per capire la sua situazione. ${flusso}`]
@@ -36,6 +38,18 @@ export function professioniContextNote(
     `SE RIMANDA LA CALL PER GUARDARE PRIMA LA SCHEDA: prendi un impegno sul quando: deve averla vista entro domani, ci vogliono due minuti. Il quando lo dice lui (regola "PRIMA GUARDO IL CORSO").${inviata ? '' : ` Se non l'ha ancora ricevuta, mandala col tag ${tag}.`}`,
     "LA SCHEDA ESISTE SEMPRE: non dire mai che non c'e' o che non abbiamo una scheda, una brochure o un pdf da mandare.",
   ].join('\n');
+}
+
+/**
+ * Da dove e' entrata la chat del funnel: 'link' = ci ha scritto lei con la frase della
+ * pagina; 'inserzione' = lead AC della campagna brochure (funnel PROFESSIONI dal CRM, la
+ * frase del link non c'e' mai stata), il primo messaggio e' nostro (PO 10/11/2026).
+ */
+export type IngressoProfessioni = 'link' | 'inserzione';
+
+export function ingressoProfessioni(i: { crmFunnel: string | null; testiInbound: readonly (string | null)[] }): IngressoProfessioni {
+  if ((i.crmFunnel ?? '').trim().toUpperCase() !== PROVENIENZA_PROFESSIONI) return 'link';
+  return i.testiInbound.some((t) => isMarkerProfessioni(t)) ? 'link' : 'inserzione';
 }
 
 export function schedaDaInviare(i: {
@@ -135,8 +149,13 @@ export function schedaSubito(i: {
   professione: string | null;
   schedaInviataAt: string | null;
   testiTurno: readonly string[];
+  /** 'inserzione' = chat PROFESSIONI nata da AC: la scheda l'ha chiesta nel form. */
+  ingresso?: IngressoProfessioni;
 }): SlugProfessione | null {
   if (!i.vinceProfessioni || i.schedaInviataAt || !isSlugProfessione(i.professione)) return null;
+  // Lead della campagna brochure (PO 10/11/2026): la scheda l'ha gia' chiesta nel form,
+  // quindi parte alla sua prima risposta, qualunque cosa scriva.
+  if (i.ingresso === 'inserzione' && i.testiTurno.length > 0) return i.professione;
   const vuole = i.testiTurno.some((t) => isMarkerProfessioni(t)) || chiedeLaScheda(i.testiTurno);
   return vuole ? i.professione : null;
 }

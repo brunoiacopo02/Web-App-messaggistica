@@ -25,6 +25,14 @@ export const PROFESSIONI: readonly Professione[] = [
 
 const MARKER = /scheda del corso/i;
 
+/**
+ * La chat e' arrivata dal CRM col funnel PROFESSIONI: lead delle inserzioni della brochure
+ * su ActiveCampaign (PO 10/11/2026), che il primo messaggio lo ricevono da noi.
+ */
+export function isCrmFunnelProfessioni(f: string | null | undefined): boolean {
+  return (f ?? '').trim().toUpperCase() === PROVENIENZA_PROFESSIONI;
+}
+
 export function isMarkerProfessioni(t: string | null | undefined): boolean {
   return MARKER.test(t ?? '');
 }

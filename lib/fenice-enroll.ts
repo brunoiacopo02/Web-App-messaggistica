@@ -19,6 +19,7 @@ import { aperturaBlackFridayText, isCrmFunnelBlackFriday, MARKER_TESTO_APERTURA_
 import { aperturaBlackFriday } from './black-friday-apertura';
 import { HANDOFF_VERGINI, HANDOFF_CRM_NON_DEL_BOT } from './lancio-vergini';
 import { lancioInCorso } from './lancio-fase';
+import { isCrmFunnelProfessioni, type SlugProfessione } from './professioni';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -37,6 +38,8 @@ export type EnrollArgs = {
   /** Nel contratto v1.7. Dal 26/09/2026 il bot ignora questo campo per scegliere il
    *  mittente: decide `scegliMittenteNuovo` (lib/scelta-mittente.ts) guardando i tetti. */
   numeroBot?: 1 | 2;
+  /** Corso del funnel PROFESSIONI noto al CRM (utm_content della campagna brochure). */
+  professione?: SlugProfessione | null;
 };
 
 export type EnrollResult = {
@@ -315,8 +318,13 @@ export async function enrollLeadIntoMario(
   // numero HIGH meno carico senza tetto giornaliero. Le aperture A/B per funnel
   // parlerebbero di 10 ore, Telegram o simulatore: promesse sbagliate per questi lead.
   const blackFriday = isCrmFunnelBlackFriday(args.crmFunnel);
+  // Lead PROFESSIONI dalle inserzioni della brochure su AC (PO 10/11/2026): stessa apertura
+  // neutra del Black Friday, mai quella del Telegram o delle 10 ore (11 lead su 32 non
+  // hanno avuto il PDF). La scheda parte alla prima risposta (`schedaSubito`). Tetti dei
+  // numeri invariati: niente `senzaTettiSoloHigh`, che resta solo del BF.
+  const aperturaNeutra = blackFriday || isCrmFunnelProfessioni(args.crmFunnel);
   const scelta = await scegliMittenteNuovo(supabase, {
-    templateSids: blackFriday ? [templateSid] : sidAperturaMario(),
+    templateSids: aperturaNeutra ? [templateSid] : sidAperturaMario(),
     chiave: args.phone,
     crmLeadId: args.crmLeadId ?? null,
     includiPrimario: true,
@@ -543,6 +551,8 @@ export async function enrollLeadIntoMario(
     // Stessa regola del ramo guardia qui sopra. `crm_lead_id` invece resta come prima:
     // e' proprio il campo che questo arruolamento porta.
     ...(args.crmFunnel ? { crm_funnel: args.crmFunnel } : {}),
+    // Corso noto al CRM (campagna brochure): la scheda giusta parte alla prima risposta.
+    ...(args.professione ? { professione: args.professione } : {}),
     // Lead nuovo del CRM su una chat che aveva l'esito di un altro lead: senza azzerarlo
     // il cron richiude la chat come gia' esitata e il lead nuovo resta senza esito.
     ...(azzeraEsito ? ESITO_AZZERATO : {}),
@@ -661,7 +671,7 @@ export async function enrollLeadIntoMario(
     sendLabel = 'Apertura Black Friday';
     variables = { '1': templateName(firstName) };
     bodyOverride = aperturaBlackFridayText(templateName(firstName));
-  } else if (process.env.NEW_OPENING_ENABLED === '1' && !blackFriday) {
+  } else if (process.env.NEW_OPENING_ENABLED === '1' && !aperturaNeutra) {
     const funnel = normalizeFunnel(args.crmFunnel);
     const ways = openingWaysFor(funnel, (k) => Boolean(process.env[k]));
     const variant = variantIndexFor(conversationId, ways);

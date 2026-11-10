@@ -440,6 +440,35 @@ describe('enrollLeadIntoMario — selezione apertura per-funnel A/B (NEW_OPENING
   });
 });
 
+describe('enrollLeadIntoMario — lead PROFESSIONI dalla campagna brochure su AC (PO 10/11/2026)', () => {
+  it('apertura neutra legacy anche con NEW_OPENING_ENABLED, mai quella del Telegram', async () => {
+    vi.stubEnv('NEW_OPENING_ENABLED', '1');
+    vi.stubEnv('OPENING_SID_T1', 'HX_T1');
+    vi.stubEnv('OPENING_SID_T2', 'HX_T2');
+    vi.stubEnv('OPENING_SID_C1', 'HX_C1');
+    vi.stubEnv('OPENING_SID_C2', 'HX_C2');
+    const { supabase, calls } = makeSupabase();
+    const res = await enrollLeadIntoMario(supabase, {
+      phone: '+393331234567', firstName: 'Ana Padilla', crmFunnel: 'PROFESSIONI', crmLeadId: 'L1', professione: 'social_media_manager',
+    });
+    expect(res).toMatchObject({ ok: true, conversationId: 42 });
+    const call = vi.mocked(sendTemplateAndLog).mock.calls[0];
+    expect(call[3]).toBe('HX_OPENING');
+    expect(call[4]).toBe('Fenice apertura');
+    // Il numero si sceglie fra quelli che spediscono il neutro, coi tetti di sempre.
+    const sm = vi.mocked(scegliMittenteNuovo).mock.calls[0][1];
+    expect(sm.templateSids).toEqual(['HX_OPENING']);
+    expect(sm.senzaTettiSoloHigh).toBe(false);
+    // Il corso del CRM finisce sulla chat: la scheda giusta parte alla prima risposta.
+    expect(calls.updates.some((u) => u.professione === 'social_media_manager' && u.crm_funnel === 'PROFESSIONI')).toBe(true);
+  });
+  it('senza corso dal CRM la chat non scrive professione (Mario lo chiede)', async () => {
+    const { supabase, calls } = makeSupabase();
+    await enrollLeadIntoMario(supabase, { phone: '+393331234567', firstName: 'Giulia', crmFunnel: 'PROFESSIONI', crmLeadId: 'L2' });
+    expect(calls.updates.some((u) => 'professione' in u)).toBe(false);
+  });
+});
+
 describe('enrollGdoLeadAsPostino — arruolamento in modalità postino', () => {
   const PAYLOAD = {
     phone: '+393331234567',

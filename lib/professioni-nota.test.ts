@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { brochureContextNote, chiedeLaScheda, FINESTRA_RICHIESTA_SCHEDA, professioniContextNote, professioniVince, richiestaSchedaFuoriFunnel, schedaDaInviare, schedaSubito } from './professioni-nota';
+import { brochureContextNote, chiedeLaScheda, ingressoProfessioni, FINESTRA_RICHIESTA_SCHEDA, professioniContextNote, professioniVince, richiestaSchedaFuoriFunnel, schedaDaInviare, schedaSubito } from './professioni-nota';
 
 describe('professioniContextNote', () => {
   it('scheda non ancora partita: nomina il corso, il tag e il ripiego col video', () => {
@@ -218,5 +218,33 @@ describe('brochureContextNote', () => {
     expect(n).toContain('sopra in chat');
     expect(n).toContain('Non rimandarla');
     expect(n).not.toContain('<slug>');
+  });
+});
+
+describe('lead PROFESSIONI dalle inserzioni della brochure su AC (PO 10/11/2026)', () => {
+  const base = { vinceProfessioni: true, professione: 'social_media_manager' as string | null, schedaInviataAt: null as string | null, testiTurno: ['Ciao, si'], ingresso: 'inserzione' as const };
+  it('la scheda parte alla prima risposta, qualunque cosa scriva', () => {
+    expect(schedaSubito(base)).toBe('social_media_manager');
+    expect(schedaSubito({ ...base, testiTurno: ['lavoro in un negozio'] })).toBe('social_media_manager');
+  });
+  it('mai due volte, mai senza turno, mai fuori dal funnel, mai senza corso (Mario lo chiede)', () => {
+    expect(schedaSubito({ ...base, schedaInviataAt: '2026-11-10T10:00:00Z' })).toBeNull();
+    expect(schedaSubito({ ...base, testiTurno: [] })).toBeNull();
+    expect(schedaSubito({ ...base, vinceProfessioni: false })).toBeNull();
+    expect(schedaSubito({ ...base, professione: null })).toBeNull();
+  });
+  it('ingresso: inserzione solo col funnel PROFESSIONI e senza la frase del link', () => {
+    expect(ingressoProfessioni({ crmFunnel: 'PROFESSIONI', testiInbound: ['ciao'] })).toBe('inserzione');
+    expect(ingressoProfessioni({ crmFunnel: 'professioni ', testiInbound: [] })).toBe('inserzione');
+    expect(ingressoProfessioni({ crmFunnel: 'PROFESSIONI', testiInbound: ['Ciao, sono interessato alla professione di Copywriter e vorrei ricevere la scheda del corso'] })).toBe('link');
+    expect(ingressoProfessioni({ crmFunnel: 'TELEGRAM', testiInbound: ['ciao'] })).toBe('link');
+    expect(ingressoProfessioni({ crmFunnel: null, testiInbound: [] })).toBe('link');
+  });
+  it('la nota non dice che ci ha scritto lui dalla pagina', () => {
+    const n = professioniContextNote(null, { ingresso: 'inserzione' });
+    expect(n).toContain("inserzione della brochure gratuita");
+    expect(n).not.toContain('ci ha scritto per primo');
+    expect(n).toContain('[SCHEDA:<slug>]');
+    expect(professioniContextNote(null)).toContain('ci ha scritto per primo');
   });
 });

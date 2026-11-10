@@ -5,6 +5,7 @@ import { normalizeFunnel, variantIndexFor, openingEnvKey, openingBody, openingWa
 import { firstNameOf, templateName } from './name';
 import { aperturaBlackFridayText, isCrmFunnelBlackFriday } from './black-friday';
 import { aperturaBlackFriday } from './black-friday-apertura';
+import { isCrmFunnelProfessioni } from './professioni';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -115,7 +116,8 @@ export async function inviaAperturaMario(
   }
   // Black Friday dalle inserzioni (PO 07/11/2026): l'apertura neutra legacy, mai quelle
   // per funnel (10 ore / Telegram / simulatore). Vedi fenice-enroll.ts.
-  if (process.env.NEW_OPENING_ENABLED === '1' && !isCrmFunnelBlackFriday(a.funnel)) {
+  // Professioni dalle inserzioni della brochure (PO 10/11/2026): la stessa neutra.
+  if (process.env.NEW_OPENING_ENABLED === '1' && !isCrmFunnelBlackFriday(a.funnel) && !isCrmFunnelProfessioni(a.funnel)) {
     const funnel = normalizeFunnel(a.funnel);
     const ways = openingWaysFor(funnel, (k) => Boolean(process.env[k]));
     const variant = variantIndexFor(a.conversationId, ways);

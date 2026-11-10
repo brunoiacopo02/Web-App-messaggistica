@@ -16,6 +16,14 @@ describe('isoWithOffset', () => {
 });
 
 describe('parseIntakePayload', () => {
+  it('professione: solo uno slug dei sei corsi (PO 10/11/2026)', () => {
+    const b0 = { leadId: 'L', phone: '+393331234567', companyId: 'fenice' };
+    expect(parseIntakePayload({ ...b0, professione: 'social_media_manager' })).toMatchObject({ ok: true, value: { professione: 'social_media_manager' } });
+    const smm = parseIntakePayload({ ...b0, professione: 'smm' });
+    expect(smm.ok && smm.value.professione).toBeFalsy();
+    const nulla = parseIntakePayload(b0);
+    expect(nulla.ok && 'professione' in nulla.value).toBe(false);
+  });
   it('codaMarketing: solo true vale (PO 29/10/2026)', () => {
     const b = { leadId: 'u1', phone: '3331234567', companyId: 'fenice' };
     expect(parseIntakePayload({ ...b, codaMarketing: true })).toMatchObject({ ok: true, value: { codaMarketing: true } });
