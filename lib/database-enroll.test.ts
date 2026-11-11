@@ -55,7 +55,7 @@ function mondo(o: Partial<Mondo> = {}) {
     chatDelNumero: async () => { chiamate.chatDelNumero++; return m.chat; },
     statoChat: async () => (m.stato === null ? null : {
       waNumber: N0047, ultimoMessaggioMs: m.nowMs - 40 * 24 * 3600_000, pausata: false, chatGdo: false, lancioInCorso: false,
-      botOutcome: 'NON_RISPOSTO', botOutcomeMs: m.nowMs - 40 * 24 * 3600_000, optOut: false, senzaWhatsapp: false, ...(m.stato ?? {}),
+      botOutcome: 'NON_RISPOSTO', botOutcomeMs: m.nowMs - 40 * 24 * 3600_000, optOut: false, senzaWhatsapp: false, haRisposto: true, ...(m.stato ?? {}),
     }),
     contaRiapertureOggi: async () => m.riaperteOggi ?? 0,
     contaDatabaseOggi: async (numero) => {
@@ -500,10 +500,21 @@ describe("riapertura di una chat ferma: la strada principale per i lead di datab
     }
   });
 
+  it("solo_chi_ha_risposto: la chat di chi non ci ha mai scritto non si riapre", async () => {
+    const no = mondo({ chat: VECCHIA, settings: { ...ACCESO, solo_chi_ha_risposto: true }, stato: { haRisposto: false } });
+    expect(await enroll(no.deps)).toMatchObject({ tipo: 'rifiuto', motivo: 'database_chat_esistente', dettaglio: 'mai_risposto' });
+    expect(no.chiamate.invia).toHaveLength(0);
+    const si = mondo({ chat: VECCHIA, settings: { ...ACCESO, solo_chi_ha_risposto: true }, stato: { haRisposto: true } });
+    expect(await enroll(si.deps)).toMatchObject({ tipo: 'aperto' });
+    // Senza l'opzione la chat senza risposta si riapre (scelta di Bruno).
+    const senza = mondo({ chat: VECCHIA, settings: ACCESO, stato: { haRisposto: false } });
+    expect(await enroll(senza.deps)).toMatchObject({ tipo: 'aperto' });
+  });
+
   it("regola pura: un APPUNTAMENTO del bot recente tiene la chat viva; vecchio no", () => {
     const s = {
       waNumber: N0047, ultimoMessaggioMs: ADESSO - 40 * GIORNO, pausata: false, chatGdo: false, lancioInCorso: false,
-      botOutcome: 'APPUNTAMENTO', botOutcomeMs: ADESSO - 3 * GIORNO, optOut: false, senzaWhatsapp: false,
+      botOutcome: 'APPUNTAMENTO', botOutcomeMs: ADESSO - 3 * GIORNO, optOut: false, senzaWhatsapp: false, haRisposto: false,
     };
     expect(motivoChatNonRiapribile(s, { nowMs: ADESSO, giorni: 14 })).toBe('chat_attiva');
     expect(motivoChatNonRiapribile({ ...s, botOutcomeMs: ADESSO - 40 * GIORNO }, { nowMs: ADESSO, giorni: 14 })).toBeNull();

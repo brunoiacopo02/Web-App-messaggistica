@@ -153,7 +153,7 @@ export async function enrollDatabaseLead(
     if (isChatDatabase(chat.crmFunnel)) return definitivo('gia_aperta_dal_database');
     const stato = await deps.statoChat(chat.conversationId);
     if (stato === null) return nonAperto('lettura_chat_fallita');
-    const perche = motivoChatNonRiapribile(stato, { nowMs, giorni: settings.riprendiChatDopoGiorni });
+    const perche = motivoChatNonRiapribile(stato, { nowMs, giorni: settings.riprendiChatDopoGiorni, soloChiHaRisposto: settings.soloChiHaRisposto });
     if (perche === 'chat_attiva') {
       await deps.log('database_intake_rifiutato', 'info',
         { ...base, motivo: 'database_chat_attiva', conversationId: chat.conversationId, ultimoMessaggioMs: stato.ultimoMessaggioMs },
@@ -351,6 +351,8 @@ export function depsDatabase(supabase: Supa): DepsDatabase {
         if (opt.error) return null;
         const morto = await supabase.from('messages').select('id').eq('conversation_id', conversationId).eq('twilio_error_code', 63024).limit(1);
         if (morto.error) return null;
+        const risposto = await supabase.from('messages').select('id').eq('conversation_id', conversationId).eq('direction', 'in').limit(1);
+        if (risposto.error) return null;
         const ms = (v: string | null | undefined) => (v ? Date.parse(v) : null);
         const ultimoAt = ((ultimo.data ?? []) as { created_at: string }[])[0]?.created_at ?? null;
         return {
@@ -363,6 +365,7 @@ export function depsDatabase(supabase: Supa): DepsDatabase {
           botOutcomeMs: ms(conv.bot_outcome_at),
           optOut: (opt.data ?? []).length > 0,
           senzaWhatsapp: (morto.data ?? []).length > 0,
+          haRisposto: (risposto.data ?? []).length > 0,
         };
       } catch {
         return null;

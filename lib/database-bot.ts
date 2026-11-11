@@ -128,11 +128,18 @@ export type SettingsDatabase = {
   riapertureMaxGiorno: number | null;
   /** `varianti_riapertura`: le varianti ammesse sulle chat riaperte (es. solo la piu' neutra). Assente = le stesse. */
   variantiRiapertura: VarianteDatabase[] | null;
+  /**
+   * `solo_chi_ha_risposto: true`: si riaprono solo le chat in cui il lead ci ha scritto
+   * almeno una volta. Riscrivere a freddo a chi non ha MAI risposto e' lo schema che ha
+   * portato lo 0047 a LOW (fine ottobre). Assente = tutte.
+   */
+  soloChiHaRisposto: boolean;
 };
 
 export const SETTINGS_DATABASE_SPENTO: SettingsDatabase = {
   attivo: false, tettoGiorno: TETTO_GIORNO_DEFAULT, tettoNumero: TETTO_NUMERO_DEFAULT, varianti: [...VARIANTI_DATABASE],
   fuoriTetto: false, numeri: null, riprendiChatDopoGiorni: null, riapertureMaxGiorno: null, variantiRiapertura: null,
+  soloChiHaRisposto: false,
 };
 
 /** Solo le cifre del numero: `whatsapp:+39 352...` e `39352...` sono lo stesso numero. */
@@ -178,6 +185,7 @@ export function parseSettingsDatabase(raw: unknown): SettingsDatabase {
     variantiRiapertura: Array.isArray(o.varianti_riapertura)
       ? VARIANTI_DATABASE.filter((v) => (o.varianti_riapertura as unknown[]).some((x) => typeof x === 'string' && x.trim().toLowerCase() === v))
       : null,
+    soloChiHaRisposto: o.solo_chi_ha_risposto === true,
   };
 }
 
@@ -203,11 +211,14 @@ export type StatoChatEsistente = {
   optOut: boolean;
   /** Un invio della chat e' morto con 63024 (numero senza WhatsApp). */
   senzaWhatsapp: boolean;
+  /** Il lead ci ha scritto almeno una volta in questa chat. */
+  haRisposto: boolean;
 };
 
 /** `chat_attiva` si puo' riprovare piu' avanti; tutti gli altri sono definitivi. */
 export type MotivoNonRiapribile =
-  | 'chat_attiva' | 'pausa_manuale' | 'opt_out' | 'senza_whatsapp' | 'lancio_in_corso' | 'chat_gdo' | 'scartata_dal_bot';
+  | 'chat_attiva' | 'pausa_manuale' | 'opt_out' | 'senza_whatsapp' | 'lancio_in_corso' | 'chat_gdo' | 'scartata_dal_bot'
+  | 'mai_risposto';
 
 /**
  * La chat esistente si puo' riaprire con l'apertura database? (regola a, PO 11/11/2026)
@@ -216,13 +227,16 @@ export type MotivoNonRiapribile =
  * GDO, non nel lancio, non scartata dal bot. Un APPUNTAMENTO del bot recente rientra in
  * "chat attiva" (esito datato meno di `giorni` fa).
  */
-export function motivoChatNonRiapribile(s: StatoChatEsistente, i: { nowMs: number; giorni: number }): MotivoNonRiapribile | null {
+export function motivoChatNonRiapribile(
+  s: StatoChatEsistente, i: { nowMs: number; giorni: number; soloChiHaRisposto?: boolean },
+): MotivoNonRiapribile | null {
   if (s.pausata) return 'pausa_manuale';
   if (s.optOut) return 'opt_out';
   if (s.senzaWhatsapp) return 'senza_whatsapp';
   if (s.chatGdo) return 'chat_gdo';
   if (s.lancioInCorso) return 'lancio_in_corso';
   if (s.botOutcome === 'DA_SCARTARE') return 'scartata_dal_bot';
+  if (i.soloChiHaRisposto && !s.haRisposto) return 'mai_risposto';
   const soglia = i.nowMs - i.giorni * 24 * 3600_000;
   if (s.ultimoMessaggioMs !== null && s.ultimoMessaggioMs > soglia) return 'chat_attiva';
   if (s.botOutcomeMs !== null && s.botOutcomeMs > soglia) return 'chat_attiva';
