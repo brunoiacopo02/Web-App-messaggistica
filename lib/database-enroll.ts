@@ -14,10 +14,11 @@
  *   con `database_chat_esistente` (definitivo: il CRM non lo ripropone). Unica eccezione
  *   il ritento dello stesso intake (stesso leadId su una chat database): `duplicato`;
  * - il numero: tutti i numeri del giro (secondari + primario) con tetto > 0 in
- *   `tetti_numeri`, sotto il loro tetto di aperture di oggi (nessun trabocco: se sono
- *   pieni il lead aspetta), sotto il tetto database per numero, e con almeno una variante
- *   approvata e spedibile dal loro account. Vince chi ha meno aperture database oggi, poi
- *   chi ha meno aperture in tutto;
+ *   `tetti_numeri` (0 o assente = a riposo), HIGH e fuori pausa per il cron qualita-numeri,
+ *   sotto il loro tetto di aperture di oggi (nessun trabocco: se sono pieni il lead
+ *   aspetta; `fuori_tetto` salta SOLO questo), sotto il tetto database per numero, e con
+ *   almeno una variante approvata e spedibile dal loro account. Vince chi ha meno aperture
+ *   database oggi, poi chi ha meno aperture in tutto;
  * - la variante: ripartizione stabile per id della chat fra quelle spedibili da QUEL numero.
  *
  * Fallisce chiuso: ogni lettura che non riesce vale "non si apre". Sbagliare in quella
@@ -29,7 +30,8 @@ import { findOrCreateLeadConversation, sendTemplateAndLog } from './messaging';
 import { inOpeningWindow } from './sequence';
 import { templateName } from './name';
 import { numeroPrimario, numeriSecondari } from './mittente';
-import { getTettiNumeri, tettoDi } from './tetti-numeri';
+import { getTettiNumeri, getStatoQualitaNumeri, eHighEFuoriPausa, tettoDi, type StatoQualitaLetto } from './tetti-numeri';
+import { giornoRoma } from './qualita-numeri';
 import { apertureMarioOggi, inizioGiornataRoma } from './bot2-tetto';
 import { credenzialiPerMittente, eSuAltroAccount } from './twilio-account';
 import { registraAperturaMario } from './scelta-mittente';
@@ -45,7 +47,8 @@ type Supa = ReturnType<typeof getSupabaseAdmin>;
 
 /**
  * `database_non_aperto` = riprova piu' tardi (vale per tutti: il CRM ferma il giro);
- * `database_chat_attiva` = questa chat e' viva, riprova questo lead piu' avanti (il giro continua);
+ * `database_chat_attiva` = problema di QUESTO lead (chat viva, quota riaperture piena, numero
+ *   della chat che oggi non apre): riprova lui piu' avanti, il giro continua;
  * `database_chat_esistente` = definitivo.
  */
 export type MotivoRifiutoDatabase = 'database_non_aperto' | 'database_chat_attiva' | 'database_chat_esistente';
@@ -53,7 +56,7 @@ export type MotivoRifiutoDatabase = 'database_non_aperto' | 'database_chat_attiv
 export type DettaglioNonAperto =
   | 'spento' | 'fuori_fascia' | 'nessuna_variante' | 'lettura_chat_fallita'
   | 'tetto_giorno' | 'conteggio_fallito' | 'tetti_illeggibili' | 'nessun_numero' | 'segno_non_scritto'
-  | 'tetto_riaperture' | 'numero_chat_non_disponibile';
+  | 'tetto_riaperture' | 'numero_chat_non_disponibile' | 'qualita_illeggibile';
 
 export type EsitoEnrollDatabase =
   | { tipo: 'rifiuto'; motivo: MotivoRifiutoDatabase; dettaglio: string; conversationId?: number }
@@ -80,6 +83,8 @@ export type DepsDatabase = {
   numeri: () => string[];
   /** null = illeggibili. */
   tetti: () => Promise<Map<string, number> | null>;
+  /** Stato del cron qualita-numeri (letture HIGH e pause). null = illeggibile. */
+  statoQualita: () => Promise<StatoQualitaLetto | null>;
   /** Aperture di Mario di oggi sul numero (il conteggio di `tetti_numeri`). null = fallito. */
   apertureOggi: (numero: string) => Promise<number | null>;
   credenzialiOk: (numero: string) => boolean;
@@ -187,22 +192,41 @@ export async function enrollDatabaseLead(
 
   const tetti = await deps.tetti();
   if (tetti === null) return nonAperto('tetti_illeggibili');
+  // Qualita' dei numeri (revisione 11/11/2026): un MARKETING a freddo solo da un numero
+  // HIGH e fuori pausa, con o senza `fuori_tetto`. Illeggibile = nessuno apre.
+  const qualita = await deps.statoQualita();
+  if (qualita === null) return nonAperto('qualita_illeggibile');
+  const oggiG = giornoRoma(new Date(nowMs));
+  const ieriG = giornoRoma(new Date(nowMs - 24 * 3600_000));
+
+  // Chat da riaprire il cui numero oggi non puo' aprire (pieno, a riposo, non HIGH, fuori
+  // dal giro): e' un problema di QUESTO lead, non di tutti. Risposta `database_chat_attiva`:
+  // il CRM salta solo lui e lo ripropone al giro dopo, senza segnarlo per sempre
+  // (revisione 11/11/2026: con `database_non_aperto` un lead fermava tutta la coda).
+  const numeroChatNonDisponibile = async (extra: Record<string, unknown>): Promise<EsitoEnrollDatabase> => {
+    await deps.log('database_intake_rifiutato', 'info',
+      { ...base, motivo: 'database_chat_attiva', dettaglio: 'numero_chat_non_disponibile', conversationId: riapri!.conversationId, numeroChat: riapri!.numero, ...extra },
+      `[database] lead ${args.crmLeadId}: il numero ${riapri!.numero} della chat ${riapri!.conversationId} oggi non apre, si riprova piu' avanti`);
+    return { tipo: 'rifiuto', motivo: 'database_chat_attiva', dettaglio: 'numero_chat_non_disponibile', conversationId: riapri!.conversationId };
+  };
 
   // I numeri sotto tutti e tre i tetti, dal meno carico.
   type Candidato = { numero: string; databaseOggi: number; apertureOggi: number; ordine: number };
   const candidati: Candidato[] = [];
   const scartati: { numero: string; motivo: string }[] = [];
-  // `numeri` nelle impostazioni restringe il giro; `fuori_tetto` salta `tetti_numeri`
-  // (PO 11/11/2026: "5 a numero, al di la' del tetto"). Resta sempre `tetto_numero`.
+  // `numeri` nelle impostazioni restringe il giro; `fuori_tetto` salta il tetto quotidiano
+  // di aperture di un numero SANO (PO 11/11/2026: "5 a numero, al di la' del tetto"). Non
+  // salta mai il riposo (tetto 0 o assente), la qualita' non HIGH, la pausa, `tetto_numero`.
   const giroCompleto = settings.numeri
     ? deps.numeri().filter((n) => settings.numeri!.includes(cifreNumero(n)))
     : deps.numeri();
   // Chat riaperta: solo il suo numero, e solo se e' nel giro.
   const giro = riapri ? giroCompleto.filter((n) => cifreNumero(n) === cifreNumero(riapri!.numero)) : giroCompleto;
-  if (riapri && giro.length === 0) return nonAperto('numero_chat_non_disponibile', { numeroChat: riapri.numero });
+  if (riapri && giro.length === 0) return numeroChatNonDisponibile({ scartati: [{ numero: riapri.numero, motivo: 'fuori_dal_giro' }] });
   for (const [ordine, numero] of giro.entries()) {
     const tettoNumero = tettoDi(tetti, numero);
-    if (!settings.fuoriTetto && tettoNumero <= 0) { scartati.push({ numero, motivo: 'tetto_zero' }); continue; }
+    if (tettoNumero <= 0) { scartati.push({ numero, motivo: 'tetto_zero' }); continue; }
+    if (!eHighEFuoriPausa(qualita, numero, oggiG, ieriG)) { scartati.push({ numero, motivo: 'non_high_o_in_pausa' }); continue; }
     if (!deps.credenzialiOk(numero)) { scartati.push({ numero, motivo: 'credenziali_mancanti' }); continue; }
     const aperture = await deps.apertureOggi(numero);
     if (aperture === null) { scartati.push({ numero, motivo: 'conteggio_fallito' }); continue; }
@@ -223,7 +247,7 @@ export async function enrollDatabaseLead(
     if (spedibili.length > 0) { scelto = { numero: c.numero, spedibili }; break; }
     scartati.push({ numero: c.numero, motivo: 'nessun_template_approvato' });
   }
-  if (!scelto) return nonAperto(riapri ? 'numero_chat_non_disponibile' : 'nessun_numero', { scartati });
+  if (!scelto) return riapri ? numeroChatNonDisponibile({ scartati }) : nonAperto('nessun_numero', { scartati });
 
   const nata = riapri
     ? { conversationId: riapri.conversationId, waNumber: scelto.numero }
@@ -396,6 +420,7 @@ export function depsDatabase(supabase: Supa): DepsDatabase {
       return [...numeriSecondari(), ...(primario ? [primario] : [])];
     },
     tetti: () => getTettiNumeri(supabase),
+    statoQualita: () => getStatoQualitaNumeri(supabase),
     apertureOggi: (numero) => apertureMarioOggi(supabase as never, numero),
     // Numero dichiarato su un altro account ma senza le sue credenziali: Twilio
     // risponderebbe 401 a ogni invio (stessa guardia di `scegliMittenteNuovo`).

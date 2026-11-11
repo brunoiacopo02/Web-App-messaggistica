@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { enrollDatabaseLead, chiaveTelefono, depsDatabase, type DepsDatabase, type ChatDelNumero } from './database-enroll';
 import { parseSettingsDatabase, scegliVariante, motivoChatNonRiapribile, FUNNEL_CHAT_DATABASE, EVENTO_DATABASE_APERTURA, type VarianteDatabase, type StatoChatEsistente } from './database-bot';
-import { parseTettiNumeri } from './tetti-numeri';
+import { parseTettiNumeri, type StatoQualitaLetto } from './tetti-numeri';
+import { giornoRoma } from './qualita-numeri';
 
 const P = 'whatsapp:+393520413199';
 const ELIXIR = 'whatsapp:+393522018718';
@@ -32,7 +33,18 @@ type Mondo = {
   /** Stato della chat esistente (riapertura). */
   stato?: Partial<StatoChatEsistente> | null;
   riaperteOggi?: number;
+  /** Stato del cron qualita-numeri; assente = tutti HIGH oggi e nessuna pausa. */
+  qualita?: StatoQualitaLetto | null;
 };
+
+/** Stato qualita' con la lettura di oggi per ogni numero (default HIGH). */
+function qualitaOggi(nowMs: number, letture: Record<string, string> = {}, pause: Record<string, unknown> = {}): StatoQualitaLetto {
+  const oggi = giornoRoma(new Date(nowMs));
+  const storico: Record<string, Record<string, string>> = {};
+  for (const n of [ELIXIR, N8061, N0047, P]) storico[n.replace('whatsapp:', '')] = { [oggi]: letture[n] ?? 'HIGH' };
+  return { storico, pause };
+}
+const senzaPrefisso = (n: string) => n.replace('whatsapp:', '');
 
 function mondo(o: Partial<Mondo> = {}) {
   const m: Mondo = {
@@ -64,6 +76,7 @@ function mondo(o: Partial<Mondo> = {}) {
     },
     numeri: () => [ELIXIR, N8061, N0047, P],
     tetti: async () => (m.tetti ? parseTettiNumeri(m.tetti) : null),
+    statoQualita: async () => (m.qualita === undefined ? qualitaOggi(m.nowMs) : m.qualita),
     apertureOggi: async (numero) => (numero in m.aperture ? m.aperture[numero] : 0),
     credenzialiOk: (numero) => !(m.senzaCredenziali ?? []).includes(numero),
     approvato: async (sid, numero) => {
@@ -365,12 +378,53 @@ describe("numero normalizzato (PO 11/11/2026)", () => {
 });
 
 describe("fuori tetto e numeri espliciti (PO 11/11/2026: 5 a numero, al di la' del tetto)", () => {
-  it('fuori_tetto: un numero pieno o senza voce in tetti_numeri apre lo stesso, fino a tetto_numero', async () => {
+  it('fuori_tetto: un numero sano pieno apre lo stesso, fino a tetto_numero; il primario senza voce no', async () => {
     // Tutti i numeri pieni e il primario senza voce: dentro i tetti nessuno aprirebbe.
     const base = { aperture: { [ELIXIR]: 70, [N8061]: 70, [N0047]: 70 }, tetti: { [ELIXIR]: 70, [N8061]: 70, [N0047]: 70 } };
     expect(await enroll(mondo(base).deps)).toMatchObject({ tipo: 'rifiuto', dettaglio: 'nessun_numero' });
     const { deps } = mondo({ ...base, settings: { attivo: true, fuori_tetto: true, tetto_numero: 5 } });
-    expect(await enroll(deps)).toMatchObject({ tipo: 'aperto' });
+    const r = await enroll(deps);
+    expect(r).toMatchObject({ tipo: 'aperto' });
+    expect(r.tipo === 'aperto' ? r.numero : null).not.toBe(P);
+  });
+
+  // Revisione 11/11/2026: `fuori_tetto` vale solo come "oltre il tetto quotidiano di un
+  // numero sano". Col codice di prima questi numeri aprivano lo stesso.
+  const FUORI = { attivo: true, fuori_tetto: true, tetto_numero: 5 };
+  const PIENI = { [ELIXIR]: 70, [N8061]: 70, [N0047]: 70, [P]: 15 };
+
+  it('fuori_tetto non usa un numero a riposo (tetto 0 o assente in tetti_numeri)', async () => {
+    const { deps, chiamate } = mondo({ settings: FUORI, tetti: { [ELIXIR]: 0 } });
+    expect(await enroll(deps)).toMatchObject({ tipo: 'rifiuto', motivo: 'database_non_aperto', dettaglio: 'nessun_numero' });
+    expect(chiamate.creaChat).toHaveLength(0);
+    expect(chiamate.invia).toHaveLength(0);
+  });
+
+  it('fuori_tetto non usa un numero in pausa qualita', async () => {
+    const tre = Object.fromEntries([ELIXIR, N8061, P].map((n) => [senzaPrefisso(n), { dal: 'ieri' }]));
+    const { deps } = mondo({ settings: FUORI, aperture: PIENI, qualita: qualitaOggi(ADESSO, {}, tre) });
+    expect(await enroll(deps)).toMatchObject({ tipo: 'aperto', numero: N0047 });
+    const tutti = Object.fromEntries([ELIXIR, N8061, N0047, P].map((n) => [senzaPrefisso(n), true]));
+    const x = mondo({ settings: FUORI, aperture: PIENI, qualita: qualitaOggi(ADESSO, {}, tutti) });
+    expect(await enroll(x.deps)).toMatchObject({ tipo: 'rifiuto', dettaglio: 'nessun_numero' });
+    expect(x.chiamate.invia).toHaveLength(0);
+  });
+
+  it('fuori_tetto non usa un numero non HIGH (MEDIUM, LOW, lettura mancante)', async () => {
+    const qualita = qualitaOggi(ADESSO, { [ELIXIR]: 'MEDIUM', [N8061]: 'LOW', [P]: 'UNKNOWN' });
+    const { deps } = mondo({ settings: FUORI, aperture: PIENI, qualita });
+    expect(await enroll(deps)).toMatchObject({ tipo: 'aperto', numero: N0047 });
+    const nessuno = mondo({ settings: FUORI, aperture: PIENI, qualita: { storico: {}, pause: {} } });
+    expect(await enroll(nessuno.deps)).toMatchObject({ tipo: 'rifiuto', dettaglio: 'nessun_numero' });
+    expect(nessuno.chiamate.invia).toHaveLength(0);
+  });
+
+  it('anche dentro i tetti un numero non HIGH o in pausa non apre; stato illeggibile = nessuno apre', async () => {
+    const qualita = qualitaOggi(ADESSO, { [ELIXIR]: 'MEDIUM', [N8061]: 'MEDIUM', [P]: 'LOW' });
+    expect(await enroll(mondo({ qualita }).deps)).toMatchObject({ tipo: 'aperto', numero: N0047 });
+    const rotto = mondo({ qualita: null });
+    expect(await enroll(rotto.deps)).toMatchObject({ tipo: 'rifiuto', motivo: 'database_non_aperto', dettaglio: 'qualita_illeggibile' });
+    expect(rotto.chiamate.creaChat).toHaveLength(0);
   });
 
   it('fuori_tetto non scavalca tetto_numero', async () => {
@@ -380,13 +434,13 @@ describe("fuori tetto e numeri espliciti (PO 11/11/2026: 5 a numero, al di la' d
     expect(chiamate.invia).toHaveLength(0);
   });
 
-  it('30 lead, 5 a numero sui numeri elencati, il primario senza voce compreso', async () => {
+  it('30 lead, 5 a numero sui numeri elencati, anche se tutti pieni di aperture di Mario', async () => {
     const numeri = [ELIXIR, N8061, N0047, P];
     const oggi: Record<string, number> = {};
     let aperti = 0;
     for (let i = 0; i < 30; i++) {
       const { deps } = mondo({
-        prossimaConv: 70_000 + i, databaseOggi: { ...oggi }, tetti: { [ELIXIR]: 70 },
+        prossimaConv: 70_000 + i, databaseOggi: { ...oggi }, aperture: { [ELIXIR]: 70, [N8061]: 70, [N0047]: 70, [P]: 15 },
         settings: { attivo: true, fuori_tetto: true, tetto_numero: 5, tetto_giorno: 30, numeri: numeri.map((n) => n.replace('whatsapp:', '')) },
       });
       const r = await enroll(deps);
@@ -474,15 +528,37 @@ describe("riapertura di una chat ferma: la strada principale per i lead di datab
     expect(chiamate.invia).toHaveLength(0);
   });
 
-  it("il numero della chat e' pieno o fuori dal giro: non si sposta su un altro numero", async () => {
+  // Revisione 11/11/2026: il numero della chat non disponibile e' un problema di QUESTO
+  // lead. `database_chat_attiva` = il CRM salta solo lui (il giro continua) e lo ripropone;
+  // col vecchio `database_non_aperto` il CRM fermava tutta la coda.
+  const SALTA_SOLO_LUI = { tipo: 'rifiuto', motivo: 'database_chat_attiva', dettaglio: 'numero_chat_non_disponibile', conversationId: 900 };
+
+  it("il numero della chat e' pieno o fuori dal giro: non si sposta su un altro numero, si salta solo questo lead", async () => {
     const pieno = mondo({ chat: VECCHIA, settings: ACCESO, aperture: { [N0047]: 70 } });
-    expect(await enroll(pieno.deps)).toMatchObject({ tipo: 'rifiuto', dettaglio: 'numero_chat_non_disponibile' });
+    expect(await enroll(pieno.deps)).toEqual(SALTA_SOLO_LUI);
     expect(pieno.chiamate.invia).toHaveLength(0);
+    expect(pieno.chiamate.aggiorna).toHaveLength(0);
     const fuori = mondo({ chat: VECCHIA, settings: { ...ACCESO, numeri: ['393522018718'] } });
-    expect(await enroll(fuori.deps)).toMatchObject({ tipo: 'rifiuto', dettaglio: 'numero_chat_non_disponibile' });
-    // Con fuori_tetto il numero pieno apre lo stesso.
+    expect(await enroll(fuori.deps)).toEqual(SALTA_SOLO_LUI);
+    expect(fuori.chiamate.invia).toHaveLength(0);
+    // Con fuori_tetto il numero pieno (ma sano) apre lo stesso.
     const fuoriTetto = mondo({ chat: VECCHIA, settings: { ...ACCESO, fuori_tetto: true }, aperture: { [N0047]: 70 } });
     expect(await enroll(fuoriTetto.deps)).toMatchObject({ tipo: 'aperto', numero: N0047 });
+  });
+
+  it("riapertura con fuori_tetto: il numero della chat a riposo, in pausa o non HIGH non apre; si salta solo questo lead", async () => {
+    const F = { ...ACCESO, fuori_tetto: true };
+    const riposo = mondo({ chat: VECCHIA, settings: F, tetti: { [ELIXIR]: 70, [N0047]: 0 } });
+    expect(await enroll(riposo.deps)).toEqual(SALTA_SOLO_LUI);
+    const pausa = mondo({ chat: VECCHIA, settings: F, qualita: qualitaOggi(ADESSO, {}, { [senzaPrefisso(N0047)]: true }) });
+    expect(await enroll(pausa.deps)).toEqual(SALTA_SOLO_LUI);
+    const medium = mondo({ chat: VECCHIA, settings: F, qualita: qualitaOggi(ADESSO, { [N0047]: 'MEDIUM' }) });
+    expect(await enroll(medium.deps)).toEqual(SALTA_SOLO_LUI);
+    for (const x of [riposo, pausa, medium]) {
+      expect(x.chiamate.invia).toHaveLength(0);
+      expect(x.chiamate.aggiorna).toHaveLength(0);
+      expect(x.chiamate.registra).toHaveLength(0);
+    }
   });
 
   it("quota delle riaperture piena: questo lead aspetta, il giro continua; le chat nuove non contano", async () => {

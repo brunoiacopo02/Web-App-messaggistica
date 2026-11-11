@@ -30,7 +30,8 @@ type Motivo = 'telefono_non_valido' | 'arruolamento_fallito' | 'apertura_non_par
   // tardi (interruttore spento, tetti, nessun template approvato); `database_chat_esistente`
   // = il numero ha gia' una chat col bot, non si ripropone.
   | 'database_non_aperto' | 'database_chat_esistente'
-  // Chat ancora viva (o quota delle riaperture piena): riproporre questo lead piu' avanti.
+  // Chat ancora viva, quota delle riaperture piena o numero della chat che oggi non apre:
+  // riproporre SOLO questo lead piu' avanti (il giro continua).
   | 'database_chat_attiva';
 
 /**
