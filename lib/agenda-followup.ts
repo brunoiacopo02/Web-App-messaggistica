@@ -1,5 +1,6 @@
 import type { getSupabaseAdmin } from './supabase/admin';
 import { sendFreeText } from './twilio';
+import { isChatDatabase } from './database-bot';
 import { romeHour } from './rome-time';
 import { firstNameOf } from './name';
 import { FILTRO_FUORI_LANCIO } from './lancio-fase';
@@ -188,7 +189,7 @@ export async function runAgendaFollowups(
   // 2. Stato delle conversazioni candidate.
   const { data: convs, error: errConvs } = await supabase
     .from('conversations')
-    .select('id, lead_id, crm_lead_id, ai_status, bot_outcome, bot_followups_sent, gdo_agenda_at, wa_number, last_inbound_number')
+    .select('id, lead_id, crm_lead_id, crm_funnel, ai_status, bot_outcome, bot_followups_sent, gdo_agenda_at, wa_number, last_inbound_number')
     .in('id', convIds)
     // Lancio Web Dev AI: il link di prenotazione in chat non e' suo, ma l'intake del
     // lancio azzera `bot_outcome` e rimette `ai_status='active'` — cioe' scioglie la
@@ -220,6 +221,9 @@ export async function runAgendaFollowups(
   for (const c of (convs ?? []) as any[]) {
     const agendaSentAtMs = agendaAtByConv.get(c.id);
     if (agendaSentAtMs === undefined) { skipped++; continue; }
+    // Lead di database (PO 10/11/2026): un solo messaggio automatico, l'apertura. Niente
+    // sollecito dell'agenda: risponde Marta quando scrive lui.
+    if (isChatDatabase(c.crm_funnel)) { skipped++; continue; }
     const lead = leadById.get(c.lead_id);
     const phone = lead?.phone_e164 as string | undefined;
 

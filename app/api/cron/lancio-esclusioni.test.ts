@@ -511,6 +511,14 @@ describe('agenda-followup: nessun sollecito free-text sulle chat del lancio', ()
     ];
     expect((await runAgendaFollowups(finto as never, ADESSO)).sent).toBe(0);
   });
+
+  it("lead di database (PO 10/11/2026): niente sollecito dell'agenda, la chat ordinaria si'", async () => {
+    stato.righe.conversations = [conv(1, { ...CHIUSO, crm_funnel: 'DATABASE BOT' }), conv(2, CHIUSO)];
+    const res = await runAgendaFollowups(finto as never, ADESSO);
+    expect(sendFreeText).toHaveBeenCalledTimes(1);
+    expect((sendFreeText.mock.calls[0][0] as { to: string }).to).toBe(tel(2));
+    expect(res.sent).toBe(1);
+  });
 });
 
 // ─────────────────────────── una query che fallisce si deve vedere ───────────────────────────

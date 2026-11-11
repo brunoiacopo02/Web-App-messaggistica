@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { enrollDatabaseLead, type DepsDatabase, type ChatDelNumero } from './database-enroll';
+import { enrollDatabaseLead, chiaveTelefono, depsDatabase, type DepsDatabase, type ChatDelNumero } from './database-enroll';
 import { parseSettingsDatabase, scegliVariante, FUNNEL_CHAT_DATABASE, EVENTO_DATABASE_APERTURA, type VarianteDatabase } from './database-bot';
 import { parseTettiNumeri } from './tetti-numeri';
 
@@ -27,6 +27,8 @@ type Mondo = {
   /** Il numero con cui la chat risulta nata (default: quello chiesto). */
   waNumberAllaNascita?: string;
   invioOk: boolean;
+  /** L'update del segno sulla chat fallisce. */
+  segnoRotto?: boolean;
 };
 
 function mondo(o: Partial<Mondo> = {}) {
@@ -42,7 +44,8 @@ function mondo(o: Partial<Mondo> = {}) {
     ...o,
   };
   const eventi: { type: string; level: string; payload: any }[] = [];
-  const chiamate = { creaChat: [] as any[], invia: [] as any[], aggiorna: [] as any[], registra: [] as any[], approvato: [] as [string, string][], leggiSettings: 0, chatDelNumero: 0 };
+  const ordine: string[] = [];
+  const chiamate = { ordine, creaChat: [] as any[], invia: [] as any[], aggiorna: [] as any[], registra: [] as any[], approvato: [] as [string, string][], leggiSettings: 0, chatDelNumero: 0 };
   const deps: DepsDatabase = {
     nowMs: () => m.nowMs,
     leggiSettings: async () => { chiamate.leggiSettings++; return parseSettingsDatabase(m.settings); },
@@ -60,9 +63,9 @@ function mondo(o: Partial<Mondo> = {}) {
       return m.approvati ? (m.approvati[numero] ?? []).includes(sid) : true;
     },
     creaChat: async (a) => { chiamate.creaChat.push(a); return { conversationId: m.prossimaConv, waNumber: m.waNumberAllaNascita ?? a.mittente }; },
-    registraApertura: async (a) => { chiamate.registra.push(a); },
-    invia: async (a) => { chiamate.invia.push(a); return m.invioOk ? { ok: true, sid: 'SM1' } : { ok: false, error: 'boom' }; },
-    aggiornaChat: async (id, patch) => { chiamate.aggiorna.push({ id, patch }); },
+    registraApertura: async (a) => { ordine.push('registra'); chiamate.registra.push(a); },
+    invia: async (a) => { ordine.push('invia'); chiamate.invia.push(a); return m.invioOk ? { ok: true, sid: 'SM1' } : { ok: false, error: 'boom' }; },
+    aggiornaChat: async (id, patch) => { ordine.push('segno'); chiamate.aggiorna.push({ id, patch }); return !m.segnoRotto; },
     log: async (type, level, payload) => { eventi.push({ type, level, payload }); },
   };
   return { m, deps, eventi, chiamate };
@@ -280,5 +283,75 @@ describe('fascia e configurazione', () => {
     const { deps, chiamate } = mondo();
     expect(await enroll(deps)).toMatchObject({ tipo: 'rifiuto', dettaglio: 'nessuna_variante' });
     expect(chiamate.creaChat).toHaveLength(0);
+  });
+});
+
+describe("segno sulla chat prima dell'invio (revisione 11/11/2026)", () => {
+  it("la chat e' firmata (crm_lead_id, DATABASE BOT, ai_owner) PRIMA dell'apertura", async () => {
+    const { deps, chiamate } = mondo();
+    await enroll(deps);
+    expect(chiamate.ordine).toEqual(['segno', 'registra', 'invia']);
+  });
+
+  it("se il segno non si scrive non parte niente e il CRM riprova piu' tardi", async () => {
+    const { deps, chiamate } = mondo({ segnoRotto: true });
+    expect(await enroll(deps)).toMatchObject({ tipo: 'rifiuto', motivo: 'database_non_aperto', dettaglio: 'segno_non_scritto' });
+    expect(chiamate.invia).toHaveLength(0);
+    expect(chiamate.registra).toHaveLength(0);
+  });
+});
+
+describe("numero normalizzato (PO 11/11/2026)", () => {
+  it("chiave: ultime 10 cifre, qualunque sia la scrittura", () => {
+    expect(chiaveTelefono('+393331234567')).toBe('3331234567');
+    expect(chiaveTelefono('333 123 4567')).toBe('3331234567');
+    expect(chiaveTelefono('0039 333-1234567')).toBe('3331234567');
+    expect(chiaveTelefono('12345')).toBeNull();
+  });
+
+  // Finto PostgREST: due schede del bot per la stessa persona, scritte diverse.
+  function supa(leadsDb: { id: number; phone_e164: string }[], convs: { id: number; lead_id: number; crm_lead_id: string | null; crm_funnel: string | null }[]) {
+    const filtri: string[] = [];
+    return {
+      filtri,
+      from(t: string) {
+        if (t === 'leads') {
+          const b: any = {
+            select: () => b,
+            like: (_c: string, pat: string) => { filtri.push(`like ${pat}`); b._rows = leadsDb.filter((l) => l.phone_e164.endsWith(pat.replace('%', ''))); return b; },
+            eq: (_c: string, v: string) => { filtri.push(`eq ${v}`); b._rows = leadsDb.filter((l) => l.phone_e164 === v); return b; },
+            limit: async () => ({ data: b._rows, error: null }),
+          };
+          return b;
+        }
+        const c: any = {
+          select: () => c,
+          in: (_c: string, ids: number[]) => { c._rows = convs.filter((x) => ids.includes(x.lead_id)); return c; },
+          order: () => c,
+          limit: async () => ({ data: c._rows, error: null }),
+        };
+        return c;
+      },
+    };
+  }
+
+  it("la chat esistente si trova anche se la scheda del bot ha il numero scritto in un altro modo", async () => {
+    const s = supa([{ id: 7, phone_e164: '+393331234567' }], [{ id: 70, lead_id: 7, crm_lead_id: 'altro', crm_funnel: 'TELEGRAM' }]);
+    const r = await depsDatabase(s as never).chatDelNumero('+39 333 1234567');
+    expect(s.filtri).toEqual(['like %3331234567']);
+    expect(r).toEqual({ esiste: true, conversationId: 70, crmLeadId: 'altro', crmFunnel: 'TELEGRAM' });
+  });
+
+  it("fra piu' chat della stessa persona vince quella del giro database (ritento riconoscibile)", async () => {
+    const s = supa(
+      [{ id: 7, phone_e164: '+393331234567' }, { id: 8, phone_e164: '+3903331234567' }],
+      [{ id: 70, lead_id: 7, crm_lead_id: 'altro', crm_funnel: 'TELEGRAM' }, { id: 80, lead_id: 8, crm_lead_id: 'lead-1', crm_funnel: FUNNEL_CHAT_DATABASE }],
+    );
+    expect(await depsDatabase(s as never).chatDelNumero('+393331234567')).toMatchObject({ conversationId: 80, crmLeadId: 'lead-1' });
+  });
+
+  it("nessuna scheda con quelle cifre: nessuna chat", async () => {
+    const s = supa([{ id: 7, phone_e164: '+393339999999' }], []);
+    expect(await depsDatabase(s as never).chatDelNumero('+393331234567')).toEqual({ esiste: false });
   });
 });

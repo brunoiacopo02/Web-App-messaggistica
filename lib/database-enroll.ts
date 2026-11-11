@@ -47,7 +47,7 @@ export type MotivoRifiutoDatabase = 'database_non_aperto' | 'database_chat_esist
 
 export type DettaglioNonAperto =
   | 'spento' | 'fuori_fascia' | 'nessuna_variante' | 'lettura_chat_fallita'
-  | 'tetto_giorno' | 'conteggio_fallito' | 'tetti_illeggibili' | 'nessun_numero';
+  | 'tetto_giorno' | 'conteggio_fallito' | 'tetti_illeggibili' | 'nessun_numero' | 'segno_non_scritto';
 
 export type EsitoEnrollDatabase =
   | { tipo: 'rifiuto'; motivo: MotivoRifiutoDatabase; dettaglio: string; conversationId?: number }
@@ -80,7 +80,8 @@ export type DepsDatabase = {
   registraApertura: (a: { numero: string; conversationId: number; crmLeadId: string | null }) => Promise<void>;
   invia: (a: { conversationId: number; phone: string; sid: string; etichetta: string; from: string; nome: string; testo: string }) =>
     Promise<{ ok: boolean; sid?: string; error?: string }>;
-  aggiornaChat: (conversationId: number, patch: Record<string, unknown>) => Promise<void>;
+  /** false = l'update non e' andato: si scrive PRIMA dell'invio, quindi niente invio. */
+  aggiornaChat: (conversationId: number, patch: Record<string, unknown>) => Promise<boolean>;
   log: (type: string, level: 'info' | 'warn' | 'error', payload: Record<string, unknown>, message: string) => Promise<void>;
 };
 
@@ -185,18 +186,29 @@ export async function enrollDatabaseLead(
   // Prima dell'invio: cosi' l'apertura cade DENTRO la cronologia che Marta rilegge.
   const arruolatoAt = new Date(deps.nowMs()).toISOString();
 
-  // Conta nel tetto del numero come ogni altra apertura (`tetti_numeri`).
-  await deps.registraApertura({ numero: scelto.numero, conversationId, crmLeadId: args.crmLeadId });
-  const res = await deps.invia({
-    conversationId, phone: args.phone, sid, etichetta: `Apertura database ${variante}`,
-    from: scelto.numero, nome, testo: testoAperturaDatabase(variante, nome),
-  });
-  await deps.aggiornaChat(conversationId, {
+  // Il segno sulla chat PRIMA dell'invio (revisione 11/11/2026): una chat con l'apertura
+  // partita ma senza segno verrebbe adottata dal webhook come lead entrante (flusso
+  // ordinario, touch, GDO), e un ritento del CRM la leggerebbe come "chat di un altro".
+  // Le strade che mandano messaggi saltano gia' le chat database, quindi firmarla prima
+  // non fa partire niente. Se l'update non va, non si manda niente.
+  const firmata = await deps.aggiornaChat(conversationId, {
     ai_owner: 'mario',
     ai_status: 'active',
     ai_started_at: arruolatoAt,
     crm_lead_id: args.crmLeadId,
     crm_funnel: FUNNEL_CHAT_DATABASE,
+  });
+  if (!firmata) {
+    await deps.log('database_intake_rifiutato', 'error', { ...base, motivo: 'database_non_aperto', dettaglio: 'segno_non_scritto', conversationId },
+      `[database] lead ${args.crmLeadId}: segno sulla chat ${conversationId} non scritto, nessun invio`);
+    return { tipo: 'rifiuto', motivo: 'database_non_aperto', dettaglio: 'segno_non_scritto', conversationId };
+  }
+
+  // Conta nel tetto del numero come ogni altra apertura (`tetti_numeri`).
+  await deps.registraApertura({ numero: scelto.numero, conversationId, crmLeadId: args.crmLeadId });
+  const res = await deps.invia({
+    conversationId, phone: args.phone, sid, etichetta: `Apertura database ${variante}`,
+    from: scelto.numero, nome, testo: testoAperturaDatabase(variante, nome),
   });
   // Una riga per apertura tentata: e' il conteggio dei due tetti database e la base delle
   // statistiche per variante. Conta anche l'invio fallito (il tetto sbaglia per eccesso).
@@ -207,6 +219,12 @@ export async function enrollDatabaseLead(
       : `[database] conv ${conversationId}: apertura ${variante} da ${scelto.numero} NON partita (${res.error ?? 'errore'})`);
 
   return { tipo: 'aperto', ok: res.ok, conversationId, variante, numero: scelto.numero, sid: res.sid, error: res.error };
+}
+
+/** Ultime 10 cifre del numero (la chiave persona del CRM); null se ne ha meno di 9. */
+export function chiaveTelefono(phone: string | null | undefined): string | null {
+  const d = (phone ?? '').replace(/\D/g, '').slice(-10);
+  return d.length >= 9 ? d : null;
 }
 
 export async function leggiSettingsDatabase(supabase: Supa): Promise<SettingsDatabase> {
@@ -225,14 +243,23 @@ export function depsDatabase(supabase: Supa): DepsDatabase {
     leggiSettings: () => leggiSettingsDatabase(supabase),
     chatDelNumero: async (phone) => {
       try {
-        const { data: lead, error } = await supabase.from('leads').select('id').eq('phone_e164', phone).maybeSingle();
+        // Lo stesso numero scritto in un altro modo (PO 11/11/2026: `+39 333...` contro
+        // `333...`): si cercano tutte le schede con le stesse ultime 10 cifre, e basta una
+        // chat su una qualunque di loro. Le schede del bot sono in E.164, quindi il
+        // suffisso basta. Il ritento dello stesso intake resta riconoscibile (stesso leadId).
+        const chiave = chiaveTelefono(phone);
+        const q = supabase.from('leads').select('id');
+        const { data: righe, error } = chiave ? await q.like('phone_e164', `%${chiave}`).limit(20) : await q.eq('phone_e164', phone).limit(20);
         if (error) return null;
-        if (!lead) return { esiste: false };
-        const { data: conv, error: e2 } = await supabase
-          .from('conversations').select('id, crm_lead_id, crm_funnel').eq('lead_id', (lead as { id: number }).id).maybeSingle();
+        const ids = ((righe ?? []) as { id: number }[]).map((r) => r.id);
+        if (ids.length === 0) return { esiste: false };
+        const { data: convs, error: e2 } = await supabase
+          .from('conversations').select('id, crm_lead_id, crm_funnel').in('lead_id', ids).order('id', { ascending: true }).limit(20);
         if (e2) return null;
-        if (!conv) return { esiste: false };
-        const c = conv as { id: number; crm_lead_id?: string | null; crm_funnel?: string | null };
+        const lista = (convs ?? []) as { id: number; crm_lead_id?: string | null; crm_funnel?: string | null }[];
+        if (lista.length === 0) return { esiste: false };
+        // Prima la chat del giro database (e' quella che rende riconoscibile il ritento).
+        const c = lista.find((x) => isChatDatabase(x.crm_funnel)) ?? lista[0];
         return { esiste: true, conversationId: c.id, crmLeadId: c.crm_lead_id ?? null, crmFunnel: c.crm_funnel ?? null };
       } catch {
         return null;
@@ -268,7 +295,12 @@ export function depsDatabase(supabase: Supa): DepsDatabase {
     registraApertura: (a) => registraAperturaMario(supabase, a),
     invia: (a) => sendTemplateAndLog(supabase, a.conversationId, a.phone, a.sid, a.etichetta, a.from, { '1': a.nome }, a.testo),
     aggiornaChat: async (conversationId, patch) => {
-      await supabase.from('conversations').update(patch as never).eq('id', conversationId);
+      try {
+        const { error } = await supabase.from('conversations').update(patch as never).eq('id', conversationId);
+        return !error;
+      } catch {
+        return false;
+      }
     },
     log: async (type, level, payload, message) => {
       await supabase.from('event_log').insert({ type, level, payload: payload as never, message }).then(() => undefined, () => undefined);
