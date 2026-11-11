@@ -35,7 +35,7 @@ import { credenzialiPerMittente, eSuAltroAccount } from './twilio-account';
 import { registraAperturaMario } from './scelta-mittente';
 import { templateApprovatoSu } from './black-friday-apertura';
 import {
-  EVENTO_DATABASE_APERTURA, FUNNEL_CHAT_DATABASE, SETTING_DATABASE_BOT, isChatDatabase,
+  EVENTO_DATABASE_APERTURA, FUNNEL_CHAT_DATABASE, SETTING_DATABASE_BOT, cifreNumero, isChatDatabase,
   parseSettingsDatabase, scegliVariante, sidDatabaseDaEnv, testoAperturaDatabase, variantiInRotazione,
   type SettingsDatabase, type VarianteDatabase,
 } from './database-bot';
@@ -143,13 +143,18 @@ export async function enrollDatabaseLead(
   type Candidato = { numero: string; databaseOggi: number; apertureOggi: number; ordine: number };
   const candidati: Candidato[] = [];
   const scartati: { numero: string; motivo: string }[] = [];
-  for (const [ordine, numero] of deps.numeri().entries()) {
+  // `numeri` nelle impostazioni restringe il giro; `fuori_tetto` salta `tetti_numeri`
+  // (PO 11/11/2026: "5 a numero, al di la' del tetto"). Resta sempre `tetto_numero`.
+  const giro = settings.numeri
+    ? deps.numeri().filter((n) => settings.numeri!.includes(cifreNumero(n)))
+    : deps.numeri();
+  for (const [ordine, numero] of giro.entries()) {
     const tettoNumero = tettoDi(tetti, numero);
-    if (tettoNumero <= 0) { scartati.push({ numero, motivo: 'tetto_zero' }); continue; }
+    if (!settings.fuoriTetto && tettoNumero <= 0) { scartati.push({ numero, motivo: 'tetto_zero' }); continue; }
     if (!deps.credenzialiOk(numero)) { scartati.push({ numero, motivo: 'credenziali_mancanti' }); continue; }
     const aperture = await deps.apertureOggi(numero);
     if (aperture === null) { scartati.push({ numero, motivo: 'conteggio_fallito' }); continue; }
-    if (aperture >= tettoNumero) { scartati.push({ numero, motivo: 'tetto_raggiunto' }); continue; }
+    if (!settings.fuoriTetto && aperture >= tettoNumero) { scartati.push({ numero, motivo: 'tetto_raggiunto' }); continue; }
     const db = await deps.contaDatabaseOggi(numero);
     if (db === null) { scartati.push({ numero, motivo: 'conteggio_fallito' }); continue; }
     if (db >= settings.tettoNumero) { scartati.push({ numero, motivo: 'tetto_database_numero' }); continue; }

@@ -355,3 +355,48 @@ describe("numero normalizzato (PO 11/11/2026)", () => {
     expect(await depsDatabase(s as never).chatDelNumero('+393331234567')).toEqual({ esiste: false });
   });
 });
+
+describe("fuori tetto e numeri espliciti (PO 11/11/2026: 5 a numero, al di la' del tetto)", () => {
+  it('fuori_tetto: un numero pieno o senza voce in tetti_numeri apre lo stesso, fino a tetto_numero', async () => {
+    // Tutti i numeri pieni e il primario senza voce: dentro i tetti nessuno aprirebbe.
+    const base = { aperture: { [ELIXIR]: 70, [N8061]: 70, [N0047]: 70 }, tetti: { [ELIXIR]: 70, [N8061]: 70, [N0047]: 70 } };
+    expect(await enroll(mondo(base).deps)).toMatchObject({ tipo: 'rifiuto', dettaglio: 'nessun_numero' });
+    const { deps } = mondo({ ...base, settings: { attivo: true, fuori_tetto: true, tetto_numero: 5 } });
+    expect(await enroll(deps)).toMatchObject({ tipo: 'aperto' });
+  });
+
+  it('fuori_tetto non scavalca tetto_numero', async () => {
+    const tutti5 = { [ELIXIR]: 5, [N8061]: 5, [N0047]: 5, [P]: 5 };
+    const { deps, chiamate } = mondo({ databaseOggi: tutti5, settings: { attivo: true, fuori_tetto: true, tetto_numero: 5, tetto_giorno: 30 } });
+    expect(await enroll(deps)).toMatchObject({ tipo: 'rifiuto', dettaglio: 'nessun_numero' });
+    expect(chiamate.invia).toHaveLength(0);
+  });
+
+  it('30 lead, 5 a numero sui numeri elencati, il primario senza voce compreso', async () => {
+    const numeri = [ELIXIR, N8061, N0047, P];
+    const oggi: Record<string, number> = {};
+    let aperti = 0;
+    for (let i = 0; i < 30; i++) {
+      const { deps } = mondo({
+        prossimaConv: 70_000 + i, databaseOggi: { ...oggi }, tetti: { [ELIXIR]: 70 },
+        settings: { attivo: true, fuori_tetto: true, tetto_numero: 5, tetto_giorno: 30, numeri: numeri.map((n) => n.replace('whatsapp:', '')) },
+      });
+      const r = await enroll(deps);
+      if (r.tipo === 'aperto') { aperti++; oggi[r.numero] = (oggi[r.numero] ?? 0) + 1; }
+    }
+    expect(aperti).toBe(20);
+    expect(Object.values(oggi)).toEqual([5, 5, 5, 5]);
+  });
+
+  it('numeri: solo quelli elencati; lista vuota = nessun numero', async () => {
+    const solo = mondo({ settings: { attivo: true, numeri: ['+393522070047'] } });
+    expect(await enroll(solo.deps)).toMatchObject({ tipo: 'aperto', numero: N0047 });
+    const vuota = mondo({ settings: { attivo: true, numeri: [] } });
+    expect(await enroll(vuota.deps)).toMatchObject({ tipo: 'rifiuto', dettaglio: 'nessun_numero' });
+  });
+
+  it('senza le due opzioni tutto come prima', () => {
+    expect(parseSettingsDatabase({ attivo: true })).toMatchObject({ fuoriTetto: false, numeri: null });
+    expect(parseSettingsDatabase({ attivo: true, fuori_tetto: 'si' }).fuoriTetto).toBe(false);
+  });
+});

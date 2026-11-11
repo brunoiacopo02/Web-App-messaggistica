@@ -106,11 +106,28 @@ export type SettingsDatabase = {
   tettoNumero: number;
   /** Le varianti accese, nell'ordine canonico. */
   varianti: VarianteDatabase[];
+  /**
+   * `fuori_tetto: true` (PO 11/11/2026, "5 a numero al di la' del tetto"): le aperture
+   * database non guardano `tetti_numeri` (ne' il tetto del numero ne' il suo 0): resta
+   * solo `tetto_numero`. Assente/falso = dentro i tetti come prima.
+   */
+  fuoriTetto: boolean;
+  /**
+   * `numeri`: elenco esplicito dei numeri da usare (cifre, con o senza `whatsapp:`/`+`),
+   * fra quelli del giro del bot. Assente = tutti i numeri del giro, come prima.
+   */
+  numeri: string[] | null;
 };
 
 export const SETTINGS_DATABASE_SPENTO: SettingsDatabase = {
   attivo: false, tettoGiorno: TETTO_GIORNO_DEFAULT, tettoNumero: TETTO_NUMERO_DEFAULT, varianti: [...VARIANTI_DATABASE],
+  fuoriTetto: false, numeri: null,
 };
+
+/** Solo le cifre del numero: `whatsapp:+39 352...` e `39352...` sono lo stesso numero. */
+export function cifreNumero(n: string | null | undefined): string {
+  return (n ?? '').replace(/\D/g, '');
+}
 
 function acceso(raw: unknown): boolean {
   if (raw === true) return true;
@@ -140,6 +157,11 @@ export function parseSettingsDatabase(raw: unknown): SettingsDatabase {
     tettoGiorno: tetto(o.tetto_giorno, TETTO_GIORNO_DEFAULT),
     tettoNumero: tetto(o.tetto_numero, TETTO_NUMERO_DEFAULT),
     varianti: scritte ? VARIANTI_DATABASE.filter((v) => scritte.includes(v)) : [...VARIANTI_DATABASE],
+    fuoriTetto: o.fuori_tetto === true,
+    // Lista presente ma vuota o tutta sporca = nessun numero (mai "tutti" per sbaglio).
+    numeri: Array.isArray(o.numeri)
+      ? o.numeri.map((n) => (typeof n === 'string' ? cifreNumero(n) : '')).filter((n) => n.length >= 8)
+      : null,
   };
 }
 
