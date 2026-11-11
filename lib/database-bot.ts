@@ -117,11 +117,22 @@ export type SettingsDatabase = {
    * fra quelli del giro del bot. Assente = tutti i numeri del giro, come prima.
    */
   numeri: string[] | null;
+  /**
+   * Riapertura di una chat VECCHIA (proposta PO 11/11/2026, regola a): `giorni_fermo`
+   * = da quanti giorni la chat deve essere ferma (nessun messaggio, ne' nostro ne' del lead)
+   * perche' l'apertura database possa partire su di lei. Assente = mai: una chat esistente
+   * resta un rifiuto definitivo, come prima.
+   */
+  riprendiChatDopoGiorni: number | null;
+  /** `riaperture_max_giorno`: quante di quelle aperture al giorno, dentro `tetto_giorno`. Assente = nessun limite in piu'. */
+  riapertureMaxGiorno: number | null;
+  /** `varianti_riapertura`: le varianti ammesse sulle chat riaperte (es. solo la piu' neutra). Assente = le stesse. */
+  variantiRiapertura: VarianteDatabase[] | null;
 };
 
 export const SETTINGS_DATABASE_SPENTO: SettingsDatabase = {
   attivo: false, tettoGiorno: TETTO_GIORNO_DEFAULT, tettoNumero: TETTO_NUMERO_DEFAULT, varianti: [...VARIANTI_DATABASE],
-  fuoriTetto: false, numeri: null,
+  fuoriTetto: false, numeri: null, riprendiChatDopoGiorni: null, riapertureMaxGiorno: null, variantiRiapertura: null,
 };
 
 /** Solo le cifre del numero: `whatsapp:+39 352...` e `39352...` sono lo stesso numero. */
@@ -162,7 +173,60 @@ export function parseSettingsDatabase(raw: unknown): SettingsDatabase {
     numeri: Array.isArray(o.numeri)
       ? o.numeri.map((n) => (typeof n === 'string' ? cifreNumero(n) : '')).filter((n) => n.length >= 8)
       : null,
+    riprendiChatDopoGiorni: interoOpzionale(o.giorni_fermo, 1, 365),
+    riapertureMaxGiorno: interoOpzionale(o.riaperture_max_giorno, 0, 1000),
+    variantiRiapertura: Array.isArray(o.varianti_riapertura)
+      ? VARIANTI_DATABASE.filter((v) => (o.varianti_riapertura as unknown[]).some((x) => typeof x === 'string' && x.trim().toLowerCase() === v))
+      : null,
   };
+}
+
+/** Un intero nell'intervallo, altrimenti null (= opzione assente: si resta come prima). */
+function interoOpzionale(raw: unknown, min: number, max: number): number | null {
+  const n = typeof raw === 'number' ? raw : typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN;
+  return Number.isInteger(n) && n >= min && n <= max ? n : null;
+}
+
+/** Lo stato di una chat esistente che serve a decidere se si puo' riaprire. */
+export type StatoChatEsistente = {
+  waNumber: string | null;
+  /** Ultimo messaggio della chat, nostro o del lead (ms). null = nessuno. */
+  ultimoMessaggioMs: number | null;
+  pausata: boolean;
+  /** La chat e' di un GDO (agenda/postino): non e' nostra. */
+  chatGdo: boolean;
+  /** Fase del lancio non terminale. */
+  lancioInCorso: boolean;
+  botOutcome: string | null;
+  botOutcomeMs: number | null;
+  /** Il lead ha chiesto di non essere contattato (STOP, "non mi interessa", "non scrivetemi"...). */
+  optOut: boolean;
+  /** Un invio della chat e' morto con 63024 (numero senza WhatsApp). */
+  senzaWhatsapp: boolean;
+};
+
+/** `chat_attiva` si puo' riprovare piu' avanti; tutti gli altri sono definitivi. */
+export type MotivoNonRiapribile =
+  | 'chat_attiva' | 'pausa_manuale' | 'opt_out' | 'senza_whatsapp' | 'lancio_in_corso' | 'chat_gdo' | 'scartata_dal_bot';
+
+/**
+ * La chat esistente si puo' riaprire con l'apertura database? (regola a, PO 11/11/2026)
+ * Ferma da almeno `giorni` (nessun messaggio, ne' nostro ne' del lead), nessun fermo
+ * manuale, nessuna richiesta di non essere contattato, numero con WhatsApp, non di un
+ * GDO, non nel lancio, non scartata dal bot. Un APPUNTAMENTO del bot recente rientra in
+ * "chat attiva" (esito datato meno di `giorni` fa).
+ */
+export function motivoChatNonRiapribile(s: StatoChatEsistente, i: { nowMs: number; giorni: number }): MotivoNonRiapribile | null {
+  if (s.pausata) return 'pausa_manuale';
+  if (s.optOut) return 'opt_out';
+  if (s.senzaWhatsapp) return 'senza_whatsapp';
+  if (s.chatGdo) return 'chat_gdo';
+  if (s.lancioInCorso) return 'lancio_in_corso';
+  if (s.botOutcome === 'DA_SCARTARE') return 'scartata_dal_bot';
+  const soglia = i.nowMs - i.giorni * 24 * 3600_000;
+  if (s.ultimoMessaggioMs !== null && s.ultimoMessaggioMs > soglia) return 'chat_attiva';
+  if (s.botOutcomeMs !== null && s.botOutcomeMs > soglia) return 'chat_attiva';
+  return null;
 }
 
 /**

@@ -29,7 +29,9 @@ type Motivo = 'telefono_non_valido' | 'arruolamento_fallito' | 'apertura_non_par
   // Lead di database (contratto v1.17): `database_non_aperto` = il CRM lo ripropone piu'
   // tardi (interruttore spento, tetti, nessun template approvato); `database_chat_esistente`
   // = il numero ha gia' una chat col bot, non si ripropone.
-  | 'database_non_aperto' | 'database_chat_esistente';
+  | 'database_non_aperto' | 'database_chat_esistente'
+  // Chat ancora viva (o quota delle riaperture piena): riproporre questo lead piu' avanti.
+  | 'database_chat_attiva';
 
 /**
  * Perché il soffitto sta a 600/minuto (dal 09/09/2026).
