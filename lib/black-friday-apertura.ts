@@ -19,10 +19,19 @@ const _approvato = new Map<string, { ok: boolean; at: number }>();
 export async function templateBfApprovatoSu(numero: string): Promise<{ ok: boolean; sid: string | null }> {
   const sid = process.env.BF_OPENING_TEMPLATE_SID?.trim() || null;
   if (!sid) return { ok: false, sid: null };
+  return { ok: await templateApprovatoSu(sid, numero), sid };
+}
+
+/**
+ * Questo template (SID dell'account principale) e' approvato da Meta sull'account del
+ * numero E il presidio lo lascia partire? La stessa verifica dell'apertura BF, per un SID
+ * qualunque: la usano anche le aperture dei lead di database (lib/database-enroll.ts).
+ */
+export async function templateApprovatoSu(sid: string, numero: string): Promise<boolean> {
   const tr = await traduciTemplate(sid, numero).catch(() => ({ sid, tradotto: false }));
-  if (!tr.tradotto) return { ok: false, sid };
+  if (!tr.tradotto) return false;
   const c = _approvato.get(tr.sid);
-  if (c && Date.now() - c.at < CACHE_MS) return { ok: c.ok, sid };
+  if (c && Date.now() - c.at < CACHE_MS) return c.ok;
   let ok = false;
   try {
     const cred = credenzialiPerMittente(numero);
@@ -40,7 +49,7 @@ export async function templateBfApprovatoSu(numero: string): Promise<{ ok: boole
     ok = false;
   }
   _approvato.set(tr.sid, { ok, at: Date.now() });
-  return { ok, sid };
+  return ok;
 }
 
 export async function leggiModoAperturaBf(supabase: Supa): Promise<string | null> {

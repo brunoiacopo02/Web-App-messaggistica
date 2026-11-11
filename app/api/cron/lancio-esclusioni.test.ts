@@ -610,3 +610,72 @@ describe("il log della query fallita non puo' peggiorare le cose", () => {
     expect(sendFreeText).not.toHaveBeenCalled();
   });
 });
+
+// ─────────────────────────── lead di database (PO 10/11/2026) ───────────────────────────
+// Un solo messaggio a persona: le chat col segno `crm_funnel = 'DATABASE BOT'` non ricevono
+// aperture differite, touch, solleciti o nudge, e non vengono riaperte con l'apertura di Mario.
+
+describe('lead di database: nessun messaggio automatico oltre l apertura', () => {
+  const DATABASE = { ...NIENTE_LANCIO, crm_funnel: 'DATABASE BOT' };
+  const conv = (id: number, extra: Riga): Riga => ({
+    id,
+    ai_status: 'active',
+    ai_started_at: new Date(ADESSO.getTime() - H).toISOString(),
+    ai_paused_at: null,
+    crm_lead_id: `crm-${id}`,
+    crm_funnel: null,
+    bot_outcome: null,
+    bot_followups_sent: 0,
+    gdo_agenda_at: null,
+    leads: leads(id),
+    ...extra,
+  });
+
+  beforeEach(() => {
+    process.env.SEQUENCE_ENABLED = '1';
+    process.env.SEQUENCE_TOUCH_ENABLED = '1';
+    process.env.FENICE_OPENING_TEMPLATE_SID = 'HXapertura';
+    delete process.env.NEW_OPENING_ENABLED;
+    for (const i of [1, 2, 3, 4]) process.env[`SEQ_TEMPLATE_SID_${i}`] = `HXseq${i}`;
+  });
+  afterEach(() => { delete process.env.SEQUENCE_TOUCH_ENABLED; });
+
+  it('sequence-touches: niente apertura di Mario a una chat database rimasta senza messaggio', async () => {
+    stato.righe.conversations = [conv(1, DATABASE), conv(2, NIENTE_LANCIO)];
+    stato.righe.messages = [];
+    await richiestaGet(sequenceTouches, '/api/cron/sequence-touches');
+    const destinatari = sendTemplate.mock.calls.map((c) => (c[0] as { to: string }).to);
+    expect(destinatari).toEqual([tel(2)]);
+  });
+
+  it('sequence-touches: niente nudge a chi ha risposto e poi e\' sparito', async () => {
+    // Ha risposto 21 ore fa, poi silenzio: per una chat ordinaria e' il momento del nudge.
+    const rispostaE = (id: number): Riga[] => [
+      { id: id * 10, conversation_id: id, direction: 'out', twilio_sid: 'SM', twilio_status: 'delivered', template_sid: 'HXqualcosa', is_template: true, created_at: new Date(ADESSO.getTime() - 23 * H).toISOString() },
+      { id: id * 10 + 1, conversation_id: id, direction: 'in', twilio_sid: null, twilio_status: null, template_sid: null, is_template: false, created_at: new Date(ADESSO.getTime() - 21 * H).toISOString() },
+    ];
+    const vecchia = { ai_started_at: new Date(ADESSO.getTime() - 24 * H).toISOString() };
+    stato.righe.conversations = [conv(1, { ...DATABASE, ...vecchia }), conv(2, { ...NIENTE_LANCIO, ...vecchia })];
+    stato.righe.messages = [...rispostaE(1), ...rispostaE(2)];
+    await richiestaGet(sequenceTouches, '/api/cron/sequence-touches');
+    const versoDatabase = [...sendFreeText.mock.calls, ...sendTemplate.mock.calls]
+      .map((c) => (c[0] as { to: string }).to).filter((t) => t === tel(1));
+    expect(versoDatabase).toEqual([]);
+  });
+
+  it('riapri-mute: una chat database muta non si riapre con l apertura di Mario', async () => {
+    const muta = (id: number, extra: Riga): Riga => ({
+      id, crm_lead_id: `crm-${id}`, crm_funnel: null, lead_id: id, ai_owner: 'mario',
+      ai_started_at: '2026-09-01T10:00:00Z', ai_status: 'active', bot_outcome: null, ...extra,
+    });
+    stato.righe.conversations = [muta(1, DATABASE), muta(2, NIENTE_LANCIO)];
+    stato.righe.messages = [1, 2].map((id) => ({ id, conversation_id: id, direction: 'out', twilio_sid: null }));
+    stato.righe.leads = [1, 2].map((id) => ({ id, phone_e164: tel(id), first_name: 'mario', email: null }));
+    await riapriMute({
+      headers: new Headers({ authorization: `Bearer ${SEGRETO}` }),
+      json: async () => ({ esegui: true, dal: '2026-08-24' }),
+    } as never);
+    const numeri = enrollLeadIntoMario.mock.calls.map((c) => (c[1] as { phone: string }).phone);
+    expect(numeri).toEqual([tel(2)]);
+  });
+});

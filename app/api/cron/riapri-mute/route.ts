@@ -4,6 +4,7 @@ import { enrollLeadIntoMario } from '@/lib/fenice-enroll';
 import { fetchAllRows } from '@/lib/supabase/paginate';
 import { FILTRO_FUORI_LANCIO } from '@/lib/lancio-fase';
 import { logCronQueryError } from '@/lib/cron-query-error';
+import { isChatDatabase } from '@/lib/database-bot';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -103,8 +104,11 @@ export async function POST(req: NextRequest) {
   }
 
   // Un lead gia' esitato non si riapre: e' stato chiuso per una ragione.
+  // Le chat dei lead di database restano fuori: `enrollLeadIntoMario` manderebbe l'apertura
+  // di Mario al posto di quella database, fuori dai suoi tetti.
   const mute = convs.filter((c: any) =>
-    tentato.has(c.id) && !partito.has(c.id) && !c.bot_outcome && c.lead_id && !giaRiagganciato.has(c.id));
+    tentato.has(c.id) && !partito.has(c.id) && !c.bot_outcome && c.lead_id && !giaRiagganciato.has(c.id)
+    && !isChatDatabase(c.crm_funnel));
 
   // Il numero del lead sta su `leads.phone_e164`, NON su `conversations.wa_number`:
   // quella colonna contiene il nostro mittente (whatsapp:+39352...), e usarla come

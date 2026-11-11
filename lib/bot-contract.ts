@@ -46,6 +46,13 @@ export interface BotIntakePayload {
    * assente o sconosciuto = Mario chiede il corso.
    */
   professione?: SlugProfessione | null;
+  /**
+   * Lead di DATABASE della coda marketing (contratto v1.17, PO 10/11/2026): un contatto
+   * vecchio che il marketing ha rimesso in coda. Il bot lo apre con un'apertura apposta
+   * (lib/database-bot.ts), un solo messaggio, e lo lavora da solo. Solo `true` vale;
+   * assente = lead ordinario, tutto come prima.
+   */
+  database?: boolean;
 }
 
 /** Come e' arrivato il lead del lancio: dalla lista AC 132 o dal pulsante della live. */
@@ -212,6 +219,8 @@ export function parseIntakePayload(
       numeroBot: o.numeroBot === 2 ? 2 : 1,
       // Solo `true` vale: assente o sporco = lead ordinario.
       codaMarketing: o.codaMarketing === true,
+      // Solo `true` vale, e il campo esiste solo allora: un payload senza resta identico.
+      ...(o.database === true ? { database: true } : {}),
       // Solo uno slug dei sei corsi: qualunque altra cosa = corso non noto (campo assente).
       ...(typeof o.professione === 'string' && isSlugProfessione(o.professione.trim())
         ? { professione: o.professione.trim() as SlugProfessione } : {}),

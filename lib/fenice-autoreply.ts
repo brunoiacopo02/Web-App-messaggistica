@@ -50,6 +50,8 @@ import {
   offertaBfEvergreenContextNote, offertaBfEvergreenVale, videoConferenzaInVsl, type SettingsOffertaBfEvergreen,
 } from './offerta-bf-evergreen';
 import { inviaScheda } from './scheda-invio';
+import { databaseContextNote, eNonMiInteressa, ENV_KEYS_DATABASE, isChatDatabase, varianteDellaChat } from './database-bot';
+import { congedoDatabase } from './database-congedo';
 import { fissatoIlDi } from './noemi-quando';
 import {
   dataCallDelBot,
@@ -255,6 +257,8 @@ export function martaSidsFromEnv(env: NodeJS.ProcessEnv = process.env): Set<stri
     'MARTA_SEQ_TEMPLATE_SID_1', 'MARTA_SEQ_TEMPLATE_SID_2',
     'MARTA_SEQ_TEMPLATE_SID_3', 'MARTA_SEQ_TEMPLATE_SID_4',
     'MARTA_REENGAGE_TEMPLATE_SID',
+    // Aperture dei lead di database (PO 10/11/2026): firmate Marta. Senza le env restano fuori.
+    ...ENV_KEYS_DATABASE,
   ];
   return new Set(keys.map((k) => env[k]).filter((v): v is string => !!v));
 }
@@ -562,6 +566,9 @@ export async function drainMarioReplies(
   // nota lo stesso (spec §2), e Mario chiede quale corso.
   const crmFunnelRiga = ((claimed as { crm_funnel?: string | null }).crm_funnel ?? null)?.trim().toUpperCase() ?? null;
   const funnelProfessioni = (claimed as { crm_funnel?: string | null }).crm_funnel === PROVENIENZA_PROFESSIONI;
+  // Lead di database ricontattato (PO 10/11/2026, lib/database-bot.ts): il segno lo scrive
+  // l'arruolamento database. Falso su ogni altra chat: niente di cio' che segue cambia.
+  const chatDatabase = isChatDatabase(crmFunnelRiga);
   // Black Friday: scadenza e posti, letti una volta per drain e solo sulle chat col segno.
   let settingsBlackFriday: SettingsBlackFriday | undefined;
   // Offerta BF ai lead evergreen (PO 10/11/2026): impostazioni e "gia' presentata", una
@@ -829,6 +836,17 @@ export async function drainMarioReplies(
       const inboundIdx = nextUnansweredInboundIndex(rows);
       let inboundBody = inboundIdx >= 0 ? (rows[inboundIdx].body ?? '') : '';
 
+      // Lead di database: il pulsante "Non mi interessa" dell'apertura. Una riga di congedo,
+      // DA_SCARTARE "non interessato" e la chat si chiude: non passa dal modello. Mai su una
+      // chat con un esito gia' in piedi o diventata di un GDO.
+      if (chatDatabase && !esitoInPiedi && !agendaGdo && eNonMiInteressa(inboundBody)) {
+        const congedo = await congedoDatabase(supabase, {
+          conversationId, phone, from, crmLeadId, variante: varianteDellaChat(rows),
+        });
+        if (congedo.chiusa) finalStatus = 'closed';
+        break;
+      }
+
       if (lancioInCorso(lancio)) {
         // Il turno del lancio dura 5-20 secondi (modello + CRM + Twilio) e scrive la sua
         // bolla alla fine: un messaggio del lead arrivato nel frattempo ("ok" e subito
@@ -992,8 +1010,12 @@ export async function drainMarioReplies(
       if (!altroFlussoEvergreen && !settingsOffertaEvergreen) {
         settingsOffertaEvergreen = await leggiSettingsOffertaBfEvergreen(supabase);
       }
+      // Lead di database aperto con la variante `bf`: l'apertura gli ha gia' nominato
+      // l'offerta, quindi i fatti del Black Friday gli servono anche se l'interruttore
+      // dell'evergreen e' spento. Date, scadenza e `BLACK_FRIDAY_FUNNEL=0` valgono lo stesso.
+      const varianteDatabase = chatDatabase ? varianteDellaChat(rows) : null;
       const attivaEvergreen = !altroFlussoEvergreen && !!settingsOffertaEvergreen && offertaBfEvergreenAttiva({
-        interruttore: settingsOffertaEvergreen.interruttore,
+        interruttore: varianteDatabase === 'bf' ? 'on' : settingsOffertaEvergreen.interruttore,
         env: process.env.BLACK_FRIDAY_FUNNEL,
         nowMs: Date.now(),
         scadenzaAtMs: settingsOffertaEvergreen.scadenza?.atMs ?? null,
@@ -1377,6 +1399,11 @@ export async function drainMarioReplies(
             callGiaFissata: esitoInPiedi === 'APPUNTAMENTO',
           })
         : null;
+      // Lead di database: lead vecchio, ricontattato da noi. Solo nel ramo generale qui
+      // sotto (una chat database diventata postino, lancio o Black Friday segue quel flusso).
+      const notaDatabase = chatDatabase
+        ? databaseContextNote({ variante: varianteDatabase, offertaBfNelPrompt: !!notaOffertaEvergreen })
+        : null;
       if (notaOffertaEvergreen && !offertaEvergreenGiaPresentata) {
         await alertUnaVolta(supabase, {
           type: EVENTO_OFFERTA_BF_EVERGREEN,
@@ -1407,8 +1434,8 @@ export async function drainMarioReplies(
             ? { contextNote: [notaBlackFriday, notaBrochure, notaSpostaBot].filter(Boolean).join('\n\n') }
             : notaProfessioni
             ? { contextNote: [notaProfessioni, notaOffertaEvergreen, notaSpostaBot].filter(Boolean).join('\n\n') }
-            : notaPrimo || notaBrochure || notaOffertaEvergreen || notaSpostaBot
-              ? { contextNote: [notaPrimo, notaBrochure, notaOffertaEvergreen, notaSpostaBot].filter(Boolean).join('\n\n') }
+            : notaPrimo || notaDatabase || notaBrochure || notaOffertaEvergreen || notaSpostaBot
+              ? { contextNote: [notaPrimo, notaDatabase, notaBrochure, notaOffertaEvergreen, notaSpostaBot].filter(Boolean).join('\n\n') }
               : {}),
       });
 

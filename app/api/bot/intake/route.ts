@@ -4,6 +4,7 @@ import { verifySignature } from '@/lib/bot-hmac';
 import { parseIntakePayload } from '@/lib/bot-contract';
 import { enrollLeadIntoMario } from '@/lib/fenice-enroll';
 import { conCodaMarketing } from '@/lib/scelta-mittente';
+import { enrollDatabaseLead } from '@/lib/database-enroll';
 import { toE164 } from '@/lib/phone';
 import { LANCIO_SLUG } from '@/lib/lancio-fase';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -24,7 +25,11 @@ export const dynamic = 'force-dynamic';
  * più un `motivo`, così la loro colonna "lavorato dal bot" torna vera senza che nessuno
  * debba riconciliare a mano.
  */
-type Motivo = 'telefono_non_valido' | 'arruolamento_fallito' | 'apertura_non_partita' | 'chat_con_appuntamento';
+type Motivo = 'telefono_non_valido' | 'arruolamento_fallito' | 'apertura_non_partita' | 'chat_con_appuntamento'
+  // Lead di database (contratto v1.17): `database_non_aperto` = il CRM lo ripropone piu'
+  // tardi (interruttore spento, tetti, nessun template approvato); `database_chat_esistente`
+  // = il numero ha gia' una chat col bot, non si ripropone.
+  | 'database_non_aperto' | 'database_chat_esistente';
 
 /**
  * Perché il soffitto sta a 600/minuto (dal 09/09/2026).
@@ -106,6 +111,54 @@ export async function POST(req: NextRequest) {
       message: `[lancio] slug sconosciuto "${p.lancio.slug}" sul lead ${p.leadId}: lavorato come "${LANCIO_SLUG}"`,
       level: 'warn',
     });
+  }
+
+  // Lead di DATABASE della coda marketing (contratto v1.17, PO 10/11/2026): strada a parte,
+  // sotto l'interruttore `app_settings.database_bot`. Senza `database: true` nel push
+  // questo blocco non esiste e l'intake e' quello di sempre.
+  if (p.database === true) {
+    try {
+      const r = await enrollDatabaseLead(supabase, {
+        phone, firstName: p.name, email: p.email, crmLeadId: p.leadId, crmFunnel: p.funnel,
+      });
+      if (r.tipo === 'rifiuto') {
+        return NextResponse.json({
+          ok: true, accettato: false, motivo: r.motivo satisfies Motivo, dettaglio: r.dettaglio,
+          ...(r.conversationId != null ? { conversationId: r.conversationId } : {}),
+        });
+      }
+      if (r.tipo === 'duplicato') {
+        return NextResponse.json({
+          ok: true, accettato: true, duplicato: true, conversationId: r.conversationId, leadIdCorrente: p.leadId,
+        });
+      }
+      await supabase.from('event_log').insert({
+        type: 'bot_intake',
+        payload: { crmLeadId: p.leadId, conversationId: r.conversationId, ok: r.ok, database: true, variante: r.variante } as never,
+        message: `[bot-fissatore] intake lead di database ${p.leadId} → conv ${r.conversationId} (variante ${r.variante})`,
+        level: 'info',
+      });
+      if (!r.ok) {
+        return NextResponse.json({
+          ok: true, accettato: false, motivo: 'apertura_non_partita' satisfies Motivo,
+          conversationId: r.conversationId, error: r.error,
+        });
+      }
+      return NextResponse.json({
+        ok: true, accettato: true, conversationId: r.conversationId, leadIdCorrente: p.leadId,
+        database: { variante: r.variante },
+      });
+    } catch (e) {
+      await supabase.from('event_log').insert({
+        type: 'bot_intake_error',
+        payload: { crmLeadId: p.leadId, database: true, error: e instanceof Error ? e.message : 'errore' } as never,
+        message: `[bot-fissatore] intake fallito lead di database ${p.leadId}`,
+        level: 'error',
+      });
+      return NextResponse.json({
+        ok: true, error: 'enroll_failed', accettato: false, motivo: 'arruolamento_fallito' satisfies Motivo,
+      });
+    }
   }
 
   try {

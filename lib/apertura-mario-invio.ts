@@ -8,6 +8,7 @@ import { aperturaBlackFriday } from './black-friday-apertura';
 import { isCrmFunnelProfessioni } from './professioni';
 import { aperturaScheda, segnaSchedaDaTemplate } from './scheda-template-invio';
 import { templateSchedaAcceso } from './scheda-template';
+import { isChatDatabase } from './database-bot';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -86,7 +87,9 @@ export type EsitoAperturaMario =
   /** Nessun invio: manca il SID dell'apertura legacy (gia' segnalato con `logConfigError`). */
   | { ok: false; tentato: false; error: 'config_mancante' }
   /** Black Friday: si aspetta l'approvazione del template BF (`bf_apertura_attesa_fino`). */
-  | { ok: false; tentato: false; error: 'attesa_template_bf' };
+  | { ok: false; tentato: false; error: 'attesa_template_bf' }
+  /** Chat di un lead di database: la sua apertura parte solo dall'intake (lib/database-enroll.ts). */
+  | { ok: false; tentato: false; error: 'chat_database' };
 
 /**
  * L'apertura di Mario: con `NEW_OPENING_ENABLED=1` la variante per funnel (persona
@@ -107,6 +110,10 @@ export async function inviaAperturaMario(
     logOpeningConfigError: (key: string) => Promise<void>;
   },
 ): Promise<EsitoAperturaMario> {
+  // Lead di database (PO 10/11/2026): la loro apertura parte SOLO dall'intake, col template
+  // database e dentro i suoi tetti. Qui (apertura differita, recupero) non si manda mai
+  // l'apertura di Mario a una chat database rimasta senza messaggio.
+  if (isChatDatabase(a.funnel)) return { ok: false, tentato: false, error: 'chat_database' };
   if (isCrmFunnelBlackFriday(a.funnel)) {
     const bf = await aperturaBlackFriday(supabase, a.from);
     if (bf.scelta === 'attesa') return { ok: false, tentato: false, error: 'attesa_template_bf' };

@@ -4246,3 +4246,112 @@ describe('drainMarioReplies — offerta Black Friday ai lead evergreen (PO 10/11
     expect(nota).toContain('Magazziniere, vuole cambiare');
   }, 20_000);
 });
+
+describe('drainMarioReplies — lead di database ricontattato (PO 10/11/2026)', () => {
+  const VSL = 'https://lp.feniceacademy.it/vsl-offerta';
+  const apertura = (sid: string): FakeMsgRow => ({
+    direction: 'out', body: 'Ciao Giulia, sono Marta di Fenice Academy. Tempo fa ci avevi chiesto informazioni sulle professioni digitali.',
+    template_sid: sid, created_at: '2026-11-12T09:00:00Z',
+  });
+  const inbound = (body: string): FakeMsgRow => ({ direction: 'in', body, template_sid: null, created_at: '2026-11-12T10:00:00Z' });
+  const riga = (extra: Partial<ClaimedRow> = {}): ClaimedRow => ({
+    id: 95, ai_started_at: null, crm_lead_id: 'crm95', bot_outcome: null, professione: null, scheda_inviata_at: null,
+    crm_funnel: 'DATABASE BOT', ...extra,
+  });
+  const settingsConVsl = {
+    attivo: true, pulsanteAttivo: false, zoomLink: null, videoLiveLink: null,
+    offertaDelMeseLink: VSL, eventoAt: '2026-10-05T21:00:00+02:00', blastPerimetro: 'tutti', sender: 'principale', quotaSecondario: 0,
+  } as never;
+  const opzioniDelTurno = () => vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string; personaName?: string };
+  const risposta = () => vi.mocked(generateMarioReply).mockResolvedValueOnce({
+    visibleReply: 'Perfetto', appointmentFixed: false, passToHuman: false, videoWatched: false,
+  } as never);
+  const scadenzaBf = { atMs: Date.parse('2026-11-30T23:59:59+01:00'), etichetta: 'lunedì 30 novembre' };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-12T11:00:00+01:00'));
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    vi.stubEnv('DATABASE_OPENING_SID_BF', 'HXdbbf');
+    vi.stubEnv('DATABASE_OPENING_SID_A', 'HXdba');
+    vi.mocked(generateMarioReply).mockReset();
+    vi.mocked(sendOutcome).mockClear();
+    vi.mocked(sendFreeText).mockClear();
+    vi.mocked(getLancioSettings).mockResolvedValue(settingsConVsl);
+    // L'interruttore dell'evergreen e' SPENTO: la variante bf lo accende da sola per la sua chat.
+    vi.mocked(leggiSettingsOffertaBfEvergreen).mockResolvedValue({ interruttore: 'off', scadenza: scadenzaBf, posti: 30 });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+    vi.mocked(getLancioSettings).mockReset();
+    vi.mocked(leggiSettingsOffertaBfEvergreen).mockReset();
+    vi.mocked(leggiSettingsOffertaBfEvergreen).mockResolvedValue({ interruttore: null, scadenza: null, posti: null });
+  });
+
+  it('"Non mi interessa": congedo, DA_SCARTARE non interessato, chat chiusa, il modello non parte', async () => {
+    const { supabase, calls } = makeDrainSupabase(riga(), [apertura('HXdba'), inbound('Non mi interessa')]);
+
+    await drainMarioReplies(supabase, 95, '+391234567890', () => 0, 0);
+
+    expect(generateMarioReply).not.toHaveBeenCalled();
+    expect(sendFreeText).toHaveBeenCalledTimes(1);
+    expect((vi.mocked(sendFreeText).mock.calls[0][0] as { body: string }).body).toBe('Va bene, grazie per la risposta: non ti scrivo più. Buona giornata!');
+    expect(sendOutcome).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'DA_SCARTARE', discardReason: 'non interessato' });
+    expect((vi.mocked(sendOutcome).mock.calls[0][2] as { note: string }).note).toContain('variante a');
+    expect(calls.finalStatusWrites.at(-1)).toBe('closed');
+    expect(calls.events.filter((e: { type: string }) => e.type === 'database_non_interessa')).toHaveLength(1);
+  }, 20_000);
+
+  it('una risposta vera passa a Marta, che sa che e\' un lead vecchio ricontattato', async () => {
+    risposta();
+    const { supabase } = makeDrainSupabase(riga(), [apertura('HXdba'), inbound('Entrata extra')]);
+
+    await drainMarioReplies(supabase, 95, '+391234567890', () => 0, 0);
+
+    const o = opzioniDelTurno();
+    expect(o.personaName).toBe('Marta');
+    expect(o.contextNote).toContain('LEAD DI DATABASE RICONTATTATO');
+    // Variante a, evergreen spento: nessun Black Friday nel prompt.
+    expect(o.contextNote).not.toContain('BLACK FRIDAY');
+    expect(o.contextNote).not.toContain('Black Friday');
+    expect(sendOutcome).not.toHaveBeenCalled();
+  }, 20_000);
+
+  it('variante bf: i fatti del Black Friday e la VSL anche con l\'evergreen spento', async () => {
+    risposta();
+    const { supabase } = makeDrainSupabase(riga(), [apertura('HXdbbf'), inbound('Cerco lavoro')]);
+
+    await drainMarioReplies(supabase, 95, '+391234567890', () => 0, 0);
+
+    const nota = opzioniDelTurno().contextNote ?? '';
+    expect(nota).toContain('LEAD DI DATABASE RICONTATTATO');
+    expect(nota).toContain("OFFERTA GIA' NOMINATA");
+    expect(nota).toContain('OFFERTA BLACK FRIDAY ATTIVA');
+    expect(nota).toContain(VSL);
+  }, 20_000);
+
+  it('variante bf dopo il 30/11: niente fatti dell\'offerta, e Marta non li inventa', async () => {
+    vi.setSystemTime(new Date('2026-12-02T11:00:00+01:00'));
+    risposta();
+    const { supabase } = makeDrainSupabase(riga(), [apertura('HXdbbf'), inbound('Lavoro')]);
+
+    await drainMarioReplies(supabase, 95, '+391234567890', () => 0, 0);
+
+    const nota = opzioniDelTurno().contextNote ?? '';
+    expect(nota).not.toContain('OFFERTA BLACK FRIDAY ATTIVA');
+    expect(nota).toContain('non inventarli');
+  }, 20_000);
+
+  it('una chat NON database non cambia: "Non mi interessa" lo legge il modello, nessuna nota database', async () => {
+    risposta();
+    const { supabase, calls } = makeDrainSupabase(riga({ crm_funnel: 'Database' }), [apertura('HXapertura'), inbound('Non mi interessa')]);
+
+    await drainMarioReplies(supabase, 95, '+391234567890', () => 0, 0);
+
+    expect(generateMarioReply).toHaveBeenCalledTimes(1);
+    expect(opzioniDelTurno().contextNote ?? '').not.toContain('LEAD DI DATABASE');
+    expect(calls.events.some((e: { type: string }) => e.type === 'database_non_interessa')).toBe(false);
+  }, 20_000);
+});

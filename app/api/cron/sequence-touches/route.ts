@@ -32,6 +32,7 @@ import { formatRomeDateTime } from '@/lib/rome-time';
 import { caricaContesto, decidiInvio, sidPerConversazione } from '@/lib/sollecito-parcheggio';
 import { caricaTouchAb, idoneaTouchAb, sidTouchPerPersona } from '@/lib/touch-ab';
 import { isCrmFunnelBlackFriday } from '@/lib/black-friday';
+import { isChatDatabase } from '@/lib/database-bot';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -195,6 +196,12 @@ export async function GET(req: NextRequest) {
       }
       // Conv con esito già inviato al CRM (es. riaperte dal webhook): mai toccare.
       if (c.bot_outcome != null) {
+        skipped++;
+        continue;
+      }
+      // Lead di database (PO 10/11/2026): un solo messaggio a persona. Niente apertura
+      // differita, touch, sollecito o nudge: chi non risponde resta dov'e'.
+      if (isChatDatabase(c.crm_funnel)) {
         skipped++;
         continue;
       }

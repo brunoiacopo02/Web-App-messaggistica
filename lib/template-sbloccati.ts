@@ -1,3 +1,5 @@
+import { tuttiISidDatabase } from './database-bot';
+
 /**
  * I SID che il presidio UTILITY lascia passare anche se Meta li ha classificati MARKETING.
  * Oltre a UTILITY_ONLY_ALLOW:
@@ -22,5 +24,9 @@ export function sidSbloccati(): string[] {
   for (const v of (process.env.SOLLECITO_PARCHEGGIO_SID ?? '').split(',')) {
     if (v.trim()) sbloccati.push(v.trim());
   }
+  // Aperture dei lead di database (PO 10/11/2026): cinque template MARKETING che Bruno
+  // manda lo stesso, sotto l'interruttore `app_settings.database_bot` e i suoi tetti.
+  // Senza le env `DATABASE_OPENING_SID_*` l'elenco resta quello di prima.
+  sbloccati.push(...tuttiISidDatabase());
   return sbloccati;
 }
