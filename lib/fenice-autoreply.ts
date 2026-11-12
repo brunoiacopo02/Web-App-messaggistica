@@ -18,7 +18,7 @@ import { ensureConfirmationBlock, containsVideoLink } from './confirmation-block
 import { unknownFeniceLinks } from './outbound-sanitize';
 import { generateBotReport } from './bot-report';
 import { registraEsitoSenzaLeadId, sendOutcome, inviaNotaAlCrm } from './bot-outcome';
-import { stopDalCrmPerLead, vuolePassaggioAUmano } from './stop-crm';
+import { stopDalCrmPerLead, stopInRispostaPerChat, vuolePassaggioAUmano } from './stop-crm';
 import { buildScriveDopoLaCallNote, motivoScartoAppuntamento, TESTO_DATA_DA_VERIFICARE, unisciGiorni } from './bot-outcome-rules';
 import { computeBookingDays, giorniDelLinkForm } from './booking-slots';
 import { paroleDellaRichiesta } from './contatti-umani';
@@ -602,7 +602,10 @@ export async function drainMarioReplies(
   // solo i clienti e chi alla call c'e' gia' andato — e per loro il silenzio sarebbe il
   // peggio dei due mondi: sulle chat vive con uno stop, 39 persone in quello stato ci
   // hanno scritto negli ultimi 14 giorni. Non risponde il bot: risponde una persona.
-  const stopCrm = await stopDalCrmPerLead(supabase, crmLeadId, 'risposta');
+  // Chat del giro database ancora senza esito (PO 12/11/2026: gia' clienti e presenze
+  // storiche DENTRO): gli abbiamo scritto noi sapendolo, quindi alla sua risposta parla
+  // Marta. Dopo un esito del bot (es. APPUNTAMENTO) lo stop torna quello di sempre.
+  const stopCrm = stopInRispostaPerChat(await stopDalCrmPerLead(supabase, crmLeadId, 'risposta'), { chatDatabase, esitoInPiedi });
   if (stopCrm) {
     if (crmLeadId && vuolePassaggioAUmano(stopCrm)) {
       // Una volta sola per conversazione: il lucchetto e' l'evento stesso, come nel

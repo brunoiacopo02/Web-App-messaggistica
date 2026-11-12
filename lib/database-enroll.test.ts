@@ -603,3 +603,99 @@ describe("riapertura di una chat ferma: la strada principale per i lead di datab
     expect(parseSettingsDatabase({ attivo: true, giorni_fermo: 0 }).riprendiChatDopoGiorni).toBeNull();
   });
 });
+
+describe("riapri_tutti: scrivere a tutti (PO 12/11/2026)", () => {
+  const VECCHIA = { esiste: true as const, conversationId: 900, crmLeadId: 'lead-vecchio', crmFunnel: 'CORSO 10 ORE' };
+  const TUTTI = { attivo: true, giorni_fermo: 7, riapri_tutti: true };
+
+  it("assente = come prima; si legge solo il true esplicito", () => {
+    expect(parseSettingsDatabase({ attivo: true }).riapriTutti).toBe(false);
+    expect(parseSettingsDatabase({ attivo: true, riapri_tutti: 'true' }).riapriTutti).toBe(false);
+    expect(parseSettingsDatabase(TUTTI).riapriTutti).toBe(true);
+  });
+
+  it.each([
+    ['in pausa', { pausata: true }],
+    ['di un GDO', { chatGdo: true }],
+    ['del lancio rimasta a meta', { lancioInCorso: true }],
+    ['scartata dal bot', { botOutcome: 'DA_SCARTARE' }],
+  ])("chat %s: si riapre, e si toglie cio' che terrebbe Marta zitta", async (_n, stato) => {
+    const { deps, chiamate } = mondo({ chat: VECCHIA, settings: TUTTI, stato });
+    expect(await enroll(deps)).toMatchObject({ tipo: 'aperto', ok: true, conversationId: 900, numero: N0047, riaperta: true });
+    expect(chiamate.creaChat).toHaveLength(0);
+    expect(chiamate.invia).toHaveLength(1);
+    const patch = chiamate.aggiorna[0].patch;
+    expect(patch).toMatchObject({ ai_paused_at: null, gdo_agenda_at: null, ai_status: 'active', crm_funnel: FUNNEL_CHAT_DATABASE });
+    expect('lancio_fase' in patch).toBe((stato as Partial<StatoChatEsistente>).lancioInCorso === true);
+    // Il numero della chat puo' aprire: resta li', `wa_number` non si tocca.
+    expect('wa_number' in patch).toBe(false);
+  });
+
+  it.each([
+    ['opt_out', { optOut: true }],
+    ['senza_whatsapp', { senzaWhatsapp: true }],
+    ['gia_apertura_bf', { giaAperturaBf: true }],
+  ])("%s: resta fuori per sempre anche con riapri_tutti", async (dettaglio, stato) => {
+    const { deps, chiamate } = mondo({ chat: VECCHIA, settings: TUTTI, stato });
+    expect(await enroll(deps)).toMatchObject({ tipo: 'rifiuto', motivo: 'database_chat_esistente', dettaglio });
+    expect(chiamate.invia).toHaveLength(0);
+    expect(chiamate.aggiorna).toHaveLength(0);
+  });
+
+  it("apertura Black Friday gia' ricevuta: fuori anche senza riapri_tutti (mai due volte)", async () => {
+    const { deps, chiamate } = mondo({ chat: VECCHIA, settings: { attivo: true, giorni_fermo: 7 }, stato: { giaAperturaBf: true } });
+    expect(await enroll(deps)).toMatchObject({ tipo: 'rifiuto', motivo: 'database_chat_esistente', dettaglio: 'gia_apertura_bf' });
+    expect(chiamate.invia).toHaveLength(0);
+  });
+
+  it("chat viva (ha scritto 3 giorni fa): non si forza, si riprova piu' avanti", async () => {
+    const { deps, chiamate } = mondo({ chat: VECCHIA, settings: TUTTI, stato: { pausata: true, ultimoMessaggioMs: ADESSO - 3 * 24 * 3600_000 } });
+    expect(await enroll(deps)).toMatchObject({ tipo: 'rifiuto', motivo: 'database_chat_attiva', dettaglio: 'chat_attiva' });
+    expect(chiamate.invia).toHaveLength(0);
+  });
+
+  it.each([
+    ['a riposo (nessun tetto)', { tetti: { [ELIXIR]: 70, [N8061]: 70 } }],
+    ['non HIGH', { qualita: qualitaOggi(ADESSO, { [N0047]: 'LOW' }) }],
+    ['pieno', { aperture: { [N0047]: 70 } }],
+  ])("numero della chat %s: l'apertura parte da un numero del giro e la chat lo segue", async (_n, extra) => {
+    const { deps, chiamate, eventi } = mondo({ chat: VECCHIA, settings: TUTTI, ...extra });
+    const r = await enroll(deps);
+    expect(r).toMatchObject({ tipo: 'aperto', ok: true, conversationId: 900, numero: ELIXIR });
+    expect(chiamate.creaChat).toHaveLength(0);
+    expect(chiamate.invia[0]).toMatchObject({ from: ELIXIR, conversationId: 900 });
+    expect(chiamate.aggiorna[0].patch).toMatchObject({ wa_number: ELIXIR });
+    expect(chiamate.registra[0]).toMatchObject({ numero: ELIXIR });
+    expect(eventi.find((e) => e.type === EVENTO_DATABASE_APERTURA)?.payload).toMatchObject({ riaperta: true, numero: ELIXIR, numeroPrima: N0047 });
+  });
+
+  it("chat senza numero: parte dal numero meno carico del giro", async () => {
+    const { deps, chiamate } = mondo({ chat: VECCHIA, settings: TUTTI, stato: { waNumber: null }, databaseOggi: { [ELIXIR]: 2 } });
+    expect(await enroll(deps)).toMatchObject({ tipo: 'aperto', numero: N8061 });
+    expect(chiamate.aggiorna[0].patch).toMatchObject({ wa_number: N8061 });
+  });
+
+  it("il numero della chat ha gia' il suo scaglione database: si passa al prossimo (carico diviso)", async () => {
+    const { deps } = mondo({ chat: VECCHIA, settings: { ...TUTTI, tetto_numero: 3 }, databaseOggi: { [N0047]: 3, [ELIXIR]: 1 } });
+    expect(await enroll(deps)).toMatchObject({ tipo: 'aperto', numero: N8061 });
+  });
+
+  it("nessun numero puo' aprire: non adesso per tutti (il CRM ferma il giro), niente scritto", async () => {
+    const { deps, chiamate } = mondo({ chat: VECCHIA, settings: TUTTI, tetti: {} });
+    expect(await enroll(deps)).toMatchObject({ tipo: 'rifiuto', motivo: 'database_non_aperto', dettaglio: 'nessun_numero' });
+    expect(chiamate.aggiorna).toHaveLength(0);
+    expect(chiamate.invia).toHaveLength(0);
+  });
+
+  it("le regole pure: con `tutti` pausa/GDO/lancio/scarto non fermano, il resto si'", () => {
+    const s: StatoChatEsistente = {
+      waNumber: N0047, ultimoMessaggioMs: ADESSO - 40 * 24 * 3600_000, pausata: true, chatGdo: true, lancioInCorso: true,
+      botOutcome: 'DA_SCARTARE', botOutcomeMs: ADESSO - 40 * 24 * 3600_000, optOut: false, senzaWhatsapp: false, haRisposto: false,
+    };
+    expect(motivoChatNonRiapribile(s, { nowMs: ADESSO, giorni: 7 })).toBe('pausa_manuale');
+    expect(motivoChatNonRiapribile(s, { nowMs: ADESSO, giorni: 7, tutti: true })).toBeNull();
+    expect(motivoChatNonRiapribile({ ...s, optOut: true }, { nowMs: ADESSO, giorni: 7, tutti: true })).toBe('opt_out');
+    expect(motivoChatNonRiapribile({ ...s, giaAperturaBf: true }, { nowMs: ADESSO, giorni: 7, tutti: true })).toBe('gia_apertura_bf');
+    expect(motivoChatNonRiapribile(s, { nowMs: ADESSO, giorni: 7, tutti: true, soloChiHaRisposto: true })).toBe('mai_risposto');
+  });
+});

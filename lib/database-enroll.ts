@@ -139,7 +139,9 @@ export async function enrollDatabaseLead(
   // tutti gia' scritti dal bot. Un solo messaggio anche qui: l'apertura database e basta.
   const chat = await deps.chatDelNumero(args.phone);
   if (chat === null) return nonAperto('lettura_chat_fallita');
-  let riapri: { conversationId: number; numero: string; stato: StatoChatEsistente } | null = null;
+  let riapri: { conversationId: number; numero: string | null; stato: StatoChatEsistente } | null = null;
+  // `riapri_tutti` (PO 12/11/2026): vedi SettingsDatabase.
+  const tutti = settings.riapriTutti;
   if (chat.esiste) {
     if (chat.crmLeadId === args.crmLeadId && isChatDatabase(chat.crmFunnel)) {
       await deps.log('database_intake_duplicato', 'info', { ...base, conversationId: chat.conversationId },
@@ -158,7 +160,7 @@ export async function enrollDatabaseLead(
     if (isChatDatabase(chat.crmFunnel)) return definitivo('gia_aperta_dal_database');
     const stato = await deps.statoChat(chat.conversationId);
     if (stato === null) return nonAperto('lettura_chat_fallita');
-    const perche = motivoChatNonRiapribile(stato, { nowMs, giorni: settings.riprendiChatDopoGiorni, soloChiHaRisposto: settings.soloChiHaRisposto });
+    const perche = motivoChatNonRiapribile(stato, { nowMs, giorni: settings.riprendiChatDopoGiorni, soloChiHaRisposto: settings.soloChiHaRisposto, tutti });
     if (perche === 'chat_attiva') {
       await deps.log('database_intake_rifiutato', 'info',
         { ...base, motivo: 'database_chat_attiva', conversationId: chat.conversationId, ultimoMessaggioMs: stato.ultimoMessaggioMs },
@@ -166,8 +168,9 @@ export async function enrollDatabaseLead(
       return { tipo: 'rifiuto', motivo: 'database_chat_attiva', dettaglio: 'chat_attiva', conversationId: chat.conversationId };
     }
     if (perche) return definitivo(perche);
-    // La chat resta sul suo numero: la persona ci ha gia' parlato da li'.
-    if (!stato.waNumber) return definitivo('chat_senza_numero');
+    // La chat resta sul suo numero: la persona ci ha gia' parlato da li'. Con `riapri_tutti`
+    // se quel numero manca o oggi non apre si parte da un numero del giro (vedi sotto).
+    if (!stato.waNumber && !tutti) return definitivo('chat_senza_numero');
     riapri = { conversationId: chat.conversationId, numero: stato.waNumber, stato };
   }
 
@@ -220,9 +223,11 @@ export async function enrollDatabaseLead(
   const giroCompleto = settings.numeri
     ? deps.numeri().filter((n) => settings.numeri!.includes(cifreNumero(n)))
     : deps.numeri();
-  // Chat riaperta: solo il suo numero, e solo se e' nel giro.
-  const giro = riapri ? giroCompleto.filter((n) => cifreNumero(n) === cifreNumero(riapri!.numero)) : giroCompleto;
-  if (riapri && giro.length === 0) return numeroChatNonDisponibile({ scartati: [{ numero: riapri.numero, motivo: 'fuori_dal_giro' }] });
+  // Chat riaperta: solo il suo numero, e solo se e' nel giro. Con `riapri_tutti` tutto il
+  // giro: il numero della chat passa davanti se oggi puo' aprire, altrimenti il meno carico.
+  const eDellaChat = (n: string) => !!riapri?.numero && cifreNumero(n) === cifreNumero(riapri.numero);
+  const giro = riapri && !tutti ? giroCompleto.filter(eDellaChat) : giroCompleto;
+  if (riapri && !tutti && giro.length === 0) return numeroChatNonDisponibile({ scartati: [{ numero: riapri.numero ?? '', motivo: 'fuori_dal_giro' }] });
   for (const [ordine, numero] of giro.entries()) {
     const tettoNumero = tettoDi(tetti, numero);
     if (tettoNumero <= 0) { scartati.push({ numero, motivo: 'tetto_zero' }); continue; }
@@ -237,6 +242,7 @@ export async function enrollDatabaseLead(
     candidati.push({ numero, databaseOggi: db, apertureOggi: aperture, ordine });
   }
   candidati.sort((a, b) => (a.databaseOggi - b.databaseOggi) || (a.apertureOggi - b.apertureOggi) || (a.ordine - b.ordine));
+  if (riapri && tutti) candidati.sort((a, b) => Number(eDellaChat(b.numero)) - Number(eDellaChat(a.numero)));
 
   // Il primo numero da cui almeno una variante in rotazione e' approvata e spedibile.
   let scelto: { numero: string; spedibili: VarianteDatabase[] } | null = null;
@@ -247,7 +253,10 @@ export async function enrollDatabaseLead(
     if (spedibili.length > 0) { scelto = { numero: c.numero, spedibili }; break; }
     scartati.push({ numero: c.numero, motivo: 'nessun_template_approvato' });
   }
-  if (!scelto) return riapri ? numeroChatNonDisponibile({ scartati }) : nonAperto('nessun_numero', { scartati });
+  // Con `riapri_tutti` la chat puo' partire da ogni numero: se non ce n'e' uno e' un "non
+  // adesso" che vale per tutti, come per una chat nuova.
+  if (!scelto) return riapri && !tutti ? numeroChatNonDisponibile({ scartati }) : nonAperto('nessun_numero', { scartati });
+  const cambiaNumero = !!riapri && !eDellaChat(scelto.numero);
 
   const nata = riapri
     ? { conversationId: riapri.conversationId, waNumber: scelto.numero }
@@ -285,6 +294,14 @@ export async function enrollDatabaseLead(
     crm_lead_id: args.crmLeadId,
     crm_funnel: FUNNEL_CHAT_DATABASE,
     ...(riapri ? { bot_outcome: null, bot_outcome_at: null, bot_followups_sent: 0, handed_off_at: null, handed_off_reason: null } : {}),
+    // `riapri_tutti`: via cio' che terrebbe Marta zitta sulla risposta del lead (fermo
+    // manuale, chat "postino" di un GDO, fase del lancio rimasta a meta': il lancio e'
+    // finito), e la chat segue il numero da cui parte l'apertura: e' li' che rispondera'.
+    ...(riapri && tutti ? {
+      ai_paused_at: null, gdo_agenda_at: null,
+      ...(riapri.stato.lancioInCorso ? { lancio_fase: 'chiuso' } : {}),
+      ...(cambiaNumero ? { wa_number: scelto.numero } : {}),
+    } : {}),
   });
   if (!firmata) {
     await deps.log('database_intake_rifiutato', 'error', { ...base, motivo: 'database_non_aperto', dettaglio: 'segno_non_scritto', conversationId },
@@ -305,13 +322,14 @@ export async function enrollDatabaseLead(
       conversationId, numero: scelto.numero, variante, sid, crmLeadId: args.crmLeadId, funnelCrm: args.crmFunnel ?? null, inviato: res.ok,
       riaperta: !!riapri,
       ...(riapri ? { esitoPrima: riapri.stato.botOutcome, ultimoMessaggioPrimaMs: riapri.stato.ultimoMessaggioMs } : {}),
+      ...(cambiaNumero ? { numeroPrima: riapri!.numero } : {}),
       ...(res.ok ? {} : { error: res.error ?? null }),
     },
     res.ok
       ? `[database] conv ${conversationId}: apertura ${variante} da ${scelto.numero}`
       : `[database] conv ${conversationId}: apertura ${variante} da ${scelto.numero} NON partita (${res.error ?? 'errore'})`);
 
-  return { tipo: 'aperto', ok: res.ok, conversationId, variante, numero: scelto.numero, sid: res.sid, error: res.error };
+  return { tipo: 'aperto', ok: res.ok, conversationId, variante, numero: scelto.numero, sid: res.sid, error: res.error, ...(riapri ? { riaperta: true } : {}) };
 }
 
 /** Ultime 10 cifre del numero (la chiave persona del CRM); null se ne ha meno di 9. */
@@ -377,6 +395,10 @@ export function depsDatabase(supabase: Supa): DepsDatabase {
         if (morto.error) return null;
         const risposto = await supabase.from('messages').select('id').eq('conversation_id', conversationId).eq('direction', 'in').limit(1);
         if (risposto.error) return null;
+        // Apertura Black Friday gia' ricevuta (lead BF o giro database): un nostro template che la nomina.
+        const bf = await supabase.from('messages').select('id').eq('conversation_id', conversationId).eq('direction', 'out')
+          .not('template_sid', 'is', null).ilike('body', '%black friday%').limit(1);
+        if (bf.error) return null;
         const ms = (v: string | null | undefined) => (v ? Date.parse(v) : null);
         const ultimoAt = ((ultimo.data ?? []) as { created_at: string }[])[0]?.created_at ?? null;
         return {
@@ -390,6 +412,7 @@ export function depsDatabase(supabase: Supa): DepsDatabase {
           optOut: (opt.data ?? []).length > 0,
           senzaWhatsapp: (morto.data ?? []).length > 0,
           haRisposto: (risposto.data ?? []).length > 0,
+          giaAperturaBf: (bf.data ?? []).length > 0,
         };
       } catch {
         return null;

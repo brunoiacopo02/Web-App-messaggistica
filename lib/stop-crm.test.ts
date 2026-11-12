@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stopDalCrm, vuolePassaggioAUmano } from './stop-crm';
+import { stopDalCrm, stopInRispostaPerChat, vuolePassaggioAUmano } from './stop-crm';
 
 const base = { presented: false, sold: false, discard_reason: null };
 
@@ -78,5 +78,19 @@ describe('vuolePassaggioAUmano', () => {
     expect(vuolePassaggioAUmano('gia_cliente')).toBe(true);
     expect(vuolePassaggioAUmano('gia_presentato')).toBe(true);
     expect(vuolePassaggioAUmano('scartato_da_persona')).toBe(false);
+  });
+});
+
+describe('stopInRispostaPerChat: giro database (PO 12/11/2026, gia clienti e presenze dentro)', () => {
+  it('chat database senza esito: al cliente o a chi si e presentato risponde Marta', () => {
+    expect(stopInRispostaPerChat('gia_cliente', { chatDatabase: true, esitoInPiedi: null })).toBeNull();
+    expect(stopInRispostaPerChat('gia_presentato', { chatDatabase: true, esitoInPiedi: null })).toBeNull();
+  });
+  it('chat database con un esito del bot: lo stop torna quello di sempre', () => {
+    expect(stopInRispostaPerChat('gia_presentato', { chatDatabase: true, esitoInPiedi: 'APPUNTAMENTO' })).toBe('gia_presentato');
+  });
+  it('ogni altra chat: niente cambia', () => {
+    expect(stopInRispostaPerChat('gia_cliente', { chatDatabase: false, esitoInPiedi: null })).toBe('gia_cliente');
+    expect(stopInRispostaPerChat(null, { chatDatabase: false, esitoInPiedi: null })).toBeNull();
   });
 });
