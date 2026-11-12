@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { eseguiControlloQualita } from '@/lib/qualita-numeri';
 import { controllaStopTouchAb } from '@/lib/touch-ab';
+import { aggiornaSospensioniSollecitiNr } from '@/lib/solleciti-nr-sospesi';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,5 +27,8 @@ export async function GET(req: NextRequest) {
   const esito = await eseguiControlloQualita(supabase);
   // A/B del touch (PO 07/11/2026): lo stop a scatto scatta alla lettura, non al primo invio.
   if (esito.ok) await controllaStopTouchAb(supabase);
-  return NextResponse.json(esito, { status: esito.ok ? 200 : 500 });
+  // Solleciti dopo i "non risponde" delle Conferme sospesi su un numero (PO 12/11/2026):
+  // si riaccendono da soli dopo 7 giorni HIGH di fila. Dopo lo storico di oggi; non lancia.
+  const solleciti = esito.ok ? await aggiornaSospensioniSollecitiNr(supabase) : { riaccesi: [] };
+  return NextResponse.json({ ...esito, sollecitiNrRiaccesi: solleciti.riaccesi }, { status: esito.ok ? 200 : 500 });
 }

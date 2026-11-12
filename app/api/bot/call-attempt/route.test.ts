@@ -19,6 +19,8 @@ const righe = {
   conversazione: [] as unknown[],
   ultimoInbound: [] as unknown[],
   cronologia: [] as unknown[],
+  /** `app_settings.solleciti_nr_sospesi` (la riga, o null se non c'e'). */
+  sospensioni: null as unknown,
 };
 
 type RigaEvento = { id: number; type: string; payload: Record<string, unknown> } & Record<string, unknown>;
@@ -83,6 +85,7 @@ function esegui(rec: Chiamata, filtri: Filtro[]): { data: unknown; error: unknow
 
   if (rec.op !== 'select') return { data: null, error: null };
   if (rec.table === 'conversations') return { data: righe.conversazione, error: null };
+  if (rec.table === 'app_settings') return { data: righe.sospensioni, error: null };
   if (rec.table === 'messages') {
     return { data: String(rec.arg).includes('direction') ? righe.cronologia : righe.ultimoInbound, error: null };
   }
@@ -208,6 +211,7 @@ beforeEach(() => {
   eventLog.length = 0;
   prossimoIdEvento = 1;
   lucchettoInvisibileAllaSelect = false;
+  righe.sospensioni = null;
   sendFreeText.mockReset().mockResolvedValue({ sid: 'SMlibero', status: 'queued' });
   sendTemplate.mockReset().mockResolvedValue({ sid: 'SMtemplate', status: 'queued' });
   generateMarioReply.mockReset().mockResolvedValue({
@@ -570,5 +574,79 @@ describe('POST /api/bot/call-attempt — la riapertura non calpesta gli stati', 
     expect(aggiornamenti().some((u) => 'ai_status' in u)).toBe(false);
     // La chat resta in cima all'inbox: quella colonna si tocca comunque.
     expect(aggiornamenti().some((u) => 'last_message_at' in u)).toBe(true);
+  });
+});
+
+// PO 12/11/2026: il 3199 e' LOW, i solleciti dopo i "non risponde" delle Conferme che
+// partirebbero da li' si sospendono (lib/solleciti-nr-sospesi.ts).
+describe('POST /api/bot/call-attempt — solleciti sospesi sul numero della chat', () => {
+  const N3199 = 'whatsapp:+393520413199';
+  const N8061 = 'whatsapp:+393520158061';
+  const sospendi3199 = () => {
+    righe.sospensioni = { value: { '+393520413199': { dal: '2026-11-12', giorni_high: 7 } } };
+  };
+  const chatSul = (numero: string, oreFa: number | null) => {
+    scenario(oreFa);
+    (righe.conversazione[0] as Record<string, unknown>).wa_number = numero;
+    (righe.conversazione[0] as Record<string, unknown>).last_inbound_number = numero;
+  };
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', N3199);
+    vi.stubEnv('BOT_NUMERI_SECONDARI', N8061);
+  });
+
+  it('chat sul 3199 sospeso, fuori finestra: il template NON parte, evento per contarli, nessun lucchetto', async () => {
+    sospendi3199();
+    chatSul(N3199, null);
+    const res = await firmato(evento(1));
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ ok: true, inviato: false, motivo: 'numero_sospeso' });
+    expect(sendTemplate).not.toHaveBeenCalled();
+    expect(sendFreeText).not.toHaveBeenCalled();
+    expect(generateMarioReply).not.toHaveBeenCalled();
+    expect(tipiScritti()).toEqual(['recupero_nr_sospeso']);
+    expect(eventiScritti()[0].payload).toMatchObject({
+      conversationId: 42, crmLeadId: LEAD, tentativo: 1, numero: '+393520413199', dal: '2026-11-12',
+    });
+    expect(lucchetti()).toEqual([]);
+    expect(aggiornamenti()).toEqual([]);
+  });
+
+  it('chat sul 3199 sospeso, dentro la finestra e terzo tentativo: non parte nemmeno il messaggio libero', async () => {
+    sospendi3199();
+    chatSul(N3199, 2);
+    const res = await firmato(evento(3));
+    await expect(res.json()).resolves.toEqual({ ok: true, inviato: false, motivo: 'numero_sospeso' });
+    expect(sendFreeText).not.toHaveBeenCalled();
+    expect(sendTemplate).not.toHaveBeenCalled();
+    expect(tipiScritti()).toEqual(['recupero_nr_sospeso']);
+  });
+
+  it('non si sposta su un altro numero e la chat su un altro numero non e toccata: dall 8061 parte come sempre', async () => {
+    sospendi3199();
+    chatSul(N8061, null);
+    const res = await firmato(evento(1));
+    await expect(res.json()).resolves.toEqual({ ok: true, inviato: true, ramo: 'template' });
+    expect(sendTemplate).toHaveBeenCalledOnce();
+    expect(sendTemplate.mock.calls[0][0]).toMatchObject({ from: N8061, contentSid: NR1 });
+    expect(tipiScritti()).not.toContain('recupero_nr_sospeso');
+  });
+
+  it('sospensione tolta (riga vuota): dal 3199 riparte', async () => {
+    righe.sospensioni = { value: {} };
+    chatSul(N3199, null);
+    const res = await firmato(evento(1));
+    await expect(res.json()).resolves.toEqual({ ok: true, inviato: true, ramo: 'template' });
+    expect(sendTemplate.mock.calls[0][0]).toMatchObject({ from: N3199 });
+  });
+
+  it('dopo la sospensione lo stesso tentativo riparte: non era rimasto nessun lucchetto', async () => {
+    sospendi3199();
+    chatSul(N3199, null);
+    await firmato(evento(1));
+    righe.sospensioni = null;
+    const res = await firmato(evento(1));
+    await expect(res.json()).resolves.toEqual({ ok: true, inviato: true, ramo: 'template' });
+    expect(sendTemplate).toHaveBeenCalledOnce();
   });
 });

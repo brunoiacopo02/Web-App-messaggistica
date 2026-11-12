@@ -19,6 +19,7 @@ import { PERSONA_NAME, personaForConversation } from '@/lib/persona';
 import { martaSidsFromEnv, shouldReopen } from '@/lib/fenice-autoreply';
 import { mittenteDiConversazione } from '@/lib/mittente';
 import { ultimoInboundSulNumero } from '@/lib/finestra-numero';
+import { leggiSospensioniSollecitiNr, numeroSospeso, EVENTO_SOLLECITO_NR_SOSPESO } from '@/lib/solleciti-nr-sospesi';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -268,6 +269,25 @@ async function inviaRecuperoNr(supabase: Supa, ctx: ContestoInvio): Promise<Esit
     // esce senza lucchetto: quando la configurazione torna a posto, si ritenta.
     await logInvioFallito(supabase, ctx, from ? 'lead senza numero di telefono' : 'TWILIO_WHATSAPP_NUMBER_FENICE non configurato');
     return { inviato: false, motivo: 'invio_fallito' };
+  }
+
+  // Solleciti sospesi su questo numero (PO 12/11/2026, lib/solleciti-nr-sospesi.ts): non
+  // parte niente, ne' il template ne' il messaggio libero, e NON si sposta su un altro
+  // numero. Nessun lucchetto: quando la sospensione si toglie, il tentativo dopo riparte.
+  // Resta un evento per contarli.
+  const sospensione = numeroSospeso(await leggiSospensioniSollecitiNr(supabase), from);
+  if (sospensione) {
+    const numero = from.replace(/^whatsapp:/i, '');
+    await supabase.from('event_log').insert({
+      type: EVENTO_SOLLECITO_NR_SOSPESO,
+      payload: {
+        conversationId: ctx.conversationId, crmLeadId: ctx.crmLeadId, tentativo: ctx.tentativo,
+        numero, dal: sospensione.dal,
+      } as never,
+      message: `[crm] recupero non-risposta NON inviato al lead ${ctx.crmLeadId} (tentativo ${ctx.tentativo}): solleciti sospesi su ${numero}`,
+      level: 'info',
+    });
+    return { inviato: false, motivo: 'numero_sospeso' };
   }
 
   const quando = quandoLeggibile(ctx.appointmentAt);
