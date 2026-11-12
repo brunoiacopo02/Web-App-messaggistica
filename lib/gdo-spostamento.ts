@@ -23,6 +23,26 @@ import { FASCE, oreAffollate, oreDaProporre, type OreOccupate } from './ore-occu
  * - se le Conferme non hanno ancora esitato il lead (confermato = venditore in calendario).
  * Il modello propone la data col tag [SPOSTA|...], il codice la verifica, il CRM decide.
  * Qualunque "no" ripiega sulla nota SPOSTAMENTO CHIESTO di sempre.
+ *
+ * «IL BOT SPOSTA SEMPRE» (PO 12/11/2026). Dal 29/10 al 12/11: 43 spostamenti veri → 26% di
+ * confermati sugli esitati; 46 lead rimasti con la sola nota → 0 presenti. Decisione: la
+ * sola nota resta dove lo spostamento non si può proprio fare. I rami che finivano in nota
+ * e cosa cambia (conteggi dal registro del bot, 29/10-12/11):
+ * - lead già SCARTATO dalle Conferme (di solito dopo le tre chiamate senza risposta) che
+ *   chiede un altro giorno, ~23 chat: ora il blocco c'è e il CRM sposta riaprendo lo scarto;
+ * - call a meno di 30 minuti, ~6 chat: il limite è tolto, basta che la call sia futura;
+ * - call del GDO già passata (da non più di 7 giorni), ~3 chat: ora si sposta; sulle call
+ *   del bot resta il fissaggio nuovo (`isRifissaggioDopoCallPassata`);
+ * - il modello scrive [ESITO:RICHIAMO|data] o [ESITO:APPUNTAMENTO|data] al posto di
+ *   [SPOSTA|data], ~8 chat: ora il codice lo tratta come [SPOSTA] (`esitoDaSpostare`);
+ * - lead vago o senza data, ~27 chat: il blocco ora fa insistere e proporre due orari
+ *   precisi, fino a due volte, prima di ripiegare sulla nota.
+ * Restano nota (casi residui): interruttore spento; lead confermato con un venditore, o
+ * già presentato; call già spostata una volta dal bot; data fuori dai 3 giorni o dalla
+ * fascia; un anticipo rispetto alla call (`esitoDaSpostare`); il CRM che risponde no o non
+ * risponde; il lead che dopo due solleciti non dà giorno e ora; call del bot già spostata
+ * dalle Conferme; chat postino con anche un appuntamento del bot; call passata da più di
+ * 7 giorni; lead senza scheda nel CRM.
  */
 
 /** Interruttore: acceso salvo `GDO_SPOSTAMENTO_BOT_ENABLED=0` (funzione approvata dal PO il 28/10/2026). */
@@ -34,8 +54,14 @@ export const SPOSTAMENTO_GIORNI = 3;
 /** Fascia accettata dal codice, minuti di Roma, estremi inclusi. Il prompt propone dalle 10. */
 const DA_MIN = 9 * 60;
 const A_MIN = 21 * 60;
-/** Sotto quest'anticipo la call è troppo vicina per spostarla dalla chat: ci pensano le Conferme. */
-const ANTICIPO_MIN_MS = 30 * 60_000;
+/**
+ * Una call del GDO passata da più di così non si sposta più: è un lead vecchio, già
+ * lavorato (stessa soglia di `AGENDA_VECCHIA_GIORNI` in `giudice-spostamento.ts` e del CRM,
+ * `SPOSTAMENTO_CALL_PASSATA_MAX_GIORNI`). Fino al 12/11/2026 non si spostava niente sotto i
+ * 30 minuti dalla call né dopo: uscivano come nota.
+ */
+export const CALL_PASSATA_MAX_GIORNI = 7;
+const CALL_PASSATA_MAX_MS = CALL_PASSATA_MAX_GIORNI * 24 * 3600_000;
 
 /** Il giorno lavorativo dopo la chiave 'YYYY-MM-DD' (la domenica salta). */
 function lavorativoDopo(key: string): string {
@@ -95,7 +121,7 @@ export type MotivoNonSpostabile =
   | 'non_postino'
   | 'data_cambiata_dal_crm'
   | 'senza_data'
-  | 'call_vicina_o_passata'
+  | 'call_passata'
   | 'gia_spostato'
   | 'esito_conferme'
   | 'gia_presentato'
@@ -120,11 +146,15 @@ export function motivoNonSpostabile(i: {
   if (!i.origine) return 'non_postino';
   if (i.dataCambiata) return 'data_cambiata_dal_crm';
   if (!i.appuntamentoAt || Number.isNaN(Date.parse(i.appuntamentoAt))) return 'senza_data';
-  if (Date.parse(i.appuntamentoAt) - i.nowMs < ANTICIPO_MIN_MS) return 'call_vicina_o_passata';
+  // Call passata: quella del GDO si sposta se è passata da poco (PO 12/11/2026); quella del
+  // bot no, perché lì il modello fissa un appuntamento nuovo (`isRifissaggioDopoCallPassata`).
+  const passataDaMs = i.nowMs - Date.parse(i.appuntamentoAt);
+  if (passataDaMs >= 0 && (i.origine === 'bot' || passataDaMs > CALL_PASSATA_MAX_MS)) return 'call_passata';
   if (i.giaSpostato) return 'gia_spostato';
   if (i.presented || i.salesOutcome) return 'gia_presentato';
-  // confermato (venditore in calendario), scartato, da_rifissare: decide chi l'ha in mano.
-  if (i.confermeOutcome) return 'esito_conferme';
+  // Scartato dalle Conferme: si sposta, il CRM riapre lo scarto (PO 12/11/2026).
+  // Confermato (venditore in calendario), da_rifissare, autofissato: decide chi l'ha in mano.
+  if (i.confermeOutcome && i.confermeOutcome !== 'scartato') return 'esito_conferme';
   return null;
 }
 
@@ -179,12 +209,21 @@ export function elencoGiorni(giorni: string[]): string {
  * piene (`oreOccupate`, lo stesso dato del fissaggio) contano solo come criterio secondario
  * fra orari ugualmente sicuri per lui.
  */
-export function notaSpostamentoPrompt(i: { giorni: string[]; callAt: Date; oreOccupate?: OreOccupate | null }): string {
+export function notaSpostamentoPrompt(i: {
+  giorni: string[];
+  callAt: Date;
+  oreOccupate?: OreOccupate | null;
+  /** La call in agenda è già passata (lead GDO che l'ha saltata, PO 12/11/2026). */
+  callPassata?: boolean;
+}): string {
   const giorni = elencoGiorni(i.giorni);
   const call = `${giornoRoma(i.callAt)} alle ${oraRoma(i.callAt)}`;
   const menoPiene = righeOreMenoPiene(i.giorni, i.oreOccupate ?? null);
+  const laCall = i.callPassata
+    ? `la sua videochiamata era ${call} e non si è fatta: se vuole rifarla la sposti tu a un giorno nuovo`
+    : `la sua videochiamata è ${call}`;
   return [
-    `SPOSTAMENTO DELLA CALL (vale solo per questo lead e solo se ti chiede di spostare): la sua videochiamata è ${call}. Qui lo spostamento lo fai TU, una volta sola, e questa regola prevale su "GIORNO E ORA DI UNA CALL GIÀ FISSATA NON LI SPOSTI TU" e su "il giorno nuovo lo sistemi con Noemi".`,
+    `SPOSTAMENTO DELLA CALL (vale solo per questo lead e solo se ti chiede di spostare): ${laCall}. Qui lo spostamento lo fai TU, una volta sola, e questa regola prevale su "GIORNO E ORA DI UNA CALL GIÀ FISSATA NON LI SPOSTI TU" e su "il giorno nuovo lo sistemi con Noemi".`,
     `Se ti chiede di spostare, o ti dice che non ce la fa, rispondi con tono deciso ma gentile, frasi corte e parole semplici. Fagli sentire che aveva preso un impegno, per esempio: "Avevi preso un impegno e la videochiamata era riservata a te. Si può spostare una volta sola: dimmi giorno e ora in cui sei sicuro di esserci." Puoi spostarla solo a ${giorni}, dalle 10:00 alle 21:00: questi sono i limiti, non una proposta da fargli. Le 9:00 non proporle mai: accettale solo se ti dice che è l'unico orario possibile.`,
     `ORARIO SICURO: lo scopo non è un orario qualsiasi, è un orario in cui è CERTO di esserci. Non proporgli tu orari al buio e non dargli fasce generiche ("dalle 10 in poi", "dalle 10 alle 21", "quando vuoi"): chi li accetta per cortesia poi salta di nuovo. Chiedigli quando è davvero sicuro di poterci essere, partendo da quello che ti ha raccontato di lavoro, turni, figli o impegni (es. "Giovedì che turno fai? Dimmi un'ora in cui sei sicuro di essere libero e col telefono in mano"). Se ti chiede di proporre tu, prima chiedigli che impegni ha in quei giorni, poi proponi due ore precise che stanno sicuramente fuori da quegli impegni. Una domanda alla volta.`,
     `CONFERMA PRIMA DI SPOSTARE: quando ti dà un giorno e un'ora dentro quei giorni e quella fascia, NON spostare subito. Prima chiedigli una conferma esplicita, una domanda sola, richiamando l'impegno che ti ha detto se c'è (es. "Giovedì 29 alle 18: a quell'ora sei sicuro di esserci, anche col turno che finisce alle 17?"). Se nello stesso messaggio ti aveva già detto lui che a quell'ora è sicuro di esserci, la conferma c'è già. Se tentenna ("penso di sì", "dovrei", "spero", "salvo imprevisti", "vediamo") non spostare: chiedigli cosa potrebbe impedirglielo e cercate insieme un orario davvero sicuro.`,
@@ -192,8 +231,45 @@ export function notaSpostamentoPrompt(i: { giorni: string[]; callAt: Date; oreOc
       `ORE MENO PIENE (criterio secondario, solo fra orari che per lui sono ugualmente sicuri: la sicurezza viene prima): ${menoPiene}. Se è lui a dirti un'ora sicura, va bene quella anche se è fra le già piene: non dirgli che è piena e non provare a spostarla.`,
     ] : []),
     `Quando ti ha confermato in modo chiaro che a quel giorno e a quell'ora c'è di sicuro, scrivi SOLO il tag [SPOSTA|<data e ora in ISO 8601 con fuso, es. 2026-10-30T18:00:00+01:00>] e nient'altro: il messaggio di conferma, con Noemi e il video, lo manda il sistema. Se ti dà solo il giorno, chiedigli l'ora; se ti dà solo l'ora, chiedigli il giorno.`,
-    `Se il giorno che vuole è fuori da quei giorni, diglielo una volta: si può spostare solo a ${giorni}. Se ti dice che non può prima, o parla di settimane o mesi, o resta vago ("non so", "ti faccio sapere"), NON usare [SPOSTA]: fai come nella sezione SE VUOLE SPOSTARE O DISDIRE (il nuovo orario lo sistema con Noemi) e chiudi con [ESITO:RICHIAMO|...]. Se vuole rinunciare del tutto, vale [ESITO:SCARTO|...] come sempre.`,
+    `LO SPOSTI SEMPRE TU: quando chiede di spostare non rimandarlo a Noemi e non chiudere con [ESITO:RICHIAMO] finché c'è modo di fissare tu giorno e ora. Se resta vago ("non so", "ti faccio sapere", "più avanti") o non ti dà un orario, non mollare al primo giro: chiedigli che impegni ha in quei giorni e proponigli TU due orari precisi fuori da quegli impegni (es. "giovedì alle 18 o venerdì alle 11: in quale dei due sei sicuro di esserci?"). Fallo al massimo due volte, una domanda per messaggio. Se il giorno che vuole è fuori da quei giorni, diglielo una volta (si può spostare solo a ${giorni}) e proponigli due orari dentro quei giorni.`,
+    `SOLO se dopo due tentativi non ti dà un giorno e un'ora, o ti dice chiaro che in quei giorni non può proprio (parla di settimane o di mesi), NON usare [SPOSTA]: digli che il nuovo orario lo sistema con Noemi quando lo chiama (sezione SE VUOLE SPOSTARE O DISDIRE) e chiudi con [ESITO:RICHIAMO|...]. Se vuole rinunciare del tutto, vale [ESITO:SCARTO|...] come sempre.`,
   ].join('\n');
+}
+
+/**
+ * Il modello ha chiuso il turno con [ESITO:RICHIAMO|data] o [ESITO:APPUNTAMENTO|data] al
+ * posto di [SPOSTA|data] su una call che il bot può spostare (PO 12/11/2026).
+ *
+ * Il manuale dice «su una call già fissata lo spostamento è SEMPRE un RICHIAMO», e il
+ * modello ogni tanto lo segue anche col blocco dello spostamento nel prompt: la data, buona
+ * e dentro la finestra, usciva come nota «SPOSTAMENTO CHIESTO … a giovedì 12 alle 12:00» e
+ * la call restava dov'era (conv 30493, 31594, 32096, 30950: 8 chat in due settimane). Se
+ * la data regge tutti i controlli di [SPOSTA], il codice la tratta come [SPOSTA]: torna la
+ * data da spostare, altrimenti `null` e l'esito segue la strada di sempre.
+ *
+ * Solo POSTICIPI (o call già passata): una data PRIMA della call in agenda di solito è
+ * l'ora in cui il lead vuole essere richiamato da Noemi («richiamatemi domani alle 10»,
+ * con la videochiamata domani alle 18), non un nuovo orario della videochiamata. Quella
+ * resta una nota e la legge una persona.
+ */
+export function esitoDaSpostare(i: {
+  outcome: string | undefined;
+  date: string | undefined;
+  /** Il turno ha già un [SPOSTA]. */
+  spostaAt: string | undefined;
+  motivoNoSposta: MotivoNonSpostabile | null;
+  callAt: string | null;
+  nowMs: number;
+  ranges: BlackoutRange[];
+}): string | null {
+  if (i.spostaAt !== undefined) return null;
+  if (i.outcome !== 'RICHIAMO' && i.outcome !== 'APPUNTAMENTO') return null;
+  if (i.motivoNoSposta !== null || !i.callAt) return null;
+  const data = (i.date ?? '').trim();
+  if (!data || motivoDataNonValida(data, i.callAt, i.nowMs, i.ranges) !== null) return null;
+  const callMs = Date.parse(i.callAt);
+  if (callMs > i.nowMs && Date.parse(data) < callMs) return null;
+  return data;
 }
 
 /**

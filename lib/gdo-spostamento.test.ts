@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  dataCallDelBot, elencoGiorni, giorniSpostamento, motivoDataNonValida, motivoNonSpostabile, notaSpostamentoFattoPrompt, notaSpostamentoPrompt,
+  dataCallDelBot, elencoGiorni, esitoDaSpostare, giorniSpostamento, motivoDataNonValida, motivoNonSpostabile, notaSpostamentoFattoPrompt, notaSpostamentoPrompt,
   origineSpostamento, spostamentoAbilitato, testoSpostamentoFatto, ultimoLinkVideo,
   richiamoNonESpostamento, spostamentoGiaRifiutato, testoSpostamentoNonFatto,
   TESTO_SPOSTAMENTO_NON_FATTO, TESTO_SPOSTAMENTO_PASSATO_AI_COLLEGHI,
@@ -46,11 +46,63 @@ describe('quando la chat può offrire lo spostamento', () => {
     expect(motivoNonSpostabile({ ...base, origine: 'bot', giaSpostato: true })).toBe('gia_spostato');
     expect(motivoNonSpostabile({ ...base, origine: 'bot', confermeOutcome: 'confermato' })).toBe('esito_conferme');
     expect(motivoNonSpostabile({ ...base, appuntamentoAt: null })).toBe('senza_data');
-    expect(motivoNonSpostabile({ ...base, appuntamentoAt: '2026-10-28T14:20:00Z' })).toBe('call_vicina_o_passata');
     expect(motivoNonSpostabile({ ...base, giaSpostato: true })).toBe('gia_spostato');
     expect(motivoNonSpostabile({ ...base, presented: true })).toBe('gia_presentato');
     expect(motivoNonSpostabile({ ...base, confermeOutcome: 'confermato' })).toBe('esito_conferme');
     expect(motivoNonSpostabile({ ...base, confermeOutcome: 'da_rifissare' })).toBe('esito_conferme');
+  });
+  describe('il bot sposta sempre (PO 12/11/2026): rami che prima finivano in sola nota', () => {
+    it('scartato dalle Conferme (tre chiamate senza risposta): ora si sposta, lo scarto lo riapre il CRM', () => {
+      expect(motivoNonSpostabile({ ...base, confermeOutcome: 'scartato' })).toBeNull();
+      expect(motivoNonSpostabile({ ...base, origine: 'bot', confermeOutcome: 'scartato' })).toBeNull();
+      // Una volta sola e «già presentato» valgono anche per lo scartato.
+      expect(motivoNonSpostabile({ ...base, confermeOutcome: 'scartato', giaSpostato: true })).toBe('gia_spostato');
+      expect(motivoNonSpostabile({ ...base, confermeOutcome: 'scartato', salesOutcome: 'Chiuso' })).toBe('gia_presentato');
+    });
+    it('call a meno di 30 minuti: ora si sposta, basta che sia futura', () => {
+      // MER_15 = 14:00Z; call alle 14:20Z e alle 14:01Z.
+      expect(motivoNonSpostabile({ ...base, appuntamentoAt: '2026-10-28T14:20:00Z' })).toBeNull();
+      expect(motivoNonSpostabile({ ...base, origine: 'bot', appuntamentoAt: '2026-10-28T14:01:00Z' })).toBeNull();
+    });
+    it('call del GDO passata da non più di 7 giorni: si sposta; oltre, o sulle call del bot, no', () => {
+      expect(motivoNonSpostabile({ ...base, appuntamentoAt: '2026-10-28T11:00:00Z' })).toBeNull();
+      expect(motivoNonSpostabile({ ...base, appuntamentoAt: '2026-10-22T17:00:00Z' })).toBeNull();
+      expect(motivoNonSpostabile({ ...base, appuntamentoAt: '2026-10-21T13:00:00Z' })).toBe('call_passata');
+      // Sulle call del bot una call passata si rifissa da zero (isRifissaggioDopoCallPassata).
+      expect(motivoNonSpostabile({ ...base, origine: 'bot', appuntamentoAt: '2026-10-28T11:00:00Z' })).toBe('call_passata');
+    });
+  });
+});
+
+describe('esitoDaSpostare: RICHIAMO o APPUNTAMENTO con una data nuova buona valgono [SPOSTA] (PO 12/11/2026)', () => {
+  // mercoledì 28/10 15:00; call giovedì 29 alle 18:00; finestra gio 29, ven 30, sab 31.
+  const base = {
+    outcome: 'RICHIAMO' as string | undefined, date: '2026-10-30T12:00:00+01:00' as string | undefined, spostaAt: undefined as string | undefined,
+    motivoNoSposta: null as ReturnType<typeof motivoNonSpostabile>, callAt: CALL as string | null, nowMs: MER_15.getTime(), ranges: [],
+  };
+  it('conv 30493: [ESITO:RICHIAMO|venerdì alle 12] su una call spostabile → si sposta a quella data', () => {
+    expect(esitoDaSpostare(base)).toBe('2026-10-30T12:00:00+01:00');
+  });
+  it('conv 30950/32096: anche [ESITO:APPUNTAMENTO|data nuova]', () => {
+    expect(esitoDaSpostare({ ...base, outcome: 'APPUNTAMENTO', date: '2026-10-29T21:00:00+01:00' })).toBe('2026-10-29T21:00:00+01:00');
+  });
+  it('resta una nota: senza data, data fuori finestra o fascia, stessa data, call non spostabile, altri esiti, [SPOSTA] già nel turno', () => {
+    expect(esitoDaSpostare({ ...base, date: undefined })).toBeNull();
+    expect(esitoDaSpostare({ ...base, date: 'a gennaio' })).toBeNull();
+    expect(esitoDaSpostare({ ...base, date: '2026-11-10T12:00:00+01:00' })).toBeNull();
+    expect(esitoDaSpostare({ ...base, date: '2026-10-30T22:30:00+01:00' })).toBeNull();
+    expect(esitoDaSpostare({ ...base, date: '2026-10-29T18:00:00+01:00' })).toBeNull();
+    expect(esitoDaSpostare({ ...base, motivoNoSposta: 'gia_spostato' })).toBeNull();
+    expect(esitoDaSpostare({ ...base, motivoNoSposta: 'esito_conferme' })).toBeNull();
+    expect(esitoDaSpostare({ ...base, outcome: 'DA_SCARTARE' })).toBeNull();
+    expect(esitoDaSpostare({ ...base, outcome: undefined })).toBeNull();
+    expect(esitoDaSpostare({ ...base, spostaAt: '2026-10-30T12:00:00+01:00' })).toBeNull();
+  });
+  it('un anticipo resta una nota: «richiamatemi domani alle 10» di solito è la chiamata di Noemi, non la videochiamata', () => {
+    expect(esitoDaSpostare({ ...base, date: '2026-10-29T10:00:00+01:00' })).toBeNull();
+  });
+  it('call del GDO già passata: qualunque data buona nella finestra è un posticipo', () => {
+    expect(esitoDaSpostare({ ...base, callAt: '2026-10-28T11:00:00Z', date: '2026-10-29T10:00:00+01:00' })).toBe('2026-10-29T10:00:00+01:00');
   });
 });
 
@@ -87,6 +139,23 @@ describe('testi', () => {
     expect(t).toContain('[SPOSTA|');
     expect(t).toContain('[ESITO:RICHIAMO|');
     expect(t).toContain('giovedì 29 alle 18:00');
+  });
+  it('il bot sposta sempre (PO 12/11/2026): se il lead resta vago insiste e propone due orari precisi, fino a due volte, prima della nota', () => {
+    const t = notaSpostamentoPrompt({ giorni: ['2026-10-29', '2026-10-30', '2026-10-31'], callAt: new Date(CALL) });
+    expect(t).toContain('LO SPOSTI SEMPRE TU');
+    expect(t).toContain('non mollare al primo giro');
+    expect(t).toContain('proponigli TU due orari precisi');
+    expect(t).toContain('al massimo due volte');
+    expect(t).toContain('SOLO se dopo due tentativi non ti dà un giorno e un\'ora');
+    // La vecchia uscita al primo «non so» non c'è più.
+    expect(t).not.toContain('o resta vago ("non so", "ti faccio sapere"), NON usare [SPOSTA]');
+    // L'orario sicuro del 10/11 resta com'era: prima gli impegni, poi le due ore.
+    expect(t).toContain('Non proporgli tu orari al buio');
+  });
+  it('call del GDO già passata: il blocco dice che non si è fatta e che la sposta lui', () => {
+    const t = notaSpostamentoPrompt({ giorni: ['2026-10-29'], callAt: new Date(CALL), callPassata: true });
+    expect(t).toContain('la sua videochiamata era giovedì 29 alle 18:00 e non si è fatta');
+    expect(notaSpostamentoPrompt({ giorni: ['2026-10-29'], callAt: new Date(CALL) })).toContain('la sua videochiamata è giovedì 29 alle 18:00.');
   });
   it('orario sicuro (PO 10/11/2026): niente fasce al buio, si parte dai suoi impegni', () => {
     const t = notaSpostamentoPrompt({ giorni: ['2026-10-29', '2026-10-30'], callAt: new Date(CALL) });

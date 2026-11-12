@@ -3896,6 +3896,80 @@ describe('drainMarioReplies — il bot sposta la call del lead GDO (PO 28/10/202
     expect(contesto()).not.toContain('SPOSTAMENTO DELLA CALL');
   });
 
+  describe('il bot sposta sempre (PO 12/11/2026)', () => {
+    // Un giorno e un'ora della finestra sicuramente DOPO la call (che e' fra 48 ore).
+    const terzo = giorniSpostamento(new Date(), [])[2];
+    const DOPO = `${terzo}T20:00:00${romeOffset(new Date(`${terzo}T12:00:00Z`))}`;
+
+    it('conv 30493: [ESITO:RICHIAMO|data nuova buona] al posto di [SPOSTA] → il codice sposta lo stesso, niente nota', async () => {
+      const f = fetchCrm(200, { ok: true, rescheduled: true });
+      vi.stubGlobal('fetch', f);
+      const { supabase, calls } = makeDrainSupabase(postino(), [RECAP, { direction: 'in', body: 'Le 20', template_sid: null, created_at: fra(-60_000) }]);
+      vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Perfetto, lo passo a Noemi.', { outcome: 'RICHIAMO', scheduledAt: DOPO }));
+
+      await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+      expect(f).toHaveBeenCalledTimes(1);
+      expect(JSON.parse((f.mock.calls[0] as any)[1].body)).toEqual({ leadId: 'gdo3', outcome: 'SPOSTAMENTO', date: DOPO });
+      const bolle = calls.messageInserts.map((m: any) => m.body);
+      expect(bolle).toHaveLength(1);
+      expect(bolle[0]).toMatch(/^Fatto Luca, la tua videochiamata ora è \*/);
+      expect(calls.events.find((e: any) => e.type === 'gdo_spostamento_da_esito')?.payload).toMatchObject({ esito: 'RICHIAMO', data: DOPO, origine: 'gdo' });
+      expect(calls.events.some((e: any) => e.type === 'gdo_spostamento_bot')).toBe(true);
+      expect(sendOutcome).not.toHaveBeenCalled();
+    });
+
+    it('il CRM dice no anche qui: resta la nota SPOSTAMENTO CHIESTO con la data, come prima', async () => {
+      vi.stubGlobal('fetch', fetchCrm(409, { error: 'spostamento_rifiutato', motivo: 'confermato' }));
+      const { supabase, calls } = makeDrainSupabase(postino(), [RECAP, SPOSTA]);
+      vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Lo passo a Noemi.', { outcome: 'RICHIAMO', scheduledAt: DOPO }));
+
+      await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+      expect(calls.messageInserts.map((m: any) => m.body)).toEqual([TESTO_SPOSTAMENTO_PASSATO_AI_COLLEGHI]);
+      expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'RICHIAMO', date: DOPO });
+    });
+
+    it('un anticipo («richiamatemi domani alle 10») NON diventa uno spostamento: e\' quasi sempre la chiamata di Noemi', async () => {
+      const f = fetchCrm(200, { ok: true, rescheduled: true });
+      vi.stubGlobal('fetch', f);
+      const lontana = fra(4 * 24 * 3600_000);
+      const primo = giorniSpostamento(new Date(), [])[0];
+      const PRIMA = `${primo}T10:00:00${romeOffset(new Date(`${primo}T12:00:00Z`))}`;
+      const { supabase, calls } = makeDrainSupabase(postino({ gdo_appuntamento_at: lontana, gdo_recap_for_at: lontana }), [RECAP, SPOSTA]);
+      vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Lo dico a Noemi.', { outcome: 'RICHIAMO', scheduledAt: PRIMA }));
+
+      await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+      expect(f).not.toHaveBeenCalled();
+      expect(calls.events.some((e: any) => e.type === 'gdo_spostamento_da_esito')).toBe(false);
+      expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'RICHIAMO', date: PRIMA });
+      expect(calls.messageInserts.map((m: any) => m.body)).toEqual(['Lo dico a Noemi.']);
+    });
+
+    it('call fra 10 minuti: il blocco dello spostamento c\'e\' (prima sotto i 30 minuti usciva solo la nota)', async () => {
+      const vicina = fra(10 * 60_000);
+      const { supabase } = makeDrainSupabase(postino({ gdo_appuntamento_at: vicina, gdo_recap_for_at: vicina }), [RECAP, SPOSTA]);
+      vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Dimmi giorno e ora in cui sei sicuro di esserci'));
+
+      await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+      expect(contesto()).toContain('SPOSTAMENTO DELLA CALL');
+      expect(contesto()).toContain('LO SPOSTI SEMPRE TU');
+    });
+
+    it('call del GDO saltata tre ore fa: il blocco c\'e\' e dice che non si e\' fatta', async () => {
+      const passata = fra(-3 * 3600_000);
+      const { supabase } = makeDrainSupabase(postino({ gdo_appuntamento_at: passata, gdo_recap_for_at: passata }), [RECAP, { direction: 'in', body: 'scusate non ho potuto, possiamo rifare domani?', template_sid: null, created_at: fra(-60_000) }]);
+      vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Dimmi giorno e ora in cui sei sicuro di esserci'));
+
+      await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+      expect(contesto()).toContain('SPOSTAMENTO DELLA CALL');
+      expect(contesto()).toContain('e non si è fatta');
+    });
+  });
+
   it("chat 31379: dopo lo spostamento fatto dal bot il prompt dice che e' vero e registrato, cosi' il modello non lo smentisce", async () => {
     // 09/11/2026: «Fatto Giuseppe, la tua videochiamata ora è martedì 10 alle 20:00» e, al
     // messaggio dopo, «lo spostamento non lo faccio io, non darlo per fatto». Nel turno dopo
@@ -4005,6 +4079,26 @@ describe('drainMarioReplies — il bot sposta anche le call che ha fissato lui (
     expect(calls.events.find((e: any) => e.type === 'gdo_spostamento_non_fatto')?.payload).toMatchObject({ origine: 'bot', motivo: 'confermato' });
     expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'RICHIAMO', date: NUOVA });
     expect(calls.convUpdates.some((u: any) => 'bot_scheduled_at' in u)).toBe(false);
+  });
+
+  it('il bot sposta sempre (conv 32096): [ESITO:APPUNTAMENTO|data nuova] su una call del bot → SPOSTAMENTO al CRM e conferma del codice, niente nota', async () => {
+    const f = fetchCrm(200, { ok: true, rescheduled: true });
+    vi.stubGlobal('fetch', f);
+    const terzo = giorniSpostamento(new Date(), [])[2];
+    const DOPO = `${terzo}T21:00:00${romeOffset(new Date(`${terzo}T12:00:00Z`))}`;
+    const { supabase, calls } = makeDrainSupabase(delBot(), [FATTO, { direction: 'in', body: 'facciamo alle 21:00', template_sid: null, created_at: fra(-60_000) }]);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Ci siamo, ti confermo alle 21:00!', { outcome: 'APPUNTAMENTO', scheduledAt: DOPO, appointmentFixed: true }));
+
+    await drainMarioReplies(supabase, 93, '+391234567890', () => 0);
+
+    expect(JSON.parse((f.mock.calls[0] as any)[1].body)).toEqual({ leadId: 'bot7', outcome: 'SPOSTAMENTO', date: DOPO });
+    const bolle = calls.messageInserts.map((m: any) => m.body);
+    expect(bolle).toHaveLength(1);
+    expect(bolle[0]).toMatch(/^Fatto Sara, la tua videochiamata ora è \*/);
+    expect(calls.convUpdates.find((u: any) => 'bot_scheduled_at' in u)).toMatchObject({ bot_scheduled_at: new Date(DOPO).toISOString() });
+    expect(calls.events.find((e: any) => e.type === 'gdo_spostamento_da_esito')?.payload).toMatchObject({ esito: 'APPUNTAMENTO', origine: 'bot' });
+    expect(calls.events.find((e: any) => e.type === 'fenice_ai_reply')?.payload).toMatchObject({ appointmentFixed: false, spostamentoFatto: true });
+    expect(sendOutcome).not.toHaveBeenCalled();
   });
 
   it('chat 32173: dopo lo spostamento il lead disdice («annulliamo la video di domani»), il RICHIAMO dei turni dopo NON si butta e arriva a sendOutcome', async () => {

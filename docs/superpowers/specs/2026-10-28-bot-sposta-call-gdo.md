@@ -83,3 +83,26 @@ dal bot" nel CRM. Il tono assertivo resta solo dentro il blocco.
 - Monitoraggio: `origine` (`gdo` | `bot`) nel payload di `gdo_spostamento_bot` e
   `gdo_spostamento_non_fatto`; nel CRM `origine` nei metadata di `BOT_APPOINTMENT_RESCHEDULED`.
   Gli eventi del 28-29/10 senza `origine` sono tutti lead GDO.
+
+## 12/11/2026: il bot sposta sempre (PO)
+
+Dati 29/10-12/11: 43 spostamenti veri, 26% di confermati sugli esitati; 46 lead rimasti con
+la sola nota, 0 presenti. Decisione: la sola nota resta dove lo spostamento non si puo' fare.
+
+Cosa cambia (bot `lib/gdo-spostamento.ts`, CRM `src/lib/bot-fissatore/spostamentoGdo.ts`):
+- scartato dalle Conferme: il blocco c'e', il CRM sposta e riapre lo scarto (CONFERME_DISCARD_RESET);
+- call a meno di 30 minuti: si sposta, basta che sia futura;
+- call del GDO passata da non piu' di 7 giorni: si sposta (sulle call del bot resta il fissaggio nuovo);
+- `[ESITO:RICHIAMO|data]` o `[ESITO:APPUNTAMENTO|data]` con una data buona e successiva alla call:
+  il codice li tratta come `[SPOSTA]` (`esitoDaSpostare`, evento `gdo_spostamento_da_esito`);
+- lead vago: il blocco fa insistere e proporre due orari precisi, fino a due volte, prima del RICHIAMO;
+- dopo lo spostamento il prompt porta `SPOSTAMENTO GIA' FATTO` (chat 31379).
+
+Restano nota: interruttore spento; confermato con venditore o gia' presentato; gia' spostato una
+volta; data fuori dai 3 giorni o dalla fascia 9-21; anticipo rispetto alla call; no o errore del
+CRM; lead senza data dopo due solleciti; call del bot gia' spostata dalle Conferme; chat postino
+con anche un appuntamento del bot; call passata da piu' di 7 giorni; lead senza scheda CRM.
+
+Ordine di pubblicazione: prima il CRM, poi il bot (col CRM vecchio i nuovi casi tornano 409 e
+finiscono in nota come oggi). Misura: `riapreScarto` e `callPassata` nei metadata di
+`BOT_APPOINTMENT_RESCHEDULED`.

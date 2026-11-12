@@ -55,6 +55,7 @@ import { congedoDatabase } from './database-congedo';
 import { fissatoIlDi } from './noemi-quando';
 import {
   dataCallDelBot,
+  esitoDaSpostare,
   giorniSpostamento,
   motivoDataNonValida,
   motivoNonSpostabile,
@@ -1386,6 +1387,8 @@ export async function drainMarioReplies(
         ? notaSpostamentoPrompt({
             giorni: giorniSposta,
             callAt: new Date(callSpostabileAt),
+            // Call del GDO saltata da poco (PO 12/11/2026): il blocco lo dice al modello.
+            callPassata: Date.parse(callSpostabileAt) <= Date.now(),
             // Le ore meno piene dei giorni dello spostamento (PO 10/11/2026): criterio
             // secondario dopo l'orario sicuro per il lead. Null se il CRM non risponde.
             oreOccupate: await leggiOreOccupate(giorniSposta),
@@ -1504,7 +1507,7 @@ export async function drainMarioReplies(
       if (appuntamentoScartato) visibleReply = TESTO_DATA_DA_VERIFICARE;
       // Da qui in giù "fissato in questo turno" vale solo se la data passa la guardia: niente
       // blocco Noemi + video e niente scheda per una call che non esiste.
-      const fissatoNelTurno = result.appointmentFixed && !appuntamentoScartato;
+      let fissatoNelTurno = result.appointmentFixed && !appuntamentoScartato;
       if (passaggioBloccato) {
         await supabase.from('event_log').insert({
           type: 'lancio_passaggio_umano_ignorato',
@@ -1571,6 +1574,36 @@ export async function drainMarioReplies(
       // sulla nota SPOSTAMENTO CHIESTO di sempre (esito RICHIAMO sul canale solo-nota).
       let spostamentoFatto = false;
       let bollaSpostamento: string | null = null;
+      // «Il bot sposta sempre» (PO 12/11/2026): il modello ha chiuso con [ESITO:RICHIAMO|data]
+      // o [ESITO:APPUNTAMENTO|data] al posto di [SPOSTA|data] su una call che si puo'
+      // spostare, e la data regge i controlli di [SPOSTA]. Prima usciva come nota
+      // «SPOSTAMENTO CHIESTO … a <data>» e la call restava dov'era; ora segue la strada di
+      // [SPOSTA] qui sotto (il CRM decide, il lead legge «fatto» solo se ha spostato davvero).
+      if (origineSposta && crmLeadId) {
+        const daSpostare = esitoDaSpostare({
+          outcome: result.outcome,
+          date: result.scheduledAt,
+          spostaAt: result.spostaAt,
+          motivoNoSposta,
+          callAt: callSpostabileAt,
+          nowMs: Date.now(),
+          ranges: rangesSpostamento,
+        });
+        if (daSpostare) {
+          await supabase.from('event_log').insert({
+            type: 'gdo_spostamento_da_esito',
+            payload: { conversationId, crmLeadId, origine: origineSposta, esito: result.outcome, data: daSpostare } as never,
+            message: `[${origineSposta}] conv ${conversationId}: ${result.outcome} con data nuova valida (${daSpostare}) trattato come [SPOSTA]`,
+            level: 'info',
+          });
+          result.spostaAt = daSpostare;
+          result.outcome = undefined;
+          result.scheduledAt = undefined;
+          // Il tag APPUNTAMENTO segnava il turno come «fissato»: qui non si fissa, si sposta.
+          fissatoNelTurno = false;
+          result.appointmentFixed = false;
+        }
+      }
       if (origineSposta && crmLeadId && result.spostaAt !== undefined) {
         const adesso = new Date();
         const videoVisto = !!gdoVideoWatchedAt || videoConfermato;
