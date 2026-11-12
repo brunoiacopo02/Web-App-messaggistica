@@ -106,3 +106,17 @@ con anche un appuntamento del bot; call passata da piu' di 7 giorni; lead senza 
 Ordine di pubblicazione: prima il CRM, poi il bot (col CRM vecchio i nuovi casi tornano 409 e
 finiscono in nota come oggi). Misura: `riapreScarto` e `callPassata` nei metadata di
 `BOT_APPOINTMENT_RESCHEDULED`.
+
+## 12/11/2026 sera: «non posso in questi giorni, riscrivo io» (PO, chat 25906)
+
+"Una volta sola" e la finestra di 3 giorni lavorativi RESTANO. Se il lead vuole una data oltre
+la finestra il bot insiste sui giorni della finestra; se proprio non puo' gli dice di riscrivere
+quando sa quando puo', e chiude con `[ESITO:RICHIAMO|...]`. Il codice (`eRiscriveLui`):
+- segna l'evento `gdo_spostamento_attesa_lead`: nessuno spostamento consumato;
+- manda alle Conferme la nota «IL LEAD RISCRIVE LUI PER LA NUOVA DATA» (non «SPOSTAMENTO CHIESTO»,
+  non «DA RICHIAMARE»): non devono chiamarlo per la call vecchia ne' spostarla;
+- `cancel_requested_at` spegne promemoria pre-call e messaggi sulle chiamate perse.
+Quando il lead riscrive, il blocco dello spostamento torna nel prompt con la finestra contata da
+quel giorno, anche se la call vecchia del GDO e' passata (fino a 60 giorni; senza attesa 7). Sulle
+call del bot, a call passata vale il fissaggio nuovo di sempre. Il CRM accetta SPOSTAMENTO fino a
+60 giorni dalla call vecchia e riapre l'eventuale scarto.

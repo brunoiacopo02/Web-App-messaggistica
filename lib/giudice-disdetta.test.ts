@@ -215,3 +215,12 @@ describe('chiamata al modello', () => {
     await expect(giudicaDisdetta(chat, { adesso, appuntamentoAt: null }, { anthropic: finto(null) as never })).rejects.toThrow('giudice_senza_json');
   });
 });
+
+describe('«riscrivo io per la data» non è una disdetta (PO 12/11/2026, chat 25906)', () => {
+  it('il prompt lo mette fra i salvi e lo distingue dal «vi ricontatto io» di chi rinuncia', () => {
+    expect(SYSTEM_GIUDICE).toContain('resta d\'accordo col BOT di riscrivere lui quando sa la data');
+    expect(SYSTEM_GIUDICE).toContain('«questa settimana proprio non riesco, ti scrivo io appena so i turni» → non_disdetta');
+    expect(SYSTEM_GIUDICE).toContain('SENZA voler rifissare la videochiamata');
+    expect(SYSTEM_GIUDICE).toContain('«allora annulla tutto» → non_disdetta');
+  });
+});

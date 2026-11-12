@@ -12,6 +12,9 @@ export type OutcomeArgs = {
    *  sintesi: le Conferme hanno chiesto anche le parole vere, per non scoprire al
    *  telefono che la disdetta diceva un'altra cosa. */
   leadWords?: string;
+  /** Solo per RICHIAMO su una call già fissata che il bot può spostare: il lead non può nei
+   *  giorni della finestra e riscrive lui (PO 12/11/2026). Cambia la nota alle Conferme. */
+  riscriveLui?: boolean;
 };
 
 export type OutcomeAction =
@@ -46,6 +49,31 @@ function buildSpostamentoChiestoNote(leadDateIso: string | null, inAgenda: strin
     ? `In agenda resta ${inAgenda}: mantenuto finché non lo spostate voi.`
     : 'Appuntamento mantenuto: da spostare voi.';
   return `${testa} ${coda}`;
+}
+
+/**
+ * "IL LEAD RISCRIVE LUI PER LA NUOVA DATA" (PO 12/11/2026, chat 25906).
+ *
+ * Il lead chiede di spostare ma nei 3 giorni lavorativi in cui il bot può spostare non
+ * può proprio («possiamo fare nella settimana dal 23/11?»). Il bot ha insistito sui giorni
+ * della finestra, poi gli ha detto di riscrivere quando sa quando può: in quel momento la
+ * call la sposta il bot, con la finestra contata da quel giorno. Lo spostamento "una volta
+ * sola" non è consumato e il lead non è una disdetta.
+ *
+ * Per le Conferme è una nota diversa da «SPOSTAMENTO CHIESTO»: lì tocca a loro spostare,
+ * qui NON devono fare niente e non devono chiamarlo per la call vecchia, che il lead ha
+ * detto di non poter fare. La testa (fino al primo punto) è fissa: la chiave di dedup del
+ * CRM non cambia fra un turno e l'altro; date e parole stanno dopo.
+ */
+export const NOTA_RISCRIVE_LUI_PREFISSO = 'IL LEAD RISCRIVE LUI PER LA NUOVA DATA';
+
+function buildRiscriveLuiNote(leadDateIso: string | null, inAgenda: string | null): string {
+  const testa = `${NOTA_RISCRIVE_LUI_PREFISSO} — nei prossimi giorni non può fare la videochiamata e il bot gli ha detto di riscrivere in chat quando sa quando può: appena riscrive, la sposta il bot.`;
+  const vecchia = inAgenda
+    ? ` La call di ${inAgenda} non la farà: non chiamatelo per quella e non spostatela voi, non serve fare niente.`
+    : ' La call che aveva non la farà: non chiamatelo per quella, non serve fare niente.';
+  const quando = leadDateIso ? ` Ha indicato ${formatRomeDateTime(leadDateIso)}, fuori dai giorni in cui il bot può spostare.` : '';
+  return `${testa}${vecchia}${quando}`;
 }
 
 /**
@@ -90,7 +118,9 @@ export function buildLockedNote(args: OutcomeArgs, existingDate: string | null):
       // UTC mentre args.date arriva dal tag del modello nel fuso locale imposto dal
       // prompt, quindi lo stesso istante avrebbe quasi sempre due stringhe diverse.
       const leadDate = args.date && !sameInstant(args.date, existingDate) ? args.date : null;
-      base = buildSpostamentoChiestoNote(leadDate, inAgenda);
+      base = args.riscriveLui
+        ? buildRiscriveLuiNote(leadDate, inAgenda)
+        : buildSpostamentoChiestoNote(leadDate, inAgenda);
       break;
     }
     case 'NON_RISPOSTO':

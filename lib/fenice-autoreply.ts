@@ -56,6 +56,8 @@ import { fissatoIlDi } from './noemi-quando';
 import {
   dataCallDelBot,
   esitoDaSpostare,
+  eRiscriveLui,
+  EVENTO_ATTESA_LEAD,
   giorniSpostamento,
   motivoDataNonValida,
   motivoNonSpostabile,
@@ -72,7 +74,7 @@ import {
 } from './gdo-spostamento';
 import {
   giaSpostatoDalBot, inviaSpostamentoAlCrm, registraSpostamentoInChat, spostamentiRifiutati, statoCrmLocale, ultimoSpostamentoDalBot,
-  ultimoSpostamentoDalBotInfo,
+  ultimoSpostamentoDalBotInfo, inAttesaCheRiscriva,
 } from './gdo-spostamento-send';
 import { isoWithOffset } from './bot-contract';
 import { sameInstant } from './rome-time';
@@ -1369,6 +1371,14 @@ export async function drainMarioReplies(
         nowMs: Date.now(),
       };
       let motivoNoSposta: MotivoNonSpostabile | null = motivoNonSpostabile({ ...baseSpostamento, giaSpostato: false });
+      // «Non posso in questi giorni, riscrivo io» (PO 12/11/2026): se il lead doveva
+      // riscrivere, la call del GDO passata da piu' di 7 giorni resta spostabile. La lettura
+      // si paga solo in quel caso.
+      let inAttesaDelLead = false;
+      if (motivoNoSposta === 'call_passata' && origineSposta === 'gdo' && crmLeadId) {
+        inAttesaDelLead = await inAttesaCheRiscriva(supabase, conversationId);
+        if (inAttesaDelLead) motivoNoSposta = motivoNonSpostabile({ ...baseSpostamento, giaSpostato: false, inAttesaDelLead });
+      }
       if (motivoNoSposta === null && crmLeadId) {
         const [gia, crm] = await Promise.all([
           giaSpostatoDalBot(supabase, conversationId),
@@ -1376,6 +1386,7 @@ export async function drainMarioReplies(
         ]);
         motivoNoSposta = motivoNonSpostabile({
           ...baseSpostamento,
+          inAttesaDelLead,
           giaSpostato: gia,
           confermeOutcome: crm?.confermeOutcome ?? null,
           presented: crm?.presented ?? null,
@@ -1722,6 +1733,24 @@ export async function drainMarioReplies(
           result.scheduledAt = undefined;
           result.note = undefined;
         }
+      }
+
+      // «Non posso in questi giorni, riscrivo io» (PO 12/11/2026, chat 25906): la call si
+      // poteva spostare e il modello ha chiuso con RICHIAMO senza uno spostamento. Non e'
+      // una disdetta e non consuma lo spostamento: si segna l'attesa (quando il lead
+      // riscrive il bot sposta, anche a call ormai passata) e alle Conferme va la nota
+      // «IL LEAD RISCRIVE LUI PER LA NUOVA DATA». `sendOutcome` segna `cancel_requested_at`:
+      // niente promemoria e niente messaggi sulle chiamate perse per la call vecchia.
+      const riscriveLui = !!origineSposta && !!crmLeadId && eRiscriveLui({
+        outcome: result.outcome, spostaAt: result.spostaAt, spostamentoFatto, motivoNoSposta,
+      });
+      if (riscriveLui) {
+        await supabase.from('event_log').insert({
+          type: EVENTO_ATTESA_LEAD,
+          payload: { conversationId, crmLeadId, origine: origineSposta, callAt: callSpostabileAt, quando: result.scheduledAt ?? result.note ?? null } as never,
+          message: `[${origineSposta}] conv ${conversationId}: il lead non puo' nei giorni dello spostamento, riscrive lui per la nuova data`,
+          level: 'info',
+        });
       }
 
       // Riscaldamento: la domanda in attesa non si rifa' MAI, nemmeno se il lead ha
@@ -2126,6 +2155,7 @@ export async function drainMarioReplies(
             // chiesto anche le parole vere del lead: sono l'ultimo turno della
             // cronologia, l'unica cosa che non e' una parafrasi.
             leadWords: [...history].reverse().find((t) => t.role === 'user')?.content,
+            ...(riscriveLui ? { riscriveLui: true } : {}),
             report,
             // I due giorni prenotabili che il modello ha visto in QUESTO turno: la
             // guardia sulla data li usa al posto di ricalcolarli. A mezzanotte (ora di

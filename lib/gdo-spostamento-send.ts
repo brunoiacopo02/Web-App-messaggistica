@@ -63,6 +63,24 @@ export async function ultimoSpostamentoDalBot(supabase: Supa, conversationId: nu
   return (await ultimoSpostamentoDalBotInfo(supabase, conversationId))?.a ?? null;
 }
 
+/**
+ * Il lead di questa chat aveva detto «in questi giorni non posso, riscrivo io»
+ * (`gdo_spostamento_attesa_lead`, PO 12/11/2026)? Nel dubbio no: vale la regola normale.
+ */
+export async function inAttesaCheRiscriva(supabase: Supa, conversationId: number): Promise<boolean> {
+  try {
+    const { data, error } = await supabase
+      .from('event_log')
+      .select('id')
+      .eq('type', 'gdo_spostamento_attesa_lead')
+      .eq('payload->>conversationId', String(conversationId))
+      .limit(1);
+    return !error && Array.isArray(data) && data.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 /** Le date dei tentativi di spostamento gia' rifiutati in questa chat (`gdo_spostamento_non_fatto`). Nel dubbio nessuna. */
 export async function spostamentiRifiutati(supabase: Supa, conversationId: number): Promise<string[]> {
   try {

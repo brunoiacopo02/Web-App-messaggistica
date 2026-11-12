@@ -747,6 +747,25 @@ describe('sendOutcome — canale solo-NOTA per i lead dei GDO (noteOnly)', () =>
     expect(calls.updates).toEqual([{ cancel_requested_at: expect.any(String) }]);
   });
 
+  it('chat 25906 (PO 12/11/2026): «non posso in questi giorni, riscrivo io» → nota IL LEAD RISCRIVE LUI e automatismi spenti sulla call vecchia', async () => {
+    const { supabase, calls } = makeSupabase({ ...CONV_GDO, gdo_appuntamento_at: '2026-11-05T10:00:00+01:00' });
+    const res = await sendOutcome(supabase, 7, {
+      outcome: 'RICHIAMO', note: 'nella settimana dal 23/11', riscriveLui: true,
+      leadWords: "Buongiorno Marta, ho bisogno di posticipare l' appuntamento, possiamo fare direttamente nella settimana dal 23/11? grazie",
+    }, { noteOnly: true });
+
+    expect(res.sent).toBe(true);
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(body.outcome).toBe('NOTA');
+    expect(body.note).toMatch(/^IL LEAD RISCRIVE LUI PER LA NUOVA DATA — /);
+    expect(body.note).toContain('appena riscrive, la sposta il bot');
+    expect(body.note).toContain('La call di giovedì 5 novembre alle 10:00 non la farà: non chiamatelo per quella');
+    expect(body.note).toContain('nella settimana dal 23/11');
+    expect(body.note).not.toContain('SPOSTAMENTO CHIESTO');
+    // Il marcatore spegne promemoria pre-call e messaggi sulle chiamate perse.
+    expect(calls.updates).toEqual([{ cancel_requested_at: expect.any(String) }]);
+  });
+
   it('un APPUNTAMENTO del modello non diventa mai un esito: resta una nota', async () => {
     const { supabase, calls } = makeSupabase(CONV_GDO);
     const res = await sendOutcome(supabase, 7, { outcome: 'APPUNTAMENTO', date: DATE }, { noteOnly: true });
@@ -883,6 +902,16 @@ describe('sendOutcome — cancel_requested_at', () => {
     await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', note: 'a maggio, quando finisce la rata del finanziamento', leadWords: 'La rata  finisce a maggio' });
     expect(marcature(calls)).toHaveLength(1);
     expect(calls.events.find((e) => e.type === 'cancel_requested')?.payload).toMatchObject({ conversationId: 1, outcome: 'RICHIAMO' });
+  });
+
+  it('call del bot, «riscrivo io» senza una data (PO 12/11/2026): nota IL LEAD RISCRIVE LUI al posto di DA RICHIAMARE, disdetta marcata, chat aperta', async () => {
+    const { supabase, calls } = makeSupabase(fissato);
+    const res = await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', note: 'appena so i turni', riscriveLui: true });
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(body.note).toMatch(/^IL LEAD RISCRIVE LUI PER LA NUOVA DATA — /);
+    expect(body.note).not.toContain('DA RICHIAMARE');
+    expect(res.keepOpen).toBe(true);
+    expect(marcature(calls)).toHaveLength(1);
   });
 
   it('un INTERROTTO NON è una disdetta: il lead non ha chiesto niente', async () => {

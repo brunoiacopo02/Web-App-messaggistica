@@ -61,6 +61,32 @@ const A_MIN = 21 * 60;
  * 30 minuti dalla call né dopo: uscivano come nota.
  */
 export const CALL_PASSATA_MAX_GIORNI = 7;
+/**
+ * «Non posso in questi giorni, ti riscrivo io» (PO 12/11/2026, chat 25906: voleva la
+ * settimana del 23/11, tre settimane dopo). Il bot insiste sui giorni della finestra; se il
+ * lead proprio non può gli dice di riscrivere quando sa quando può, e quando riscrive lo
+ * sposta, con la finestra di 3 giorni contata da quel giorno. Lo spostamento "una volta
+ * sola" non si consuma (non c'è stato nessuno spostamento) e la call vecchia, anche se nel
+ * frattempo è passata, resta spostabile fino a questi giorni (stesso tetto nel CRM:
+ * `SPOSTAMENTO_CALL_PASSATA_MAX_GIORNI`).
+ */
+export const ATTESA_LEAD_MAX_GIORNI = 60;
+/** L'evento che segna «il lead riscrive lui per la nuova data». */
+export const EVENTO_ATTESA_LEAD = 'gdo_spostamento_attesa_lead';
+
+/**
+ * Il RICHIAMO di questo turno è «non posso in questi giorni, riscrivo io»? Sì quando la
+ * call si poteva spostare (il blocco era nel prompt, che fa uscire con [ESITO:RICHIAMO] solo
+ * così) e il turno non ha prodotto né tentato uno spostamento.
+ */
+export function eRiscriveLui(i: {
+  outcome: string | undefined;
+  spostaAt: string | undefined;
+  spostamentoFatto: boolean;
+  motivoNoSposta: MotivoNonSpostabile | null;
+}): boolean {
+  return i.outcome === 'RICHIAMO' && i.spostaAt === undefined && !i.spostamentoFatto && i.motivoNoSposta === null;
+}
 const CALL_PASSATA_MAX_MS = CALL_PASSATA_MAX_GIORNI * 24 * 3600_000;
 
 /** Il giorno lavorativo dopo la chiave 'YYYY-MM-DD' (la domenica salta). */
@@ -140,16 +166,22 @@ export function motivoNonSpostabile(i: {
   confermeOutcome?: string | null;
   presented?: boolean | null;
   salesOutcome?: string | null;
+  /** Il lead aveva detto «in questi giorni non posso, riscrivo io» (`EVENTO_ATTESA_LEAD`):
+   *  la call del GDO si sposta anche se è passata da più di 7 giorni, fino a
+   *  `ATTESA_LEAD_MAX_GIORNI`. */
+  inAttesaDelLead?: boolean;
   nowMs: number;
 }): MotivoNonSpostabile | null {
   if (!i.enabled) return 'spento';
   if (!i.origine) return 'non_postino';
   if (i.dataCambiata) return 'data_cambiata_dal_crm';
   if (!i.appuntamentoAt || Number.isNaN(Date.parse(i.appuntamentoAt))) return 'senza_data';
-  // Call passata: quella del GDO si sposta se è passata da poco (PO 12/11/2026); quella del
-  // bot no, perché lì il modello fissa un appuntamento nuovo (`isRifissaggioDopoCallPassata`).
+  // Call passata: quella del GDO si sposta se è passata da poco (PO 12/11/2026), o da più
+  // tempo se il lead doveva riscrivere lui; quella del bot no, perché lì il modello fissa un
+  // appuntamento nuovo (`isRifissaggioDopoCallPassata`).
   const passataDaMs = i.nowMs - Date.parse(i.appuntamentoAt);
-  if (passataDaMs >= 0 && (i.origine === 'bot' || passataDaMs > CALL_PASSATA_MAX_MS)) return 'call_passata';
+  const maxPassataMs = i.inAttesaDelLead ? ATTESA_LEAD_MAX_GIORNI * 24 * 3600_000 : CALL_PASSATA_MAX_MS;
+  if (passataDaMs >= 0 && (i.origine === 'bot' || passataDaMs > maxPassataMs)) return 'call_passata';
   if (i.giaSpostato) return 'gia_spostato';
   if (i.presented || i.salesOutcome) return 'gia_presentato';
   // Scartato dalle Conferme: si sposta, il CRM riapre lo scarto (PO 12/11/2026).
@@ -231,8 +263,8 @@ export function notaSpostamentoPrompt(i: {
       `ORE MENO PIENE (criterio secondario, solo fra orari che per lui sono ugualmente sicuri: la sicurezza viene prima): ${menoPiene}. Se è lui a dirti un'ora sicura, va bene quella anche se è fra le già piene: non dirgli che è piena e non provare a spostarla.`,
     ] : []),
     `Quando ti ha confermato in modo chiaro che a quel giorno e a quell'ora c'è di sicuro, scrivi SOLO il tag [SPOSTA|<data e ora in ISO 8601 con fuso, es. 2026-10-30T18:00:00+01:00>] e nient'altro: il messaggio di conferma, con Noemi e il video, lo manda il sistema. Se ti dà solo il giorno, chiedigli l'ora; se ti dà solo l'ora, chiedigli il giorno.`,
-    `LO SPOSTI SEMPRE TU: quando chiede di spostare non rimandarlo a Noemi e non chiudere con [ESITO:RICHIAMO] finché c'è modo di fissare tu giorno e ora. Se resta vago ("non so", "ti faccio sapere", "più avanti") o non ti dà un orario, non mollare al primo giro: chiedigli che impegni ha in quei giorni e proponigli TU due orari precisi fuori da quegli impegni (es. "giovedì alle 18 o venerdì alle 11: in quale dei due sei sicuro di esserci?"). Fallo al massimo due volte, una domanda per messaggio. Se il giorno che vuole è fuori da quei giorni, diglielo una volta (si può spostare solo a ${giorni}) e proponigli due orari dentro quei giorni.`,
-    `SOLO se dopo due tentativi non ti dà un giorno e un'ora, o ti dice chiaro che in quei giorni non può proprio (parla di settimane o di mesi), NON usare [SPOSTA]: digli che il nuovo orario lo sistema con Noemi quando lo chiama (sezione SE VUOLE SPOSTARE O DISDIRE) e chiudi con [ESITO:RICHIAMO|...]. Se vuole rinunciare del tutto, vale [ESITO:SCARTO|...] come sempre.`,
+    `LO SPOSTI SEMPRE TU: quando chiede di spostare non rimandarlo a Noemi e non chiudere con [ESITO:RICHIAMO] finché c'è modo di fissare tu giorno e ora. Se resta vago ("non so", "ti faccio sapere", "più avanti") o non ti dà un orario, non mollare al primo giro: chiedigli che impegni ha in quei giorni e proponigli TU due orari precisi fuori da quegli impegni (es. "giovedì alle 18 o venerdì alle 11: in quale dei due sei sicuro di esserci?"). Fallo al massimo due volte, una domanda per messaggio. Se il giorno che vuole è oltre quei giorni (la settimana prossima, fra due settimane, una data lontana), diglielo una volta (si può spostare solo a ${giorni}) e insisti proponendogli due orari dentro quei giorni.`,
+    `SE IN QUEI GIORNI NON PUÒ PROPRIO (te lo dice chiaro, o dopo due tentativi non ti dà un giorno e un'ora): NON usare [SPOSTA], non fissargli niente fuori da quei giorni, non mandarlo da Noemi e non proporgli di annullare. Digli di riscriverti lui qui appena sa quando può, e che in quel momento la sposti tu: lo spostamento non lo perde. Es. "Va bene, allora facciamo così: appena sai quando puoi scrivimi qui e te la sposto io in quel momento". Non dirgli che la videochiamata è annullata e non dirgli che non gli scriverai più. Chiudi quel messaggio con [ESITO:RICHIAMO|<le sue parole sul quando, o la data ISO se te l'ha detta>]. Se vuole rinunciare del tutto, vale [ESITO:SCARTO|...] come sempre.`,
   ].join('\n');
 }
 

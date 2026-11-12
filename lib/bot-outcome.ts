@@ -831,6 +831,9 @@ export type SendOutcomeArgs = {
    *  `note` e `discardReason` sono la sintesi del modello, cioè una parafrasi — le
    *  Conferme hanno chiesto anche le parole vere. */
   leadWords?: string;
+  /** Solo per RICHIAMO su una call già fissata: il lead non può nei giorni in cui il bot
+   *  può spostare e riscrive lui (PO 12/11/2026). Vedi `buildLockedNote`. */
+  riscriveLui?: boolean;
   /** Solo per `NON_RISPOSTO` (contratto v1.11): il lead ha letto almeno un nostro
    *  messaggio. Va nel corpo al CRM, che con `true` lo dà ai GDO invece di parcheggiarlo. */
   letto?: boolean;
@@ -1346,7 +1349,11 @@ export async function sendOutcome(
     });
   }
   if (!dataCheck.ok && !periodo) {
-    const note = buildRichiamoSenzaDataNote({ motivo: dataCheck.motivo, leadWords: args.note });
+    // Call del bot, lead che non può nei giorni della finestra e riscrive lui (PO
+    // 12/11/2026): alle Conferme va la nota che lo dice, non «DA RICHIAMARE».
+    const note = args.riscriveLui && holdsAppointment
+      ? buildLockedNote(args, row?.bot_scheduled_at ?? null)
+      : buildRichiamoSenzaDataNote({ motivo: dataCheck.motivo, leadWords: args.note });
     await supabase.from('event_log').insert({
       type: 'richiamo_senza_data',
       payload: { conversationId, crmLeadId, motivo: dataCheck.motivo, dataScartata: args.date ?? null, note } as never,

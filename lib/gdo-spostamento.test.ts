@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  dataCallDelBot, elencoGiorni, esitoDaSpostare, giorniSpostamento, motivoDataNonValida, motivoNonSpostabile, notaSpostamentoFattoPrompt, notaSpostamentoPrompt,
+  ATTESA_LEAD_MAX_GIORNI, dataCallDelBot, elencoGiorni, eRiscriveLui, esitoDaSpostare, giorniSpostamento, motivoDataNonValida, motivoNonSpostabile, notaSpostamentoFattoPrompt, notaSpostamentoPrompt,
   origineSpostamento, spostamentoAbilitato, testoSpostamentoFatto, ultimoLinkVideo,
   richiamoNonESpostamento, spostamentoGiaRifiutato, testoSpostamentoNonFatto,
   TESTO_SPOSTAMENTO_NON_FATTO, TESTO_SPOSTAMENTO_PASSATO_AI_COLLEGHI,
@@ -146,7 +146,14 @@ describe('testi', () => {
     expect(t).toContain('non mollare al primo giro');
     expect(t).toContain('proponigli TU due orari precisi');
     expect(t).toContain('al massimo due volte');
-    expect(t).toContain('SOLO se dopo due tentativi non ti dà un giorno e un\'ora');
+    // PO 12/11/2026 sera: oltre la finestra si insiste sui giorni della finestra; se proprio
+    // non può, riscrive lui e in quel momento lo sposta il bot (chat 25906).
+    expect(t).toContain('insisti proponendogli due orari dentro quei giorni');
+    expect(t).toContain('SE IN QUEI GIORNI NON PUÒ PROPRIO');
+    expect(t).toContain('appena sai quando puoi scrivimi qui e te la sposto io in quel momento');
+    expect(t).toContain('lo spostamento non lo perde');
+    expect(t).toContain('non mandarlo da Noemi e non proporgli di annullare');
+    expect(t).not.toContain('lo sistema con Noemi quando lo chiama');
     // La vecchia uscita al primo «non so» non c'è più.
     expect(t).not.toContain('o resta vago ("non so", "ti faccio sapere"), NON usare [SPOSTA]');
     // L'orario sicuro del 10/11 resta com'era: prima gli impegni, poi le due ore.
@@ -335,5 +342,36 @@ describe('notaSpostamentoFattoPrompt: dopo lo spostamento il modello non si smen
     expect(t).toContain('"per ora resta"');
     expect(t).toContain("non la sposti un'ALTRA volta");
     expect(t).toContain('senza [ESITO:RICHIAMO]');
+  });
+});
+
+describe('«non posso in questi giorni, riscrivo io» (PO 12/11/2026, chat 25906)', () => {
+  const base = { enabled: true, origine: 'gdo' as const, appuntamentoAt: '2026-11-05T10:00:00+01:00', giaSpostato: false };
+  // Il lead riscrive lunedì 23/11: la call del 5/11 è passata da 18 giorni.
+  const LUN_23 = new Date('2026-11-23T09:00:00+01:00').getTime();
+  it('riscrive 18 giorni dopo la call vecchia: senza attesa no, con l\'attesa segnata si sposta', () => {
+    expect(motivoNonSpostabile({ ...base, nowMs: LUN_23 })).toBe('call_passata');
+    expect(motivoNonSpostabile({ ...base, nowMs: LUN_23, inAttesaDelLead: true })).toBeNull();
+  });
+  it('lo spostamento "una volta sola" non è consumato dall\'attesa; se era già stato usato resta usato', () => {
+    expect(motivoNonSpostabile({ ...base, nowMs: LUN_23, inAttesaDelLead: true, giaSpostato: false })).toBeNull();
+    expect(motivoNonSpostabile({ ...base, nowMs: LUN_23, inAttesaDelLead: true, giaSpostato: true })).toBe('gia_spostato');
+  });
+  it(`tetto dell'attesa: ${ATTESA_LEAD_MAX_GIORNI} giorni dalla call vecchia; scartato nel frattempo dalle Conferme: si sposta lo stesso`, () => {
+    const oltre = new Date('2026-11-05T10:00:00+01:00').getTime() + (ATTESA_LEAD_MAX_GIORNI + 1) * 86_400_000;
+    expect(motivoNonSpostabile({ ...base, nowMs: oltre, inAttesaDelLead: true })).toBe('call_passata');
+    expect(motivoNonSpostabile({ ...base, nowMs: LUN_23, inAttesaDelLead: true, confermeOutcome: 'scartato' })).toBeNull();
+  });
+  it('la finestra dei 3 giorni si conta dal giorno in cui riscrive', () => {
+    expect(giorniSpostamento(new Date(LUN_23), [])).toEqual(['2026-11-24', '2026-11-25', '2026-11-26']);
+    expect(motivoDataNonValida('2026-11-25T18:00:00+01:00', base.appuntamentoAt, LUN_23, [])).toBeNull();
+  });
+  it('eRiscriveLui: RICHIAMO su una call spostabile, senza [SPOSTA] nel turno', () => {
+    const t = { outcome: 'RICHIAMO' as string | undefined, spostaAt: undefined as string | undefined, spostamentoFatto: false, motivoNoSposta: null as ReturnType<typeof motivoNonSpostabile> };
+    expect(eRiscriveLui(t)).toBe(true);
+    expect(eRiscriveLui({ ...t, motivoNoSposta: 'gia_spostato' })).toBe(false);
+    expect(eRiscriveLui({ ...t, spostaAt: '2026-11-25T18:00:00+01:00' })).toBe(false);
+    expect(eRiscriveLui({ ...t, outcome: 'DA_SCARTARE' })).toBe(false);
+    expect(eRiscriveLui({ ...t, outcome: undefined })).toBe(false);
   });
 });
