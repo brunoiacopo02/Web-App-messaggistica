@@ -4019,6 +4019,100 @@ describe('drainMarioReplies — il bot sposta la call del lead GDO (PO 28/10/202
       expect(sendOutcome).not.toHaveBeenCalled();
     });
 
+    describe('«se scrive dopo dobbiamo essere avvisati» (PO 12/11/2026)', () => {
+      const attesa = (giorniFa: number) => ({
+        type: 'gdo_spostamento_attesa_lead',
+        payload: { conversationId: 92, crmLeadId: 'gdo3', origine: 'gdo' },
+        created_at: fra(-giorniFa * 24 * 3600_000),
+      });
+      const inAttesa = (callGiorniFa: number) => {
+        const vecchia = fra(-callGiorniFa * 24 * 3600_000);
+        return postino({ gdo_appuntamento_at: vecchia, gdo_recap_for_at: vecchia, cancel_requested_at: fra(-(callGiorniFa + 1) * 24 * 3600_000) });
+      };
+      const RISCRIVE: FakeMsgRow = { direction: 'in', body: 'Ciao Marta, eccomi, ora posso: come facciamo?', template_sid: null, created_at: fra(-60_000) };
+      beforeEach(() => { vi.mocked(inviaNotaAlCrm).mockReset(); vi.mocked(inviaNotaAlCrm).mockResolvedValue({ sent: true }); });
+
+      it('riscrive ma non da\' ancora la data (il bot puo\' spostare): nota alle Conferme «IL LEAD IN ATTESA HA RISCRITTO», una volta sola', async () => {
+        const { supabase, calls } = makeDrainSupabase(inAttesa(18), [RECAP, RISCRIVE]);
+        calls.events.push(attesa(19));
+        vi.mocked(generateMarioReply).mockResolvedValue(reply('Bentornato! Dimmi giorno e ora in cui sei sicuro di esserci'));
+
+        await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+        expect(inviaNotaAlCrm).toHaveBeenCalledTimes(1);
+        const nota = vi.mocked(inviaNotaAlCrm).mock.calls[0][3];
+        expect(nota).toMatch(/^IL LEAD IN ATTESA HA RISCRITTO — /);
+        expect(nota).toContain('Se non vi arriva la nota «Spostato dal bot», sentitelo voi');
+        expect(nota).toContain('Ciao Marta, eccomi, ora posso: come facciamo?');
+        expect(calls.events.find((e: any) => e.type === 'gdo_spostamento_attesa_riscritto')?.payload).toMatchObject({ segnale: 'nota_conferme' });
+        expect(sendOutcome).not.toHaveBeenCalled();
+
+        // Il messaggio dopo, nella stessa attesa: nessuna seconda segnalazione.
+        await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+        expect(inviaNotaAlCrm).toHaveBeenCalledTimes(1);
+      });
+
+      it('riscrive oltre i 60 giorni (il bot non puo\' piu\' spostare): richiesta di contatto a una persona, mai nel vuoto', async () => {
+        const { supabase, calls } = makeDrainSupabase(inAttesa(70), [RECAP, RISCRIVE]);
+        calls.events.push(attesa(71));
+        vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Ciao! Ti faccio sentire da una collega.'));
+
+        await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+        expect(contesto()).not.toContain('SPOSTAMENTO DELLA CALL');
+        expect(inviaNotaAlCrm).not.toHaveBeenCalled();
+        expect(sendOutcome).toHaveBeenCalledTimes(1);
+        const args = vi.mocked(sendOutcome).mock.calls[0][2] as { outcome: string; motivoContattoUmano?: string; notaContattoUmano?: string };
+        expect(args).toMatchObject({ outcome: 'CONTATTO_UMANO', motivoContattoUmano: 'disdetta' });
+        expect(args.notaContattoUmano).toMatch(/^IL LEAD IN ATTESA HA RISCRITTO E IL BOT NON PUÒ SPOSTARLO — /);
+        expect(args.notaContattoUmano).toContain('la call vecchia è passata da troppo tempo');
+        expect(args.notaContattoUmano).toContain('va sentito da una persona per rifissare');
+        expect(calls.events.find((e: any) => e.type === 'gdo_spostamento_attesa_riscritto')?.payload).toMatchObject({ segnale: 'contatto_umano', motivoNoSposta: 'call_passata' });
+      });
+
+      it('riscrive, da\' la data, ma il CRM rifiuta (es. parcheggiato): richiesta di contatto oltre alla nota di ripiego', async () => {
+        vi.stubGlobal('fetch', fetchCrm(409, { error: 'spostamento_rifiutato', motivo: 'parcheggiato' }));
+        const { supabase, calls } = makeDrainSupabase(inAttesa(18), [RECAP, RISCRIVE]);
+        calls.events.push(attesa(19));
+        vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('', { spostaAt: NUOVA }));
+
+        await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+        const chiamate = vi.mocked(sendOutcome).mock.calls.map((c) => c[2] as { outcome: string; notaContattoUmano?: string });
+        expect(chiamate.find((a) => a.outcome === 'CONTATTO_UMANO')?.notaContattoUmano).toContain('il tentativo di spostarla non è andato a buon fine');
+        expect(chiamate.some((a) => a.outcome === 'RICHIAMO')).toBe(true);
+        expect(calls.events.find((e: any) => e.type === 'gdo_spostamento_attesa_riscritto')?.payload).toMatchObject({ segnale: 'contatto_umano' });
+      });
+
+      it('riscrive e il bot sposta: basta «Spostato dal bot», nessuna segnalazione in piu\'; l\'attesa si chiude', async () => {
+        vi.stubGlobal('fetch', fetchCrm(200, { ok: true, rescheduled: true }));
+        const { supabase, calls } = makeDrainSupabase(inAttesa(18), [RECAP, RISCRIVE]);
+        calls.events.push(attesa(19));
+        vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('', { spostaAt: NUOVA }));
+
+        await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+        expect(inviaNotaAlCrm).not.toHaveBeenCalled();
+        expect(sendOutcome).not.toHaveBeenCalled();
+        expect(calls.events.find((e: any) => e.type === 'gdo_spostamento_attesa_riscritto')?.payload).toMatchObject({ segnale: 'spostato' });
+      });
+
+      it('il «grazie» subito dopo «riscrivimi tu» (attesa di pochi minuti fa) e un «ok» giorni dopo non sono un «ha riscritto»', async () => {
+        const a = makeDrainSupabase(inAttesa(-2), [RECAP, RISCRIVE]);
+        a.calls.events.push({ ...attesa(0), created_at: fra(-5 * 60_000) });
+        vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Figurati!'));
+        await drainMarioReplies(a.supabase, 92, '+391234567890', () => 0);
+        expect(a.calls.events.some((e: any) => e.type === 'gdo_spostamento_attesa_riscritto')).toBe(false);
+
+        const b = makeDrainSupabase(inAttesa(18), [RECAP, { direction: 'in', body: 'ok grazie', template_sid: null, created_at: fra(-60_000) }]);
+        b.calls.events.push(attesa(19));
+        vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('A presto!'));
+        await drainMarioReplies(b.supabase, 92, '+391234567890', () => 0);
+        expect(b.calls.events.some((e: any) => e.type === 'gdo_spostamento_attesa_riscritto')).toBe(false);
+        expect(inviaNotaAlCrm).not.toHaveBeenCalled();
+      });
+    });
+
     it('controprova: stessa call passata da 18 giorni ma senza l\'attesa segnata → niente blocco', async () => {
       const vecchia = fra(-18 * 24 * 3600_000);
       const { supabase } = makeDrainSupabase(postino({ gdo_appuntamento_at: vecchia, gdo_recap_for_at: vecchia }), [RECAP, SPOSTA]);

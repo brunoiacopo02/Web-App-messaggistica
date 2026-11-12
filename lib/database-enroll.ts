@@ -293,7 +293,10 @@ export async function enrollDatabaseLead(
     ai_started_at: arruolatoAt,
     crm_lead_id: args.crmLeadId,
     crm_funnel: FUNNEL_CHAT_DATABASE,
-    ...(riapri ? { bot_outcome: null, bot_outcome_at: null, bot_followups_sent: 0, handed_off_at: null, handed_off_reason: null } : {}),
+    // `cancel_requested_at`: la disdetta o l'attesa «riscrivo io» della call VECCHIA (PO
+    // 12/11/2026) non deve spegnere i promemoria di un appuntamento nuovo preso dopo questa
+    // apertura: il cron dei promemoria salta le chat col marcatore.
+    ...(riapri ? { bot_outcome: null, bot_outcome_at: null, bot_followups_sent: 0, handed_off_at: null, handed_off_reason: null, cancel_requested_at: null } : {}),
     // `riapri_tutti`: via cio' che terrebbe Marta zitta sulla risposta del lead (fermo
     // manuale, chat "postino" di un GDO, fase del lancio rimasta a meta': il lancio e'
     // finito), e la chat segue il numero da cui parte l'apertura: e' li' che rispondera'.

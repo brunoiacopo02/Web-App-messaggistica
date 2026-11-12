@@ -485,6 +485,8 @@ describe("riapertura di una chat ferma: la strada principale per i lead di datab
     expect(chiamate.aggiorna[0].patch).toMatchObject({
       crm_lead_id: 'lead-1', crm_funnel: FUNNEL_CHAT_DATABASE, ai_owner: 'mario', ai_status: 'active',
       bot_outcome: null, bot_outcome_at: null, bot_followups_sent: 0, handed_off_at: null,
+      // PO 12/11/2026: il marcatore della call vecchia (disdetta o attesa «riscrivo io») non spegne i promemoria di un appuntamento nuovo.
+      cancel_requested_at: null,
     });
     expect(chiamate.aggiorna[0].patch.ai_started_at).toBeTruthy();
     expect(eventi.find((e) => e.type === EVENTO_DATABASE_APERTURA)?.payload).toMatchObject({ riaperta: true, esitoPrima: 'NON_RISPOSTO', numero: N0047 });

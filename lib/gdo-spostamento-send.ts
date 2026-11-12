@@ -81,6 +81,36 @@ export async function inAttesaCheRiscriva(supabase: Supa, conversationId: number
   }
 }
 
+/** L'evento che segna «il lead in attesa ha riscritto, e l'abbiamo segnalato (o gestito)». */
+export const EVENTO_ATTESA_RISCRITTO = 'gdo_spostamento_attesa_riscritto';
+/** Sotto questo tempo dall'attesa un messaggio del lead e' la coda della stessa conversazione. */
+const ATTESA_MIN_PRIMA_DI_SEGNALARE_MS = 60 * 60_000;
+
+/**
+ * C'e' un'attesa «riscrivo io» ancora aperta da segnalare? (PO 12/11/2026: «se scrive dopo
+ * dobbiamo essere avvisati».) Si' se le attese segnate sono piu' dei «ha riscritto» gia'
+ * registrati e l'ultima attesa ha almeno un'ora (il «grazie» subito dopo non conta).
+ * Nel dubbio no.
+ */
+export async function attesaDaSegnalare(supabase: Supa, conversationId: number, nowMs: number): Promise<boolean> {
+  try {
+    const conv = String(conversationId);
+    const [attese, riscritti] = await Promise.all([
+      supabase.from('event_log').select('id, created_at').eq('type', 'gdo_spostamento_attesa_lead').eq('payload->>conversationId', conv).limit(50),
+      supabase.from('event_log').select('id').eq('type', EVENTO_ATTESA_RISCRITTO).eq('payload->>conversationId', conv).limit(50),
+    ]);
+    if (attese.error || riscritti.error || !Array.isArray(attese.data) || !Array.isArray(riscritti.data)) return false;
+    if (attese.data.length <= riscritti.data.length) return false;
+    const tempi: number[] = attese.data
+      .map((r: { created_at?: string | null }) => (r.created_at ? Date.parse(r.created_at) : NaN))
+      .filter((t: number) => !Number.isNaN(t));
+    if (tempi.length === 0) return false;
+    return nowMs - Math.max(...tempi) >= ATTESA_MIN_PRIMA_DI_SEGNALARE_MS;
+  } catch {
+    return false;
+  }
+}
+
 /** Le date dei tentativi di spostamento gia' rifiutati in questa chat (`gdo_spostamento_non_fatto`). Nel dubbio nessuna. */
 export async function spostamentiRifiutati(supabase: Supa, conversationId: number): Promise<string[]> {
   try {

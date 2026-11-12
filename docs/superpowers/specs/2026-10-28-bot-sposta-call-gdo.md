@@ -120,3 +120,20 @@ Quando il lead riscrive, il blocco dello spostamento torna nel prompt con la fin
 quel giorno, anche se la call vecchia del GDO e' passata (fino a 60 giorni; senza attesa 7). Sulle
 call del bot, a call passata vale il fissaggio nuovo di sempre. Il CRM accetta SPOSTAMENTO fino a
 60 giorni dalla call vecchia e riapre l'eventuale scarto.
+
+### «Se scrive dopo dobbiamo essere avvisati» (PO 12/11/2026)
+Il lead in attesa che riscrive viene segnalato sempre, una volta per attesa (evento
+`gdo_spostamento_attesa_riscritto`, campo `segnale`):
+- il bot sposta nel turno → basta la nota «Spostato dal bot» (`segnale: spostato`);
+- il bot puo' spostare ma la data non c'e' ancora → NOTA alle Conferme «IL LEAD IN ATTESA HA
+  RISCRITTO … se non vi arriva "Spostato dal bot", sentitelo voi» (`nota_conferme`);
+- il bot non puo' piu' spostare (oltre 60 giorni, esito o parcheggio delle Conferme, no del CRM)
+  → CONTATTO_UMANO, categoria `disdetta` («Disdetta o spostamento»), con l'appuntamento nel
+  corpo cosi' il CRM lo instrada alle Conferme e non al GDO (`contatto_umano`).
+Non contano il «grazie» entro un'ora dall'attesa ne' le sole prese d'atto.
+
+Offerte e giro database: l'attesa non esclude il lead (nessuna regola guarda l'evento o
+`cancel_requested_at`); la riapertura database azzera `cancel_requested_at`, cosi' i promemoria
+di un appuntamento nuovo partono. Per contare gli attesa poi scartati dalle Conferme: nel CRM le
+schede con una BOT_NOTE che inizia per «IL LEAD RISCRIVE LUI PER LA NUOVA DATA» e
+`confirmationsOutcome = 'scartato'` (o evento `conferme_auto_discarded_3nr` successivo alla nota).

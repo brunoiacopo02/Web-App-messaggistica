@@ -77,6 +77,39 @@ function buildRiscriveLuiNote(leadDateIso: string | null, inAgenda: string | nul
 }
 
 /**
+ * Il lead che doveva riscrivere lui per la nuova data HA RISCRITTO (PO 12/11/2026: «se
+ * scrive dopo dobbiamo essere avvisati», sempre). Due testi:
+ * - il bot può ancora spostare: nota alle Conferme, così se «Spostato dal bot» non arriva
+ *   (non dà la data, il CRM rifiuta) qualcuno lo sa e lo sente;
+ * - il bot NON può più spostare (call vecchia passata da oltre 60 giorni, parcheggiato o
+ *   esitato dalle Conferme, già spostato, no del CRM): richiesta di contatto a una persona.
+ * Le parole del lead in coda: la testa resta fissa per la dedup del CRM.
+ */
+export const NOTA_ATTESA_RISCRITTO_PREFISSO = 'IL LEAD IN ATTESA HA RISCRITTO';
+
+const PERCHE_NON_SPOSTA: Record<string, string> = {
+  call_passata: 'la call vecchia è passata da troppo tempo',
+  gia_spostato: 'la call è già stata spostata una volta',
+  esito_conferme: "le Conferme hanno già dato un esito o l'hanno parcheggiato",
+  gia_presentato: 'risulta già presentato o con un esito del venditore',
+  data_cambiata_dal_crm: 'la data è già stata cambiata dalle Conferme',
+  spento: 'lo spostamento dal bot è spento',
+  tentativo_non_riuscito: 'il tentativo di spostarla non è andato a buon fine',
+};
+
+export function buildAttesaRiscrittoNote(input: { puoSpostare: boolean; motivo?: string | null; leadWords?: string }): string {
+  const parole = paroleDelLead(input.leadWords);
+  const citazione = parole ? ` Parole del lead: "${parole}".` : '';
+  if (input.puoSpostare) {
+    return `${NOTA_ATTESA_RISCRITTO_PREFISSO} — aveva detto che riscriveva lui per la nuova data e ha riscritto adesso: il bot gli sta facendo scegliere giorno e ora.`
+      + ` Se non vi arriva la nota «Spostato dal bot», sentitelo voi per rifissare.${citazione}`;
+  }
+  const perche = (input.motivo ? PERCHE_NON_SPOSTA[input.motivo] : undefined) ?? 'non è più una call che il bot può spostare';
+  return `${NOTA_ATTESA_RISCRITTO_PREFISSO} E IL BOT NON PUÒ SPOSTARLO — aveva detto che riscriveva lui per la nuova data e ha riscritto adesso, ma il bot non può spostare la call (${perche}):`
+    + ` va sentito da una persona per rifissare.${citazione}`;
+}
+
+/**
  * Costruisce la nota da inviare al CRM quando un lead GIÀ fissato genera un esito
  * successivo. L'esito non declassa: viene tradotto in una nota informativa.
  */

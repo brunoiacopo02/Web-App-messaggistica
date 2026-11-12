@@ -19,7 +19,7 @@ import { unknownFeniceLinks } from './outbound-sanitize';
 import { generateBotReport } from './bot-report';
 import { registraEsitoSenzaLeadId, sendOutcome, inviaNotaAlCrm } from './bot-outcome';
 import { stopDalCrmPerLead, stopInRispostaPerChat, vuolePassaggioAUmano } from './stop-crm';
-import { buildScriveDopoLaCallNote, motivoScartoAppuntamento, TESTO_DATA_DA_VERIFICARE, unisciGiorni } from './bot-outcome-rules';
+import { buildAttesaRiscrittoNote, buildScriveDopoLaCallNote, motivoScartoAppuntamento, TESTO_DATA_DA_VERIFICARE, unisciGiorni } from './bot-outcome-rules';
 import { computeBookingDays, giorniDelLinkForm } from './booking-slots';
 import { paroleDellaRichiesta } from './contatti-umani';
 import { bookingBlackout } from './booking-blackout';
@@ -74,7 +74,7 @@ import {
 } from './gdo-spostamento';
 import {
   giaSpostatoDalBot, inviaSpostamentoAlCrm, registraSpostamentoInChat, spostamentiRifiutati, statoCrmLocale, ultimoSpostamentoDalBot,
-  ultimoSpostamentoDalBotInfo, inAttesaCheRiscriva,
+  ultimoSpostamentoDalBotInfo, inAttesaCheRiscriva, attesaDaSegnalare, EVENTO_ATTESA_RISCRITTO,
 } from './gdo-spostamento-send';
 import { isoWithOffset } from './bot-contract';
 import { sameInstant } from './rome-time';
@@ -1379,6 +1379,11 @@ export async function drainMarioReplies(
         inAttesaDelLead = await inAttesaCheRiscriva(supabase, conversationId);
         if (inAttesaDelLead) motivoNoSposta = motivoNonSpostabile({ ...baseSpostamento, giaSpostato: false, inAttesaDelLead });
       }
+      // Un'attesa «riscrivo io» ancora da segnalare: si legge PRIMA del turno (l'attesa che
+      // nasce in questo turno non conta) e solo sulle chat che hanno ancora la loro call.
+      const attesaAperta = !!crmLeadId && !!gdo.cancel_requested_at && (agendaGdo || esitoInPiedi === 'APPUNTAMENTO')
+        ? await attesaDaSegnalare(supabase, conversationId, Date.now())
+        : false;
       if (motivoNoSposta === null && crmLeadId) {
         const [gia, crm] = await Promise.all([
           giaSpostatoDalBot(supabase, conversationId),
@@ -1751,6 +1756,46 @@ export async function drainMarioReplies(
           message: `[${origineSposta}] conv ${conversationId}: il lead non puo' nei giorni dello spostamento, riscrive lui per la nuova data`,
           level: 'info',
         });
+      }
+
+      // «Se scrive dopo dobbiamo essere avvisati» (PO 12/11/2026): il lead che doveva
+      // riscrivere ha riscritto. Una volta per attesa. Se in questo turno il bot ha spostato
+      // (arriva «Spostato dal bot»), se il lead rimanda ancora (riparte la nota «riscrive
+      // lui») o se disdice (parte la disdetta) la segnalazione c'e' gia': si chiude solo
+      // l'attesa. Altrimenti: nota alle Conferme se il bot puo' ancora spostare, richiesta
+      // di contatto a una persona se non puo' piu'. Un errore qui non si propaga.
+      if (attesaAperta && crmLeadId) {
+        const testoRiscritto = idxTurno >= 0
+          ? rows.slice(idxTurno).filter((m) => m.direction === 'in').map((m) => (m.body ?? '').trim()).filter(Boolean).join(' / ')
+          : '';
+        if (!isSoloPresaDAtto(testoRiscritto)) {
+          const tentatoENonFatto = result.spostaAt !== undefined && !spostamentoFatto;
+          const giaCoperto = spostamentoFatto ? 'spostato' : riscriveLui ? 'rimanda_ancora' : result.outcome === 'DA_SCARTARE' ? 'disdetta' : null;
+          const puoSpostare = motivoNoSposta === null && !tentatoENonFatto;
+          let esitoSegnale: string = giaCoperto ?? 'non_inviata';
+          try {
+            if (!giaCoperto) {
+              const nota = buildAttesaRiscrittoNote({
+                puoSpostare,
+                motivo: motivoNoSposta ?? (tentatoENonFatto ? 'tentativo_non_riuscito' : null),
+                leadWords: testoRiscritto,
+              });
+              const secret = process.env.BOT_WEBHOOK_SECRET;
+              const inviata = puoSpostare
+                ? (secret ? await inviaNotaAlCrm(supabase, conversationId, crmLeadId, nota, undefined, secret) : { sent: false })
+                : await sendOutcome(supabase, conversationId, { outcome: 'CONTATTO_UMANO', note: testoRiscritto, motivoContattoUmano: 'disdetta', notaContattoUmano: nota });
+              esitoSegnale = inviata.sent ? (puoSpostare ? 'nota_conferme' : 'contatto_umano') : 'non_inviata';
+            }
+          } catch {
+            esitoSegnale = 'non_inviata';
+          }
+          await supabase.from('event_log').insert({
+            type: EVENTO_ATTESA_RISCRITTO,
+            payload: { conversationId, crmLeadId, origine: origineSposta, segnale: esitoSegnale, motivoNoSposta, parole: testoRiscritto.slice(0, 200) } as never,
+            message: `[${origineSposta ?? 'attesa'}] conv ${conversationId}: il lead in attesa ha riscritto (${esitoSegnale})`,
+            level: esitoSegnale === 'non_inviata' ? 'error' : 'info',
+          });
+        }
       }
 
       // Riscaldamento: la domanda in attesa non si rifa' MAI, nemmeno se il lead ha
