@@ -19,7 +19,7 @@ vi.mock('./black-friday-apertura', () => ({
   aperturaBlackFriday: vi.fn(async () => ({ scelta: 'template_bf', sid: 'HX_BF' })),
 }));
 
-import { aperturaBfSuAppuntamento, enrollLeadIntoMario, restituisciPerChatConAppuntamento, riapreChatPerBlackFriday } from './fenice-enroll';
+import { aperturaBfConAppuntamentoDiAltroLead, aperturaBfSuAppuntamento, enrollLeadIntoMario, restituisciPerChatConAppuntamento, riapreChatPerBlackFriday } from './fenice-enroll';
 import { sendTemplateAndLog } from './messaging';
 import { MARKER_TESTO_APERTURA_BF, EVENTO_BF_SU_APPUNTAMENTO, blackFridayContextNote } from './black-friday';
 
@@ -34,6 +34,12 @@ type Chat = {
   gdoAgendaAt?: string | null; botScheduledAt?: string | null;
   /** Una richiesta `bf_apertura_su_appuntamento` gia' in event_log (ritento). */
   richiestaGia?: boolean;
+  /** `bot_outcome_at`: quando il bot ha fissato l'APPUNTAMENTO che e' sulla chat. */
+  botOutcomeAt?: string | null;
+  /** La riga `bot_intake` piu' vecchia di questo leadId (il CRM ce lo rimanda). */
+  primoIntakeAt?: string | null;
+  /** La lettura del primo intake fallisce. */
+  errorePrimoIntake?: boolean;
 };
 
 /** Fake Supabase: la riga della chat e le letture dei messaggi che l'arruolamento fa. */
@@ -45,6 +51,7 @@ function fake(chat: Chat) {
     ai_paused_at: chat.aiPausedAt ?? null, gdo_appuntamento_at: chat.gdoAppuntamentoAt ?? null,
     lancio_slug: null, lancio_fase: null, last_inbound_at: chat.lastInboundAt ?? null,
     gdo_agenda_at: chat.gdoAgendaAt ?? null, bot_scheduled_at: chat.botScheduledAt ?? null,
+    bot_outcome_at: chat.botOutcomeAt ?? null,
   };
   const supabase: any = {
     from(table: string) {
@@ -90,7 +97,18 @@ function fake(chat: Chat) {
       return {
         insert(p: any) { calls.events.push(p); return Promise.resolve({}); },
         select() {
-          const c: any = { eq: () => c, limit: async () => ({ data: chat.richiestaGia ? [{ id: 1 }] : [], error: null }) };
+          let tipo: string | null = null;
+          const c: any = {
+            eq: (col: string, v: string) => { if (col === 'type') tipo = v; return c; },
+            order: () => c,
+            limit: async () => {
+              if (tipo === 'bot_intake') {
+                if (chat.errorePrimoIntake) return { data: null, error: { message: 'boom' } };
+                return { data: chat.primoIntakeAt ? [{ created_at: chat.primoIntakeAt }] : [], error: null };
+              }
+              return { data: chat.richiestaGia ? [{ id: 1 }] : [], error: null };
+            },
+          };
           return c;
         },
       };
@@ -220,6 +238,96 @@ describe('enrollLeadIntoMario — lead Black Friday su una chat che esiste gia (
     expect(sendTemplateAndLog).not.toHaveBeenCalled();
   });
 
+  // PO 12/11/2026: "Va fatta l'apertura se l'appuntamento e' stato preso prima che il lead
+  // arrivasse al bot, se no no." Il lead resta rifiutato (torna ai GDO), l'appuntamento intatto.
+  const SARA: Chat = {
+    crmLeadId: 'LEAD-APP', crmFunnel: 'CORSO 10 ORE', aiStatus: 'closed', botOutcome: 'APPUNTAMENTO',
+    botScheduledAt: '2026-09-12T14:00:00+00:00', botOutcomeAt: '2026-09-10T09:30:00+00:00',
+    lastInboundAt: fa(30), ultimoMessaggioAt: fa(30), ultimoOutboundAt: fa(30),
+  };
+
+  it('altro lead, appuntamento fissato PRIMA dell arrivo, chat ferma → rifiuto + apertura BF richiesta, appuntamento intatto', async () => {
+    const { supabase, calls } = fake(SARA);
+    const res = await enrollLeadIntoMario(supabase, ARGS);
+    expect(res).toEqual({
+      ok: true, conversationId: 8727,
+      rifiuto: { motivo: 'chat_con_appuntamento', leadIdAppuntamento: 'LEAD-APP', appuntamento: '2026-09-12T14:00:00+00:00', aperturaBf: 'richiesta' },
+    });
+    // L'apertura la manda bf-aperture, non l'intake. Un solo update: il funnel.
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+    expect(calls.updates).toEqual([{ crm_funnel: 'BLACK FRIDAY' }]);
+    expect(calls.events.map((e: any) => e.type)).toEqual([EVENTO_BF_SU_APPUNTAMENTO, 'fenice_enroll_rifiuto_chat_con_appuntamento']);
+    const ev = calls.events[0];
+    // `crmLeadIdAppuntamento` resta il lead che ha la call: la chat non cambia padrone.
+    expect(ev.payload).toMatchObject({
+      conversationId: '8727', crmLeadIdBf: 'LEAD-BF', crmLeadIdAppuntamento: 'LEAD-APP', altroLead: true,
+      appuntamentoFissatoIl: '2026-09-10T09:30:00+00:00', arrivoAlBot: new Date(ORA).toISOString(),
+    });
+    expect(calls.events[1].payload).toMatchObject({ aperturaBf: 'richiesta', regolaDate: 'appuntamento_prima_dell_arrivo' });
+  });
+
+  it('altro lead, call ancora da fare ma fissata prima dell arrivo → apertura BF richiesta lo stesso, data della call intatta', async () => {
+    const { supabase, calls } = fake({ ...SARA, botScheduledAt: new Date(ORA + 20 * H).toISOString(), botOutcomeAt: fa(40) });
+    const res = await enrollLeadIntoMario(supabase, ARGS);
+    expect(res.rifiuto).toMatchObject({ motivo: 'chat_con_appuntamento', aperturaBf: 'richiesta' });
+    expect(calls.updates).toEqual([{ crm_funnel: 'BLACK FRIDAY' }]);
+  });
+
+  it('altro lead, il CRM rimanda un lead arrivato 48h fa e l appuntamento e di 24h fa (preso DOPO l arrivo) → rifiuto semplice, chat intatta', async () => {
+    const { supabase, calls } = fake({ ...SARA, botOutcomeAt: fa(24), primoIntakeAt: fa(48), lastInboundAt: fa(24), ultimoMessaggioAt: fa(24), ultimoOutboundAt: fa(24) });
+    const res = await enrollLeadIntoMario(supabase, ARGS);
+    expect(res.rifiuto).toEqual({ motivo: 'chat_con_appuntamento', leadIdAppuntamento: 'LEAD-APP', appuntamento: '2026-09-12T14:00:00+00:00' });
+    expect(calls.updates).toEqual([]);
+    expect(calls.events.map((e: any) => e.type)).toEqual(['fenice_enroll_rifiuto_chat_con_appuntamento']);
+    expect(calls.events[0].payload).toMatchObject({ aperturaBf: 'no', regolaDate: 'appuntamento_dopo_l_arrivo', arrivoAlBot: fa(48) });
+  });
+
+  it('altro lead, il CRM rimanda un lead arrivato 48h fa ma l appuntamento era di prima → apertura BF richiesta', async () => {
+    const { supabase } = fake({ ...SARA, primoIntakeAt: fa(48) });
+    const res = await enrollLeadIntoMario(supabase, ARGS);
+    expect(res.rifiuto?.aperturaBf).toBe('richiesta');
+  });
+
+  it('altro lead, date che non si sanno (bot_outcome_at vuoto, o lettura del primo intake fallita) → rifiuto semplice', async () => {
+    for (const chat of [{ ...SARA, botOutcomeAt: null }, { ...SARA, errorePrimoIntake: true }]) {
+      const { supabase, calls } = fake(chat);
+      const res = await enrollLeadIntoMario(supabase, ARGS);
+      expect(res.rifiuto).not.toHaveProperty('aperturaBf');
+      expect(calls.updates).toEqual([]);
+      expect(calls.events.map((e: any) => e.type)).toEqual(['fenice_enroll_rifiuto_chat_con_appuntamento']);
+      expect(calls.events[0].payload).toMatchObject({ aperturaBf: 'no', regolaDate: 'dati_mancanti' });
+    }
+  });
+
+  it('altro lead, appuntamento di prima ma le guardie dell apertura dicono no (BF gia partita, chat viva, ritento, handed_off, fermo, postino GDO) → rifiuto semplice', async () => {
+    const casi: Chat[] = [
+      { ...SARA, bfPartita: true },
+      { ...SARA, lastInboundAt: fa(3), ultimoMessaggioAt: fa(3), ultimoOutboundAt: fa(3) },
+      { ...SARA, ultimoOutboundAt: fa(2) },
+      { ...SARA, richiestaGia: true },
+      { ...SARA, aiStatus: 'handed_off' },
+      { ...SARA, aiPausedAt: fa(100) },
+      { ...SARA, gdoAgendaAt: fa(100) },
+    ];
+    for (const chat of casi) {
+      const { supabase, calls } = fake(chat);
+      const res = await enrollLeadIntoMario(supabase, ARGS);
+      expect(res.rifiuto?.motivo).toBe('chat_con_appuntamento');
+      expect(res.rifiuto).not.toHaveProperty('aperturaBf');
+      expect(calls.updates).toEqual([]);
+      expect(calls.events.map((e: any) => e.type)).not.toContain(EVENTO_BF_SU_APPUNTAMENTO);
+    }
+    expect(sendTemplateAndLog).not.toHaveBeenCalled();
+  });
+
+  it('altro lead su un funnel che non e BF, appuntamento di prima → nessuna apertura', async () => {
+    const { supabase, calls } = fake(SARA);
+    const res = await enrollLeadIntoMario(supabase, { ...ARGS, crmFunnel: 'CORSO 10 ORE' });
+    expect(res.rifiuto).toEqual({ motivo: 'chat_con_appuntamento', leadIdAppuntamento: 'LEAD-APP', appuntamento: '2026-09-12T14:00:00+00:00' });
+    expect(calls.updates).toEqual([]);
+    expect(calls.events[0].payload).not.toHaveProperty('aperturaBf');
+  });
+
   it('APPUNTAMENTO dello STESSO lead, chat non ancora BF (PO 09/11) → apertura BF richiesta, nessun rifiuto', async () => {
     const { supabase, calls } = fake({
       crmLeadId: 'LEAD-BF', crmFunnel: 'CORSO 10 ORE', aiStatus: 'closed', botOutcome: 'APPUNTAMENTO',
@@ -274,6 +382,69 @@ describe('restituisciPerChatConAppuntamento — regole (PO 10/11/2026)', () => {
     expect(restituisciPerChatConAppuntamento({ crmLeadIdPrima: 'A', crmLeadIdNuovo: null, botOutcome: 'APPUNTAMENTO' })).toBe(false);
     expect(restituisciPerChatConAppuntamento({ crmLeadIdPrima: 'A', crmLeadIdNuovo: 'B', botOutcome: 'INTERROTTO' })).toBe(false);
     expect(restituisciPerChatConAppuntamento({ crmLeadIdPrima: 'A', crmLeadIdNuovo: 'B', botOutcome: null })).toBe(false);
+  });
+});
+
+describe('aperturaBfConAppuntamentoDiAltroLead — prima o dopo l arrivo al bot (PO 12/11/2026)', () => {
+  const NOW = Date.parse('2026-11-12T10:00:00Z');
+  // Senza il secondo argomento = primo intake (null); `undefined` esplicito = lettura fallita.
+  const d = (appuntamentoFissatoIl: string | null | undefined, ...resto: [primoIntakeIl?: string | null, nowMs?: number]) =>
+    aperturaBfConAppuntamentoDiAltroLead({
+      appuntamentoFissatoIl, primoIntakeIl: resto.length > 0 ? resto[0] : null, nowMs: resto[1] ?? NOW,
+    });
+
+  it('fissato settimane prima, primo intake adesso → apri', () => {
+    expect(d('2026-10-08T07:09:36.287+00:00')).toEqual({ apri: true, motivo: 'appuntamento_prima_dell_arrivo', arrivoAlBot: '2026-11-12T10:00:00.000Z' });
+  });
+  it('fissato un millisecondo prima dell arrivo → apri', () => {
+    expect(d('2026-11-12T09:59:59.999Z').apri).toBe(true);
+  });
+  it('stesso istante → no ("prima" e stretto)', () => {
+    expect(d('2026-11-12T10:00:00.000Z')).toMatchObject({ apri: false, motivo: 'stesso_istante' });
+    expect(d('2026-11-11T08:00:00Z', '2026-11-11T08:00:00.000+00:00')).toMatchObject({ apri: false, motivo: 'stesso_istante' });
+    // Lo stesso istante scritto in due fusi.
+    expect(d('2026-11-11T09:00:00+01:00', '2026-11-11T08:00:00Z')).toMatchObject({ apri: false, motivo: 'stesso_istante' });
+  });
+  it('lead gia arrivato ieri e appuntamento fissato dopo quell arrivo → no', () => {
+    expect(d('2026-11-11T15:00:00Z', '2026-11-11T08:00:00Z')).toEqual({ apri: false, motivo: 'appuntamento_dopo_l_arrivo', arrivoAlBot: '2026-11-11T08:00:00.000Z' });
+  });
+  it('lead gia arrivato ieri ma appuntamento precedente → apri, e l arrivo e il primo intake, non adesso', () => {
+    expect(d('2026-11-10T15:00:00Z', '2026-11-11T08:00:00Z')).toEqual({ apri: true, motivo: 'appuntamento_prima_dell_arrivo', arrivoAlBot: '2026-11-11T08:00:00.000Z' });
+  });
+  it('fusi orari: conta l istante, non la stringa', () => {
+    // 10:30 di Roma = 09:30Z, prima delle 09:45Z (come stringa "10:30" verrebbe dopo "09:45").
+    expect(d('2026-11-11T10:30:00+01:00', '2026-11-11T09:45:00Z').apri).toBe(true);
+    // 09:30Z, dopo le 10:15 di Roma = 09:15Z (come stringa verrebbe prima).
+    expect(d('2026-11-11T09:30:00Z', '2026-11-11T10:15:00+01:00')).toMatchObject({ apri: false, motivo: 'appuntamento_dopo_l_arrivo' });
+    // A cavallo della mezzanotte: 00:30 di Roma del 12 = 23:30Z dell'11, prima delle 23:45Z.
+    expect(d('2026-11-12T00:30:00+01:00', '2026-11-11T23:45:00Z').apri).toBe(true);
+    // Cambio dell'ora (25/10/2026): 02:30+02:00 = 00:30Z, prima di 02:10+01:00 = 01:10Z.
+    expect(d('2026-10-25T02:30:00+02:00', '2026-10-25T02:10:00+01:00').apri).toBe(true);
+  });
+  it('i formati di Postgres (spazio, fuso di sole ore, microsecondi) si leggono', () => {
+    expect(d('2026-11-10 06:55:43.786+00', '2026-11-11 09:54:10.198695+00')).toEqual({ apri: true, motivo: 'appuntamento_prima_dell_arrivo', arrivoAlBot: '2026-11-11T09:54:10.198Z' });
+    expect(d('2026-11-10T06:55:43+0100').apri).toBe(true);
+  });
+  it('date senza fuso → dati mancanti, niente apertura', () => {
+    expect(d('2026-10-08T07:09:36')).toMatchObject({ apri: false, motivo: 'dati_mancanti' });
+    expect(d('2026-10-08')).toMatchObject({ apri: false, motivo: 'dati_mancanti' });
+    expect(d('2026-10-08T07:09:36Z', '2026-11-11 08:00:00')).toEqual({ apri: false, motivo: 'dati_mancanti', arrivoAlBot: null });
+  });
+  it('date mancanti o illeggibili, lettura fallita → niente apertura', () => {
+    expect(d(null)).toMatchObject({ apri: false, motivo: 'dati_mancanti' });
+    expect(d(undefined)).toMatchObject({ apri: false, motivo: 'dati_mancanti' });
+    expect(d('')).toMatchObject({ apri: false, motivo: 'dati_mancanti' });
+    expect(d('ieri')).toMatchObject({ apri: false, motivo: 'dati_mancanti' });
+    expect(d('2026-13-45T99:00:00Z')).toMatchObject({ apri: false, motivo: 'dati_mancanti' });
+    expect(d('2026-10-08T07:09:36Z', undefined)).toEqual({ apri: false, motivo: 'dati_mancanti', arrivoAlBot: null });
+    expect(d('2026-10-08T07:09:36Z', 'boh')).toEqual({ apri: false, motivo: 'dati_mancanti', arrivoAlBot: null });
+    expect(d('2026-10-08T07:09:36Z', null, NaN)).toEqual({ apri: false, motivo: 'dati_mancanti', arrivoAlBot: null });
+  });
+  it('primo intake con l orologio avanti rispetto a noi → l arrivo e adesso', () => {
+    expect(d('2026-11-12T09:00:00Z', '2026-11-12T10:05:00Z')).toEqual({ apri: true, motivo: 'appuntamento_prima_dell_arrivo', arrivoAlBot: '2026-11-12T10:00:00.000Z' });
+  });
+  it('appuntamento "fissato nel futuro" (dato impossibile) → no', () => {
+    expect(d('2026-11-13T09:00:00Z')).toMatchObject({ apri: false, motivo: 'appuntamento_dopo_l_arrivo' });
   });
 });
 

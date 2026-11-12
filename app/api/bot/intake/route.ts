@@ -194,6 +194,10 @@ export async function POST(req: NextRequest) {
         conversationId: res.conversationId,
         leadIdAppuntamento: res.rifiuto.leadIdAppuntamento,
         ...(res.rifiuto.appuntamento ? { appuntamento: res.rifiuto.appuntamento } : {}),
+        // Contratto v1.18 (PO 12/11/2026): al lead Black Friday l'apertura BF parte lo stesso
+        // (appuntamento dell'altro lead fissato prima del suo arrivo al bot). Il CRM lo scrive
+        // nella nota al GDO; un CRM che non conosce il campo si comporta come con la v1.16.
+        ...(res.rifiuto.aperturaBf ? { aperturaBf: res.rifiuto.aperturaBf } : {}),
       });
     }
 
