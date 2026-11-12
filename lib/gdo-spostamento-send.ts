@@ -32,8 +32,14 @@ export async function giaSpostatoDalBot(supabase: Supa, conversationId: number):
   }
 }
 
-/** La data a cui il bot ha spostato la call l'ultima volta (`payload.a`), o null. Nel dubbio null. */
-export async function ultimoSpostamentoDalBot(supabase: Supa, conversationId: number): Promise<string | null> {
+/**
+ * L'ultimo spostamento fatto dal bot: la data nuova (`payload.a`) e quando l'ha fatto
+ * (`at`, l'istante dell'evento; null se non si legge). Nel dubbio null.
+ */
+export async function ultimoSpostamentoDalBotInfo(
+  supabase: Supa,
+  conversationId: number,
+): Promise<{ a: string; at: string | null } | null> {
   try {
     const { data, error } = await supabase
       .from('event_log')
@@ -43,11 +49,18 @@ export async function ultimoSpostamentoDalBot(supabase: Supa, conversationId: nu
       .order('created_at', { ascending: false })
       .limit(1);
     if (error || !Array.isArray(data) || data.length === 0) return null;
-    const a = (data[0] as { payload?: { a?: string } | null }).payload?.a;
-    return typeof a === 'string' ? a : null;
+    const riga = data[0] as { payload?: { a?: string } | null; created_at?: string | null };
+    const a = riga.payload?.a;
+    if (typeof a !== 'string') return null;
+    return { a, at: typeof riga.created_at === 'string' ? riga.created_at : null };
   } catch {
     return null;
   }
+}
+
+/** La data a cui il bot ha spostato la call l'ultima volta (`payload.a`), o null. Nel dubbio null. */
+export async function ultimoSpostamentoDalBot(supabase: Supa, conversationId: number): Promise<string | null> {
+  return (await ultimoSpostamentoDalBotInfo(supabase, conversationId))?.a ?? null;
 }
 
 /** Le date dei tentativi di spostamento gia' rifiutati in questa chat (`gdo_spostamento_non_fatto`). Nel dubbio nessuna. */

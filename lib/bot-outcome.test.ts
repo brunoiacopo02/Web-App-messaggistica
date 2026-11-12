@@ -878,6 +878,13 @@ describe('sendOutcome — cancel_requested_at', () => {
     expect(marcature(calls)).toHaveLength(1);
   });
 
+  it('chat 32173: il RICHIAMO «a maggio» di chi ha disdetto la call fissata marca la disdetta, cioe\' spegne i promemoria pre-call', async () => {
+    const { supabase, calls } = makeSupabase(fissato);
+    await sendOutcome(supabase, 1, { outcome: 'RICHIAMO', note: 'a maggio, quando finisce la rata del finanziamento', leadWords: 'La rata  finisce a maggio' });
+    expect(marcature(calls)).toHaveLength(1);
+    expect(calls.events.find((e) => e.type === 'cancel_requested')?.payload).toMatchObject({ conversationId: 1, outcome: 'RICHIAMO' });
+  });
+
   it('un INTERROTTO NON è una disdetta: il lead non ha chiesto niente', async () => {
     const { supabase, calls } = makeSupabase(fissato);
     await sendOutcome(supabase, 1, { outcome: 'INTERROTTO' });

@@ -507,7 +507,8 @@ function makeDrainSupabase(claimedRow: ClaimedRow, initialRows: FakeMsgRow[]) {
                 && (conv === undefined || String((e.payload ?? {}).conversationId) === conv)
                 && Object.entries(payload).every(([k, v]) => (e.payload ?? {})[k] === v));
               // Le letture "l'ultimo prima" (order desc) vedono l'evento piu' recente per primo.
-              const righe = prior.map((e, i) => ({ id: i + 1, payload: e.payload, created_at: new Date().toISOString() })).reverse();
+              // Un evento spinto dal test con il suo `created_at` lo conserva (chat 32173).
+              const righe = prior.map((e, i) => ({ id: i + 1, payload: e.payload, created_at: (e as { created_at?: string }).created_at ?? new Date().toISOString() })).reverse();
               resolve({ data: righe, error: null });
             },
           };
@@ -4004,6 +4005,59 @@ describe('drainMarioReplies — il bot sposta anche le call che ha fissato lui (
     expect(calls.events.find((e: any) => e.type === 'gdo_spostamento_non_fatto')?.payload).toMatchObject({ origine: 'bot', motivo: 'confermato' });
     expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'RICHIAMO', date: NUOVA });
     expect(calls.convUpdates.some((u: any) => 'bot_scheduled_at' in u)).toBe(false);
+  });
+
+  it('chat 32173: dopo lo spostamento il lead disdice («annulliamo la video di domani»), il RICHIAMO dei turni dopo NON si butta e arriva a sendOutcome', async () => {
+    // 11/11/2026: call spostata dal bot a giovedì 12 alle 10; la sera il lead annulla, il bot
+    // risponde «la annullo io» con [ESITO:RICHIAMO] su «La rata finisce a maggio» e sui
+    // «Grazie». Ogni RICHIAMO finiva in `richiamo_non_spostamento_ignorato` (la call era
+    // quella spostata dal bot): nessuna disdetta segnata, e alle 8:30 del 12 è partito il
+    // promemoria. Ora il RICHIAMO passa: e' `sendOutcome` a segnare `cancel_requested_at`.
+    const { supabase, calls } = makeDrainSupabase(delBot(), [
+      FATTO,
+      { direction: 'out', body: 'Fatto Sara, la tua videochiamata ora è *giovedì 12 alle 10:00*.', template_sid: null, created_at: fra(-8 * 3600_000) },
+      { direction: 'in', body: 'Ciao ho visto il video, ho già un finanziamento e non posso farne un altro quindi annulliamo la video di domani non faccio perdere tempo', template_sid: null, created_at: fra(-10 * 60_000) },
+      { direction: 'out', body: 'Quando pensi che qualcosa possa cambiare?', template_sid: null, created_at: fra(-9 * 60_000) },
+      { direction: 'in', body: 'Si', template_sid: null, created_at: fra(-8 * 60_000) },
+      { direction: 'out', body: 'Le rate partono da circa 100 euro al mese.', template_sid: null, created_at: fra(-7 * 60_000) },
+      { direction: 'in', body: 'Il discorso è che non accettano il finanziamento', template_sid: null, created_at: fra(-6 * 60_000) },
+      { direction: 'out', body: 'Ha senso che tu ci ragioni così.', template_sid: null, created_at: fra(-5 * 60_000) },
+      { direction: 'in', body: 'Lo farei se cambiasse qualcosa', template_sid: null, created_at: fra(-4 * 60_000) },
+      { direction: 'out', body: 'Quando pensi che qualcosa possa cambiare, tra un mese, tre mesi?', template_sid: null, created_at: fra(-3 * 60_000) },
+      { direction: 'in', body: 'La rata  finisce a maggio', template_sid: null, created_at: fra(-60_000) },
+    ]);
+    calls.events.push({
+      type: 'gdo_spostamento_bot',
+      payload: { conversationId: 93, a: new Date(CALL).toISOString(), origine: 'bot' },
+      created_at: fra(-8 * 3600_000),
+    });
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Allora maggio è il momento giusto per ripartire.', { outcome: 'RICHIAMO', note: 'a maggio, quando finisce la rata' }));
+
+    await drainMarioReplies(supabase, 93, '+391234567890', () => 0);
+
+    expect(calls.events.some((e: any) => e.type === 'richiamo_non_spostamento_ignorato')).toBe(false);
+    expect(sendOutcome).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'RICHIAMO', note: 'a maggio, quando finisce la rata' });
+  });
+
+  it('chat 32173, controprova: la richiesta di spostare era PRIMA dello spostamento (lead 4da4e19f), il RICHIAMO su «grazie» si butta ancora', async () => {
+    const { supabase, calls } = makeDrainSupabase(delBot(), [
+      FATTO,
+      { direction: 'in', body: 'non ce la faccio, possiamo spostare?', template_sid: null, created_at: fra(-9 * 3600_000) },
+      { direction: 'out', body: 'Fatto Sara, la tua videochiamata ora è *giovedì 12 alle 10:00*.', template_sid: null, created_at: fra(-8 * 3600_000) },
+      { direction: 'in', body: 'grazie mille', template_sid: null, created_at: fra(-60_000) },
+    ]);
+    calls.events.push({
+      type: 'gdo_spostamento_bot',
+      payload: { conversationId: 93, a: new Date(CALL).toISOString(), origine: 'bot' },
+      created_at: fra(-8 * 3600_000),
+    });
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Figurati, a giovedì!', { outcome: 'RICHIAMO' }));
+
+    await drainMarioReplies(supabase, 93, '+391234567890', () => 0);
+
+    expect(calls.events.some((e: any) => e.type === 'richiamo_non_spostamento_ignorato')).toBe(true);
+    expect(sendOutcome).not.toHaveBeenCalled();
   });
 
   it("chat 31379 sulle call del bot: dopo lo spostamento la nota «gia' fatto» e' in coda al prompt", async () => {

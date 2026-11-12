@@ -236,6 +236,14 @@ describe('richiamoNonESpostamento: niente nota SPOSTAMENTO CHIESTO su frasi che 
     expect(richiamoNonESpostamento({ ...base, outcome: 'SCARTO' })).toBe(false);
     expect(richiamoNonESpostamento({ ...base, spostaNelTurno: true })).toBe(false);
   });
+  it('chat 32173: sulla call spostata dal bot, una disdetta arrivata DOPO lo spostamento tiene vivo il RICHIAMO', () => {
+    const dopo = 'ho già un finanziamento quindi annulliamo la video di domani / Grazie / Si';
+    expect(richiamoNonESpostamento({ ...base, testoLead: 'La rata finisce a maggio', testoDopoSpostamento: dopo })).toBe(false);
+    expect(richiamoNonESpostamento({ ...base, testoLead: 'Grazie', soloPresaDAtto: true, testoDopoSpostamento: dopo })).toBe(false);
+    // Dopo lo spostamento il lead ha solo ringraziato: il RICHIAMO resta da buttare (lead 4da4e19f).
+    expect(richiamoNonESpostamento({ ...base, testoLead: 'Grazie', soloPresaDAtto: true, testoDopoSpostamento: 'ok perfetto / a martedì' })).toBe(true);
+    expect(richiamoNonESpostamento({ ...base, testoDopoSpostamento: '' })).toBe(true);
+  });
   it('senza spostamento del bot: solo prese d\'atto e conferme nette, e mai dopo una richiesta aperta', () => {
     const senza = { ...base, spostataDalBotA: null };
     expect(richiamoNonESpostamento(senza)).toBe(true);

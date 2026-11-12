@@ -305,7 +305,8 @@ const normalizzaFrase = (s: string): string =>
  *
  * Si', solo se il modello non ha messo una data nuova (o ha rimesso quella in agenda), il
  * turno non ha un [SPOSTA], il lead non parla di spostare/disdire, e:
- * - la call in agenda e' proprio quella appena spostata dal bot, oppure
+ * - la call in agenda e' proprio quella appena spostata dal bot, e DOPO quello spostamento
+ *   il lead non ha chiesto di annullare o di spostare ancora (`testoDopoSpostamento`), oppure
  * - il lead ha solo preso atto o confermato ("ok", "farò il possibile", "l'ho visto") e nei
  *   suoi messaggi di prima (`testoPrima`) non c'e' una richiesta di spostare rimasta aperta:
  *   un "ok" dopo «giovedì non posso» puo' essere il RICHIAMO vero di quella richiesta.
@@ -323,12 +324,23 @@ export function richiamoNonESpostamento(i: {
   soloPresaDAtto: boolean;
   /** I messaggi del lead dei turni appena prima (vale solo per la seconda regola). */
   testoPrima?: string;
+  /**
+   * I messaggi del lead arrivati DOPO l'ultimo spostamento fatto dal bot e prima di questo
+   * turno (chat 32173, 11/11/2026). Il lead, con la call spostata dal bot al giorno dopo,
+   * scrive «annulliamo la video di domani»; il bot gli risponde «la annullo io» e mette
+   * [ESITO:RICHIAMO] su «La rata finisce a maggio» e sui «Grazie» dopo. La prima regola
+   * («la call e' quella appena spostata dal bot») buttava via ogni RICHIAMO: la disdetta
+   * non arrivava a `sendOutcome`, `cancel_requested_at` restava vuoto e la mattina dopo e'
+   * partito il promemoria della call. Una richiesta di annullare o spostare arrivata dopo
+   * lo spostamento e' un fatto nuovo: il RICHIAMO non si butta.
+   */
+  testoDopoSpostamento?: string;
 }): boolean {
   if (i.outcome !== 'RICHIAMO' || i.spostaNelTurno) return false;
   if (i.date && i.date.trim() && !(i.callAt && isoWithOffset(i.date.trim()) && sameInstant(i.date, i.callAt))) return false;
   if (parlaDiDisdireOSpostare(i.testoLead)) return false;
   const callSpostata = !!i.callAt && !!i.spostataDalBotA && sameInstant(i.callAt, i.spostataDalBotA);
-  if (callSpostata) return true;
+  if (callSpostata) return !(i.testoDopoSpostamento && parlaDiDisdireOSpostare(i.testoDopoSpostamento));
   if (i.testoPrima && parlaDiDisdireOSpostare(i.testoPrima)) return false;
   return i.soloPresaDAtto || FRASE_CHE_CONFERMA.test(normalizzaFrase(i.testoLead));
 }

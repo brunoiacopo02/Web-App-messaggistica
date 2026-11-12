@@ -71,6 +71,7 @@ import {
 } from './gdo-spostamento';
 import {
   giaSpostatoDalBot, inviaSpostamentoAlCrm, registraSpostamentoInChat, spostamentiRifiutati, statoCrmLocale, ultimoSpostamentoDalBot,
+  ultimoSpostamentoDalBotInfo,
 } from './gdo-spostamento-send';
 import { isoWithOffset } from './bot-contract';
 import { sameInstant } from './rome-time';
@@ -1656,7 +1657,15 @@ export async function drainMarioReplies(
         const testoTurnoRichiamo = idxTurno >= 0
           ? rows.slice(idxTurno).filter((m) => m.direction === 'in').map((m) => (m.body ?? '').trim()).filter(Boolean).join(' / ')
           : '';
-        const spostataA = await ultimoSpostamentoDalBot(supabase, conversationId);
+        const ultimoSposta = await ultimoSpostamentoDalBotInfo(supabase, conversationId);
+        const spostataA = ultimoSposta?.a ?? null;
+        // Quello che il lead ha scritto dopo lo spostamento e prima di questo turno (chat
+        // 32173): una disdetta arrivata li' non deve far buttare il RICHIAMO.
+        const spostataIlMs = ultimoSposta?.at ? Date.parse(ultimoSposta.at) : NaN;
+        const fineTurniPrima = idxTurno >= 0 ? idxTurno : rows.length;
+        const testoDopoSpostamento = Number.isNaN(spostataIlMs) ? '' : rows.slice(0, fineTurniPrima)
+          .filter((m) => m.direction === 'in' && Date.parse(m.created_at) > spostataIlMs)
+          .map((m) => m.body ?? '').join(' / ');
         if (richiamoNonESpostamento({
           outcome: result.outcome,
           date: result.scheduledAt,
@@ -1668,6 +1677,7 @@ export async function drainMarioReplies(
           // Gli ultimi messaggi del lead prima di questo turno (al massimo 6 righe indietro).
           testoPrima: rows.slice(Math.max(0, (idxTurno >= 0 ? idxTurno : rows.length) - 6), idxTurno >= 0 ? idxTurno : rows.length)
             .filter((m) => m.direction === 'in').map((m) => m.body ?? '').join(' / '),
+          testoDopoSpostamento,
         })) {
           await supabase.from('event_log').insert({
             type: 'richiamo_non_spostamento_ignorato',
