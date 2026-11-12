@@ -228,14 +228,18 @@ export function sidAperturaMario(): string[] {
  */
 export async function sceltaHighMenoCarico(
   supabase: Supa,
-  i: { templateSids: string[]; adesso?: Date; primario: string },
+  i: {
+    templateSids: string[]; adesso?: Date; primario: string;
+    /** Il primario resta fuori dalla scelta (BF senza chat passata sul 3199, lib/bf-primario.ts). */
+    escludiPrimario?: boolean;
+  },
 ): Promise<{ numero: string; oggi: number } | null> {
   const [tetti, stato] = await Promise.all([getTettiNumeri(supabase), getStatoQualitaNumeri(supabase)]);
   if (!tetti || !stato) return null;
   const adesso = i.adesso ?? new Date();
   const oggiG = giornoRomaDi(adesso);
   const ieriG = giornoRomaDi(new Date(adesso.getTime() - 24 * 3600 * 1000));
-  const numeri = [...numeriSecondari(), i.primario];
+  const numeri = i.escludiPrimario ? numeriSecondari() : [...numeriSecondari(), i.primario];
   const ok: { numero: string; oggi: number; ordine: number }[] = [];
   for (const [ordine, numero] of numeri.entries()) {
     if (tettoDi(tetti, numero) <= 0) continue;
@@ -276,6 +280,12 @@ export async function scegliMittenteNuovo(
      * sempre qui sotto.
      */
     senzaTettiSoloHigh?: boolean;
+    /**
+     * Black Friday (PO 12/11/2026, lib/bf-primario.ts): la chat nuova non nasce sul
+     * primario. Fuori dalla scelta HIGH e dal giro (`includiPrimario` non vale); resta
+     * solo l'ultimo ripiego, quando nessun altro numero puo' spedire.
+     */
+    escludiPrimario?: boolean;
   },
 ): Promise<SceltaMittente> {
   const codaMarketing = i.codaMarketing ?? inCodaMarketing();
@@ -370,7 +380,7 @@ export async function scegliMittenteNuovo(
   // Conteggio fallito = fuori dal giro; tetto pieno = solo il trabocco qui sotto.
   // I lead della coda marketing non nascono MAI sul primario (PO 29/10/2026).
   let primarioPieno: { numero: string; oggi: number } | null = null;
-  if (i.includiPrimario && !i.ignoraTetti && !codaMarketing) {
+  if (i.includiPrimario && !i.escludiPrimario && !i.ignoraTetti && !codaMarketing) {
     const tettoP = tettoDi(tetti, primario);
     if (tettoP > 0) {
       const n = await apertureMarioOggi(supabase as never, primario, i.adesso);

@@ -15,6 +15,7 @@ import { contaBenvenutiUltimaOra } from './lancio-db';
 import { mittenteDiConversazione, numeroPrimario } from './mittente';
 import { mittenteBenvenutoLancio } from './lancio-mittente';
 import { scegliMittenteNuovo, sidAperturaMario, chatEsistente, registraAperturaMario } from './scelta-mittente';
+import { regolaBfPrimarioAttiva, bfDaToglierDalPrimario, stessoNumero, EVENTO_BF_FUORI_DAL_PRIMARIO } from './bf-primario';
 import { aperturaBlackFridayText, isCrmFunnelBlackFriday, MARKER_TESTO_APERTURA_BF, EVENTO_BF_SU_APPUNTAMENTO } from './black-friday';
 import { aperturaBlackFriday } from './black-friday-apertura';
 import { HANDOFF_VERGINI, HANDOFF_CRM_NON_DEL_BOT } from './lancio-vergini';
@@ -367,12 +368,17 @@ export async function enrollLeadIntoMario(
   // hanno avuto il PDF). La scheda parte alla prima risposta (`schedaSubito`). Tetti dei
   // numeri invariati: niente `senzaTettiSoloHigh`, che resta solo del BF.
   const aperturaNeutra = blackFriday || isCrmFunnelProfessioni(args.crmFunnel);
+  // Black Friday (PO 12/11/2026): dal 3199 solo chi ha gia' una chat con lui. Una chat
+  // nuova non nasce li'; una chat gia' li' senza una risposta del lead si sposta prima
+  // dell'invio (piu' sotto). Vedi lib/bf-primario.ts.
+  const regolaBfPrimario = blackFriday ? await regolaBfPrimarioAttiva(supabase) : false;
   const scelta = await scegliMittenteNuovo(supabase, {
     templateSids: aperturaNeutra ? [templateSid] : sidAperturaMario(),
     chiave: args.phone,
     crmLeadId: args.crmLeadId ?? null,
     includiPrimario: true,
     senzaTettiSoloHigh: blackFriday,
+    escludiPrimario: regolaBfPrimario,
   });
   const mittenteImposto: string | undefined = scelta.from;
   // Il tetto di ogni numero conta le chat che NASCONO qui (PO 06/11/2026): si guarda
@@ -657,7 +663,14 @@ export async function enrollLeadIntoMario(
   // Black Friday (PO 07/11/2026): il template BF se approvato sull'account del numero;
   // in attesa dell'approvazione l'apertura si differisce come di notte (la manda il cron
   // sequence-touches appena il template e' approvato, o il neutro a fine attesa).
-  const aperturaBf = blackFriday && !riaperturaBf ? await aperturaBlackFriday(supabase, from) : null;
+  // Chat gia' sul 3199 senza una risposta del lead: l'apertura BF parte dal numero scelto
+  // fra gli altri (`scelta`, calcolata senza il primario). Qui si decide soltanto; la chat
+  // cambia numero solo se l'apertura parte davvero (dopo la guardia dei ritenti). Le
+  // differite le manda `bf-aperture`, che applica la stessa regola.
+  const bfFuoriDalPrimario = blackFriday && !stessoNumero(scelta.from, primario)
+    && await bfDaToglierDalPrimario(supabase, { attiva: regolaBfPrimario, conversationId, numeroChat: from, primario });
+  const fromInvio = bfFuoriDalPrimario ? scelta.from : from;
+  const aperturaBf = blackFriday && !riaperturaBf ? await aperturaBlackFriday(supabase, fromInvio) : null;
   if (!inOpeningWindow(Date.now()) || aperturaBf?.scelta === 'attesa') {
     await supabase.from('conversations').update(convUpdate).eq('id', conversationId);
     await supabase.from('event_log').insert({
@@ -767,8 +780,17 @@ export async function enrollLeadIntoMario(
     }
   }
 
+  if (bfFuoriDalPrimario) {
+    await supabase.from('conversations').update({ wa_number: fromInvio }).eq('id', conversationId);
+    await supabase.from('event_log').insert({
+      type: EVENTO_BF_FUORI_DAL_PRIMARIO,
+      payload: { phone: args.phone, conversationId, crmLeadId: args.crmLeadId ?? null, da: from, a: fromInvio, punto: 'arruolamento' } as never,
+      message: `[bf] conv ${conversationId}: nessuna chat passata sul numero storico, apertura Black Friday da ${fromInvio}`,
+      level: 'info',
+    });
+  }
   const res = await sendTemplateAndLog(
-    supabase, conversationId, args.phone, sendSid, sendLabel, from, variables, bodyOverride,
+    supabase, conversationId, args.phone, sendSid, sendLabel, fromInvio, variables, bodyOverride,
   );
 
   await supabase.from('conversations').update(convUpdate).eq('id', conversationId);
