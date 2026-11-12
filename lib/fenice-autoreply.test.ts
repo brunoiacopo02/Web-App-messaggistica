@@ -3895,6 +3895,37 @@ describe('drainMarioReplies — il bot sposta la call del lead GDO (PO 28/10/202
     expect(contesto()).not.toContain('SPOSTAMENTO DELLA CALL');
   });
 
+  it("chat 31379: dopo lo spostamento fatto dal bot il prompt dice che e' vero e registrato, cosi' il modello non lo smentisce", async () => {
+    // 09/11/2026: «Fatto Giuseppe, la tua videochiamata ora è martedì 10 alle 20:00» e, al
+    // messaggio dopo, «lo spostamento non lo faccio io, non darlo per fatto». Nel turno dopo
+    // lo spostamento il blocco SPOSTAMENTO DELLA CALL non c'e' piu' (una volta sola): deve
+    // esserci quello che dice che lo spostamento e' gia' fatto.
+    const { supabase, calls } = makeDrainSupabase(postino(), [
+      RECAP,
+      { direction: 'out', body: 'Fatto Luca, la tua videochiamata ora è *martedì 10 alle 20:00*.', template_sid: null, created_at: fra(-90_000) },
+      { direction: 'in', body: 'Ma la call è in forma verbale o videochiamata?', template_sid: null, created_at: fra(-60_000) },
+    ]);
+    calls.events.push({ type: 'gdo_spostamento_bot', payload: { conversationId: 92, a: new Date(CALL).toISOString(), origine: 'gdo' } });
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('È una videochiamata, basta il telefono.'));
+
+    await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+    expect(contesto()).toContain('SPOSTAMENTO GIÀ FATTO');
+    expect(contesto()).toContain('Non smentirlo');
+    expect(contesto()).not.toContain('SPOSTAMENTO DELLA CALL');
+    expect(sendOutcome).not.toHaveBeenCalled();
+  });
+
+  it("chat 31379: se poi le Conferme hanno cambiato la data, la nota «gia' fatto» non c'e' piu'", async () => {
+    const { supabase, calls } = makeDrainSupabase(postino(), [RECAP, SPOSTA]);
+    calls.events.push({ type: 'gdo_spostamento_bot', payload: { conversationId: 92, a: fra(5 * 24 * 3600_000), origine: 'gdo' } });
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('ok'));
+
+    await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+    expect(contesto()).not.toContain('SPOSTAMENTO GIÀ FATTO');
+  });
+
   it('chat postino con anche un APPUNTAMENTO del bot (origine incerta), o interruttore spento: niente blocco nel prompt', async () => {
     const a = makeDrainSupabase(postino({ bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: CALL }), [RECAP, SPOSTA]);
     vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('ok'));
@@ -3973,6 +4004,17 @@ describe('drainMarioReplies — il bot sposta anche le call che ha fissato lui (
     expect(calls.events.find((e: any) => e.type === 'gdo_spostamento_non_fatto')?.payload).toMatchObject({ origine: 'bot', motivo: 'confermato' });
     expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'RICHIAMO', date: NUOVA });
     expect(calls.convUpdates.some((u: any) => 'bot_scheduled_at' in u)).toBe(false);
+  });
+
+  it("chat 31379 sulle call del bot: dopo lo spostamento la nota «gia' fatto» e' in coda al prompt", async () => {
+    const { supabase, calls } = makeDrainSupabase(delBot(), [FATTO, { direction: 'in', body: 'ok grazie', template_sid: null, created_at: fra(-60_000) }]);
+    calls.events.push({ type: 'gdo_spostamento_bot', payload: { conversationId: 93, a: new Date(CALL).toISOString(), origine: 'bot' } });
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Figurati!'));
+
+    await drainMarioReplies(supabase, 93, '+391234567890', () => 0);
+
+    expect(contesto()).toContain('SPOSTAMENTO GIÀ FATTO');
+    expect(contesto()).not.toContain('SPOSTAMENTO DELLA CALL');
   });
 
   it('call del bot gia\' spostata dalle Conferme (date diverse): niente blocco nel prompt', async () => {

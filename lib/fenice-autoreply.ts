@@ -58,6 +58,7 @@ import {
   giorniSpostamento,
   motivoDataNonValida,
   motivoNonSpostabile,
+  notaSpostamentoFattoPrompt,
   notaSpostamentoPrompt,
   origineSpostamento,
   spostamentoAbilitato,
@@ -1389,9 +1390,21 @@ export async function drainMarioReplies(
             oreOccupate: await leggiOreOccupate(giorniSposta),
           })
         : null;
+      // Dopo lo spostamento fatto dal bot (chat 31379): il blocco qui sopra esce dal prompt
+      // («una volta sola») e il modello, col solo manuale, smentiva la conferma scritta dal
+      // codice. Finche' la call in agenda e' quella spostata dal bot, il prompt lo dice.
+      const callAncoraFutura = !!callSpostabileAt && Date.parse(callSpostabileAt) > Date.now();
+      const spostataDalBotA = origineSposta && crmLeadId && !notaSposta && callAncoraFutura
+        ? await ultimoSpostamentoDalBot(supabase, conversationId)
+        : null;
+      const notaSpostaFatto = spostataDalBotA && callSpostabileAt && sameInstant(spostataDalBotA, callSpostabileAt)
+        ? notaSpostamentoFattoPrompt({ callAt: new Date(callSpostabileAt) })
+        : null;
+      // Una delle due, mai insieme: o si puo' ancora spostare, o e' gia' stato fatto.
+      const notaSpostaTurno = notaSposta ?? notaSpostaFatto;
       // Sulle call del bot il blocco va in coda alla nota del turno, qualunque sia; sul
       // postino sta gia' in coda alla nota GDO (qui sotto).
-      const notaSpostaBot = origineSposta === 'bot' ? notaSposta : null;
+      const notaSpostaBot = origineSposta === 'bot' ? notaSpostaTurno : null;
       // Offerta BF evergreen: in coda alla nota del funnel (Professioni) o del primo
       // contatto. Il lancio, gli studenti e il postino non arrivano qui (`altroFlusso`).
       const notaOffertaEvergreen = offertaEvergreen && vslEvergreen && settingsOffertaEvergreen && !notaLancioCompleta && !notaStudente
@@ -1428,7 +1441,7 @@ export async function drainMarioReplies(
         // nota e' un'altra, la dichiarazione IA: un postino ha sempre ricevuto l'agenda,
         // quindi i due casi non si incontrano mai.
         ...(noteGdo
-          ? { contextNote: [gdoContextNote(noteGdo), notaSposta, notaWarmup].filter(Boolean).join('\n\n') }
+          ? { contextNote: [gdoContextNote(noteGdo), notaSpostaTurno, notaWarmup].filter(Boolean).join('\n\n') }
           : notaLancioCompleta
             ? { contextNote: [notaLancioCompleta, notaSpostaBot].filter(Boolean).join('\n\n') }
             : notaStudente
@@ -1532,7 +1545,7 @@ export async function drainMarioReplies(
               botScheduledAt: botScheduledAt,
               gdoAppuntamentoAt: gdoAppuntamentoAt,
               fissatoIl: fissatoIlGdo,
-            }), notaSposta, notaWarmup].filter(Boolean).join('\n\n'),
+            }), notaSpostaTurno, notaWarmup].filter(Boolean).join('\n\n'),
           });
           // Fail-safe: una rigenerazione vuota non vale meno di zero, vale come un
           // fallimento — si manda comunque la prima risposta, il lead non resta muto.

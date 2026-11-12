@@ -196,6 +196,30 @@ export function notaSpostamentoPrompt(i: { giorni: string[]; callAt: Date; oreOc
   ].join('\n');
 }
 
+/**
+ * Il blocco per il prompt DOPO che il bot ha spostato la call (chat 31379, 09/11/2026).
+ *
+ * Lo spostamento si fa una volta sola, quindi dal turno dopo `notaSpostamentoPrompt` esce
+ * dal prompt e resta solo il manuale: «GIORNO E ORA DI UNA CALL GIÀ FISSATA NON LI SPOSTI
+ * TU, MAI… non gli dici "fatto"». Il modello si ritrovava in cronologia la bolla «Fatto, la
+ * tua videochiamata ora è…» (scritta dal codice, non da lui), la prendeva per un suo errore
+ * e la smentiva: «lo spostamento non lo faccio io, non darlo per fatto… per ora la call
+ * resta stasera», con la call già spostata nel CRM. Il lead ha due date in testa e le
+ * Conferme una nota di spostamento falsa.
+ *
+ * Qui il modello viene a sapere che lo spostamento è vero e registrato. Va nel prompt
+ * finché la call in agenda è quella a cui il bot l'ha spostata.
+ */
+export function notaSpostamentoFattoPrompt(i: { callAt: Date }): string {
+  const call = `${giornoRoma(i.callAt)} alle ${oraRoma(i.callAt)}`;
+  return [
+    `SPOSTAMENTO GIÀ FATTO (vale solo per questo lead): su sua richiesta la videochiamata è stata spostata dal sistema ed è registrata in agenda. Adesso è ${call}: è questa la data vera, quella di prima non esiste più.`,
+    `Il messaggio "Fatto, la tua videochiamata ora è..." che trovi in chat l'ha mandato il sistema ed è corretto. Non smentirlo, non correggerlo e non scusarti: non dire che lo spostamento non lo puoi fare, che non è valido, che lo deve confermare Noemi, che "per ora resta" l'orario di prima o che passi tu la richiesta a qualcuno. La regola "GIORNO E ORA DI UNA CALL GIÀ FISSATA NON LI SPOSTI TU" qui vuol dire solo che non la sposti un'ALTRA volta.`,
+    `Noemi lo chiama prima di ${call} per la conferma di sempre: se ti chiede della call, di Noemi o del video, rispondi sulla data nuova. Un "ok", un "grazie", un "va bene" o una domanda su come funziona la call NON sono una richiesta di spostare: rispondi e basta, senza [ESITO:RICHIAMO].`,
+    `Solo se ti chiede lui di cambiare ANCORA giorno o ora: digli che si poteva spostare una volta sola e fai come nella sezione SE VUOLE SPOSTARE O DISDIRE (il nuovo orario lo sistema con Noemi quando lo chiama).`,
+  ].join('\n');
+}
+
 /** "giovedì 29: la mattina 11:00 o 12:00, ... (già piene: 10:00)" per i giorni dello spostamento. */
 export function righeOreMenoPiene(giorni: readonly string[], dati: OreOccupate | null): string | null {
   if (!dati) return null;

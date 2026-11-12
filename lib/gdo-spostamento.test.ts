@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  dataCallDelBot, elencoGiorni, giorniSpostamento, motivoDataNonValida, motivoNonSpostabile, notaSpostamentoPrompt,
+  dataCallDelBot, elencoGiorni, giorniSpostamento, motivoDataNonValida, motivoNonSpostabile, notaSpostamentoFattoPrompt, notaSpostamentoPrompt,
   origineSpostamento, spostamentoAbilitato, testoSpostamentoFatto, ultimoLinkVideo,
   richiamoNonESpostamento, spostamentoGiaRifiutato, testoSpostamentoNonFatto,
   TESTO_SPOSTAMENTO_NON_FATTO, TESTO_SPOSTAMENTO_PASSATO_AI_COLLEGHI,
@@ -242,5 +242,21 @@ describe('richiamoNonESpostamento: niente nota SPOSTAMENTO CHIESTO su frasi che 
     expect(richiamoNonESpostamento({ ...senza, testoLead: 'ok', soloPresaDAtto: true })).toBe(true);
     expect(richiamoNonESpostamento({ ...senza, testoLead: 'grazie, purtroppo lavoro quel giorno' })).toBe(false);
     expect(richiamoNonESpostamento({ ...senza, testoLead: 'ok', soloPresaDAtto: true, testoPrima: 'giovedì devo spostare' })).toBe(false);
+  });
+});
+
+describe('notaSpostamentoFattoPrompt: dopo lo spostamento il modello non si smentisce (chat 31379)', () => {
+  const t = notaSpostamentoFattoPrompt({ callAt: new Date('2026-11-10T19:00:00Z') });
+  it("dice la data nuova, che e' registrata e che il messaggio «Fatto» e' vero", () => {
+    expect(t).toContain('SPOSTAMENTO GIÀ FATTO');
+    expect(t).toContain('martedì 10 alle 20:00');
+    expect(t).toContain('registrata in agenda');
+    expect(t).toContain('Non smentirlo');
+  });
+  it('vieta le frasi della smentita del 09/11 e dice che la regola del manuale vale solo per un secondo spostamento', () => {
+    expect(t).toContain('che lo deve confermare Noemi');
+    expect(t).toContain('"per ora resta"');
+    expect(t).toContain("non la sposti un'ALTRA volta");
+    expect(t).toContain('senza [ESITO:RICHIAMO]');
   });
 });
