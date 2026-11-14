@@ -88,8 +88,10 @@ const ATTESA_MIN_PRIMA_DI_SEGNALARE_MS = 60 * 60_000;
 
 /**
  * C'e' un'attesa «riscrivo io» ancora aperta da segnalare? (PO 12/11/2026: «se scrive dopo
- * dobbiamo essere avvisati».) Si' se le attese segnate sono piu' dei «ha riscritto» gia'
- * registrati e l'ultima attesa ha almeno un'ora (il «grazie» subito dopo non conta).
+ * dobbiamo essere avvisati».) Si' se l'ULTIMA attesa e' piu' recente dell'ULTIMO «ha
+ * riscritto» e ha almeno un'ora (il «grazie» subito dopo non conta). Si confrontano le date,
+ * non i conteggi: dopo «scrivimi tu» un «Ok perfetto» del lead puo' far rimettere RICHIAMO al
+ * modello e nascere una seconda attesa, e con i conteggi l'avviso partiva su due turni.
  * Nel dubbio no.
  */
 export async function attesaDaSegnalare(supabase: Supa, conversationId: number, nowMs: number): Promise<boolean> {
@@ -97,15 +99,19 @@ export async function attesaDaSegnalare(supabase: Supa, conversationId: number, 
     const conv = String(conversationId);
     const [attese, riscritti] = await Promise.all([
       supabase.from('event_log').select('id, created_at').eq('type', 'gdo_spostamento_attesa_lead').eq('payload->>conversationId', conv).limit(50),
-      supabase.from('event_log').select('id').eq('type', EVENTO_ATTESA_RISCRITTO).eq('payload->>conversationId', conv).limit(50),
+      supabase.from('event_log').select('id, created_at').eq('type', EVENTO_ATTESA_RISCRITTO).eq('payload->>conversationId', conv).limit(50),
     ]);
     if (attese.error || riscritti.error || !Array.isArray(attese.data) || !Array.isArray(riscritti.data)) return false;
-    if (attese.data.length <= riscritti.data.length) return false;
-    const tempi: number[] = attese.data
-      .map((r: { created_at?: string | null }) => (r.created_at ? Date.parse(r.created_at) : NaN))
-      .filter((t: number) => !Number.isNaN(t));
-    if (tempi.length === 0) return false;
-    return nowMs - Math.max(...tempi) >= ATTESA_MIN_PRIMA_DI_SEGNALARE_MS;
+    const tempi = (righe: { created_at?: string | null }[]): number[] =>
+      righe.map((r) => (r.created_at ? Date.parse(r.created_at) : NaN)).filter((t) => !Number.isNaN(t));
+    const tempiAttese = tempi(attese.data);
+    if (tempiAttese.length === 0) return false;
+    const ultimaAttesa = Math.max(...tempiAttese);
+    // Un «ha riscritto» senza data leggibile: nel dubbio l'attesa e' gia' chiusa.
+    if (riscritti.data.length > tempi(riscritti.data).length) return false;
+    const tempiRiscritti = tempi(riscritti.data);
+    if (tempiRiscritti.length > 0 && Math.max(...tempiRiscritti) >= ultimaAttesa) return false;
+    return nowMs - ultimaAttesa >= ATTESA_MIN_PRIMA_DI_SEGNALARE_MS;
   } catch {
     return false;
   }

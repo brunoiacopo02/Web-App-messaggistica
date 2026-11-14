@@ -5,7 +5,7 @@ import {
   richiamoNonESpostamento, spostamentoGiaRifiutato, testoSpostamentoNonFatto,
   TESTO_SPOSTAMENTO_NON_FATTO, TESTO_SPOSTAMENTO_PASSATO_AI_COLLEGHI,
 } from './gdo-spostamento';
-import { inviaSpostamentoAlCrm } from './gdo-spostamento-send';
+import { attesaDaSegnalare, EVENTO_ATTESA_RISCRITTO, inviaSpostamentoAlCrm } from './gdo-spostamento-send';
 import { parseMarioReply } from './mario';
 
 // mercoledì 28/10/2026 15:00 Roma (CET, +01:00)
@@ -390,5 +390,40 @@ describe('«non posso in questi giorni, riscrivo io» (PO 12/11/2026, chat 25906
     expect(eRiscriveLui({ ...t, date: '2026-12-01T18:00:00+01:00' })).toBe(true);
     // Call già passata: una data prima della call non è un anticipo.
     expect(eRiscriveLui({ ...t, callAt: '2026-11-18T18:00:00+01:00', date: '2026-11-18T10:00:00+01:00' })).toBe(true);
+  });
+});
+
+describe('attesaDaSegnalare: si confrontano le date, non i conteggi (revisione 14/11/2026)', () => {
+  const ORA = new Date('2026-11-20T15:00:00+01:00').getTime();
+  const ore = (h: number) => new Date(ORA - h * 3600_000).toISOString();
+  // Un event_log finto: risponde per `type`, con le righe date.
+  function fakeLog(attese: string[], riscritti: string[]) {
+    const righe: Record<string, { id: number; created_at: string }[]> = {
+      gdo_spostamento_attesa_lead: attese.map((c, n) => ({ id: n + 1, created_at: c })),
+      [EVENTO_ATTESA_RISCRITTO]: riscritti.map((c, n) => ({ id: 100 + n, created_at: c })),
+    };
+    return {
+      from: () => {
+        let tipo = '';
+        const q: any = {
+          select: () => q,
+          eq: (col: string, v: string) => { if (col === 'type') tipo = v; return q; },
+          order: () => q,
+          limit: () => q,
+          then: (ok: (r: unknown) => unknown, ko?: (e: unknown) => unknown) => Promise.resolve({ data: righe[tipo] ?? [], error: null }).then(ok, ko),
+        };
+        return q;
+      },
+    };
+  }
+  it('due attese di fila («scrivimi tu», poi «Ok perfetto» con un altro RICHIAMO) e un solo «ha riscritto» dopo: nessun secondo avviso', async () => {
+    expect(await attesaDaSegnalare(fakeLog([ore(48), ore(47)], [ore(2)]), 1, ORA)).toBe(false);
+  });
+  it('attesa nuova dopo un «ha riscritto»: avviso', async () => {
+    expect(await attesaDaSegnalare(fakeLog([ore(48), ore(10)], [ore(20)]), 1, ORA)).toBe(true);
+  });
+  it("attesa senza «ha riscritto»: avviso dopo un'ora, non prima", async () => {
+    expect(await attesaDaSegnalare(fakeLog([ore(3)], []), 1, ORA)).toBe(true);
+    expect(await attesaDaSegnalare(fakeLog([ore(0.5)], []), 1, ORA)).toBe(false);
   });
 });
