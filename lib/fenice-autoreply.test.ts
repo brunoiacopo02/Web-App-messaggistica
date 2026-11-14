@@ -43,7 +43,7 @@ import { leggiSettingsOffertaBfEvergreen } from './offerta-bf-evergreen';
 import { leggiOreOccupate } from './ore-occupate';
 import { sendOutcome, inviaNotaAlCrm, registraEsitoSenzaLeadId } from './bot-outcome';
 import { NOTA_VIDEO, NOTA_NOEMI } from './gdo-context-note';
-import { OPENING_ENV_KEYS, personaForConversation } from './persona';
+import { OPENING_ENV_KEYS, personaForConversation, notaNomeMarta } from './persona';
 import { eseguiTurnoLancio } from './lancio-turno';
 import { getLancioSettings } from './lancio-settings';
 import { TESTO_POSTO_BLOCCATO } from './lancio-fase';
@@ -4698,5 +4698,54 @@ describe('drainMarioReplies — lead di database ricontattato (PO 10/11/2026)', 
     expect(generateMarioReply).toHaveBeenCalledTimes(1);
     expect(opzioniDelTurno().contextNote ?? '').not.toContain('LEAD DI DATABASE');
     expect(calls.events.some((e: { type: string }) => e.type === 'database_non_interessa')).toBe(false);
+  }, 20_000);
+});
+
+// Decisione del titolare 14/11/2026: «si deve dire sempre che è Marta, se no si creano
+// casini». Caso vero: chat 1737 (13/11), nata con l'apertura legacy firmata Mario.
+describe('drainMarioReplies — il bot si presenta sempre come Marta (titolare 14/11/2026)', () => {
+  const legacy: FakeMsgRow = {
+    direction: 'out', body: 'Ciao Luca, sono Mario tutor di Fenice Academy.\n\nTi scrivo perché ho visto che ci hai lasciato ora i tuoi contatti in una nostra pubblicità. Cosa ti ha incuriosito?',
+    template_sid: 'HXlegacy', created_at: '2026-11-13T09:00:00Z',
+  };
+  const aperturaMarta: FakeMsgRow = {
+    direction: 'out', body: 'Ciao Luca, sono Marta di Fenice Academy. Le tue 10 ore gratuite arrivano via email a minuti.',
+    template_sid: 'HXc1', created_at: '2026-11-13T09:00:00Z',
+  };
+  const inbound = (body: string): FakeMsgRow => ({ direction: 'in', body, template_sid: null, created_at: '2026-11-13T10:00:00Z' });
+  const riga = (): ClaimedRow => ({
+    id: 1737, ai_started_at: null, crm_lead_id: 'crm1737', bot_outcome: null, professione: null, scheda_inviata_at: null,
+    crm_funnel: 'CORSO 10 ORE',
+  });
+  const opzioniDelTurno = () => vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string; personaName?: string };
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    // Con un SID Marta configurato la vecchia regola dava Mario alle chat legacy.
+    vi.stubEnv('OPENING_SID_C1', 'HXc1');
+    vi.mocked(generateMarioReply).mockReset().mockResolvedValueOnce({
+      visibleReply: 'Ciao Luca!', appointmentFixed: false, passToHuman: false, videoWatched: false,
+    } as never);
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('chat nata con l\'apertura firmata Mario: risponde Marta, con la nota sul cambio di nome', async () => {
+    const { supabase } = makeDrainSupabase(riga(), [legacy, inbound('Sei Francesco giusto?')]);
+
+    await drainMarioReplies(supabase, 1737, '+391234567890', () => 0, 0);
+
+    const o = opzioniDelTurno();
+    expect(o.personaName).toBe('Marta');
+    expect(o.contextNote ?? '').toContain(notaNomeMarta([legacy]) as string);
+  }, 20_000);
+
+  it('chat nata con l\'apertura Marta: Marta come sempre, nessuna nota sul nome', async () => {
+    const { supabase } = makeDrainSupabase(riga(), [aperturaMarta, inbound('Entrata extra')]);
+
+    await drainMarioReplies(supabase, 1737, '+391234567890', () => 0, 0);
+
+    const o = opzioniDelTurno();
+    expect(o.personaName).toBe('Marta');
+    expect(o.contextNote ?? '').not.toContain('Mario');
   }, 20_000);
 });

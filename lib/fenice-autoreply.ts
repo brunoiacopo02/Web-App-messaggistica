@@ -24,7 +24,7 @@ import { computeBookingDays, giorniDelLinkForm } from './booking-slots';
 import { paroleDellaRichiesta } from './contatti-umani';
 import { bookingBlackout } from './booking-blackout';
 import type { BotOutcome } from './bot-contract';
-import { personaForConversation, PERSONA_NAME, OPENING_ENV_KEYS } from './persona';
+import { OPENING_ENV_KEYS, NOME_RISPOSTE_IA, notaNomeMarta } from './persona';
 import { confermaVideoVisto } from './video-visto';
 import { notaPrimoContatto } from './primo-contatto-note';
 import { haCongedo, lancioInCorso, marioDopoNotte, risposteRiscaldamento } from './lancio-fase';
@@ -266,6 +266,11 @@ export function martaSidsFromEnv(env: NodeJS.ProcessEnv = process.env): Set<stri
     ...ENV_KEYS_DATABASE,
   ];
   return new Set(keys.map((k) => env[k]).filter((v): v is string => !!v));
+}
+
+/** Aggiunge in coda al contesto del turno la riga sul nome (solo chat firmate Mario). */
+function conNotaNome(ctx: { contextNote?: string }, notaNome: string | null): { contextNote?: string } {
+  return notaNome ? { contextNote: [ctx.contextNote, notaNome].filter(Boolean).join('\n\n') } : ctx;
 }
 
 /**
@@ -1194,18 +1199,11 @@ export async function drainMarioReplies(
         role: m.direction === 'in' ? 'user' : 'assistant',
         content: m.body,
       }));
-      // Persona dal primo template outbound: aperture Marta ⇒ Marta, legacy ⇒ Mario.
-      // Senza env Marta configurate il set è vuoto ⇒ sempre Mario (zero regressioni).
-      const martaSids = martaSidsFromEnv();
-      // I lead dei GDO ricevono l'agenda firmata Marta: la conversazione prosegue con
-      // quel nome, altrimenti il lead si vedrebbe rispondere da qualcun altro.
-      // Su `agendaGdo`, non su `postino`: chi ha ricevuto l'agenda firmata Marta continua a
-      // parlare con Marta anche quando il turno e' del funnel Professioni.
-      const persona = agendaGdo
-        ? 'marta'
-        : martaSids.size > 0
-          ? personaForConversation(rows, martaSids)
-          : 'mario';
+      // Nelle risposte dell'IA il bot si presenta SEMPRE come Marta (titolare 14/11/2026),
+      // anche nelle chat nate con un template firmato Mario: li' una riga nella parte
+      // variabile del prompt le dice che da ora segue lei, senza negare i messaggi di prima.
+      const nomeRisposta = NOME_RISPOSTE_IA;
+      const notaNome = notaNomeMarta(rows);
       // Sui lead adottati (non postino) la nota e' la dichiarazione IA: se sulla
       // conversazione non e' mai uscito niente da parte nostra, il lead non sa mai
       // con chi sta parlando senza questa nota.
@@ -1451,7 +1449,7 @@ export async function drainMarioReplies(
         offertaEvergreenGiaPresentata = true;
       }
       const result = await generateMarioReply(history, {
-        personaName: PERSONA_NAME[persona],
+        personaName: nomeRisposta,
         giorniPieni,
         oreOccupate: await leggiOre(),
         conversationId,
@@ -1460,7 +1458,7 @@ export async function drainMarioReplies(
         // farli arrivare come un messaggio programmato addosso. Sui lead adottati la
         // nota e' un'altra, la dichiarazione IA: un postino ha sempre ricevuto l'agenda,
         // quindi i due casi non si incontrano mai.
-        ...(noteGdo
+        ...conNotaNome(noteGdo
           ? { contextNote: [gdoContextNote(noteGdo), notaSpostaTurno, notaWarmup].filter(Boolean).join('\n\n') }
           : notaLancioCompleta
             ? { contextNote: [notaLancioCompleta, notaSpostaBot].filter(Boolean).join('\n\n') }
@@ -1472,7 +1470,7 @@ export async function drainMarioReplies(
             ? { contextNote: [notaProfessioni, notaOffertaEvergreen, notaSpostaBot].filter(Boolean).join('\n\n') }
             : notaPrimo || notaDatabase || notaBrochure || notaOffertaEvergreen || notaSpostaBot
               ? { contextNote: [notaPrimo, notaDatabase, notaBrochure, notaOffertaEvergreen, notaSpostaBot].filter(Boolean).join('\n\n') }
-              : {}),
+              : {}, notaNome),
       });
 
       // Il lead può confermare di aver visto il video PRIMA che gli sia mai arrivato
@@ -1550,7 +1548,7 @@ export async function drainMarioReplies(
       if (postino && videoConfermato && !gdoNoemiRemindedAt && !result.outcome && !passaAPersona) {
         try {
           const retry = await generateMarioReply(history, {
-            personaName: PERSONA_NAME[persona],
+            personaName: nomeRisposta,
             giorniPieni,
             oreOccupate: await leggiOre(),
             conversationId,
@@ -1565,7 +1563,7 @@ export async function drainMarioReplies(
               botScheduledAt: botScheduledAt,
               gdoAppuntamentoAt: gdoAppuntamentoAt,
               fissatoIl: fissatoIlGdo,
-            }), notaSpostaTurno, notaWarmup].filter(Boolean).join('\n\n'),
+            }), notaSpostaTurno, notaWarmup, notaNome].filter(Boolean).join('\n\n'),
           });
           // Fail-safe: una rigenerazione vuota non vale meno di zero, vale come un
           // fallimento — si manda comunque la prima risposta, il lead non resta muto.

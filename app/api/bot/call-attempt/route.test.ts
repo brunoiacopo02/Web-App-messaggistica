@@ -484,6 +484,25 @@ describe('POST /api/bot/call-attempt — la cronologia che arriva al modello', (
     await firmato(evento(1));
     expect(tipiScritti()).toContain('unknown_fenice_link');
   });
+
+  // Decisione del titolare 14/11/2026: «si deve dire sempre che è Marta».
+  it('chat nata con l\'apertura firmata Mario: il recupero lo scrive Marta, con la nota sul nome', async () => {
+    scenario(2);
+    vi.stubEnv('OPENING_SID_C1', 'HXc1');
+    righe.cronologia[0] = { direction: 'out', body: 'Ciao Mario, sono Mario tutor di Fenice Academy.', template_sid: 'HXapertura', created_at: '2026-08-20T09:00:00Z' };
+    await firmato(evento(1));
+    const opts = generateMarioReply.mock.calls[0][1] as { personaName?: string; contextNote?: string };
+    expect(opts.personaName).toBe('Marta');
+    expect(opts.contextNote).toContain('adesso lo segue Marta');
+  });
+
+  it('chat senza firme Mario: Marta, e nessuna nota sul nome', async () => {
+    scenario(2);
+    await firmato(evento(1));
+    const opts = generateMarioReply.mock.calls[0][1] as { personaName?: string; contextNote?: string };
+    expect(opts.personaName).toBe('Marta');
+    expect(opts.contextNote).not.toContain('adesso lo segue Marta');
+  });
 });
 
 describe('POST /api/bot/call-attempt — il lucchetto è un claim, non una lettura', () => {

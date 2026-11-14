@@ -15,8 +15,8 @@ import { unknownFeniceLinks } from '@/lib/outbound-sanitize';
 import { sendFreeText } from '@/lib/twilio';
 import { sendTemplateAndLog } from '@/lib/messaging';
 import { templateName } from '@/lib/name';
-import { PERSONA_NAME, personaForConversation } from '@/lib/persona';
-import { martaSidsFromEnv, shouldReopen } from '@/lib/fenice-autoreply';
+import { NOME_RISPOSTE_IA, notaNomeMarta } from '@/lib/persona';
+import { shouldReopen } from '@/lib/fenice-autoreply';
 import { mittenteDiConversazione } from '@/lib/mittente';
 import { ultimoInboundSulNumero } from '@/lib/finestra-numero';
 import { leggiSospensioniSollecitiNr, numeroSospeso, EVENTO_SOLLECITO_NR_SOSPESO } from '@/lib/solleciti-nr-sospesi';
@@ -442,10 +442,9 @@ async function scriviMessaggioLibero(
   const { data } = await q;
   const rows = (data ?? []) as unknown as { direction: string; body: string | null; template_sid: string | null }[];
 
-  // Stessa regola del drain: la persona la decide il primo template uscito su questa
-  // chat, così il lead non si vede rispondere all'improvviso da un altro nome.
-  const martaSids = martaSidsFromEnv();
-  const persona = martaSids.size > 0 ? personaForConversation(rows, martaSids) : 'mario';
+  // Stessa regola del drain: nelle risposte dell'IA sempre Marta (titolare 14/11/2026);
+  // sulle chat firmate Mario una riga nel contesto le dice che da ora segue lei.
+  const notaNome = notaNomeMarta(rows);
 
   // La cronologia grezza qui finisce quasi sempre su un turno `assistant`: la guardia
   // `gia_risposto` esclude i lead che hanno scritto dopo la chiamata a vuoto, e al loro
@@ -459,8 +458,8 @@ async function scriviMessaggioLibero(
   );
 
   const result = await generateMarioReply(history, {
-    personaName: PERSONA_NAME[persona],
-    contextNote: notaRecuperoNr(quando, ctx.tentativo),
+    personaName: NOME_RISPOSTE_IA,
+    contextNote: [notaRecuperoNr(quando, ctx.tentativo), notaNome].filter(Boolean).join('\n\n'),
     conversationId: ctx.conversationId,
     timeoutMs: BUDGET_MODELLO_MS,
     maxRetries: RETRY_MODELLO,
