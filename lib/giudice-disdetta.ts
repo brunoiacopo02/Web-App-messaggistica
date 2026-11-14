@@ -27,6 +27,12 @@ type Supa = ReturnType<typeof getSupabaseAdmin>;
  * (81 lead salvati fra il 29/10 e il 12/11, 21 lette per intero) con la regola nuova se ne
  * salva 1.
  *
+ * REVISIONE DEL 13/11/2026 (regola del PO: chi chiede di spostare si salva, chi annulla o
+ * rinuncia è disdetta). La stretta buttava anche chi diceva solo «non riesco», «ho avuto un
+ * imprevisto», «dobbiamo rimandare» senza ancora un giorno (chat 22690, 27820, 18028): ora è
+ * salvo (caso D del prompt) finché non annulla o rinuncia in modo esplicito, o finché alla
+ * domanda del bot «quando?» non dà un giorno.
+ *
  * Le guardie scritte nel codice:
  * - la richiesta esplicita di non essere più contattati (`lib/non-contattare.ts`) nell'ultimo
  *   turno del lead vale SEMPRE `disdetta_vera`, qualunque cosa dica il modello (chat 32198:
@@ -81,14 +87,15 @@ COSA SUCCEDE CON IL TUO VERDETTO
 Per due settimane nel dubbio si è sempre salvato: bastava un "oggi", un "per ora", un "vi ricontatto io", il lavoro o un imprevisto. Risultato: 75 lead salvati, nessuno si è presentato alla videochiamata, 75 giri di telefonate a vuoto. Quindi adesso la regola è stretta: SI SALVA SOLO CHI VUOLE DAVVERO RIFARLA.
 
 LA REGOLA
-Il lead è salvo ("non_disdetta") solo in uno di questi tre casi:
+Il lead è salvo ("non_disdetta") solo in uno di questi quattro casi:
 A. Chiede davvero di spostare: vuole fare la videochiamata un altro giorno o a un'altra ora ("possiamo fare domani?", "si può spostare a venerdì?", "riesco solo dopo le 18").
 B. Indica una nuova disponibilità concreta: un giorno, una data, una fascia, una settimana precisa ("venerdì stesso orario", "lunedì mattina", "la settimana del 23"). Vale anche se subito dopo annulla solo perché il BOT gli ha risposto che quella data non si può.
 C. Non sta disdicendo affatto: fa una domanda, parla della chiamata di Noemi o di una chiamata persa senza rinunciare, dice che adesso è a lavoro e non può rispondere, non ha ricevuto un link o un video, fa un'obiezione sul prezzo senza chiedere di annullare, parla d'altro.
+D. Dice che alla videochiamata fissata non riesce, che ha avuto un imprevisto o che la deve rimandare, SENZA annullare o rinunciare in modo esplicito, anche se non indica ancora un giorno: il nuovo giorno glielo chiede il BOT. Diventa "disdetta_vera" solo se il BOT gli ha già chiesto quando e lui non dà un giorno: cioè il BOT gli ha già chiesto un altro giorno per la videochiamata e lui, invece di darlo, rinuncia o rimanda a un periodo vago o lontano.
 In ogni altro caso in cui annulla, disdice o rinuncia il verdetto è "disdetta_vera", qualunque sia il motivo e per quanto gentile sia il tono.
 
 È "disdetta_vera" ANCHE QUANDO (sono i casi che finora venivano salvati per errore)
-- rimanda senza una data per la videochiamata: "per ora rimando", "più avanti", "in futuro", "magari a gennaio", "l'anno prossimo", "tra qualche mese", "quando finisco di pagare la rata", "quando avrò il permesso";
+- rimanda a un periodo vago o lontano, senza una data per la videochiamata: "per ora rimando", "più avanti", "in futuro", "magari a gennaio", "l'anno prossimo", "tra qualche mese", "quando finisco di pagare la rata", "quando avrò il permesso";
 - dice che si farà vivo lui: "vi ricontatto io", "se cambio idea vi scrivo", "appena mi decido vi faccio sapere", "a risentirci";
 - la rinuncia è "per adesso": "al momento non sono interessata", "in questo periodo non posso", "ora come ora no";
 - annulla per un imprevisto, il lavoro, la salute, un lutto, la famiglia o i soldi e NON chiede un altro giorno: "ho avuto un imprevisto, dobbiamo annullare", "oggi non posso, annullo tutto", "mi ritiro, ho un lutto in famiglia";
@@ -110,6 +117,8 @@ ESEMPI (frasi del lead, anonime)
 - «non riesco a partecipare stasera, possiamo fare domani? Comunque non voglio acquistare niente» → non_disdetta, spostamento: chiede un altro giorno.
 - «Buongiorno, vorrei rimandare la chiamata a venerdì stesso orario» → non_disdetta, spostamento.
 - «ho bisogno di posticipare, possiamo fare nella settimana dal 23/11?», il BOT risponde che si può solo entro tre giorni, e lui «allora annulla tutto» → non_disdetta, spostamento: la disponibilità concreta l'ha data, annulla solo per il nostro no.
+- «scusa, mi è capitato un contrattempo al lavoro e non credo di farcela per la chiamata di stasera» → non_disdetta, spostamento: non annulla, il nuovo giorno glielo chiede il BOT.
+- «oggi non riesco, ho un contrattempo», il BOT chiede quale altro giorno gli va bene, e lui «non lo so, in questo periodo è un casino» → disdetta_vera: alla domanda sul giorno non lo dà.
 - «Non riesco a rispondervi se sono a lavoro..» → non_disdetta: non rinuncia.
 - «Ok ma oggi noemi? Non riesco sai» → non_disdetta: parla della chiamata di Noemi di oggi.
 - «Per adesso non posso permettermi. Ok alle 17» → non_disdetta: accetta un orario.

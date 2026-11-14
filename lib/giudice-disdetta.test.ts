@@ -169,6 +169,20 @@ describe('il prompt del giudice dopo la stretta del 12/11/2026', () => {
     expect(SYSTEM_GIUDICE).toContain('«Preferisco rimandare il tutto, ricontatto a dicembre» → disdetta_vera');
     expect(SYSTEM_GIUDICE).toContain('«Annulliamo» (in risposta al messaggio sulle chiamate perse di Noemi) → disdetta_vera');
   });
+  it("revisione 13/11/2026: chi non riesce, ha un imprevisto o deve rimandare senza annullare e' salvo anche senza una data", () => {
+    // chat 22690, 27820, 18028: uscite disdetta_vera col modello vero
+    expect(SYSTEM_GIUDICE).toContain('in uno di questi quattro casi');
+    expect(SYSTEM_GIUDICE).toContain('D. Dice che alla videochiamata fissata non riesce');
+    expect(SYSTEM_GIUDICE).toContain('SENZA annullare o rinunciare in modo esplicito');
+    expect(SYSTEM_GIUDICE).toContain('solo se il BOT gli ha già chiesto quando e lui non dà un giorno');
+    expect(SYSTEM_GIUDICE).toContain('rimanda a un periodo vago o lontano');
+    // la domanda che conta e' quella sul giorno della VIDEOCHIAMATA (chat 30319: il BOT chiedeva quando richiamarla per Noemi)
+    expect(SYSTEM_GIUDICE).toContain('il BOT gli ha già chiesto un altro giorno per la videochiamata e lui, invece di darlo, rinuncia o rimanda a un periodo vago o lontano.');
+    expect(SYSTEM_GIUDICE).toContain('→ non_disdetta, spostamento: non annulla, il nuovo giorno glielo chiede il BOT.');
+    expect(SYSTEM_GIUDICE).toContain('«non lo so, in questo periodo è un casino» → disdetta_vera');
+    // niente «vi faccio sapere» nell'esempio: trascinava a disdetta la chat 4097 (presente)
+    expect(SYSTEM_GIUDICE).not.toContain('«non so, vi faccio sapere io»');
+  });
   it("la richiesta di non essere piu' contattati e' sempre disdetta_vera", () => {
     expect(SYSTEM_GIUDICE).toContain('NON CONTATTATEMI PIÙ');
     expect(SYSTEM_GIUDICE).toContain('non è mai recuperabile');
