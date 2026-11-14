@@ -49,11 +49,18 @@ const CON_PIU: RegExp[] = [
   new RegExp(`\\bnon ${VOGLIO} ${PIU} (?:ricevere (?:altre |vostre |le vostre )?(?:chiamate|telefonate)|avere (?:altri )?contatti|sentirvi|sentirti)\\b`),
 ];
 
+/** Da dove toglierlo: la lista, i contatti, il numero, i dati, l'archivio (non il promemoria o la call). */
+const OGGETTO =
+  '(?:(?:da(?:i|l|lla|lle|gli|llo)?|il|i|ogni) (?:vostr[aeio] |mio |miei |mie |tutt[aeio] )?'
+  + '(?:list\\w*|contatt\\w*|numer\\w*|nominativ\\w*|recapit\\w*|dat[io]|database|archivi\\w*|elenc\\w*|registr\\w*|rubric\\w*|newsletter|mailing)\\b)';
+
 /** Le forme che valgono da sole: la cancellazione dei propri dati. */
 const CANCELLAZIONE: RegExp[] = [
   // «cancellate il mio numero», «cancella pure il mio contatto», «eliminate i miei dati», «toglimi dalla lista»
   /\b(?:cancell\w*|elimin\w*|rimuov\w*|togli\w*) (?:pure |subito |per favore )?(?:il mio (?:numero|contatto|nominativo|recapito)|i miei (?:dati|contatti|recapiti)|dall[ae] (?:vostra |vostre )?list\w+)/,
-  /\b(?:toglietemi|rimuovetemi|cancellatemi|eliminatemi)\b/,
+  // «toglietemi (tranquillamente) dai contatti», «cancellatemi dalla lista», «eliminatemi il numero».
+  // DA SOLI non bastano: chat 27983, «Chiamatemi o toglietemi del promemoria», vuole la chiamata.
+  new RegExp(`\\b(?:toglietemi|rimuovetemi|cancellatemi|eliminatemi)(?: \\w+){0,2}? ${OGGETTO}`),
 ];
 
 /**
