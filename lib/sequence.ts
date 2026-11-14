@@ -256,7 +256,8 @@ const NUDGE_VARIANTS: ((name: string, persona: string) => string)[] = [
   (n, p) => `Ciao${n}, sono ${p}! Se ti è rimasto qualche dubbio o vuoi riprendere il discorso, scrivimi pure quando ti è comodo.`,
 ];
 
-export function pickNudgeText(conversationId: number, firstName: string | null, personaName: string = 'Mario'): string {
+// Firma sempre Marta (titolare 14/11/2026: «si deve dire sempre che è Marta»).
+export function pickNudgeText(conversationId: number, firstName: string | null, personaName: string = 'Marta'): string {
   const clean = firstNameOf(firstName);
   const name = clean ? ` ${clean}` : '';
   return NUDGE_VARIANTS[conversationId % 3](name, personaName);
