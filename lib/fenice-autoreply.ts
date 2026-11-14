@@ -1748,6 +1748,7 @@ export async function drainMarioReplies(
       // niente promemoria e niente messaggi sulle chiamate perse per la call vecchia.
       const riscriveLui = !!origineSposta && !!crmLeadId && eRiscriveLui({
         outcome: result.outcome, spostaAt: result.spostaAt, spostamentoFatto, motivoNoSposta,
+        date: result.scheduledAt, callAt: callSpostabileAt, nowMs: Date.now(),
       });
       if (riscriveLui) {
         await supabase.from('event_log').insert({

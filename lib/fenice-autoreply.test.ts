@@ -3944,6 +3944,9 @@ describe('drainMarioReplies — il bot sposta la call del lead GDO (PO 28/10/202
       expect(f).not.toHaveBeenCalled();
       expect(calls.events.some((e: any) => e.type === 'gdo_spostamento_da_esito')).toBe(false);
       expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'RICHIAMO', date: PRIMA });
+      // Non e' «riscrivo io»: nota SPOSTAMENTO CHIESTO di sempre, promemoria accesi, nessuna attesa.
+      expect(vi.mocked(sendOutcome).mock.calls[0][2]).not.toHaveProperty('riscriveLui');
+      expect(calls.events.some((e: any) => e.type === 'gdo_spostamento_attesa_lead')).toBe(false);
       expect(calls.messageInserts.map((m: any) => m.body)).toEqual(['Lo dico a Noemi.']);
     });
 

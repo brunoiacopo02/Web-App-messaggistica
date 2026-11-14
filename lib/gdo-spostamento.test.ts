@@ -367,11 +367,28 @@ describe('«non posso in questi giorni, riscrivo io» (PO 12/11/2026, chat 25906
     expect(motivoDataNonValida('2026-11-25T18:00:00+01:00', base.appuntamentoAt, LUN_23, [])).toBeNull();
   });
   it('eRiscriveLui: RICHIAMO su una call spostabile, senza [SPOSTA] nel turno', () => {
-    const t = { outcome: 'RICHIAMO' as string | undefined, spostaAt: undefined as string | undefined, spostamentoFatto: false, motivoNoSposta: null as ReturnType<typeof motivoNonSpostabile> };
+    const t = {
+      outcome: 'RICHIAMO' as string | undefined, spostaAt: undefined as string | undefined, spostamentoFatto: false, motivoNoSposta: null as ReturnType<typeof motivoNonSpostabile>,
+      date: undefined as string | undefined, callAt: '2026-11-20T18:00:00+01:00' as string | null, nowMs: new Date('2026-11-19T15:00:00+01:00').getTime(),
+    };
     expect(eRiscriveLui(t)).toBe(true);
     expect(eRiscriveLui({ ...t, motivoNoSposta: 'gia_spostato' })).toBe(false);
     expect(eRiscriveLui({ ...t, spostaAt: '2026-11-25T18:00:00+01:00' })).toBe(false);
     expect(eRiscriveLui({ ...t, outcome: 'DA_SCARTARE' })).toBe(false);
     expect(eRiscriveLui({ ...t, outcome: undefined })).toBe(false);
+  });
+  it('eRiscriveLui: l\'anticipo («richiamatemi domani alle 10», call alle 18) NON è «riscrive lui»: resta la nota SPOSTAMENTO CHIESTO di sempre', () => {
+    const t = {
+      outcome: 'RICHIAMO' as string | undefined, spostaAt: undefined as string | undefined, spostamentoFatto: false, motivoNoSposta: null as ReturnType<typeof motivoNonSpostabile>,
+      date: undefined as string | undefined, callAt: '2026-11-20T18:00:00+01:00' as string | null, nowMs: new Date('2026-11-19T15:00:00+01:00').getTime(),
+    };
+    // Anticipo: data valida prima della call futura.
+    expect(eRiscriveLui({ ...t, date: '2026-11-20T10:00:00+01:00' })).toBe(false);
+    // Vero «riscrivo io»: nessuna data, data illeggibile, data DOPO la call anche fuori finestra.
+    expect(eRiscriveLui({ ...t, date: undefined })).toBe(true);
+    expect(eRiscriveLui({ ...t, date: 'nella settimana dal 23/11' })).toBe(true);
+    expect(eRiscriveLui({ ...t, date: '2026-12-01T18:00:00+01:00' })).toBe(true);
+    // Call già passata: una data prima della call non è un anticipo.
+    expect(eRiscriveLui({ ...t, callAt: '2026-11-18T18:00:00+01:00', date: '2026-11-18T10:00:00+01:00' })).toBe(true);
   });
 });

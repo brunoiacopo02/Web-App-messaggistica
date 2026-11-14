@@ -75,17 +75,36 @@ export const ATTESA_LEAD_MAX_GIORNI = 60;
 export const EVENTO_ATTESA_LEAD = 'gdo_spostamento_attesa_lead';
 
 /**
+ * La data è un ANTICIPO rispetto alla call in agenda? Sì se è una data ISO leggibile, la call
+ * è ancora da fare e la data viene prima: di solito è l'ora in cui il lead vuole essere
+ * richiamato da Noemi («richiamatemi domani alle 10», call domani alle 18), non un nuovo
+ * orario della videochiamata. Resta una nota e la legge una persona.
+ */
+function eAnticipo(date: string | undefined, callAt: string | null, nowMs: number): boolean {
+  const data = (date ?? '').trim();
+  if (!data || !callAt || !isoWithOffset(data)) return false;
+  const callMs = Date.parse(callAt);
+  return callMs > nowMs && Date.parse(data) < callMs;
+}
+
+/**
  * Il RICHIAMO di questo turno è «non posso in questi giorni, riscrivo io»? Sì quando la
  * call si poteva spostare (il blocco era nel prompt, che fa uscire con [ESITO:RICHIAMO] solo
- * così) e il turno non ha prodotto né tentato uno spostamento.
+ * così) e il turno non ha prodotto né tentato uno spostamento. No sull'anticipo
+ * (`eAnticipo`): quello resta la nota «SPOSTAMENTO CHIESTO» di sempre, promemoria accesi.
  */
 export function eRiscriveLui(i: {
   outcome: string | undefined;
   spostaAt: string | undefined;
   spostamentoFatto: boolean;
   motivoNoSposta: MotivoNonSpostabile | null;
+  /** La data del tag [ESITO:RICHIAMO|data], se c'è. */
+  date: string | undefined;
+  callAt: string | null;
+  nowMs: number;
 }): boolean {
-  return i.outcome === 'RICHIAMO' && i.spostaAt === undefined && !i.spostamentoFatto && i.motivoNoSposta === null;
+  if (i.outcome !== 'RICHIAMO' || i.spostaAt !== undefined || i.spostamentoFatto || i.motivoNoSposta !== null) return false;
+  return !eAnticipo(i.date, i.callAt, i.nowMs);
 }
 const CALL_PASSATA_MAX_MS = CALL_PASSATA_MAX_GIORNI * 24 * 3600_000;
 
@@ -299,8 +318,7 @@ export function esitoDaSpostare(i: {
   if (i.motivoNoSposta !== null || !i.callAt) return null;
   const data = (i.date ?? '').trim();
   if (!data || motivoDataNonValida(data, i.callAt, i.nowMs, i.ranges) !== null) return null;
-  const callMs = Date.parse(i.callAt);
-  if (callMs > i.nowMs && Date.parse(data) < callMs) return null;
+  if (eAnticipo(data, i.callAt, i.nowMs)) return null;
   return data;
 }
 
