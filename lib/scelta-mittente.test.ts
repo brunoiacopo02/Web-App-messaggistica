@@ -51,8 +51,12 @@ const ADESSO = new Date('2026-11-06T14:00:00Z');
 const OGGI = '2026-11-06';
 const IERI = '2026-11-05';
 const tutti = (q: string) => Object.fromEntries([P, ELIXIR, N8061, N0047].map((n) => [n.replace('whatsapp:', ''), { [OGGI]: q }]));
-const qualita = (storico: Record<string, Record<string, string>>, pause: Record<string, unknown> = {}) =>
-  vi.mocked(getStatoQualitaNumeri).mockResolvedValue({ storico, pause });
+const qualita = (
+  storico: Record<string, Record<string, string>>, pause: Record<string, unknown> = {},
+  ultime?: Record<string, { qualita: string; alle: string; cattiveDiFila: number }>,
+) => vi.mocked(getStatoQualitaNumeri).mockResolvedValue({ storico, pause, ...(ultime ? { ultime } : {}) });
+/** L'ultima lettura di un numero, come la scrive il cron dal 17/11/2026. */
+const ultimaLettura = (q: string, cattiveDiFila: number) => ({ qualita: q, alle: '2026-11-06T11:10:00.000Z', cattiveDiFila });
 const tetti = (o: Record<string, number>) => vi.mocked(getTettiNumeri).mockResolvedValue(parseTettiNumeri(o));
 const scegli = (s: any, extra: Partial<Parameters<typeof scegliMittenteNuovo>[1]> = {}) =>
   scegliMittenteNuovo(s, { templateSids: ['HX_A'], chiave: '+393331234567', adesso: ADESSO, ...extra });
@@ -441,6 +445,44 @@ describe('scegliMittenteNuovo con includiPrimario (PO 23/10/2026: il 3199 torna 
     vi.mocked(apertureMarioOggi).mockResolvedValue(15);
     vi.mocked(getStatoQualitaNumeri).mockResolvedValue(null);
     expect((await scegli(supa().s)).motivo).toBe('nessun_candidato');
+  });
+
+  it('Black Friday: una lettura cattiva isolata non toglie il numero dal giro, due di fila si (titolare 17/11/2026)', async () => {
+    tetti({ [P]: 15, [ELIXIR]: 50, [N8061]: 15, [N0047]: 0 });
+    // L'8061 e' il meno carico e oggi ha UNA lettura LOW: resta nel giro Black Friday.
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === N8061 ? 1 : n === ELIXIR ? 60 : n === P ? 30 : 0));
+    qualita({ ...tutti('HIGH'), '+393520158061': { [OGGI]: 'LOW' } }, {}, { '+393520158061': ultimaLettura('LOW', 1) });
+    const { s, eventi } = supa();
+    const r = await scegli(s, { senzaTettiSoloHigh: true, includiPrimario: true });
+    expect(r).toMatchObject({ from: N8061, secondario: true, motivo: 'scelto' });
+    expect(eventi.find((e) => e.type === 'mittente_black_friday')?.payload.numero).toBe(N8061);
+    // Tornato HIGH al giro dopo (il peggiore del giorno resta LOW): sempre dentro.
+    qualita({ ...tutti('HIGH'), '+393520158061': { [OGGI]: 'LOW' } }, {}, { '+393520158061': ultimaLettura('HIGH', 0) });
+    expect((await scegli(supa().s, { senzaTettiSoloHigh: true, includiPrimario: true })).from).toBe(N8061);
+    // Seconda lettura cattiva di fila: il cron lo mette in pausa, e' fuori.
+    qualita({ ...tutti('HIGH'), '+393520158061': { [OGGI]: 'LOW' } }, { '+393520158061': { fino: '2026-11-09' } },
+      { '+393520158061': ultimaLettura('LOW', 2) });
+    expect((await scegli(supa().s, { senzaTettiSoloHigh: true, includiPrimario: true })).from).toBe(P);
+  });
+
+  it('trabocco: l 8061 con una lettura cattiva isolata prende ancora il trabocco; con due di fila no (titolare 17/11/2026)', async () => {
+    tetti({ [P]: 15, [N8061]: 15, [ELIXIR]: 50 });
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === P ? 40 : n === N8061 ? 15 : 50));
+    qualita({ ...tutti('HIGH'), '+393520158061': { [OGGI]: 'MEDIUM' } }, {}, { '+393520158061': ultimaLettura('MEDIUM', 1) });
+    const { s, eventi } = supa();
+    expect(await scegli(s, { includiPrimario: true })).toMatchObject({ from: N8061, secondario: true, motivo: 'scelto' });
+    expect(eventi.filter((e) => e.type === 'mittente_trabocco')).toHaveLength(1);
+    // Due cattive di fila ma nessuna pausa (era l'ultimo aperto): fuori dal trabocco lo stesso.
+    qualita({ ...tutti('HIGH'), '+393520158061': { [OGGI]: 'MEDIUM' } }, {}, { '+393520158061': ultimaLettura('MEDIUM', 2) });
+    expect((await scegli(supa().s, { includiPrimario: true })).from).toBe(P);
+  });
+
+  it('trabocco e Black Friday: il 3199 con una lettura cattiva isolata resta fuori, per lui non cambia', async () => {
+    tetti({ [P]: 15, [N8061]: 15 });
+    qualita({ ...tutti('HIGH'), '+393520413199': { [OGGI]: 'LOW' } }, {}, { '+393520413199': ultimaLettura('LOW', 1) });
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === P ? 15 : 30));
+    expect((await scegli(supa().s, { includiPrimario: true })).from).toBe(N8061);
+    expect((await scegli(supa().s, { senzaTettiSoloHigh: true, includiPrimario: true })).from).toBe(N8061);
   });
 
   it('coda marketing oltre i tetti: trabocco solo sull 8061, mai il 3199', async () => {

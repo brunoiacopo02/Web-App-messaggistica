@@ -2,11 +2,20 @@
  * Controllo automatico della qualita' dei numeri del bot (PO 29/10/2026).
  *
  * Regole decise da Bruno:
- * - Un numero delle aperture a freddo (i secondari) che scende sotto HIGH (MEDIUM o
- *   LOW) si ferma per 3 giorni: tetto 0 in `tetti_numeri`. Le sue aperture vanno
- *   sugli altri numeri del giro (vedi lib/scelta-mittente.ts), non sul 3199 e non
- *   ai GDO. Dopo 3 giorni riparte col tetto di prima se e' HIGH, altrimenti la pausa
- *   si allunga di altri 3 giorni.
+ * - Un numero delle aperture a freddo (i secondari) che resta sotto HIGH (MEDIUM o
+ *   LOW) per DUE letture di fila del cron si ferma per 3 giorni: tetto 0 in
+ *   `tetti_numeri` (titolare 17/11/2026: prima bastava una lettura, e il 17/11 8061 e
+ *   0047 si sono fermati 3 giorni per un LOW tornato HIGH tre ore dopo). Una lettura
+ *   cattiva isolata non ferma niente: scrive solo `qualita_numeri_lettura_isolata`.
+ *   Le aperture di un numero in pausa vanno sugli altri numeri del giro (vedi
+ *   lib/scelta-mittente.ts), non sul 3199 e non ai GDO. Dopo 3 giorni riparte col
+ *   tetto di prima se e' HIGH, altrimenti la pausa si allunga di altri 3 giorni.
+ *   La coppia (vedi `aggiornaUltima`): la lettura di adesso e l'ultima lettura VALIDA
+ *   di prima, tutte e due MEDIUM o LOW, lontane fra loro almeno 1 ora (due chiamate
+ *   ravvicinate del cron sono lo stesso giro) e non piu' di 24. UNKNOWN (API giu') e'
+ *   trasparente: non si scrive, quindi non spezza la coppia (cattiva, UNKNOWN, cattiva
+ *   = pausa: l'API muta non e' una prova che il numero sia tornato buono) e non la
+ *   crea (cattiva + UNKNOWN, o UNKNOWN + cattiva, = niente).
  * - Mai fermare l'ultimo numero del giro: se resterebbero zero numeri aperti, si
  *   scrive un warn e il numero resta acceso (lo decide una persona).
  * - Il 3199 (primario) rientra dopo 4 giorni HIGH di fila con tetto 15 aperture di
@@ -19,7 +28,9 @@
  *   in BOT_TETTO_GIORNALIERO del CRM.
  *
  * Stato in `app_settings.qualita_numeri_stato` (storico per giorno = la lettura
- * peggiore del giorno, pause in corso). I numeri a tetto 0 messi a mano (non in
+ * peggiore del giorno, pause in corso, `ultime` = l'ultima lettura valida di ogni
+ * numero con data e ora). Lo storico "peggiore del giorno" resta la base dei conteggi
+ * dei giorni HIGH (rientro del 3199, promozioni, riaccensione dei solleciti). I numeri a tetto 0 messi a mano (non in
  * pausa qui) non si toccano mai.
  *
  * Interruttore: `QUALITA_NUMERI_AUTO=off` legge e scrive lo storico ma non cambia
@@ -37,6 +48,15 @@ type Supa = ReturnType<typeof getSupabaseAdmin>;
 
 export type Qualita = 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN';
 
+/** L'ultima lettura VALIDA (mai UNKNOWN) di un numero, e quante cattive di fila la precedono (lei compresa). */
+export type UltimaLettura = {
+  qualita: 'HIGH' | 'MEDIUM' | 'LOW';
+  /** ISO, l'istante del giro del cron che l'ha letta. */
+  alle: string;
+  /** 0 se HIGH; 1 = cattiva isolata; >= 2 = sotto HIGH confermato (e' la soglia della pausa). */
+  cattiveDiFila: number;
+};
+
 export type StatoQualita = {
   /** numero (senza `whatsapp:`) → giorno (YYYY-MM-DD, Roma) → lettura peggiore del giorno */
   storico: Record<string, Record<string, Qualita>>;
@@ -46,6 +66,8 @@ export type StatoQualita = {
   primario?: { fase: 'trenta'; dal: string } | null;
   /** Promozioni una tantum gia' fatte (numero senza `whatsapp:`): non si rifanno mai. */
   promozioni?: Record<string, { giorno: string; da: number; a: number }>;
+  /** numero (senza `whatsapp:`) → ultima lettura valida (titolare 17/11/2026). */
+  ultime?: Record<string, UltimaLettura>;
 };
 
 /**
@@ -72,6 +94,12 @@ export const GIORNI_PAUSA = 3;
 export const GIORNI_HIGH_PER_RIENTRO = 4;
 /** PO 06/11/2026: 15 aperture di Mario al giorno (era 30, poi 100000 a regime). */
 export const TETTO_RIENTRO_PRIMARIO = 15;
+/** Letture cattive di fila perche' un secondario vada in pausa (titolare 17/11/2026). */
+export const LETTURE_CATTIVE_PER_PAUSA = 2;
+/** Una lettura precedente piu' vecchia di cosi' non fa coppia con quella di adesso. */
+export const ORE_MAX_FRA_LETTURE = 24;
+/** Due letture piu' vicine di cosi' sono lo stesso giro del cron (richiamato due volte), non due giri. */
+export const ORE_MIN_FRA_LETTURE = 1;
 const GIORNI_STORICO = 21;
 const KEY_STATO = 'qualita_numeri_stato';
 const KEY_TETTI = 'tetti_numeri';
@@ -107,9 +135,30 @@ function peggiore(a: Qualita | undefined, b: Qualita): Qualita {
   return RANGO[a] <= RANGO[b] ? a : b;
 }
 
+/**
+ * L'ultima lettura valida di un numero dopo la lettura di adesso. Pura.
+ * - UNKNOWN: resta quella di prima (non spezza e non crea la coppia);
+ * - HIGH: la fila di cattive si azzera;
+ * - MEDIUM/LOW: la fila sale di uno se la lettura di prima era cattiva e sta fra 1 e 24
+ *   ore fa; riparte da 1 se quella di prima era HIGH, manca, e' piu' vecchia di 24 ore
+ *   o ha una data illeggibile; resta com'e' se quella di prima ha meno di un'ora (lo
+ *   stesso giro richiamato due volte non vale due letture).
+ */
+export function aggiornaUltima(prima: UltimaLettura | undefined, q: Qualita, adesso: Date): UltimaLettura | undefined {
+  if (q === 'UNKNOWN') return prima;
+  const alle = adesso.toISOString();
+  if (q === 'HIGH') return { qualita: 'HIGH', alle, cattiveDiFila: 0 };
+  const filaPrima = prima && Number.isInteger(prima.cattiveDiFila) && prima.cattiveDiFila > 0 ? prima.cattiveDiFila : 0;
+  const distanzaOre = prima ? (adesso.getTime() - Date.parse(prima.alle)) / 3600_000 : NaN;
+  if (filaPrima > 0 && distanzaOre >= 0 && distanzaOre < ORE_MIN_FRA_LETTURE) return prima;
+  const faCoppia = filaPrima > 0 && distanzaOre >= ORE_MIN_FRA_LETTURE && distanzaOre <= ORE_MAX_FRA_LETTURE;
+  return { qualita: q, alle, cattiveDiFila: faCoppia ? filaPrima + 1 : 1 };
+}
+
 export type Azione =
   | { tipo: 'pausa'; numero: string; qualita: Qualita; fino: string; tettoPrima: number }
   | { tipo: 'pausa_negata_ultimo'; numero: string; qualita: Qualita }
+  | { tipo: 'lettura_isolata'; numero: string; qualita: Qualita }
   | { tipo: 'pausa_allungata'; numero: string; qualita: Qualita; fino: string }
   | { tipo: 'ripresa'; numero: string; tetto: number }
   | { tipo: 'rientro_primario'; numero: string; tetto: number }
@@ -123,6 +172,8 @@ export type Azione =
  */
 export function decidi(args: {
   oggi: string;
+  /** L'istante di questo giro del cron: data e ora dell'ultima lettura di ogni numero. */
+  adesso: Date;
   letture: Record<string, Qualita>;
   stato: StatoQualita;
   tetti: Record<string, number>;
@@ -137,7 +188,9 @@ export function decidi(args: {
     pause: structuredClone(args.stato.pause ?? {}),
     primario: args.stato.primario ? { ...args.stato.primario } : null,
     promozioni: structuredClone(args.stato.promozioni ?? {}),
+    ultime: structuredClone(args.stato.ultime ?? {}),
   };
+  const ultime = (stato.ultime ??= {});
   // I tetti si scrivono con le chiavi come le trovo (con o senza `whatsapp:`).
   const tetti: Record<string, number> = { ...args.tetti };
   const chiaveDi = (n: string) =>
@@ -154,6 +207,9 @@ export function decidi(args: {
     const giorni = (stato.storico[num] ??= {});
     giorni[oggi] = peggiore(giorni[oggi], q);
     for (const g of Object.keys(giorni)) if (g < piuGiorni(oggi, -GIORNI_STORICO)) delete giorni[g];
+    // 1b. L'ultima lettura valida, con la fila di cattive: e' su questa che si decide la pausa.
+    const u = aggiornaUltima(ultime[num], q, args.adesso);
+    if (u) ultime[num] = u;
   }
   const qOggi = (n: string): Qualita => args.letture[n] ?? args.letture[`whatsapp:${n}`] ?? 'UNKNOWN';
 
@@ -171,13 +227,18 @@ export function decidi(args: {
     }
   }
 
-  // 3. Secondari aperti sotto HIGH: pausa, ma mai l'ultimo aperto.
+  // 3. Secondari aperti sotto HIGH per due letture di fila: pausa, ma mai l'ultimo aperto.
+  //    Una lettura cattiva isolata si segna e basta (titolare 17/11/2026).
   for (const num of secondari) {
     if (stato.pause[num]) continue;
     const tetto = tettoDi(num);
     if (tetto <= 0) continue; // a riposo per mano di una persona: non e' affar nostro
     const q = qOggi(num);
     if (q !== 'MEDIUM' && q !== 'LOW') continue;
+    if ((ultime[num]?.cattiveDiFila ?? 0) < LETTURE_CATTIVE_PER_PAUSA) {
+      azioni.push({ tipo: 'lettura_isolata', numero: num, qualita: q });
+      continue;
+    }
     const altriAperti = secondari.filter((s) => s !== num && !stato.pause[s] && tettoDi(s) > 0);
     if (altriAperti.length === 0) {
       azioni.push({ tipo: 'pausa_negata_ultimo', numero: num, qualita: q });
@@ -277,13 +338,13 @@ export async function eseguiControlloQualita(supabase: Supa, adesso: Date = new 
   const { data: rigaStato } = await supabase.from('app_settings').select('value').eq('key', KEY_STATO).maybeSingle();
   const statoPrima = ((rigaStato as { value?: StatoQualita } | null)?.value ?? { storico: {}, pause: {} }) as StatoQualita;
 
-  const r = decidi({ oggi, letture, stato: statoPrima, tetti, primario, secondari });
+  const r = decidi({ oggi, adesso, letture, stato: statoPrima, tetti, primario, secondari });
 
-  // In modalita' "off" lo storico si aggiorna (serve per il conto dei 7 giorni), le
-  // pause e i tetti no.
+  // In modalita' "off" lo storico e le ultime letture si aggiornano (servono per il
+  // conto dei giorni HIGH e per la coppia di letture), le pause e i tetti no.
   const statoDaScrivere: StatoQualita = auto
     ? r.stato
-    : { storico: r.stato.storico, pause: statoPrima.pause ?? {}, primario: statoPrima.primario ?? null, promozioni: statoPrima.promozioni ?? {} };
+    : { storico: r.stato.storico, pause: statoPrima.pause ?? {}, primario: statoPrima.primario ?? null, promozioni: statoPrima.promozioni ?? {}, ultime: r.stato.ultime ?? {} };
   await supabase.from('app_settings').upsert({ key: KEY_STATO, value: statoDaScrivere as never, updated_at: adesso.toISOString() });
   const cambiaTetti = auto && JSON.stringify(r.tetti) !== JSON.stringify(tetti);
   if (cambiaTetti) {
@@ -311,7 +372,7 @@ export async function eseguiControlloQualita(supabase: Supa, adesso: Date = new 
     }
     await supabase.from('event_log').insert({
       type: `qualita_numeri_${a.tipo}`,
-      level: a.tipo === 'pausa' || a.tipo === 'pausa_negata_ultimo' || a.tipo === 'uscita_primario' || a.tipo === 'pausa_allungata' ? 'warn' : 'info',
+      level: a.tipo === 'pausa' || a.tipo === 'pausa_negata_ultimo' || a.tipo === 'uscita_primario' || a.tipo === 'pausa_allungata' || a.tipo === 'lettura_isolata' ? 'warn' : 'info',
       payload: { ...a, auto } as never,
       message: `[qualita-numeri] ${a.tipo} ${a.numero}${auto ? '' : ' (solo simulato: QUALITA_NUMERI_AUTO=off)'}`,
     });

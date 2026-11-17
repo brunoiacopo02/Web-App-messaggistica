@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { parseTettiNumeri, tettoDi, getTettiNumeri } from './tetti-numeri';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { parseTettiNumeri, tettoDi, getTettiNumeri, eHighEFuoriPausa } from './tetti-numeri';
 
 describe('parseTettiNumeri', () => {
   it('legge la mappa e normalizza le chiavi', () => {
@@ -21,6 +21,60 @@ describe('parseTettiNumeri', () => {
 
   it('non un oggetto = mappa vuota', () => {
     for (const raw of [null, undefined, 'x', 3, [1, 2]]) expect(parseTettiNumeri(raw).size).toBe(0);
+  });
+});
+
+describe('eHighEFuoriPausa (titolare 17/11/2026: fuori solo dopo due letture cattive di fila)', () => {
+  const N = '+393522070047';
+  const P = '+393520413199';
+  const OGGI = '2026-11-17';
+  const IERI = '2026-11-16';
+  const ultima = (qualita: string, cattiveDiFila: number) => ({ qualita, alle: '2026-11-17T08:10:00.000Z', cattiveDiFila });
+  beforeEach(() => { vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', `whatsapp:${P}`); });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('HIGH oggi, o ieri se oggi manca: si', () => {
+    expect(eHighEFuoriPausa({ storico: { [N]: { [OGGI]: 'HIGH' } }, pause: {} }, `whatsapp:${N}`, OGGI, IERI)).toBe(true);
+    expect(eHighEFuoriPausa({ storico: { [N]: { [IERI]: 'HIGH' } }, pause: {} }, N, OGGI, IERI)).toBe(true);
+  });
+
+  it('una lettura cattiva isolata oggi: resta dentro', () => {
+    const stato = { storico: { [N]: { [OGGI]: 'LOW' } }, pause: {}, ultime: { [N]: ultima('LOW', 1) } };
+    expect(eHighEFuoriPausa(stato, N, OGGI, IERI)).toBe(true);
+  });
+
+  it('cattiva e poi di nuovo HIGH (peggiore del giorno LOW): resta dentro', () => {
+    const stato = { storico: { [N]: { [OGGI]: 'LOW' } }, pause: {}, ultime: { [N]: ultima('HIGH', 0) } };
+    expect(eHighEFuoriPausa(stato, N, OGGI, IERI)).toBe(true);
+  });
+
+  it('in pausa: fuori, qualunque lettura', () => {
+    const stato = { storico: { [N]: { [OGGI]: 'HIGH' } }, pause: { [N]: { fino: '2026-11-20' } }, ultime: { [N]: ultima('HIGH', 0) } };
+    expect(eHighEFuoriPausa(stato, N, OGGI, IERI)).toBe(false);
+  });
+
+  it('due cattive di fila senza pausa (l ultimo aperto, che il cron non ferma): fuori', () => {
+    const stato = { storico: { [N]: { [OGGI]: 'MEDIUM' } }, pause: {}, ultime: { [N]: ultima('MEDIUM', 2) } };
+    expect(eHighEFuoriPausa(stato, N, OGGI, IERI)).toBe(false);
+  });
+
+  it('stato scritto prima della regola (senza `ultime`) con una lettura cattiva: fuori, come prima', () => {
+    expect(eHighEFuoriPausa({ storico: { [N]: { [OGGI]: 'LOW' } }, pause: {} }, N, OGGI, IERI)).toBe(false);
+    expect(eHighEFuoriPausa({ storico: { [N]: { [OGGI]: 'LOW' } }, pause: {}, ultime: { [N]: { qualita: 'LOW' } } }, N, OGGI, IERI)).toBe(false);
+  });
+
+  it('nessuna lettura, lettura vecchia, UNKNOWN, stato illeggibile: fuori', () => {
+    const u = { [N]: ultima('HIGH', 0) };
+    expect(eHighEFuoriPausa({ storico: {}, pause: {}, ultime: u }, N, OGGI, IERI)).toBe(false);
+    expect(eHighEFuoriPausa({ storico: { [N]: { '2026-11-15': 'HIGH' } }, pause: {}, ultime: u }, N, OGGI, IERI)).toBe(false);
+    expect(eHighEFuoriPausa({ storico: { [N]: { [OGGI]: 'UNKNOWN' } }, pause: {}, ultime: u }, N, OGGI, IERI)).toBe(false);
+    expect(eHighEFuoriPausa(null, N, OGGI, IERI)).toBe(false);
+  });
+
+  it('il primario (3199) esce alla prima lettura cattiva: per lui la regola non cambia', () => {
+    const stato = { storico: { [P]: { [OGGI]: 'LOW' } }, pause: {}, ultime: { [P]: ultima('LOW', 1) } };
+    expect(eHighEFuoriPausa(stato, `whatsapp:${P}`, OGGI, IERI)).toBe(false);
+    expect(eHighEFuoriPausa({ storico: { [P]: { [OGGI]: 'HIGH' } }, pause: {} }, P, OGGI, IERI)).toBe(true);
   });
 });
 

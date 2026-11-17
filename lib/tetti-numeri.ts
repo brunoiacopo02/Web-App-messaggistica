@@ -1,4 +1,5 @@
 import type { getSupabaseAdmin } from './supabase/admin';
+import { numeroPrimario } from './mittente';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -54,12 +55,14 @@ export async function getTettiNumeri(supabase: Supa): Promise<Map<string, number
 /**
  * Lo stato del cron qualita-numeri (`app_settings.qualita_numeri_stato`, scritto da
  * lib/qualita-numeri.ts), letto per il trabocco di `scegliMittenteNuovo`: storico
- * per numero (senza `whatsapp:`) → giorno di Roma → lettura peggiore del giorno, e
- * pause in corso.
+ * per numero (senza `whatsapp:`) → giorno di Roma → lettura peggiore del giorno,
+ * pause in corso e, dal 17/11/2026, `ultime`: l'ultima lettura valida di ogni numero
+ * con la fila di letture cattive (assente negli stati scritti prima).
  */
 export type StatoQualitaLetto = {
   storico: Record<string, Record<string, string>>;
   pause: Record<string, unknown>;
+  ultime?: Record<string, { qualita?: string; alle?: string; cattiveDiFila?: number } | undefined>;
 };
 
 /** null = non si e' potuto leggere: nessun numero vale HIGH (fallisce chiuso). */
@@ -69,22 +72,42 @@ export async function getStatoQualitaNumeri(supabase: Supa): Promise<StatoQualit
     if (error) return null;
     const v = (data as { value?: Partial<StatoQualitaLetto> } | null)?.value;
     if (!v || typeof v !== 'object') return null;
-    return { storico: v.storico ?? {}, pause: v.pause ?? {} };
+    return {
+      storico: v.storico ?? {}, pause: v.pause ?? {},
+      ...(v.ultime && typeof v.ultime === 'object' ? { ultime: v.ultime } : {}),
+    };
   } catch {
     return null;
   }
 }
 
 /**
- * HIGH secondo l'ultima lettura del cron: quella di oggi, o di ieri se oggi non c'e'
- * ancora (il cron gira 06:10-21:10 Roma; un intake di notte vede la sera prima).
- * Piu' vecchia, mancante o UNKNOWN = non HIGH. Un numero con una pausa in corso
- * (finche' il cron non la toglie) = non HIGH.
+ * Il numero puo' ricevere i giri che vogliono un numero sano (Black Friday, trabocco,
+ * database): ha una lettura di oggi, o di ieri se oggi non c'e' ancora (il cron gira
+ * 06:10-21:10 Roma; un intake di notte vede la sera prima), e non e' in pausa.
+ *
+ * Titolare 17/11/2026: un numero esce da questi giri solo quando il cron lo ferma, cioe'
+ * dopo DUE letture cattive di fila, non per una lettura isolata. Quindi:
+ * - pausa in corso (finche' il cron non la toglie) = no;
+ * - peggiore del giorno HIGH = si';
+ * - peggiore del giorno MEDIUM o LOW = si' solo se la fila di letture cattive in
+ *   `ultime` e' sotto 2 (lettura isolata, o gia' tornato HIGH). Con la fila a 2 o piu'
+ *   e' no anche senza pausa: e' il numero che il cron non ha potuto fermare perche' era
+ *   l'ultimo aperto, e fuori da questi giri ci stava gia' prima;
+ * - nessuna lettura, lettura piu' vecchia di ieri, UNKNOWN, stato senza `ultime` per quel
+ *   numero (scritto prima di questa regola) = no, come prima (fallisce chiuso).
+ * Il primario (3199) tiene la regola di prima: esce alla prima lettura sotto HIGH
+ * (decisione che NON cambia), quindi per lui vale solo la peggiore del giorno.
  */
 export function eHighEFuoriPausa(stato: StatoQualitaLetto | null, numero: string, oggi: string, ieri: string): boolean {
   if (!stato) return false;
   const n = chiave(numero);
   if (stato.pause[n]) return false;
   const giorni = stato.storico[n] ?? {};
-  return (giorni[oggi] ?? giorni[ieri]) === 'HIGH';
+  const delGiorno = giorni[oggi] ?? giorni[ieri];
+  if (delGiorno === 'HIGH') return true;
+  if (delGiorno !== 'MEDIUM' && delGiorno !== 'LOW') return false;
+  if (n === chiave(numeroPrimario() ?? '')) return false;
+  const fila = stato.ultime?.[n]?.cattiveDiFila;
+  return typeof fila === 'number' && Number.isInteger(fila) && fila >= 0 && fila < 2;
 }

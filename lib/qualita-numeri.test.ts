@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { decidi, piuGiorni, giornoRoma, normalizzaQualita, sommaTetti, type StatoQualita, type Qualita } from './qualita-numeri';
+import { eHighEFuoriPausa } from './tetti-numeri';
 
 const P = '+393520413199';
 const A = '+393520158061';
@@ -10,8 +11,22 @@ const vuoto = (): StatoQualita => ({ storico: {}, pause: {} });
 const tuttiAperti = () => ({ [`whatsapp:${A}`]: 100000, [`whatsapp:${B}`]: 100000, [`whatsapp:${C}`]: 100000 });
 const leggi = (o: Partial<Record<string, Qualita>>): Record<string, Qualita> =>
   ({ [P]: 'LOW', [A]: 'HIGH', [B]: 'HIGH', [C]: 'HIGH', ...o } as Record<string, Qualita>);
-const run = (oggi: string, letture: Record<string, Qualita>, stato = vuoto(), tetti: Record<string, number> = tuttiAperti()) =>
-  decidi({ oggi, letture, stato, tetti, primario: `whatsapp:${P}`, secondari: SEC });
+/** L'istante di un giro del cron: di default le 09:10 UTC di quel giorno. */
+const ora = (giorno: string, h = 9, m = 10) => new Date(`${giorno}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00Z`);
+const run = (
+  oggi: string, letture: Record<string, Qualita>, stato = vuoto(), tetti: Record<string, number> = tuttiAperti(),
+  adesso: Date = ora(oggi),
+) => decidi({ oggi, adesso, letture, stato, tetti, primario: `whatsapp:${P}`, secondari: SEC });
+/** Lo stato in cui quei numeri hanno gia' una lettura cattiva al giro di tre ore prima (06:10 UTC). */
+const giaCattivi = (giorno: string, numeri: string[], base: StatoQualita = vuoto()): StatoQualita => ({
+  ...base,
+  ultime: {
+    ...(base.ultime ?? {}),
+    ...Object.fromEntries(numeri.map((n) => [n, { qualita: 'LOW' as const, alle: ora(giorno, 6).toISOString(), cattiveDiFila: 1 }])),
+  },
+});
+/** Il 0047 messo in pausa il 30/10 (seconda lettura cattiva di fila). */
+const pausaC = () => run('2026-10-30', leggi({ [C]: 'LOW' }), giaCattivi('2026-10-30', [C])).stato;
 
 describe('decidi (PO 29/10/2026)', () => {
   it('tutti HIGH e 3199 LOW: nessuna azione, tetti invariati', () => {
@@ -20,22 +35,22 @@ describe('decidi (PO 29/10/2026)', () => {
     expect(r.tetti).toEqual(tuttiAperti());
   });
 
-  it('un secondario MEDIUM: pausa di 3 giorni col tetto di prima salvato', () => {
-    const r = run('2026-10-30', leggi({ [C]: 'MEDIUM' }));
+  it('un secondario MEDIUM per la seconda lettura di fila: pausa di 3 giorni col tetto di prima salvato', () => {
+    const r = run('2026-10-30', leggi({ [C]: 'MEDIUM' }), giaCattivi('2026-10-30', [C]));
     expect(r.tetti[`whatsapp:${C}`]).toBe(0);
     expect(r.stato.pause[C]).toEqual({ fino: '2026-11-02', tettoPrima: 100000, dal: '2026-10-30' });
     expect(r.azioni).toEqual([{ tipo: 'pausa', numero: C, qualita: 'MEDIUM', fino: '2026-11-02', tettoPrima: 100000 }]);
   });
 
   it('pausa non ancora scaduta: resta ferma anche se torna HIGH', () => {
-    const s = run('2026-10-30', leggi({ [C]: 'LOW' })).stato;
+    const s = pausaC();
     const r = run('2026-11-01', leggi({}), s, { ...tuttiAperti(), [`whatsapp:${C}`]: 0 });
     expect(r.tetti[`whatsapp:${C}`]).toBe(0);
     expect(r.azioni).toEqual([]);
   });
 
   it('pausa scaduta e HIGH: riparte col tetto di prima', () => {
-    const s = run('2026-10-30', leggi({ [C]: 'LOW' })).stato;
+    const s = pausaC();
     const r = run('2026-11-02', leggi({}), s, { ...tuttiAperti(), [`whatsapp:${C}`]: 0 });
     expect(r.tetti[`whatsapp:${C}`]).toBe(100000);
     expect(r.stato.pause[C]).toBeUndefined();
@@ -43,7 +58,7 @@ describe('decidi (PO 29/10/2026)', () => {
   });
 
   it('pausa scaduta ma ancora MEDIUM: altri 3 giorni', () => {
-    const s = run('2026-10-30', leggi({ [C]: 'LOW' })).stato;
+    const s = pausaC();
     const r = run('2026-11-02', leggi({ [C]: 'MEDIUM' }), s, { ...tuttiAperti(), [`whatsapp:${C}`]: 0 });
     expect(r.tetti[`whatsapp:${C}`]).toBe(0);
     expect(r.stato.pause[C].fino).toBe('2026-11-05');
@@ -51,20 +66,20 @@ describe('decidi (PO 29/10/2026)', () => {
 
   it('mai fermare l ultimo aperto: azione di avviso e tetto intatto', () => {
     const tetti = { [`whatsapp:${A}`]: 100000, [`whatsapp:${B}`]: 0, [`whatsapp:${C}`]: 0 };
-    const r = run('2026-10-30', leggi({ [A]: 'MEDIUM' }), vuoto(), tetti);
+    const r = run('2026-10-30', leggi({ [A]: 'MEDIUM' }), giaCattivi('2026-10-30', [A]), tetti);
     expect(r.tetti[`whatsapp:${A}`]).toBe(100000);
     expect(r.azioni).toEqual([{ tipo: 'pausa_negata_ultimo', numero: A, qualita: 'MEDIUM' }]);
   });
 
   it('due scendono insieme: il primo si ferma, il secondo no se resterebbe l unico... ma qui ne resta uno', () => {
-    const r = run('2026-10-30', leggi({ [A]: 'LOW', [B]: 'MEDIUM' }));
+    const r = run('2026-10-30', leggi({ [A]: 'LOW', [B]: 'MEDIUM' }), giaCattivi('2026-10-30', [A, B]));
     expect(r.tetti[`whatsapp:${A}`]).toBe(0);
     expect(r.tetti[`whatsapp:${B}`]).toBe(0);
     expect(r.tetti[`whatsapp:${C}`]).toBe(100000);
   });
 
   it('tutti e tre scendono: si fermano i primi due, il terzo resta aperto con avviso', () => {
-    const r = run('2026-10-30', leggi({ [A]: 'LOW', [B]: 'LOW', [C]: 'LOW' }));
+    const r = run('2026-10-30', leggi({ [A]: 'LOW', [B]: 'LOW', [C]: 'LOW' }), giaCattivi('2026-10-30', [A, B, C]));
     const aperti = [A, B, C].filter((n) => r.tetti[`whatsapp:${n}`] > 0);
     expect(aperti).toHaveLength(1);
     expect(r.azioni.some((a) => a.tipo === 'pausa_negata_ultimo')).toBe(true);
@@ -172,6 +187,136 @@ describe('decidi (PO 29/10/2026)', () => {
   });
 });
 
+describe('pausa solo dopo due letture di fila sotto HIGH (titolare 17/11/2026)', () => {
+  const G = '2026-11-17';
+  const IERI = '2026-11-16';
+
+  it('una lettura cattiva isolata non ferma niente: tetti intatti, solo l avviso', () => {
+    for (const q of ['LOW', 'MEDIUM'] as Qualita[]) {
+      const r = run(G, leggi({ [A]: q, [C]: q }));
+      expect(r.tetti).toEqual(tuttiAperti());
+      expect(r.stato.pause).toEqual({});
+      expect(r.azioni).toEqual([
+        { tipo: 'lettura_isolata', numero: C, qualita: q },
+        { tipo: 'lettura_isolata', numero: A, qualita: q },
+      ]);
+      expect(r.stato.ultime?.[A]).toEqual({ qualita: q, alle: ora(G).toISOString(), cattiveDiFila: 1 });
+    }
+  });
+
+  it('il caso del 17/11: LOW e tre ore dopo HIGH, nessuna pausa ne adesso ne dopo', () => {
+    const r1 = run(G, leggi({ [A]: 'LOW', [C]: 'LOW' }), vuoto(), tuttiAperti(), ora(G, 8));
+    const r2 = run(G, leggi({}), r1.stato, r1.tetti, ora(G, 11));
+    expect(r2.tetti).toEqual(tuttiAperti());
+    expect(r2.stato.pause).toEqual({});
+    expect(r2.azioni).toEqual([]);
+    expect(r2.stato.ultime?.[A]?.cattiveDiFila).toBe(0);
+    // Lo storico del giorno resta la lettura peggiore: i conteggi dei giorni HIGH non cambiano.
+    expect(r2.stato.storico[A][G]).toBe('LOW');
+  });
+
+  it('due letture cattive di fila (due giri del cron): pausa alla seconda', () => {
+    const r1 = run(G, leggi({ [C]: 'LOW' }), vuoto(), tuttiAperti(), ora(G, 8));
+    expect(r1.stato.pause[C]).toBeUndefined();
+    const r2 = run(G, leggi({ [C]: 'MEDIUM' }), r1.stato, r1.tetti, ora(G, 11));
+    expect(r2.tetti[`whatsapp:${C}`]).toBe(0);
+    expect(r2.stato.pause[C]).toEqual({ fino: '2026-11-20', tettoPrima: 100000, dal: G });
+    expect(r2.azioni).toEqual([{ tipo: 'pausa', numero: C, qualita: 'MEDIUM', fino: '2026-11-20', tettoPrima: 100000 }]);
+  });
+
+  it('l ultima della sera e la prima della mattina (9 ore) fanno coppia', () => {
+    const r1 = run(IERI, leggi({ [C]: 'LOW' }), vuoto(), tuttiAperti(), ora(IERI, 20));
+    const r2 = run(G, leggi({ [C]: 'LOW' }), r1.stato, r1.tetti, ora(G, 5));
+    expect(r2.stato.pause[C]).toBeTruthy();
+  });
+
+  it('cattiva, buona, cattiva: nessuna pausa', () => {
+    const r1 = run(G, leggi({ [C]: 'LOW' }), vuoto(), tuttiAperti(), ora(G, 5));
+    const r2 = run(G, leggi({}), r1.stato, r1.tetti, ora(G, 8));
+    const r3 = run(G, leggi({ [C]: 'LOW' }), r2.stato, r2.tetti, ora(G, 11));
+    expect(r3.tetti).toEqual(tuttiAperti());
+    expect(r3.stato.pause).toEqual({});
+    expect(r3.azioni).toEqual([{ tipo: 'lettura_isolata', numero: C, qualita: 'LOW' }]);
+    // La quarta, ancora cattiva, e' la seconda di fila: pausa.
+    const r4 = run(G, leggi({ [C]: 'LOW' }), r3.stato, r3.tetti, ora(G, 14));
+    expect(r4.stato.pause[C]).toBeTruthy();
+  });
+
+  it('UNKNOWN in mezzo non spezza la coppia: cattiva, UNKNOWN, cattiva = pausa', () => {
+    const r1 = run(G, leggi({ [C]: 'LOW' }), vuoto(), tuttiAperti(), ora(G, 5));
+    const r2 = run(G, leggi({ [C]: 'UNKNOWN' }), r1.stato, r1.tetti, ora(G, 8));
+    expect(r2.azioni).toEqual([]);
+    expect(r2.stato.pause).toEqual({});
+    expect(r2.stato.ultime?.[C]).toEqual(r1.stato.ultime?.[C]);
+    const r3 = run(G, leggi({ [C]: 'MEDIUM' }), r2.stato, r2.tetti, ora(G, 11));
+    expect(r3.stato.pause[C]).toBeTruthy();
+    expect(r3.tetti[`whatsapp:${C}`]).toBe(0);
+  });
+
+  it('UNKNOWN non crea la coppia: UNKNOWN + cattiva, e cattiva + UNKNOWN, non fermano', () => {
+    const r1 = run(G, leggi({ [C]: 'UNKNOWN' }), vuoto(), tuttiAperti(), ora(G, 5));
+    expect(r1.stato.ultime?.[C]).toBeUndefined();
+    const r2 = run(G, leggi({ [C]: 'LOW' }), r1.stato, r1.tetti, ora(G, 8));
+    expect(r2.stato.pause).toEqual({});
+    const r3 = run(G, leggi({ [C]: 'UNKNOWN' }), r2.stato, r2.tetti, ora(G, 11));
+    expect(r3.stato.pause).toEqual({});
+    expect(r3.tetti).toEqual(tuttiAperti());
+  });
+
+  it('una buona fra due UNKNOWN azzera la fila: cattiva, UNKNOWN, buona, UNKNOWN, cattiva = niente', () => {
+    let s = vuoto();
+    const giri: Qualita[] = ['LOW', 'UNKNOWN', 'HIGH', 'UNKNOWN', 'LOW'];
+    let ultimo;
+    for (const [k, q] of giri.entries()) { ultimo = run(G, leggi({ [C]: q }), s, tuttiAperti(), ora(G, 5 + 3 * k)); s = ultimo.stato; }
+    expect(ultimo!.stato.pause).toEqual({});
+  });
+
+  it('lettura precedente piu vecchia di 24 ore: non fa coppia, la fila riparte da uno', () => {
+    const r1 = run(IERI, leggi({ [C]: 'LOW' }), vuoto(), tuttiAperti(), ora(IERI, 8));
+    // 27 ore dopo (in mezzo solo UNKNOWN: API giu').
+    const r2 = run(G, leggi({ [C]: 'LOW' }), r1.stato, r1.tetti, ora(G, 11));
+    expect(r2.stato.pause).toEqual({});
+    expect(r2.stato.ultime?.[C]).toEqual({ qualita: 'LOW', alle: ora(G, 11).toISOString(), cattiveDiFila: 1 });
+    // Entro le 24 ore si': 23 ore.
+    const r3 = run(G, leggi({ [C]: 'LOW' }), r1.stato, r1.tetti, ora(G, 7));
+    expect(r3.stato.pause[C]).toBeTruthy();
+  });
+
+  it('lo stesso giro richiamato due volte (10 minuti dopo) non vale due letture', () => {
+    const r1 = run(G, leggi({ [C]: 'LOW' }), vuoto(), tuttiAperti(), ora(G, 8, 10));
+    const r2 = run(G, leggi({ [C]: 'LOW' }), r1.stato, r1.tetti, ora(G, 8, 20));
+    expect(r2.stato.pause).toEqual({});
+    expect(r2.stato.ultime?.[C]).toEqual(r1.stato.ultime?.[C]);
+    const r3 = run(G, leggi({ [C]: 'LOW' }), r2.stato, r2.tetti, ora(G, 11, 10));
+    expect(r3.stato.pause[C]).toBeTruthy();
+  });
+
+  it('data della lettura precedente illeggibile: non fa coppia', () => {
+    const s: StatoQualita = { ...vuoto(), ultime: { [C]: { qualita: 'LOW', alle: 'boh', cattiveDiFila: 1 } } };
+    expect(run(G, leggi({ [C]: 'LOW' }), s).stato.pause).toEqual({});
+  });
+
+  it('il 3199 esce comunque alla prima lettura cattiva (non cambia)', () => {
+    const r = run(G, leggi({ [P]: 'MEDIUM' }), vuoto(), { ...tuttiAperti(), [`whatsapp:${P}`]: 100000 });
+    expect(r.tetti[`whatsapp:${P}`]).toBeUndefined();
+    expect(r.azioni).toEqual([{ tipo: 'uscita_primario', numero: P, qualita: 'MEDIUM' }]);
+  });
+
+  it('giri Black Friday, trabocco e database: fuori solo dopo due cattive di fila', () => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', `whatsapp:${P}`);
+    const r1 = run(G, leggi({ [C]: 'LOW' }), vuoto(), tuttiAperti(), ora(G, 8));
+    expect(eHighEFuoriPausa(r1.stato, `whatsapp:${C}`, G, IERI)).toBe(true);
+    // Tornato HIGH tre ore dopo: sempre dentro, anche se il peggiore del giorno resta LOW.
+    const buono = run(G, leggi({}), r1.stato, r1.tetti, ora(G, 11));
+    expect(buono.stato.storico[C][G]).toBe('LOW');
+    expect(eHighEFuoriPausa(buono.stato, C, G, IERI)).toBe(true);
+    // Ancora LOW tre ore dopo: pausa, fuori.
+    const r2 = run(G, leggi({ [C]: 'LOW' }), r1.stato, r1.tetti, ora(G, 11));
+    expect(eHighEFuoriPausa(r2.stato, C, G, IERI)).toBe(false);
+    vi.unstubAllEnvs();
+  });
+});
+
 describe('utilita', () => {
   it('giornoRoma usa il giorno di Roma', () => {
     expect(giornoRoma(new Date('2026-10-29T23:30:00Z'))).toBe('2026-10-30');
@@ -209,7 +354,7 @@ describe('promozioni una tantum dei tetti (PO 07/11/2026)', () => {
     },
   });
   const giro = (oggi: string, letture: Record<string, Qualita>, stato: StatoQualita, tetti: Record<string, number>) =>
-    decidi({ oggi, letture, stato, tetti, primario: `whatsapp:${P}`, secondari: SEC2 });
+    decidi({ oggi, adesso: ora(oggi), letture, stato, tetti, primario: `whatsapp:${P}`, secondari: SEC2 });
 
   it('07/11 (2 giorni HIGH): nessuna promozione', () => {
     const r = giro('2026-11-07', tuttiHigh(), stato07(), tetti07());
@@ -271,9 +416,16 @@ describe('promozioni una tantum dei tetti (PO 07/11/2026)', () => {
     expect(r.tetti[`whatsapp:${N2508}`]).toBe(0);
   });
 
-  it('sceso sotto HIGH oggi: va in pausa e non viene promosso', () => {
-    const r = giro('2026-11-08', { ...tuttiHigh(), [N2245]: 'MEDIUM' }, stato07(), tetti07());
+  it('sotto HIGH per la seconda lettura di fila: va in pausa e non viene promosso', () => {
+    const r = giro('2026-11-08', { ...tuttiHigh(), [N2245]: 'MEDIUM' }, giaCattivi('2026-11-08', [N2245], stato07()), tetti07());
     expect(r.tetti[`whatsapp:${N2245}`]).toBe(0);
+    expect(r.azioni.some((a) => a.tipo === 'tetto_promosso' && a.numero === N2245)).toBe(false);
+  });
+
+  it('una lettura cattiva isolata: niente pausa, ma oggi non e un giorno HIGH e la promozione non scatta', () => {
+    const r = giro('2026-11-08', { ...tuttiHigh(), [N2245]: 'MEDIUM' }, stato07(), tetti07());
+    expect(r.tetti[`whatsapp:${N2245}`]).toBe(30);
+    expect(r.stato.pause).toEqual({});
     expect(r.azioni.some((a) => a.tipo === 'tetto_promosso' && a.numero === N2245)).toBe(false);
   });
 });
