@@ -9,6 +9,9 @@ import {
   funnelDaPrimoMessaggio,
   PERSONA_NAME,
   OPENING_ENV_KEYS,
+  NOME_RISPOSTE_IA,
+  chatFirmataMario,
+  notaNomeMarta,
   type FunnelKey,
 } from './persona';
 
@@ -314,6 +317,40 @@ describe('personaForConversation', () => {
 describe('PERSONA_NAME', () => {
   it('mappa persona → nome visualizzato', () => {
     expect(PERSONA_NAME).toEqual({ mario: 'Mario', marta: 'Marta' });
+  });
+});
+
+// Decisione del titolare 14/11/2026: «si deve dire sempre che è Marta».
+describe('nome nelle risposte dell\'IA: sempre Marta', () => {
+  const out = (body: string) => ({ direction: 'out', body });
+  const inb = (body: string) => ({ direction: 'in', body });
+
+  it('il nome detto al lead è Marta', () => {
+    expect(NOME_RISPOSTE_IA).toBe('Marta');
+  });
+
+  it('riconosce i nostri messaggi firmati Mario (template legacy, sequenza, risposte vecchie)', () => {
+    expect(chatFirmataMario([out('Ciao Luca, sono Mario tutor di Fenice Academy.')])).toBe(true);
+    expect(chatFirmataMario([out('Ciao Luca, sono di nuovo Mario di Fenice Academy.')])).toBe(true);
+    expect(chatFirmataMario([out('Ciao Luca, Mario di Fenice Academy. Domanda secca')])).toBe(true);
+    expect(chatFirmataMario([inb('Sei Francesco giusto?'), out('No, io sono Mario di Fenice Academy')])).toBe(true);
+    expect(chatFirmataMario([out('Ciao Luca, sono Mario!')])).toBe(true);
+  });
+
+  it('un lead che si chiama Mario non fa scattare niente', () => {
+    expect(chatFirmataMario([out('Ciao Mario, sono Marta di Fenice Academy.')])).toBe(false);
+    expect(chatFirmataMario([inb('Ciao, sono Mario Rossi')])).toBe(false);
+    expect(chatFirmataMario([out('Perfetto Mario, ci sentiamo in call'), out(null as never)])).toBe(false);
+  });
+
+  it('la nota esce solo sulle chat firmate Mario, ed è corta', () => {
+    expect(notaNomeMarta([out('Ciao, sono Marta di Fenice Academy.')])).toBeNull();
+    const nota = notaNomeMarta([out('Ciao Luca, sono Mario tutor di Fenice Academy.')]);
+    expect(nota).not.toBeNull();
+    expect(nota).toContain('Marta');
+    expect(nota).toContain('Mario');
+    expect(nota).toMatch(/femminile/);
+    expect((nota as string).split('\n')).toHaveLength(1);
   });
 });
 

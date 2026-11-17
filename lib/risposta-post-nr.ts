@@ -1,6 +1,7 @@
 import type { getSupabaseAdmin } from './supabase/admin';
 import { sendOutcome } from './bot-outcome';
 import { buildRispostaPostNrNote } from './bot-outcome-rules';
+import { chiedeDiNonEssereContattato } from './non-contattare';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -102,6 +103,22 @@ export async function segnalaRispostaDopoTerzoNr(
       giaSegnalato: Boolean(gia),
     })) {
       return { segnalato: false, motivo: 'niente_da_segnalare' };
+    }
+
+    // Chi risponde chiedendo di non essere più contattato NON è «ancora recuperabile» (PO
+    // 12/11/2026, chat 32198: «oggi non posso dato che insistete non voglio più essere
+    // contatta» era arrivata alle Conferme come «da riaprire: l'appuntamento è ancora
+    // recuperabile»). Niente segnalazione; il lucchetto si scrive lo stesso, così il
+    // «grazie» che di solito segue non la fa partire al posto suo. Della disdetta si occupa
+    // il turno del bot (nota DISDETTA o scarto del giudice).
+    if (chiedeDiNonEssereContattato(inbound?.body)) {
+      await supabase.from('event_log').insert({
+        type: 'risposta_post_nr_segnalata',
+        payload: { conversationId, crmLeadId, tentativo: TENTATIVO_TERMINALE, stopContatti: true, segnalato: false } as never,
+        message: `[crm] il lead ${crmLeadId} ha risposto dopo il terzo tentativo chiedendo di non essere più contattato: NON segnalato come recuperabile`,
+        level: 'info',
+      });
+      return { segnalato: false, motivo: 'stop_contatti' };
     }
 
     // Il lucchetto si scrive PRIMA della chiamata al CRM, come nel recupero NR: due

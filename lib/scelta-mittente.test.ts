@@ -95,6 +95,27 @@ describe('scegliMittenteNuovo', () => {
     expect(eventi.find((e) => e.type === 'mittente_black_friday')?.payload.numero).toBe(P);
   });
 
+  it('Black Friday con escludiPrimario (PO 12/11/2026): il 3199, anche HIGH e il meno carico, resta fuori', async () => {
+    tetti({ [P]: 15, [ELIXIR]: 50, [N8061]: 15, [N0047]: 0 });
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => (n === P ? 0 : n === ELIXIR ? 60 : 20));
+    const { s, eventi } = supa();
+    // Senza la regola vincerebbe il 3199 (0 aperture oggi).
+    expect((await scegli(s, { senzaTettiSoloHigh: true, includiPrimario: true })).from).toBe(P);
+    const r = await scegli(s, { senzaTettiSoloHigh: true, includiPrimario: true, escludiPrimario: true });
+    expect(r).toMatchObject({ from: N8061, secondario: true, motivo: 'scelto' });
+    expect(eventi.filter((e) => e.type === 'mittente_black_friday').at(-1)?.payload.numero).toBe(N8061);
+  });
+
+  it('Black Friday con escludiPrimario e nessun secondario HIGH: giro di sempre senza il 3199', async () => {
+    tetti({ [P]: 15, [ELIXIR]: 150, [N8061]: 150, [N0047]: 0 });
+    // Solo il 3199 e' HIGH: non si prende lo stesso, ne' dalla scelta HIGH ne' dal giro.
+    qualita({ ...tutti('LOW'), '+393520413199': { [OGGI]: 'HIGH' } });
+    const { s } = supa();
+    const r = await scegli(s, { senzaTettiSoloHigh: true, includiPrimario: true, escludiPrimario: true });
+    expect([ELIXIR, N8061]).toContain(r.from);
+    expect(r.secondario).toBe(true);
+  });
+
   it('Black Friday senza nessun numero HIGH: regola di sempre', async () => {
     tetti({ [ELIXIR]: 150, [N8061]: 150, [N0047]: 0 });
     qualita(tutti('LOW'));

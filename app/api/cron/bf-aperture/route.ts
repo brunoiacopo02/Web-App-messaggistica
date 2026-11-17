@@ -9,6 +9,7 @@ import { sceltaHighMenoCarico } from '@/lib/scelta-mittente';
 import { inOpeningWindow } from '@/lib/sequence';
 import { templateName } from '@/lib/name';
 import { logCronQueryError } from '@/lib/cron-query-error';
+import { regolaBfPrimarioAttiva, bfDaToglierDalPrimario, EVENTO_BF_FUORI_DAL_PRIMARIO } from '@/lib/bf-primario';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,6 +28,10 @@ export const maxDuration = 300;
  *   continua Mario in chat.
  * - Numero: quello della chat se HIGH e fuori pausa, altrimenti il HIGH meno carico (la
  *   chat passa a quel numero, come nel recupero aperture).
+ * - Il 3199 (PO 12/11/2026, lib/bf-primario.ts): apre solo chi ha gia' una chat con lui
+ *   (il lead ci ha scritto almeno una volta). Chat sul 3199 senza una sua risposta = il
+ *   HIGH meno carico fra gli altri; e il 3199 non e' mai il numero di ripiego per le chat
+ *   degli altri numeri. Si spegne con `app_settings.bf_primario_solo_chat_passata`="off".
  * - Fascia 07-23 (`inOpeningWindow`), al massimo MAX_PER_GIRO invii a giro.
  */
 const MAX_PER_GIRO = 40;
@@ -113,6 +118,7 @@ export async function GET(req: NextRequest) {
   const oggiG = giornoRoma(now);
   const ieriG = giornoRoma(now - 24 * H);
   const primario = numeroPrimario();
+  const regolaBfPrimario = await regolaBfPrimarioAttiva(supabase);
 
   for (const c of convs) {
     const phone = c.leads?.phone_e164;
@@ -136,9 +142,15 @@ export async function GET(req: NextRequest) {
     // Il numero: quello della chat se HIGH, altrimenti il HIGH meno carico.
     let numero = c.wa_number ?? (primario ? `whatsapp:${primario.replace(/^whatsapp:/, '')}` : null);
     if (!numero) { senzaNumero++; continue; }
-    if (!eHighEFuoriPausa(stato, numero, oggiG, ieriG)) {
+    // Chat sul 3199 senza una chat passata col lead: l'apertura va sugli altri numeri.
+    const fuoriDalPrimario = await bfDaToglierDalPrimario(supabase, {
+      attiva: regolaBfPrimario, conversationId: c.id, numeroChat: numero, primario,
+    });
+    if (fuoriDalPrimario || !eHighEFuoriPausa(stato, numero, oggiG, ieriG)) {
       const sidBf = process.env.BF_OPENING_TEMPLATE_SID?.trim();
-      const alt = sidBf && primario ? await sceltaHighMenoCarico(supabase, { templateSids: [sidBf], primario }) : null;
+      const alt = sidBf && primario
+        ? await sceltaHighMenoCarico(supabase, { templateSids: [sidBf], primario, escludiPrimario: regolaBfPrimario })
+        : null;
       if (!alt) { senzaNumero++; continue; }
       numero = alt.numero;
     }
@@ -170,6 +182,14 @@ export async function GET(req: NextRequest) {
     });
     if (numero !== c.wa_number) {
       await supabase.from('conversations').update({ wa_number: numero }).eq('id', c.id);
+    }
+    // Scritto solo quando l'apertura parte davvero (non a ogni giro in attesa).
+    if (fuoriDalPrimario) {
+      await supabase.from('event_log').insert({
+        type: EVENTO_BF_FUORI_DAL_PRIMARIO, level: 'info',
+        payload: { conversationId: c.id, da: c.wa_number ?? primario ?? null, a: numero, punto: 'bf-aperture' } as never,
+        message: `[bf] conv ${c.id}: nessuna chat passata sul numero storico, apertura Black Friday da ${numero}`,
+      });
     }
     const nome = templateName(c.leads?.first_name ?? null);
     const r = await sendSequenceTemplate(

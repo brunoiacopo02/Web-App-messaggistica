@@ -22,6 +22,7 @@ vi.mock('@/lib/cron-query-error', () => ({ logCronQueryError: vi.fn(async () => 
 import { GET } from './route';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { sendSequenceTemplate } from '@/lib/apertura-mario-invio';
+import { sceltaHighMenoCarico } from '@/lib/scelta-mittente';
 import { EVENTO_BF_SU_APPUNTAMENTO } from '@/lib/black-friday';
 
 const RICHIESTA_AT = '2026-11-09T12:00:00.000Z';
@@ -138,5 +139,116 @@ describe('bf-aperture — chat con APPUNTAMENTO e lead BF (PO 09/11/2026)', () =
     const body = await (await GET(req())).json();
     expect(body).toMatchObject({ candidati: 0, inviati: 0 });
     expect(EVENTO_BF_SU_APPUNTAMENTO).toBe('bf_apertura_su_appuntamento');
+  });
+});
+
+// PO 12/11/2026 (lib/bf-primario.ts): dal 3199 l'apertura BF parte solo per chi ha gia'
+// una chat con lui; gli altri vanno sul numero HIGH meno carico fra gli altri.
+describe('bf-aperture — il 3199 apre solo chi ha gia una chat con lui (PO 12/11/2026)', () => {
+  const P = 'whatsapp:+393520413199';
+  const N0047 = 'whatsapp:+393522070047';
+
+  /** Una chat BF 'active' sul 3199, riaperta adesso (nessun messaggio dopo `ai_started_at`). */
+  function fakeAttiva(opts: { inboundPassati: number | null; regola?: unknown }) {
+    const calls = { updates: [] as any[], events: [] as any[] };
+    const conv = {
+      id: 19348, ai_started_at: '2026-11-11T10:29:00Z', wa_number: P,
+      leads: { phone_e164: '+393331234567', first_name: 'Giulia' },
+    };
+    const supabase: any = {
+      from(table: string) {
+        if (table === 'app_settings') {
+          return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: opts.regola === undefined ? null : { value: opts.regola }, error: null }) }) }) };
+        }
+        if (table === 'conversations') {
+          return {
+            select() {
+              const c: any = { ilike: () => c, eq: () => c, is: () => c, not: () => c, order: () => c, limit: async () => ({ data: [conv], error: null }) };
+              return c;
+            },
+            update(p: any) { calls.updates.push(p); const c: any = { eq: () => c, then: (r: any) => r({}) }; return c; },
+          };
+        }
+        if (table === 'messages') {
+          return {
+            select(_c: string, o?: { head?: boolean }) {
+              if (o?.head) {
+                const k: any = {
+                  eq: () => k,
+                  then: (r: any) => r(opts.inboundPassati === null ? { count: null, error: { message: 'giu' } } : { count: opts.inboundPassati, error: null }),
+                };
+                return k;
+              }
+              // Dopo la riapertura non c'e' ancora nessun messaggio.
+              const c: any = { eq: () => c, gte: () => c, then: (r: any) => r({ data: [] }) };
+              return c;
+            },
+          };
+        }
+        return {
+          insert(p: any) { calls.events.push(p); return Promise.resolve({}); },
+          select(_c: string, o?: { head?: boolean }) {
+            if (o?.head) { const k: any = { eq: () => k, gte: () => k, then: (r: any) => r({ count: 0 }) }; return k; }
+            const c: any = { eq: () => c, gte: () => c, order: () => c, limit: async () => ({ data: [] }) };
+            return c;
+          },
+        };
+      },
+    };
+    return { supabase, calls };
+  }
+
+  beforeEach(() => {
+    vi.stubEnv('BF_OPENING_TEMPLATE_SID', 'HX_BF');
+    vi.mocked(sceltaHighMenoCarico).mockResolvedValue({ numero: N0047, oggi: 3 });
+  });
+
+  it('chat passata sul 3199 (il lead ci ha scritto) → l apertura parte dal 3199', async () => {
+    const { supabase, calls } = fakeAttiva({ inboundPassati: 6 });
+    vi.mocked(getSupabaseAdmin).mockReturnValue(supabase);
+    const body = await (await GET(req())).json();
+    expect(body).toMatchObject({ inviati: 1 });
+    expect(vi.mocked(sendSequenceTemplate).mock.calls[0][5]).toBe(P);
+    expect(sceltaHighMenoCarico).not.toHaveBeenCalled();
+    expect(calls.updates).toEqual([]);
+    expect(calls.events.map((e: any) => e.type)).not.toContain('bf_apertura_fuori_dal_primario');
+  });
+
+  it('nessuna chat passata sul 3199 → altro numero (HIGH meno carico, 3199 escluso), la chat lo segue', async () => {
+    const { supabase, calls } = fakeAttiva({ inboundPassati: 0 });
+    vi.mocked(getSupabaseAdmin).mockReturnValue(supabase);
+    const body = await (await GET(req())).json();
+    expect(body).toMatchObject({ inviati: 1 });
+    expect(vi.mocked(sendSequenceTemplate).mock.calls[0][5]).toBe(N0047);
+    expect(vi.mocked(sceltaHighMenoCarico).mock.calls[0][1]).toMatchObject({ escludiPrimario: true });
+    expect(calls.updates).toEqual([{ wa_number: N0047 }]);
+    const ev = calls.events.find((e: any) => e.type === 'bf_apertura_fuori_dal_primario');
+    expect(ev.payload).toMatchObject({ conversationId: 19348, da: P, a: N0047, punto: 'bf-aperture' });
+  });
+
+  it('nessuna chat passata e nessun altro numero utilizzabile → non parte dal 3199, si riprova al giro dopo', async () => {
+    vi.mocked(sceltaHighMenoCarico).mockResolvedValue(null);
+    const { supabase, calls } = fakeAttiva({ inboundPassati: 0 });
+    vi.mocked(getSupabaseAdmin).mockReturnValue(supabase);
+    const body = await (await GET(req())).json();
+    expect(body).toMatchObject({ inviati: 0, senzaNumero: 1 });
+    expect(sendSequenceTemplate).not.toHaveBeenCalled();
+    expect(calls.events.map((e: any) => e.type)).not.toContain('bf_apertura_fuori_dal_primario');
+  });
+
+  it('regola spenta da impostazione → dal 3199 come prima', async () => {
+    const { supabase, calls } = fakeAttiva({ inboundPassati: 0, regola: 'off' });
+    vi.mocked(getSupabaseAdmin).mockReturnValue(supabase);
+    const body = await (await GET(req())).json();
+    expect(body).toMatchObject({ inviati: 1 });
+    expect(vi.mocked(sendSequenceTemplate).mock.calls[0][5]).toBe(P);
+    expect(calls.updates).toEqual([]);
+  });
+
+  it('conteggio fallito → nel dubbio la chat resta sul 3199', async () => {
+    const { supabase } = fakeAttiva({ inboundPassati: null });
+    vi.mocked(getSupabaseAdmin).mockReturnValue(supabase);
+    await GET(req());
+    expect(vi.mocked(sendSequenceTemplate).mock.calls[0][5]).toBe(P);
   });
 });

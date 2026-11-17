@@ -64,6 +64,20 @@ export function stopDalCrm(
   return null;
 }
 
+/**
+ * Lo stop "in risposta" su una chat del giro DATABASE (PO 12/11/2026: già clienti e
+ * presenze storiche DENTRO). A quella persona abbiamo scritto noi sapendolo: finché la
+ * chat non ha un esito del bot, alla sua risposta parla Marta e lo stop non vale. Dopo un
+ * esito (es. APPUNTAMENTO) torna la regola di sempre. Su ogni altra chat non cambia niente.
+ */
+export function stopInRispostaPerChat(
+  motivo: MotivoStopCrm | null,
+  c: { chatDatabase: boolean; esitoInPiedi: string | null | undefined },
+): MotivoStopCrm | null {
+  if (c.chatDatabase && !c.esitoInPiedi) return null;
+  return motivo;
+}
+
 /** Vero quando lo stop dice "questa chat non è più roba da bot": va passata a una
  *  persona, non lasciata cadere nel vuoto. */
 export function vuolePassaggioAUmano(motivo: MotivoStopCrm): boolean {

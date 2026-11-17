@@ -32,8 +32,14 @@ export async function giaSpostatoDalBot(supabase: Supa, conversationId: number):
   }
 }
 
-/** La data a cui il bot ha spostato la call l'ultima volta (`payload.a`), o null. Nel dubbio null. */
-export async function ultimoSpostamentoDalBot(supabase: Supa, conversationId: number): Promise<string | null> {
+/**
+ * L'ultimo spostamento fatto dal bot: la data nuova (`payload.a`) e quando l'ha fatto
+ * (`at`, l'istante dell'evento; null se non si legge). Nel dubbio null.
+ */
+export async function ultimoSpostamentoDalBotInfo(
+  supabase: Supa,
+  conversationId: number,
+): Promise<{ a: string; at: string | null } | null> {
   try {
     const { data, error } = await supabase
       .from('event_log')
@@ -43,10 +49,71 @@ export async function ultimoSpostamentoDalBot(supabase: Supa, conversationId: nu
       .order('created_at', { ascending: false })
       .limit(1);
     if (error || !Array.isArray(data) || data.length === 0) return null;
-    const a = (data[0] as { payload?: { a?: string } | null }).payload?.a;
-    return typeof a === 'string' ? a : null;
+    const riga = data[0] as { payload?: { a?: string } | null; created_at?: string | null };
+    const a = riga.payload?.a;
+    if (typeof a !== 'string') return null;
+    return { a, at: typeof riga.created_at === 'string' ? riga.created_at : null };
   } catch {
     return null;
+  }
+}
+
+/** La data a cui il bot ha spostato la call l'ultima volta (`payload.a`), o null. Nel dubbio null. */
+export async function ultimoSpostamentoDalBot(supabase: Supa, conversationId: number): Promise<string | null> {
+  return (await ultimoSpostamentoDalBotInfo(supabase, conversationId))?.a ?? null;
+}
+
+/**
+ * Il lead di questa chat aveva detto «in questi giorni non posso, riscrivo io»
+ * (`gdo_spostamento_attesa_lead`, PO 12/11/2026)? Nel dubbio no: vale la regola normale.
+ */
+export async function inAttesaCheRiscriva(supabase: Supa, conversationId: number): Promise<boolean> {
+  try {
+    const { data, error } = await supabase
+      .from('event_log')
+      .select('id')
+      .eq('type', 'gdo_spostamento_attesa_lead')
+      .eq('payload->>conversationId', String(conversationId))
+      .limit(1);
+    return !error && Array.isArray(data) && data.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** L'evento che segna «il lead in attesa ha riscritto, e l'abbiamo segnalato (o gestito)». */
+export const EVENTO_ATTESA_RISCRITTO = 'gdo_spostamento_attesa_riscritto';
+/** Sotto questo tempo dall'attesa un messaggio del lead e' la coda della stessa conversazione. */
+const ATTESA_MIN_PRIMA_DI_SEGNALARE_MS = 60 * 60_000;
+
+/**
+ * C'e' un'attesa «riscrivo io» ancora aperta da segnalare? (PO 12/11/2026: «se scrive dopo
+ * dobbiamo essere avvisati».) Si' se l'ULTIMA attesa e' piu' recente dell'ULTIMO «ha
+ * riscritto» e ha almeno un'ora (il «grazie» subito dopo non conta). Si confrontano le date,
+ * non i conteggi: dopo «scrivimi tu» un «Ok perfetto» del lead puo' far rimettere RICHIAMO al
+ * modello e nascere una seconda attesa, e con i conteggi l'avviso partiva su due turni.
+ * Nel dubbio no.
+ */
+export async function attesaDaSegnalare(supabase: Supa, conversationId: number, nowMs: number): Promise<boolean> {
+  try {
+    const conv = String(conversationId);
+    const [attese, riscritti] = await Promise.all([
+      supabase.from('event_log').select('id, created_at').eq('type', 'gdo_spostamento_attesa_lead').eq('payload->>conversationId', conv).limit(50),
+      supabase.from('event_log').select('id, created_at').eq('type', EVENTO_ATTESA_RISCRITTO).eq('payload->>conversationId', conv).limit(50),
+    ]);
+    if (attese.error || riscritti.error || !Array.isArray(attese.data) || !Array.isArray(riscritti.data)) return false;
+    const tempi = (righe: { created_at?: string | null }[]): number[] =>
+      righe.map((r) => (r.created_at ? Date.parse(r.created_at) : NaN)).filter((t) => !Number.isNaN(t));
+    const tempiAttese = tempi(attese.data);
+    if (tempiAttese.length === 0) return false;
+    const ultimaAttesa = Math.max(...tempiAttese);
+    // Un «ha riscritto» senza data leggibile: nel dubbio l'attesa e' gia' chiusa.
+    if (riscritti.data.length > tempi(riscritti.data).length) return false;
+    const tempiRiscritti = tempi(riscritti.data);
+    if (tempiRiscritti.length > 0 && Math.max(...tempiRiscritti) >= ultimaAttesa) return false;
+    return nowMs - ultimaAttesa >= ATTESA_MIN_PRIMA_DI_SEGNALARE_MS;
+  } catch {
+    return false;
   }
 }
 

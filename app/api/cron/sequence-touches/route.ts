@@ -21,7 +21,7 @@ import { inviaAperturaMario, sendSequenceTemplate } from '@/lib/apertura-mario-i
 import { stopDalCrmPerLead } from '@/lib/stop-crm';
 import {
   personaForConversation,
-  PERSONA_NAME,
+  NOME_RISPOSTE_IA,
   OPENING_ENV_KEYS,
 } from '@/lib/persona';
 import { templateName } from '@/lib/name';
@@ -475,7 +475,7 @@ export async function GET(req: NextRequest) {
         continue;
       }
       const slugScheda = usaNudgeScheda(c as { scheda_inviata_at: string | null; bot_outcome: string | null; professione: string | null });
-      const body = slugScheda ? pickNudgeTextScheda(firstName, slugScheda) : pickNudgeText(c.id, firstName, PERSONA_NAME[persona]);
+      const body = slugScheda ? pickNudgeTextScheda(firstName, slugScheda) : pickNudgeText(c.id, firstName, NOME_RISPOSTE_IA);
       sent++;
       const res = await sendFreeText({ to: phone, body, from });
       await supabase.from('messages').insert({

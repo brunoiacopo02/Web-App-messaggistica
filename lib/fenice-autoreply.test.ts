@@ -43,7 +43,7 @@ import { leggiSettingsOffertaBfEvergreen } from './offerta-bf-evergreen';
 import { leggiOreOccupate } from './ore-occupate';
 import { sendOutcome, inviaNotaAlCrm, registraEsitoSenzaLeadId } from './bot-outcome';
 import { NOTA_VIDEO, NOTA_NOEMI } from './gdo-context-note';
-import { OPENING_ENV_KEYS, personaForConversation } from './persona';
+import { OPENING_ENV_KEYS, personaForConversation, notaNomeMarta } from './persona';
 import { eseguiTurnoLancio } from './lancio-turno';
 import { getLancioSettings } from './lancio-settings';
 import { TESTO_POSTO_BLOCCATO } from './lancio-fase';
@@ -507,7 +507,8 @@ function makeDrainSupabase(claimedRow: ClaimedRow, initialRows: FakeMsgRow[]) {
                 && (conv === undefined || String((e.payload ?? {}).conversationId) === conv)
                 && Object.entries(payload).every(([k, v]) => (e.payload ?? {})[k] === v));
               // Le letture "l'ultimo prima" (order desc) vedono l'evento piu' recente per primo.
-              const righe = prior.map((e, i) => ({ id: i + 1, payload: e.payload, created_at: new Date().toISOString() })).reverse();
+              // Un evento spinto dal test con il suo `created_at` lo conserva (chat 32173).
+              const righe = prior.map((e, i) => ({ id: i + 1, payload: e.payload, created_at: (e as { created_at?: string }).created_at ?? new Date().toISOString() })).reverse();
               resolve({ data: righe, error: null });
             },
           };
@@ -3895,6 +3896,266 @@ describe('drainMarioReplies — il bot sposta la call del lead GDO (PO 28/10/202
     expect(contesto()).not.toContain('SPOSTAMENTO DELLA CALL');
   });
 
+  describe('il bot sposta sempre (PO 12/11/2026)', () => {
+    // Un giorno e un'ora della finestra sicuramente DOPO la call (che e' fra 48 ore).
+    const terzo = giorniSpostamento(new Date(), [])[2];
+    const DOPO = `${terzo}T20:00:00${romeOffset(new Date(`${terzo}T12:00:00Z`))}`;
+
+    it('conv 30493: [ESITO:RICHIAMO|data nuova buona] al posto di [SPOSTA] → il codice sposta lo stesso, niente nota', async () => {
+      const f = fetchCrm(200, { ok: true, rescheduled: true });
+      vi.stubGlobal('fetch', f);
+      const { supabase, calls } = makeDrainSupabase(postino(), [RECAP, { direction: 'in', body: 'Le 20', template_sid: null, created_at: fra(-60_000) }]);
+      vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Perfetto, lo passo a Noemi.', { outcome: 'RICHIAMO', scheduledAt: DOPO }));
+
+      await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+      expect(f).toHaveBeenCalledTimes(1);
+      expect(JSON.parse((f.mock.calls[0] as any)[1].body)).toEqual({ leadId: 'gdo3', outcome: 'SPOSTAMENTO', date: DOPO });
+      const bolle = calls.messageInserts.map((m: any) => m.body);
+      expect(bolle).toHaveLength(1);
+      expect(bolle[0]).toMatch(/^Fatto Luca, la tua videochiamata ora è \*/);
+      expect(calls.events.find((e: any) => e.type === 'gdo_spostamento_da_esito')?.payload).toMatchObject({ esito: 'RICHIAMO', data: DOPO, origine: 'gdo' });
+      expect(calls.events.some((e: any) => e.type === 'gdo_spostamento_bot')).toBe(true);
+      expect(sendOutcome).not.toHaveBeenCalled();
+    });
+
+    it('il CRM dice no anche qui: resta la nota SPOSTAMENTO CHIESTO con la data, come prima', async () => {
+      vi.stubGlobal('fetch', fetchCrm(409, { error: 'spostamento_rifiutato', motivo: 'confermato' }));
+      const { supabase, calls } = makeDrainSupabase(postino(), [RECAP, SPOSTA]);
+      vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Lo passo a Noemi.', { outcome: 'RICHIAMO', scheduledAt: DOPO }));
+
+      await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+      expect(calls.messageInserts.map((m: any) => m.body)).toEqual([TESTO_SPOSTAMENTO_PASSATO_AI_COLLEGHI]);
+      expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'RICHIAMO', date: DOPO });
+    });
+
+    it('un anticipo («richiamatemi domani alle 10») NON diventa uno spostamento: e\' quasi sempre la chiamata di Noemi', async () => {
+      const f = fetchCrm(200, { ok: true, rescheduled: true });
+      vi.stubGlobal('fetch', f);
+      const lontana = fra(4 * 24 * 3600_000);
+      const primo = giorniSpostamento(new Date(), [])[0];
+      const PRIMA = `${primo}T10:00:00${romeOffset(new Date(`${primo}T12:00:00Z`))}`;
+      const { supabase, calls } = makeDrainSupabase(postino({ gdo_appuntamento_at: lontana, gdo_recap_for_at: lontana }), [RECAP, SPOSTA]);
+      vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Lo dico a Noemi.', { outcome: 'RICHIAMO', scheduledAt: PRIMA }));
+
+      await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+      expect(f).not.toHaveBeenCalled();
+      expect(calls.events.some((e: any) => e.type === 'gdo_spostamento_da_esito')).toBe(false);
+      expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'RICHIAMO', date: PRIMA });
+      // Non e' «riscrivo io»: nota SPOSTAMENTO CHIESTO di sempre, promemoria accesi, nessuna attesa.
+      expect(vi.mocked(sendOutcome).mock.calls[0][2]).not.toHaveProperty('riscriveLui');
+      expect(calls.events.some((e: any) => e.type === 'gdo_spostamento_attesa_lead')).toBe(false);
+      expect(calls.messageInserts.map((m: any) => m.body)).toEqual(['Lo dico a Noemi.']);
+    });
+
+    it('call fra 10 minuti: il blocco dello spostamento c\'e\' (prima sotto i 30 minuti usciva solo la nota)', async () => {
+      const vicina = fra(10 * 60_000);
+      const { supabase } = makeDrainSupabase(postino({ gdo_appuntamento_at: vicina, gdo_recap_for_at: vicina }), [RECAP, SPOSTA]);
+      vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Dimmi giorno e ora in cui sei sicuro di esserci'));
+
+      await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+      expect(contesto()).toContain('SPOSTAMENTO DELLA CALL');
+      expect(contesto()).toContain('LO SPOSTI SEMPRE TU');
+    });
+
+    it('call del GDO saltata tre ore fa: il blocco c\'e\' e dice che non si e\' fatta', async () => {
+      const passata = fra(-3 * 3600_000);
+      const { supabase } = makeDrainSupabase(postino({ gdo_appuntamento_at: passata, gdo_recap_for_at: passata }), [RECAP, { direction: 'in', body: 'scusate non ho potuto, possiamo rifare domani?', template_sid: null, created_at: fra(-60_000) }]);
+      vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Dimmi giorno e ora in cui sei sicuro di esserci'));
+
+      await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+      expect(contesto()).toContain('SPOSTAMENTO DELLA CALL');
+      expect(contesto()).toContain('e non si è fatta');
+    });
+  });
+
+  describe('chat 25906: «non posso in questi giorni», il lead riscrive lui e il bot sposta quando riscrive (PO 12/11/2026)', () => {
+    const CHIEDE: FakeMsgRow = { direction: 'in', body: "Buongiorno Marta, ho bisogno di posticipare l' appuntamento, possiamo fare direttamente nella settimana dal 23/11? grazie", template_sid: null, created_at: fra(-5 * 60_000) };
+
+    it('primo tempo: il modello chiude con RICHIAMO senza spostare → attesa segnata, nota «riscrive lui», nessuno spostamento consumato', async () => {
+      const f = fetchCrm(200, { ok: true, rescheduled: true });
+      vi.stubGlobal('fetch', f);
+      const { supabase, calls } = makeDrainSupabase(postino(), [
+        RECAP, CHIEDE,
+        { direction: 'out', body: 'Si può spostare solo a giovedì, venerdì o sabato: giovedì alle 18 o venerdì alle 11?', template_sid: null, created_at: fra(-4 * 60_000) },
+        { direction: 'in', body: 'In questi giorni non posso proprio, sono via fino al 22', template_sid: null, created_at: fra(-60_000) },
+      ]);
+      vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Va bene, allora facciamo così: appena sai quando puoi scrivimi qui e te la sposto io in quel momento', { outcome: 'RICHIAMO', note: 'nella settimana dal 23/11' }));
+
+      await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+      // Il prompt aveva l'istruzione nuova.
+      expect(contesto()).toContain('SE IN QUEI GIORNI NON PUÒ PROPRIO');
+      // Nessuno spostamento al CRM: «una volta sola» resta da spendere.
+      expect(f).not.toHaveBeenCalled();
+      expect(calls.events.some((e: any) => e.type === 'gdo_spostamento_bot')).toBe(false);
+      expect(calls.events.find((e: any) => e.type === 'gdo_spostamento_attesa_lead')?.payload).toMatchObject({ conversationId: 92, crmLeadId: 'gdo3', origine: 'gdo', quando: 'nella settimana dal 23/11' });
+      // Alle Conferme la nota nuova (la scrive sendOutcome con `riscriveLui`), sul canale solo-nota.
+      expect(sendOutcome).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'RICHIAMO', riscriveLui: true, note: 'nella settimana dal 23/11' });
+      expect(vi.mocked(sendOutcome).mock.calls[0][3]).toEqual({ noteOnly: true });
+      expect(calls.messageInserts.map((m: any) => m.body)).toEqual(['Va bene, allora facciamo così: appena sai quando puoi scrivimi qui e te la sposto io in quel momento']);
+    });
+
+    it('secondo tempo: riscrive 18 giorni dopo, a call vecchia passata → il blocco c\'e\' e [SPOSTA] sposta, con la finestra contata da oggi', async () => {
+      const f = fetchCrm(200, { ok: true, rescheduled: true });
+      vi.stubGlobal('fetch', f);
+      const vecchia = fra(-18 * 24 * 3600_000);
+      const { supabase, calls } = makeDrainSupabase(postino({ gdo_appuntamento_at: vecchia, gdo_recap_for_at: vecchia, cancel_requested_at: fra(-19 * 24 * 3600_000) }), [
+        RECAP, { direction: 'in', body: 'Ciao Marta, eccomi: posso giovedì alle 18', template_sid: null, created_at: fra(-60_000) },
+      ]);
+      calls.events.push({ type: 'gdo_spostamento_attesa_lead', payload: { conversationId: 92, crmLeadId: 'gdo3', origine: 'gdo' } });
+      vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('', { spostaAt: NUOVA }));
+
+      await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+      expect(contesto()).toContain('SPOSTAMENTO DELLA CALL');
+      expect(contesto()).toContain('e non si è fatta');
+      expect(JSON.parse((f.mock.calls[0] as any)[1].body)).toEqual({ leadId: 'gdo3', outcome: 'SPOSTAMENTO', date: NUOVA });
+      expect(calls.messageInserts.map((m: any) => m.body)[0]).toMatch(/^Fatto Luca, la tua videochiamata ora è \*/);
+      // La data nuova riaccende gli automatismi.
+      expect(calls.convUpdates.find((u: any) => 'gdo_appuntamento_at' in u)).toMatchObject({ gdo_appuntamento_at: new Date(NUOVA).toISOString(), cancel_requested_at: null });
+      expect(sendOutcome).not.toHaveBeenCalled();
+    });
+
+    describe('«se scrive dopo dobbiamo essere avvisati» (PO 12/11/2026)', () => {
+      const attesa = (giorniFa: number) => ({
+        type: 'gdo_spostamento_attesa_lead',
+        payload: { conversationId: 92, crmLeadId: 'gdo3', origine: 'gdo' },
+        created_at: fra(-giorniFa * 24 * 3600_000),
+      });
+      const inAttesa = (callGiorniFa: number) => {
+        const vecchia = fra(-callGiorniFa * 24 * 3600_000);
+        return postino({ gdo_appuntamento_at: vecchia, gdo_recap_for_at: vecchia, cancel_requested_at: fra(-(callGiorniFa + 1) * 24 * 3600_000) });
+      };
+      const RISCRIVE: FakeMsgRow = { direction: 'in', body: 'Ciao Marta, eccomi, ora posso: come facciamo?', template_sid: null, created_at: fra(-60_000) };
+      beforeEach(() => { vi.mocked(inviaNotaAlCrm).mockReset(); vi.mocked(inviaNotaAlCrm).mockResolvedValue({ sent: true }); });
+
+      it('riscrive ma non da\' ancora la data (il bot puo\' spostare): nota alle Conferme «IL LEAD IN ATTESA HA RISCRITTO», una volta sola', async () => {
+        const { supabase, calls } = makeDrainSupabase(inAttesa(18), [RECAP, RISCRIVE]);
+        calls.events.push(attesa(19));
+        vi.mocked(generateMarioReply).mockResolvedValue(reply('Bentornato! Dimmi giorno e ora in cui sei sicuro di esserci'));
+
+        await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+        expect(inviaNotaAlCrm).toHaveBeenCalledTimes(1);
+        const nota = vi.mocked(inviaNotaAlCrm).mock.calls[0][3];
+        expect(nota).toMatch(/^IL LEAD IN ATTESA HA RISCRITTO — /);
+        expect(nota).toContain('Se non vi arriva la nota «Spostato dal bot», sentitelo voi');
+        expect(nota).toContain('Ciao Marta, eccomi, ora posso: come facciamo?');
+        expect(calls.events.find((e: any) => e.type === 'gdo_spostamento_attesa_riscritto')?.payload).toMatchObject({ segnale: 'nota_conferme' });
+        expect(sendOutcome).not.toHaveBeenCalled();
+
+        // Il messaggio dopo, nella stessa attesa: nessuna seconda segnalazione.
+        await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+        expect(inviaNotaAlCrm).toHaveBeenCalledTimes(1);
+      });
+
+      it('riscrive oltre i 60 giorni (il bot non puo\' piu\' spostare): richiesta di contatto a una persona, mai nel vuoto', async () => {
+        const { supabase, calls } = makeDrainSupabase(inAttesa(70), [RECAP, RISCRIVE]);
+        calls.events.push(attesa(71));
+        vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Ciao! Ti faccio sentire da una collega.'));
+
+        await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+        expect(contesto()).not.toContain('SPOSTAMENTO DELLA CALL');
+        expect(inviaNotaAlCrm).not.toHaveBeenCalled();
+        expect(sendOutcome).toHaveBeenCalledTimes(1);
+        const args = vi.mocked(sendOutcome).mock.calls[0][2] as { outcome: string; motivoContattoUmano?: string; notaContattoUmano?: string };
+        expect(args).toMatchObject({ outcome: 'CONTATTO_UMANO', motivoContattoUmano: 'disdetta' });
+        expect(args.notaContattoUmano).toMatch(/^IL LEAD IN ATTESA HA RISCRITTO E IL BOT NON PUÒ SPOSTARLO — /);
+        expect(args.notaContattoUmano).toContain('la call vecchia è passata da troppo tempo');
+        expect(args.notaContattoUmano).toContain('va sentito da una persona per rifissare');
+        expect(calls.events.find((e: any) => e.type === 'gdo_spostamento_attesa_riscritto')?.payload).toMatchObject({ segnale: 'contatto_umano', motivoNoSposta: 'call_passata' });
+      });
+
+      it('riscrive, da\' la data, ma il CRM rifiuta (es. parcheggiato): richiesta di contatto oltre alla nota di ripiego', async () => {
+        vi.stubGlobal('fetch', fetchCrm(409, { error: 'spostamento_rifiutato', motivo: 'parcheggiato' }));
+        const { supabase, calls } = makeDrainSupabase(inAttesa(18), [RECAP, RISCRIVE]);
+        calls.events.push(attesa(19));
+        vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('', { spostaAt: NUOVA }));
+
+        await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+        const chiamate = vi.mocked(sendOutcome).mock.calls.map((c) => c[2] as { outcome: string; notaContattoUmano?: string });
+        expect(chiamate.find((a) => a.outcome === 'CONTATTO_UMANO')?.notaContattoUmano).toContain('il tentativo di spostarla non è andato a buon fine');
+        expect(chiamate.some((a) => a.outcome === 'RICHIAMO')).toBe(true);
+        expect(calls.events.find((e: any) => e.type === 'gdo_spostamento_attesa_riscritto')?.payload).toMatchObject({ segnale: 'contatto_umano' });
+      });
+
+      it('riscrive e il bot sposta: basta «Spostato dal bot», nessuna segnalazione in piu\'; l\'attesa si chiude', async () => {
+        vi.stubGlobal('fetch', fetchCrm(200, { ok: true, rescheduled: true }));
+        const { supabase, calls } = makeDrainSupabase(inAttesa(18), [RECAP, RISCRIVE]);
+        calls.events.push(attesa(19));
+        vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('', { spostaAt: NUOVA }));
+
+        await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+        expect(inviaNotaAlCrm).not.toHaveBeenCalled();
+        expect(sendOutcome).not.toHaveBeenCalled();
+        expect(calls.events.find((e: any) => e.type === 'gdo_spostamento_attesa_riscritto')?.payload).toMatchObject({ segnale: 'spostato' });
+      });
+
+      it('il «grazie» subito dopo «riscrivimi tu» (attesa di pochi minuti fa) e un «ok» giorni dopo non sono un «ha riscritto»', async () => {
+        const a = makeDrainSupabase(inAttesa(-2), [RECAP, RISCRIVE]);
+        a.calls.events.push({ ...attesa(0), created_at: fra(-5 * 60_000) });
+        vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Figurati!'));
+        await drainMarioReplies(a.supabase, 92, '+391234567890', () => 0);
+        expect(a.calls.events.some((e: any) => e.type === 'gdo_spostamento_attesa_riscritto')).toBe(false);
+
+        const b = makeDrainSupabase(inAttesa(18), [RECAP, { direction: 'in', body: 'ok grazie', template_sid: null, created_at: fra(-60_000) }]);
+        b.calls.events.push(attesa(19));
+        vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('A presto!'));
+        await drainMarioReplies(b.supabase, 92, '+391234567890', () => 0);
+        expect(b.calls.events.some((e: any) => e.type === 'gdo_spostamento_attesa_riscritto')).toBe(false);
+        expect(inviaNotaAlCrm).not.toHaveBeenCalled();
+      });
+    });
+
+    it('controprova: stessa call passata da 18 giorni ma senza l\'attesa segnata → niente blocco', async () => {
+      const vecchia = fra(-18 * 24 * 3600_000);
+      const { supabase } = makeDrainSupabase(postino({ gdo_appuntamento_at: vecchia, gdo_recap_for_at: vecchia }), [RECAP, SPOSTA]);
+      vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('ok'));
+      await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+      expect(contesto()).not.toContain('SPOSTAMENTO DELLA CALL');
+    });
+  });
+
+  it("chat 31379: dopo lo spostamento fatto dal bot il prompt dice che e' vero e registrato, cosi' il modello non lo smentisce", async () => {
+    // 09/11/2026: «Fatto Giuseppe, la tua videochiamata ora è martedì 10 alle 20:00» e, al
+    // messaggio dopo, «lo spostamento non lo faccio io, non darlo per fatto». Nel turno dopo
+    // lo spostamento il blocco SPOSTAMENTO DELLA CALL non c'e' piu' (una volta sola): deve
+    // esserci quello che dice che lo spostamento e' gia' fatto.
+    const { supabase, calls } = makeDrainSupabase(postino(), [
+      RECAP,
+      { direction: 'out', body: 'Fatto Luca, la tua videochiamata ora è *martedì 10 alle 20:00*.', template_sid: null, created_at: fra(-90_000) },
+      { direction: 'in', body: 'Ma la call è in forma verbale o videochiamata?', template_sid: null, created_at: fra(-60_000) },
+    ]);
+    calls.events.push({ type: 'gdo_spostamento_bot', payload: { conversationId: 92, a: new Date(CALL).toISOString(), origine: 'gdo' } });
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('È una videochiamata, basta il telefono.'));
+
+    await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+    expect(contesto()).toContain('SPOSTAMENTO GIÀ FATTO');
+    expect(contesto()).toContain('Non smentirlo');
+    expect(contesto()).not.toContain('SPOSTAMENTO DELLA CALL');
+    expect(sendOutcome).not.toHaveBeenCalled();
+  });
+
+  it("chat 31379: se poi le Conferme hanno cambiato la data, la nota «gia' fatto» non c'e' piu'", async () => {
+    const { supabase, calls } = makeDrainSupabase(postino(), [RECAP, SPOSTA]);
+    calls.events.push({ type: 'gdo_spostamento_bot', payload: { conversationId: 92, a: fra(5 * 24 * 3600_000), origine: 'gdo' } });
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('ok'));
+
+    await drainMarioReplies(supabase, 92, '+391234567890', () => 0);
+
+    expect(contesto()).not.toContain('SPOSTAMENTO GIÀ FATTO');
+  });
+
   it('chat postino con anche un APPUNTAMENTO del bot (origine incerta), o interruttore spento: niente blocco nel prompt', async () => {
     const a = makeDrainSupabase(postino({ bot_outcome: 'APPUNTAMENTO', bot_scheduled_at: CALL }), [RECAP, SPOSTA]);
     vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('ok'));
@@ -3973,6 +4234,90 @@ describe('drainMarioReplies — il bot sposta anche le call che ha fissato lui (
     expect(calls.events.find((e: any) => e.type === 'gdo_spostamento_non_fatto')?.payload).toMatchObject({ origine: 'bot', motivo: 'confermato' });
     expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'RICHIAMO', date: NUOVA });
     expect(calls.convUpdates.some((u: any) => 'bot_scheduled_at' in u)).toBe(false);
+  });
+
+  it('il bot sposta sempre (conv 32096): [ESITO:APPUNTAMENTO|data nuova] su una call del bot → SPOSTAMENTO al CRM e conferma del codice, niente nota', async () => {
+    const f = fetchCrm(200, { ok: true, rescheduled: true });
+    vi.stubGlobal('fetch', f);
+    const terzo = giorniSpostamento(new Date(), [])[2];
+    const DOPO = `${terzo}T21:00:00${romeOffset(new Date(`${terzo}T12:00:00Z`))}`;
+    const { supabase, calls } = makeDrainSupabase(delBot(), [FATTO, { direction: 'in', body: 'facciamo alle 21:00', template_sid: null, created_at: fra(-60_000) }]);
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Ci siamo, ti confermo alle 21:00!', { outcome: 'APPUNTAMENTO', scheduledAt: DOPO, appointmentFixed: true }));
+
+    await drainMarioReplies(supabase, 93, '+391234567890', () => 0);
+
+    expect(JSON.parse((f.mock.calls[0] as any)[1].body)).toEqual({ leadId: 'bot7', outcome: 'SPOSTAMENTO', date: DOPO });
+    const bolle = calls.messageInserts.map((m: any) => m.body);
+    expect(bolle).toHaveLength(1);
+    expect(bolle[0]).toMatch(/^Fatto Sara, la tua videochiamata ora è \*/);
+    expect(calls.convUpdates.find((u: any) => 'bot_scheduled_at' in u)).toMatchObject({ bot_scheduled_at: new Date(DOPO).toISOString() });
+    expect(calls.events.find((e: any) => e.type === 'gdo_spostamento_da_esito')?.payload).toMatchObject({ esito: 'APPUNTAMENTO', origine: 'bot' });
+    expect(calls.events.find((e: any) => e.type === 'fenice_ai_reply')?.payload).toMatchObject({ appointmentFixed: false, spostamentoFatto: true });
+    expect(sendOutcome).not.toHaveBeenCalled();
+  });
+
+  it('chat 32173: dopo lo spostamento il lead disdice («annulliamo la video di domani»), il RICHIAMO dei turni dopo NON si butta e arriva a sendOutcome', async () => {
+    // 11/11/2026: call spostata dal bot a giovedì 12 alle 10; la sera il lead annulla, il bot
+    // risponde «la annullo io» con [ESITO:RICHIAMO] su «La rata finisce a maggio» e sui
+    // «Grazie». Ogni RICHIAMO finiva in `richiamo_non_spostamento_ignorato` (la call era
+    // quella spostata dal bot): nessuna disdetta segnata, e alle 8:30 del 12 è partito il
+    // promemoria. Ora il RICHIAMO passa: e' `sendOutcome` a segnare `cancel_requested_at`.
+    const { supabase, calls } = makeDrainSupabase(delBot(), [
+      FATTO,
+      { direction: 'out', body: 'Fatto Sara, la tua videochiamata ora è *giovedì 12 alle 10:00*.', template_sid: null, created_at: fra(-8 * 3600_000) },
+      { direction: 'in', body: 'Ciao ho visto il video, ho già un finanziamento e non posso farne un altro quindi annulliamo la video di domani non faccio perdere tempo', template_sid: null, created_at: fra(-10 * 60_000) },
+      { direction: 'out', body: 'Quando pensi che qualcosa possa cambiare?', template_sid: null, created_at: fra(-9 * 60_000) },
+      { direction: 'in', body: 'Si', template_sid: null, created_at: fra(-8 * 60_000) },
+      { direction: 'out', body: 'Le rate partono da circa 100 euro al mese.', template_sid: null, created_at: fra(-7 * 60_000) },
+      { direction: 'in', body: 'Il discorso è che non accettano il finanziamento', template_sid: null, created_at: fra(-6 * 60_000) },
+      { direction: 'out', body: 'Ha senso che tu ci ragioni così.', template_sid: null, created_at: fra(-5 * 60_000) },
+      { direction: 'in', body: 'Lo farei se cambiasse qualcosa', template_sid: null, created_at: fra(-4 * 60_000) },
+      { direction: 'out', body: 'Quando pensi che qualcosa possa cambiare, tra un mese, tre mesi?', template_sid: null, created_at: fra(-3 * 60_000) },
+      { direction: 'in', body: 'La rata  finisce a maggio', template_sid: null, created_at: fra(-60_000) },
+    ]);
+    calls.events.push({
+      type: 'gdo_spostamento_bot',
+      payload: { conversationId: 93, a: new Date(CALL).toISOString(), origine: 'bot' },
+      created_at: fra(-8 * 3600_000),
+    });
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Allora maggio è il momento giusto per ripartire.', { outcome: 'RICHIAMO', note: 'a maggio, quando finisce la rata' }));
+
+    await drainMarioReplies(supabase, 93, '+391234567890', () => 0);
+
+    expect(calls.events.some((e: any) => e.type === 'richiamo_non_spostamento_ignorato')).toBe(false);
+    expect(sendOutcome).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendOutcome).mock.calls[0][2]).toMatchObject({ outcome: 'RICHIAMO', note: 'a maggio, quando finisce la rata' });
+  });
+
+  it('chat 32173, controprova: la richiesta di spostare era PRIMA dello spostamento (lead 4da4e19f), il RICHIAMO su «grazie» si butta ancora', async () => {
+    const { supabase, calls } = makeDrainSupabase(delBot(), [
+      FATTO,
+      { direction: 'in', body: 'non ce la faccio, possiamo spostare?', template_sid: null, created_at: fra(-9 * 3600_000) },
+      { direction: 'out', body: 'Fatto Sara, la tua videochiamata ora è *giovedì 12 alle 10:00*.', template_sid: null, created_at: fra(-8 * 3600_000) },
+      { direction: 'in', body: 'grazie mille', template_sid: null, created_at: fra(-60_000) },
+    ]);
+    calls.events.push({
+      type: 'gdo_spostamento_bot',
+      payload: { conversationId: 93, a: new Date(CALL).toISOString(), origine: 'bot' },
+      created_at: fra(-8 * 3600_000),
+    });
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Figurati, a giovedì!', { outcome: 'RICHIAMO' }));
+
+    await drainMarioReplies(supabase, 93, '+391234567890', () => 0);
+
+    expect(calls.events.some((e: any) => e.type === 'richiamo_non_spostamento_ignorato')).toBe(true);
+    expect(sendOutcome).not.toHaveBeenCalled();
+  });
+
+  it("chat 31379 sulle call del bot: dopo lo spostamento la nota «gia' fatto» e' in coda al prompt", async () => {
+    const { supabase, calls } = makeDrainSupabase(delBot(), [FATTO, { direction: 'in', body: 'ok grazie', template_sid: null, created_at: fra(-60_000) }]);
+    calls.events.push({ type: 'gdo_spostamento_bot', payload: { conversationId: 93, a: new Date(CALL).toISOString(), origine: 'bot' } });
+    vi.mocked(generateMarioReply).mockResolvedValueOnce(reply('Figurati!'));
+
+    await drainMarioReplies(supabase, 93, '+391234567890', () => 0);
+
+    expect(contesto()).toContain('SPOSTAMENTO GIÀ FATTO');
+    expect(contesto()).not.toContain('SPOSTAMENTO DELLA CALL');
   });
 
   it('call del bot gia\' spostata dalle Conferme (date diverse): niente blocco nel prompt', async () => {
@@ -4353,5 +4698,54 @@ describe('drainMarioReplies — lead di database ricontattato (PO 10/11/2026)', 
     expect(generateMarioReply).toHaveBeenCalledTimes(1);
     expect(opzioniDelTurno().contextNote ?? '').not.toContain('LEAD DI DATABASE');
     expect(calls.events.some((e: { type: string }) => e.type === 'database_non_interessa')).toBe(false);
+  }, 20_000);
+});
+
+// Decisione del titolare 14/11/2026: «si deve dire sempre che è Marta, se no si creano
+// casini». Caso vero: chat 1737 (13/11), nata con l'apertura legacy firmata Mario.
+describe('drainMarioReplies — il bot si presenta sempre come Marta (titolare 14/11/2026)', () => {
+  const legacy: FakeMsgRow = {
+    direction: 'out', body: 'Ciao Luca, sono Mario tutor di Fenice Academy.\n\nTi scrivo perché ho visto che ci hai lasciato ora i tuoi contatti in una nostra pubblicità. Cosa ti ha incuriosito?',
+    template_sid: 'HXlegacy', created_at: '2026-11-13T09:00:00Z',
+  };
+  const aperturaMarta: FakeMsgRow = {
+    direction: 'out', body: 'Ciao Luca, sono Marta di Fenice Academy. Le tue 10 ore gratuite arrivano via email a minuti.',
+    template_sid: 'HXc1', created_at: '2026-11-13T09:00:00Z',
+  };
+  const inbound = (body: string): FakeMsgRow => ({ direction: 'in', body, template_sid: null, created_at: '2026-11-13T10:00:00Z' });
+  const riga = (): ClaimedRow => ({
+    id: 1737, ai_started_at: null, crm_lead_id: 'crm1737', bot_outcome: null, professione: null, scheda_inviata_at: null,
+    crm_funnel: 'CORSO 10 ORE',
+  });
+  const opzioniDelTurno = () => vi.mocked(generateMarioReply).mock.calls[0][1] as { contextNote?: string; personaName?: string };
+
+  beforeEach(() => {
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBER_FENICE', 'whatsapp:+390000000000');
+    // Con un SID Marta configurato la vecchia regola dava Mario alle chat legacy.
+    vi.stubEnv('OPENING_SID_C1', 'HXc1');
+    vi.mocked(generateMarioReply).mockReset().mockResolvedValueOnce({
+      visibleReply: 'Ciao Luca!', appointmentFixed: false, passToHuman: false, videoWatched: false,
+    } as never);
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('chat nata con l\'apertura firmata Mario: risponde Marta, con la nota sul cambio di nome', async () => {
+    const { supabase } = makeDrainSupabase(riga(), [legacy, inbound('Sei Francesco giusto?')]);
+
+    await drainMarioReplies(supabase, 1737, '+391234567890', () => 0, 0);
+
+    const o = opzioniDelTurno();
+    expect(o.personaName).toBe('Marta');
+    expect(o.contextNote ?? '').toContain(notaNomeMarta([legacy]) as string);
+  }, 20_000);
+
+  it('chat nata con l\'apertura Marta: Marta come sempre, nessuna nota sul nome', async () => {
+    const { supabase } = makeDrainSupabase(riga(), [aperturaMarta, inbound('Entrata extra')]);
+
+    await drainMarioReplies(supabase, 1737, '+391234567890', () => 0, 0);
+
+    const o = opzioniDelTurno();
+    expect(o.personaName).toBe('Marta');
+    expect(o.contextNote ?? '').not.toContain('Mario');
   }, 20_000);
 });

@@ -83,3 +83,57 @@ dal bot" nel CRM. Il tono assertivo resta solo dentro il blocco.
 - Monitoraggio: `origine` (`gdo` | `bot`) nel payload di `gdo_spostamento_bot` e
   `gdo_spostamento_non_fatto`; nel CRM `origine` nei metadata di `BOT_APPOINTMENT_RESCHEDULED`.
   Gli eventi del 28-29/10 senza `origine` sono tutti lead GDO.
+
+## 12/11/2026: il bot sposta sempre (PO)
+
+Dati 29/10-12/11: 43 spostamenti veri, 26% di confermati sugli esitati; 46 lead rimasti con
+la sola nota, 0 presenti. Decisione: la sola nota resta dove lo spostamento non si puo' fare.
+
+Cosa cambia (bot `lib/gdo-spostamento.ts`, CRM `src/lib/bot-fissatore/spostamentoGdo.ts`):
+- scartato dalle Conferme: il blocco c'e', il CRM sposta e riapre lo scarto (CONFERME_DISCARD_RESET);
+- call a meno di 30 minuti: si sposta, basta che sia futura;
+- call del GDO passata da non piu' di 7 giorni: si sposta (sulle call del bot resta il fissaggio nuovo);
+- `[ESITO:RICHIAMO|data]` o `[ESITO:APPUNTAMENTO|data]` con una data buona e successiva alla call:
+  il codice li tratta come `[SPOSTA]` (`esitoDaSpostare`, evento `gdo_spostamento_da_esito`);
+- lead vago: il blocco fa insistere e proporre due orari precisi, fino a due volte, prima del RICHIAMO;
+- dopo lo spostamento il prompt porta `SPOSTAMENTO GIA' FATTO` (chat 31379).
+
+Restano nota: interruttore spento; confermato con venditore o gia' presentato; gia' spostato una
+volta; data fuori dai 3 giorni o dalla fascia 9-21; anticipo rispetto alla call; no o errore del
+CRM; lead senza data dopo due solleciti; call del bot gia' spostata dalle Conferme; chat postino
+con anche un appuntamento del bot; call passata da piu' di 7 giorni; lead senza scheda CRM.
+
+Ordine di pubblicazione: prima il CRM, poi il bot (col CRM vecchio i nuovi casi tornano 409 e
+finiscono in nota come oggi). Misura: `riapreScarto` e `callPassata` nei metadata di
+`BOT_APPOINTMENT_RESCHEDULED`.
+
+## 12/11/2026 sera: «non posso in questi giorni, riscrivo io» (PO, chat 25906)
+
+"Una volta sola" e la finestra di 3 giorni lavorativi RESTANO. Se il lead vuole una data oltre
+la finestra il bot insiste sui giorni della finestra; se proprio non puo' gli dice di riscrivere
+quando sa quando puo', e chiude con `[ESITO:RICHIAMO|...]`. Il codice (`eRiscriveLui`):
+- segna l'evento `gdo_spostamento_attesa_lead`: nessuno spostamento consumato;
+- manda alle Conferme la nota «IL LEAD RISCRIVE LUI PER LA NUOVA DATA» (non «SPOSTAMENTO CHIESTO»,
+  non «DA RICHIAMARE»): non devono chiamarlo per la call vecchia ne' spostarla;
+- `cancel_requested_at` spegne promemoria pre-call e messaggi sulle chiamate perse.
+Quando il lead riscrive, il blocco dello spostamento torna nel prompt con la finestra contata da
+quel giorno, anche se la call vecchia del GDO e' passata (fino a 60 giorni; senza attesa 7). Sulle
+call del bot, a call passata vale il fissaggio nuovo di sempre. Il CRM accetta SPOSTAMENTO fino a
+60 giorni dalla call vecchia e riapre l'eventuale scarto.
+
+### «Se scrive dopo dobbiamo essere avvisati» (PO 12/11/2026)
+Il lead in attesa che riscrive viene segnalato sempre, una volta per attesa (evento
+`gdo_spostamento_attesa_riscritto`, campo `segnale`):
+- il bot sposta nel turno → basta la nota «Spostato dal bot» (`segnale: spostato`);
+- il bot puo' spostare ma la data non c'e' ancora → NOTA alle Conferme «IL LEAD IN ATTESA HA
+  RISCRITTO … se non vi arriva "Spostato dal bot", sentitelo voi» (`nota_conferme`);
+- il bot non puo' piu' spostare (oltre 60 giorni, esito o parcheggio delle Conferme, no del CRM)
+  → CONTATTO_UMANO, categoria `disdetta` («Disdetta o spostamento»), con l'appuntamento nel
+  corpo cosi' il CRM lo instrada alle Conferme e non al GDO (`contatto_umano`).
+Non contano il «grazie» entro un'ora dall'attesa ne' le sole prese d'atto.
+
+Offerte e giro database: l'attesa non esclude il lead (nessuna regola guarda l'evento o
+`cancel_requested_at`); la riapertura database azzera `cancel_requested_at`, cosi' i promemoria
+di un appuntamento nuovo partono. Per contare gli attesa poi scartati dalle Conferme: nel CRM le
+schede con una BOT_NOTE che inizia per «IL LEAD RISCRIVE LUI PER LA NUOVA DATA» e
+`confirmationsOutcome = 'scartato'` (o evento `conferme_auto_discarded_3nr` successivo alla nota).

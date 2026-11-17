@@ -134,12 +134,21 @@ export type SettingsDatabase = {
    * portato lo 0047 a LOW (fine ottobre). Assente = tutte.
    */
   soloChiHaRisposto: boolean;
+  /**
+   * `riapri_tutti: true` (PO 12/11/2026: "dobbiamo scrivere a tutti"): insieme a
+   * `giorni_fermo`, una chat esistente si riapre anche se era in pausa, di un GDO, del
+   * lancio o scartata dal bot, e se il suo numero oggi non puo' aprire (a riposo, pieno,
+   * non HIGH) l'apertura parte da un numero del giro e la chat lo segue. Restano fuori
+   * solo: chat viva, opt-out, numero senza WhatsApp, apertura Black Friday gia' ricevuta.
+   * Assente = come prima.
+   */
+  riapriTutti: boolean;
 };
 
 export const SETTINGS_DATABASE_SPENTO: SettingsDatabase = {
   attivo: false, tettoGiorno: TETTO_GIORNO_DEFAULT, tettoNumero: TETTO_NUMERO_DEFAULT, varianti: [...VARIANTI_DATABASE],
   fuoriTetto: false, numeri: null, riprendiChatDopoGiorni: null, riapertureMaxGiorno: null, variantiRiapertura: null,
-  soloChiHaRisposto: false,
+  soloChiHaRisposto: false, riapriTutti: false,
 };
 
 /** Solo le cifre del numero: `whatsapp:+39 352...` e `39352...` sono lo stesso numero. */
@@ -186,6 +195,7 @@ export function parseSettingsDatabase(raw: unknown): SettingsDatabase {
       ? VARIANTI_DATABASE.filter((v) => (o.varianti_riapertura as unknown[]).some((x) => typeof x === 'string' && x.trim().toLowerCase() === v))
       : null,
     soloChiHaRisposto: o.solo_chi_ha_risposto === true,
+    riapriTutti: o.riapri_tutti === true,
   };
 }
 
@@ -213,12 +223,14 @@ export type StatoChatEsistente = {
   senzaWhatsapp: boolean;
   /** Il lead ci ha scritto almeno una volta in questa chat. */
   haRisposto: boolean;
+  /** La chat ha gia' ricevuto un nostro template che nomina il Black Friday (PO 12/11/2026: mai due volte). */
+  giaAperturaBf?: boolean;
 };
 
 /** `chat_attiva` si puo' riprovare piu' avanti; tutti gli altri sono definitivi. */
 export type MotivoNonRiapribile =
   | 'chat_attiva' | 'pausa_manuale' | 'opt_out' | 'senza_whatsapp' | 'lancio_in_corso' | 'chat_gdo' | 'scartata_dal_bot'
-  | 'mai_risposto';
+  | 'mai_risposto' | 'gia_apertura_bf';
 
 /**
  * La chat esistente si puo' riaprire con l'apertura database? (regola a, PO 11/11/2026)
@@ -228,14 +240,17 @@ export type MotivoNonRiapribile =
  * "chat attiva" (esito datato meno di `giorni` fa).
  */
 export function motivoChatNonRiapribile(
-  s: StatoChatEsistente, i: { nowMs: number; giorni: number; soloChiHaRisposto?: boolean },
+  s: StatoChatEsistente, i: { nowMs: number; giorni: number; soloChiHaRisposto?: boolean; tutti?: boolean },
 ): MotivoNonRiapribile | null {
-  if (s.pausata) return 'pausa_manuale';
+  // `tutti` (`riapri_tutti`, PO 12/11/2026): pausa, chat di un GDO, lancio e scarto del bot
+  // non fermano piu' la riapertura. Opt-out, numero morto, doppia apertura BF e chat viva si'.
+  if (s.pausata && !i.tutti) return 'pausa_manuale';
   if (s.optOut) return 'opt_out';
   if (s.senzaWhatsapp) return 'senza_whatsapp';
-  if (s.chatGdo) return 'chat_gdo';
-  if (s.lancioInCorso) return 'lancio_in_corso';
-  if (s.botOutcome === 'DA_SCARTARE') return 'scartata_dal_bot';
+  if (s.giaAperturaBf) return 'gia_apertura_bf';
+  if (s.chatGdo && !i.tutti) return 'chat_gdo';
+  if (s.lancioInCorso && !i.tutti) return 'lancio_in_corso';
+  if (s.botOutcome === 'DA_SCARTARE' && !i.tutti) return 'scartata_dal_bot';
   if (i.soloChiHaRisposto && !s.haRisposto) return 'mai_risposto';
   const soglia = i.nowMs - i.giorni * 24 * 3600_000;
   if (s.ultimoMessaggioMs !== null && s.ultimoMessaggioMs > soglia) return 'chat_attiva';

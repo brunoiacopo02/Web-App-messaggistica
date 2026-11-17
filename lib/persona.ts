@@ -126,6 +126,34 @@ export function openingBody(funnel: FunnelKey, variant: OpeningVariant, name?: s
   return OPENING_TEXTS[FUNNEL_LETTER[funnel]][variant](templateName(name));
 }
 
+/**
+ * Il nome con cui il bot si presenta nelle risposte scritte dall'IA: SEMPRE Marta, in
+ * ogni chat, anche in quelle nate con un template firmato Mario (titolare 14/11/2026:
+ * «si deve dire sempre che è Marta, se no si creano casini»). Cambia SOLO il nome detto
+ * al lead: `personaForConversation` resta com'è e continua a decidere template e
+ * solleciti della sequenza. "Mario" resta il nome interno del bot.
+ */
+export const NOME_RISPOSTE_IA: string = PERSONA_NAME.marta;
+
+/** Un nostro messaggio in cui il bot si e' firmato Mario: «sono Mario», «sono di nuovo
+ *  Mario», «Mario di Fenice», «Mario tutor di Fenice». Non basta la parola Mario: un lead
+ *  che si chiama Mario («Ciao Mario, sono Marta») non deve far scattare niente. */
+const FIRMA_MARIO = /\bsono\s+(?:di nuovo\s+|ancora\s+)?Mario\b|\bMario\s+(?:tutor\s+|consulente\s+)?di\s+Fenice\b/i;
+
+/** true se in chat e' gia' uscito da noi un messaggio firmato Mario. */
+export function chatFirmataMario(msgs: { direction: string; body: string | null }[]): boolean {
+  return msgs.some((m) => m.direction === 'out' && FIRMA_MARIO.test(m.body ?? ''));
+}
+
+/** Riga per la parte VARIABILE del prompt (la parte fissa resta identica byte per byte):
+ *  solo sulle chat che il bot aveva firmato Mario, cosi' Marta non nega i messaggi di prima. */
+export const NOTA_ORA_MARTA =
+  "NOME: in questa chat i nostri messaggi precedenti erano firmati Mario; da ora sei Marta e parli al femminile. Se il lead chiede di Mario o del cambio di nome, digli con naturalezza che adesso lo segue Marta, senza negare i messaggi di prima.";
+
+export function notaNomeMarta(msgs: { direction: string; body: string | null }[]): string | null {
+  return chatFirmataMario(msgs) ? NOTA_ORA_MARTA : null;
+}
+
 /** Persona di una conversazione, derivata dai messaggi (ordine cronologico):
  * 'marta' se il PRIMO out con template_sid è in martaSids, oppure se non c'è alcun out
  * (conversazione nuova / apertura differita); altrimenti 'mario'. Gli out free-form

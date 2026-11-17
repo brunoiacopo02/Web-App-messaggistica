@@ -12,6 +12,9 @@ export type OutcomeArgs = {
    *  sintesi: le Conferme hanno chiesto anche le parole vere, per non scoprire al
    *  telefono che la disdetta diceva un'altra cosa. */
   leadWords?: string;
+  /** Solo per RICHIAMO su una call già fissata che il bot può spostare: il lead non può nei
+   *  giorni della finestra e riscrive lui (PO 12/11/2026). Cambia la nota alle Conferme. */
+  riscriveLui?: boolean;
 };
 
 export type OutcomeAction =
@@ -46,6 +49,64 @@ function buildSpostamentoChiestoNote(leadDateIso: string | null, inAgenda: strin
     ? `In agenda resta ${inAgenda}: mantenuto finché non lo spostate voi.`
     : 'Appuntamento mantenuto: da spostare voi.';
   return `${testa} ${coda}`;
+}
+
+/**
+ * "IL LEAD RISCRIVE LUI PER LA NUOVA DATA" (PO 12/11/2026, chat 25906).
+ *
+ * Il lead chiede di spostare ma nei 3 giorni lavorativi in cui il bot può spostare non
+ * può proprio («possiamo fare nella settimana dal 23/11?»). Il bot ha insistito sui giorni
+ * della finestra, poi gli ha detto di riscrivere quando sa quando può: in quel momento la
+ * call la sposta il bot, con la finestra contata da quel giorno. Lo spostamento "una volta
+ * sola" non è consumato e il lead non è una disdetta.
+ *
+ * Per le Conferme è una nota diversa da «SPOSTAMENTO CHIESTO»: lì tocca a loro spostare,
+ * qui NON devono fare niente e non devono chiamarlo per la call vecchia, che il lead ha
+ * detto di non poter fare. La testa (fino al primo punto) è fissa: la chiave di dedup del
+ * CRM non cambia fra un turno e l'altro; date e parole stanno dopo.
+ */
+export const NOTA_RISCRIVE_LUI_PREFISSO = 'IL LEAD RISCRIVE LUI PER LA NUOVA DATA';
+
+function buildRiscriveLuiNote(leadDateIso: string | null, inAgenda: string | null): string {
+  const testa = `${NOTA_RISCRIVE_LUI_PREFISSO} — nei prossimi giorni non può fare la videochiamata e il bot gli ha detto di riscrivere in chat quando sa quando può: appena riscrive, la sposta il bot.`;
+  const vecchia = inAgenda
+    ? ` La call di ${inAgenda} non la farà: non chiamatelo per quella e non spostatela voi, non serve fare niente.`
+    : ' La call che aveva non la farà: non chiamatelo per quella, non serve fare niente.';
+  const quando = leadDateIso ? ` Ha indicato ${formatRomeDateTime(leadDateIso)}, fuori dai giorni in cui il bot può spostare.` : '';
+  return `${testa}${vecchia}${quando}`;
+}
+
+/**
+ * Il lead che doveva riscrivere lui per la nuova data HA RISCRITTO (PO 12/11/2026: «se
+ * scrive dopo dobbiamo essere avvisati», sempre). Due testi:
+ * - il bot può ancora spostare: nota alle Conferme, così se «Spostato dal bot» non arriva
+ *   (non dà la data, il CRM rifiuta) qualcuno lo sa e lo sente;
+ * - il bot NON può più spostare (call vecchia passata da oltre 60 giorni, parcheggiato o
+ *   esitato dalle Conferme, già spostato, no del CRM): richiesta di contatto a una persona.
+ * Le parole del lead in coda: la testa resta fissa per la dedup del CRM.
+ */
+export const NOTA_ATTESA_RISCRITTO_PREFISSO = 'IL LEAD IN ATTESA HA RISCRITTO';
+
+const PERCHE_NON_SPOSTA: Record<string, string> = {
+  call_passata: 'la call vecchia è passata da troppo tempo',
+  gia_spostato: 'la call è già stata spostata una volta',
+  esito_conferme: "le Conferme hanno già dato un esito o l'hanno parcheggiato",
+  gia_presentato: 'risulta già presentato o con un esito del venditore',
+  data_cambiata_dal_crm: 'la data è già stata cambiata dalle Conferme',
+  spento: 'lo spostamento dal bot è spento',
+  tentativo_non_riuscito: 'il tentativo di spostarla non è andato a buon fine',
+};
+
+export function buildAttesaRiscrittoNote(input: { puoSpostare: boolean; motivo?: string | null; leadWords?: string }): string {
+  const parole = paroleDelLead(input.leadWords);
+  const citazione = parole ? ` Parole del lead: "${parole}".` : '';
+  if (input.puoSpostare) {
+    return `${NOTA_ATTESA_RISCRITTO_PREFISSO} — aveva detto che riscriveva lui per la nuova data e ha riscritto adesso: il bot gli sta facendo scegliere giorno e ora.`
+      + ` Se non vi arriva la nota «Spostato dal bot», sentitelo voi per rifissare.${citazione}`;
+  }
+  const perche = (input.motivo ? PERCHE_NON_SPOSTA[input.motivo] : undefined) ?? 'non è più una call che il bot può spostare';
+  return `${NOTA_ATTESA_RISCRITTO_PREFISSO} E IL BOT NON PUÒ SPOSTARLO — aveva detto che riscriveva lui per la nuova data e ha riscritto adesso, ma il bot non può spostare la call (${perche}):`
+    + ` va sentito da una persona per rifissare.${citazione}`;
 }
 
 /**
@@ -90,7 +151,9 @@ export function buildLockedNote(args: OutcomeArgs, existingDate: string | null):
       // UTC mentre args.date arriva dal tag del modello nel fuso locale imposto dal
       // prompt, quindi lo stesso istante avrebbe quasi sempre due stringhe diverse.
       const leadDate = args.date && !sameInstant(args.date, existingDate) ? args.date : null;
-      base = buildSpostamentoChiestoNote(leadDate, inAgenda);
+      base = args.riscriveLui
+        ? buildRiscriveLuiNote(leadDate, inAgenda)
+        : buildSpostamentoChiestoNote(leadDate, inAgenda);
       break;
     }
     case 'NON_RISPOSTO':

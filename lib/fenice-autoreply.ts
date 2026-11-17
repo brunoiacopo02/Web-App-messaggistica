@@ -18,13 +18,13 @@ import { ensureConfirmationBlock, containsVideoLink } from './confirmation-block
 import { unknownFeniceLinks } from './outbound-sanitize';
 import { generateBotReport } from './bot-report';
 import { registraEsitoSenzaLeadId, sendOutcome, inviaNotaAlCrm } from './bot-outcome';
-import { stopDalCrmPerLead, vuolePassaggioAUmano } from './stop-crm';
-import { buildScriveDopoLaCallNote, motivoScartoAppuntamento, TESTO_DATA_DA_VERIFICARE, unisciGiorni } from './bot-outcome-rules';
+import { stopDalCrmPerLead, stopInRispostaPerChat, vuolePassaggioAUmano } from './stop-crm';
+import { buildAttesaRiscrittoNote, buildScriveDopoLaCallNote, motivoScartoAppuntamento, TESTO_DATA_DA_VERIFICARE, unisciGiorni } from './bot-outcome-rules';
 import { computeBookingDays, giorniDelLinkForm } from './booking-slots';
 import { paroleDellaRichiesta } from './contatti-umani';
 import { bookingBlackout } from './booking-blackout';
 import type { BotOutcome } from './bot-contract';
-import { personaForConversation, PERSONA_NAME, OPENING_ENV_KEYS } from './persona';
+import { OPENING_ENV_KEYS, NOME_RISPOSTE_IA, notaNomeMarta } from './persona';
 import { confermaVideoVisto } from './video-visto';
 import { notaPrimoContatto } from './primo-contatto-note';
 import { haCongedo, lancioInCorso, marioDopoNotte, risposteRiscaldamento } from './lancio-fase';
@@ -55,9 +55,13 @@ import { congedoDatabase } from './database-congedo';
 import { fissatoIlDi } from './noemi-quando';
 import {
   dataCallDelBot,
+  esitoDaSpostare,
+  eRiscriveLui,
+  EVENTO_ATTESA_LEAD,
   giorniSpostamento,
   motivoDataNonValida,
   motivoNonSpostabile,
+  notaSpostamentoFattoPrompt,
   notaSpostamentoPrompt,
   origineSpostamento,
   spostamentoAbilitato,
@@ -70,6 +74,7 @@ import {
 } from './gdo-spostamento';
 import {
   giaSpostatoDalBot, inviaSpostamentoAlCrm, registraSpostamentoInChat, spostamentiRifiutati, statoCrmLocale, ultimoSpostamentoDalBot,
+  ultimoSpostamentoDalBotInfo, inAttesaCheRiscriva, attesaDaSegnalare, EVENTO_ATTESA_RISCRITTO,
 } from './gdo-spostamento-send';
 import { isoWithOffset } from './bot-contract';
 import { sameInstant } from './rome-time';
@@ -261,6 +266,11 @@ export function martaSidsFromEnv(env: NodeJS.ProcessEnv = process.env): Set<stri
     ...ENV_KEYS_DATABASE,
   ];
   return new Set(keys.map((k) => env[k]).filter((v): v is string => !!v));
+}
+
+/** Aggiunge in coda al contesto del turno la riga sul nome (solo chat firmate Mario). */
+function conNotaNome(ctx: { contextNote?: string }, notaNome: string | null): { contextNote?: string } {
+  return notaNome ? { contextNote: [ctx.contextNote, notaNome].filter(Boolean).join('\n\n') } : ctx;
 }
 
 /**
@@ -602,7 +612,10 @@ export async function drainMarioReplies(
   // solo i clienti e chi alla call c'e' gia' andato — e per loro il silenzio sarebbe il
   // peggio dei due mondi: sulle chat vive con uno stop, 39 persone in quello stato ci
   // hanno scritto negli ultimi 14 giorni. Non risponde il bot: risponde una persona.
-  const stopCrm = await stopDalCrmPerLead(supabase, crmLeadId, 'risposta');
+  // Chat del giro database ancora senza esito (PO 12/11/2026: gia' clienti e presenze
+  // storiche DENTRO): gli abbiamo scritto noi sapendolo, quindi alla sua risposta parla
+  // Marta. Dopo un esito del bot (es. APPUNTAMENTO) lo stop torna quello di sempre.
+  const stopCrm = stopInRispostaPerChat(await stopDalCrmPerLead(supabase, crmLeadId, 'risposta'), { chatDatabase, esitoInPiedi });
   if (stopCrm) {
     if (crmLeadId && vuolePassaggioAUmano(stopCrm)) {
       // Una volta sola per conversazione: il lucchetto e' l'evento stesso, come nel
@@ -1186,18 +1199,11 @@ export async function drainMarioReplies(
         role: m.direction === 'in' ? 'user' : 'assistant',
         content: m.body,
       }));
-      // Persona dal primo template outbound: aperture Marta ⇒ Marta, legacy ⇒ Mario.
-      // Senza env Marta configurate il set è vuoto ⇒ sempre Mario (zero regressioni).
-      const martaSids = martaSidsFromEnv();
-      // I lead dei GDO ricevono l'agenda firmata Marta: la conversazione prosegue con
-      // quel nome, altrimenti il lead si vedrebbe rispondere da qualcun altro.
-      // Su `agendaGdo`, non su `postino`: chi ha ricevuto l'agenda firmata Marta continua a
-      // parlare con Marta anche quando il turno e' del funnel Professioni.
-      const persona = agendaGdo
-        ? 'marta'
-        : martaSids.size > 0
-          ? personaForConversation(rows, martaSids)
-          : 'mario';
+      // Nelle risposte dell'IA il bot si presenta SEMPRE come Marta (titolare 14/11/2026),
+      // anche nelle chat nate con un template firmato Mario: li' una riga nella parte
+      // variabile del prompt le dice che da ora segue lei, senza negare i messaggi di prima.
+      const nomeRisposta = NOME_RISPOSTE_IA;
+      const notaNome = notaNomeMarta(rows);
       // Sui lead adottati (non postino) la nota e' la dichiarazione IA: se sulla
       // conversazione non e' mai uscito niente da parte nostra, il lead non sa mai
       // con chi sta parlando senza questa nota.
@@ -1363,6 +1369,19 @@ export async function drainMarioReplies(
         nowMs: Date.now(),
       };
       let motivoNoSposta: MotivoNonSpostabile | null = motivoNonSpostabile({ ...baseSpostamento, giaSpostato: false });
+      // «Non posso in questi giorni, riscrivo io» (PO 12/11/2026): se il lead doveva
+      // riscrivere, la call del GDO passata da piu' di 7 giorni resta spostabile. La lettura
+      // si paga solo in quel caso.
+      let inAttesaDelLead = false;
+      if (motivoNoSposta === 'call_passata' && origineSposta === 'gdo' && crmLeadId) {
+        inAttesaDelLead = await inAttesaCheRiscriva(supabase, conversationId);
+        if (inAttesaDelLead) motivoNoSposta = motivoNonSpostabile({ ...baseSpostamento, giaSpostato: false, inAttesaDelLead });
+      }
+      // Un'attesa «riscrivo io» ancora da segnalare: si legge PRIMA del turno (l'attesa che
+      // nasce in questo turno non conta) e solo sulle chat che hanno ancora la loro call.
+      const attesaAperta = !!crmLeadId && !!gdo.cancel_requested_at && (agendaGdo || esitoInPiedi === 'APPUNTAMENTO')
+        ? await attesaDaSegnalare(supabase, conversationId, Date.now())
+        : false;
       if (motivoNoSposta === null && crmLeadId) {
         const [gia, crm] = await Promise.all([
           giaSpostatoDalBot(supabase, conversationId),
@@ -1370,6 +1389,7 @@ export async function drainMarioReplies(
         ]);
         motivoNoSposta = motivoNonSpostabile({
           ...baseSpostamento,
+          inAttesaDelLead,
           giaSpostato: gia,
           confermeOutcome: crm?.confermeOutcome ?? null,
           presented: crm?.presented ?? null,
@@ -1381,14 +1401,28 @@ export async function drainMarioReplies(
         ? notaSpostamentoPrompt({
             giorni: giorniSposta,
             callAt: new Date(callSpostabileAt),
+            // Call del GDO saltata da poco (PO 12/11/2026): il blocco lo dice al modello.
+            callPassata: Date.parse(callSpostabileAt) <= Date.now(),
             // Le ore meno piene dei giorni dello spostamento (PO 10/11/2026): criterio
             // secondario dopo l'orario sicuro per il lead. Null se il CRM non risponde.
             oreOccupate: await leggiOreOccupate(giorniSposta),
           })
         : null;
+      // Dopo lo spostamento fatto dal bot (chat 31379): il blocco qui sopra esce dal prompt
+      // («una volta sola») e il modello, col solo manuale, smentiva la conferma scritta dal
+      // codice. Finche' la call in agenda e' quella spostata dal bot, il prompt lo dice.
+      const callAncoraFutura = !!callSpostabileAt && Date.parse(callSpostabileAt) > Date.now();
+      const spostataDalBotA = origineSposta && crmLeadId && !notaSposta && callAncoraFutura
+        ? await ultimoSpostamentoDalBot(supabase, conversationId)
+        : null;
+      const notaSpostaFatto = spostataDalBotA && callSpostabileAt && sameInstant(spostataDalBotA, callSpostabileAt)
+        ? notaSpostamentoFattoPrompt({ callAt: new Date(callSpostabileAt) })
+        : null;
+      // Una delle due, mai insieme: o si puo' ancora spostare, o e' gia' stato fatto.
+      const notaSpostaTurno = notaSposta ?? notaSpostaFatto;
       // Sulle call del bot il blocco va in coda alla nota del turno, qualunque sia; sul
       // postino sta gia' in coda alla nota GDO (qui sotto).
-      const notaSpostaBot = origineSposta === 'bot' ? notaSposta : null;
+      const notaSpostaBot = origineSposta === 'bot' ? notaSpostaTurno : null;
       // Offerta BF evergreen: in coda alla nota del funnel (Professioni) o del primo
       // contatto. Il lancio, gli studenti e il postino non arrivano qui (`altroFlusso`).
       const notaOffertaEvergreen = offertaEvergreen && vslEvergreen && settingsOffertaEvergreen && !notaLancioCompleta && !notaStudente
@@ -1415,7 +1449,7 @@ export async function drainMarioReplies(
         offertaEvergreenGiaPresentata = true;
       }
       const result = await generateMarioReply(history, {
-        personaName: PERSONA_NAME[persona],
+        personaName: nomeRisposta,
         giorniPieni,
         oreOccupate: await leggiOre(),
         conversationId,
@@ -1424,8 +1458,8 @@ export async function drainMarioReplies(
         // farli arrivare come un messaggio programmato addosso. Sui lead adottati la
         // nota e' un'altra, la dichiarazione IA: un postino ha sempre ricevuto l'agenda,
         // quindi i due casi non si incontrano mai.
-        ...(noteGdo
-          ? { contextNote: [gdoContextNote(noteGdo), notaSposta, notaWarmup].filter(Boolean).join('\n\n') }
+        ...conNotaNome(noteGdo
+          ? { contextNote: [gdoContextNote(noteGdo), notaSpostaTurno, notaWarmup].filter(Boolean).join('\n\n') }
           : notaLancioCompleta
             ? { contextNote: [notaLancioCompleta, notaSpostaBot].filter(Boolean).join('\n\n') }
             : notaStudente
@@ -1436,7 +1470,7 @@ export async function drainMarioReplies(
             ? { contextNote: [notaProfessioni, notaOffertaEvergreen, notaSpostaBot].filter(Boolean).join('\n\n') }
             : notaPrimo || notaDatabase || notaBrochure || notaOffertaEvergreen || notaSpostaBot
               ? { contextNote: [notaPrimo, notaDatabase, notaBrochure, notaOffertaEvergreen, notaSpostaBot].filter(Boolean).join('\n\n') }
-              : {}),
+              : {}, notaNome),
       });
 
       // Il lead può confermare di aver visto il video PRIMA che gli sia mai arrivato
@@ -1487,7 +1521,7 @@ export async function drainMarioReplies(
       if (appuntamentoScartato) visibleReply = TESTO_DATA_DA_VERIFICARE;
       // Da qui in giù "fissato in questo turno" vale solo se la data passa la guardia: niente
       // blocco Noemi + video e niente scheda per una call che non esiste.
-      const fissatoNelTurno = result.appointmentFixed && !appuntamentoScartato;
+      let fissatoNelTurno = result.appointmentFixed && !appuntamentoScartato;
       if (passaggioBloccato) {
         await supabase.from('event_log').insert({
           type: 'lancio_passaggio_umano_ignorato',
@@ -1514,7 +1548,7 @@ export async function drainMarioReplies(
       if (postino && videoConfermato && !gdoNoemiRemindedAt && !result.outcome && !passaAPersona) {
         try {
           const retry = await generateMarioReply(history, {
-            personaName: PERSONA_NAME[persona],
+            personaName: nomeRisposta,
             giorniPieni,
             oreOccupate: await leggiOre(),
             conversationId,
@@ -1529,7 +1563,7 @@ export async function drainMarioReplies(
               botScheduledAt: botScheduledAt,
               gdoAppuntamentoAt: gdoAppuntamentoAt,
               fissatoIl: fissatoIlGdo,
-            }), notaSposta, notaWarmup].filter(Boolean).join('\n\n'),
+            }), notaSpostaTurno, notaWarmup, notaNome].filter(Boolean).join('\n\n'),
           });
           // Fail-safe: una rigenerazione vuota non vale meno di zero, vale come un
           // fallimento — si manda comunque la prima risposta, il lead non resta muto.
@@ -1554,6 +1588,36 @@ export async function drainMarioReplies(
       // sulla nota SPOSTAMENTO CHIESTO di sempre (esito RICHIAMO sul canale solo-nota).
       let spostamentoFatto = false;
       let bollaSpostamento: string | null = null;
+      // «Il bot sposta sempre» (PO 12/11/2026): il modello ha chiuso con [ESITO:RICHIAMO|data]
+      // o [ESITO:APPUNTAMENTO|data] al posto di [SPOSTA|data] su una call che si puo'
+      // spostare, e la data regge i controlli di [SPOSTA]. Prima usciva come nota
+      // «SPOSTAMENTO CHIESTO … a <data>» e la call restava dov'era; ora segue la strada di
+      // [SPOSTA] qui sotto (il CRM decide, il lead legge «fatto» solo se ha spostato davvero).
+      if (origineSposta && crmLeadId) {
+        const daSpostare = esitoDaSpostare({
+          outcome: result.outcome,
+          date: result.scheduledAt,
+          spostaAt: result.spostaAt,
+          motivoNoSposta,
+          callAt: callSpostabileAt,
+          nowMs: Date.now(),
+          ranges: rangesSpostamento,
+        });
+        if (daSpostare) {
+          await supabase.from('event_log').insert({
+            type: 'gdo_spostamento_da_esito',
+            payload: { conversationId, crmLeadId, origine: origineSposta, esito: result.outcome, data: daSpostare } as never,
+            message: `[${origineSposta}] conv ${conversationId}: ${result.outcome} con data nuova valida (${daSpostare}) trattato come [SPOSTA]`,
+            level: 'info',
+          });
+          result.spostaAt = daSpostare;
+          result.outcome = undefined;
+          result.scheduledAt = undefined;
+          // Il tag APPUNTAMENTO segnava il turno come «fissato»: qui non si fissa, si sposta.
+          fissatoNelTurno = false;
+          result.appointmentFixed = false;
+        }
+      }
       if (origineSposta && crmLeadId && result.spostaAt !== undefined) {
         const adesso = new Date();
         const videoVisto = !!gdoVideoWatchedAt || videoConfermato;
@@ -1640,7 +1704,15 @@ export async function drainMarioReplies(
         const testoTurnoRichiamo = idxTurno >= 0
           ? rows.slice(idxTurno).filter((m) => m.direction === 'in').map((m) => (m.body ?? '').trim()).filter(Boolean).join(' / ')
           : '';
-        const spostataA = await ultimoSpostamentoDalBot(supabase, conversationId);
+        const ultimoSposta = await ultimoSpostamentoDalBotInfo(supabase, conversationId);
+        const spostataA = ultimoSposta?.a ?? null;
+        // Quello che il lead ha scritto dopo lo spostamento e prima di questo turno (chat
+        // 32173): una disdetta arrivata li' non deve far buttare il RICHIAMO.
+        const spostataIlMs = ultimoSposta?.at ? Date.parse(ultimoSposta.at) : NaN;
+        const fineTurniPrima = idxTurno >= 0 ? idxTurno : rows.length;
+        const testoDopoSpostamento = Number.isNaN(spostataIlMs) ? '' : rows.slice(0, fineTurniPrima)
+          .filter((m) => m.direction === 'in' && Date.parse(m.created_at) > spostataIlMs)
+          .map((m) => m.body ?? '').join(' / ');
         if (richiamoNonESpostamento({
           outcome: result.outcome,
           date: result.scheduledAt,
@@ -1652,6 +1724,7 @@ export async function drainMarioReplies(
           // Gli ultimi messaggi del lead prima di questo turno (al massimo 6 righe indietro).
           testoPrima: rows.slice(Math.max(0, (idxTurno >= 0 ? idxTurno : rows.length) - 6), idxTurno >= 0 ? idxTurno : rows.length)
             .filter((m) => m.direction === 'in').map((m) => m.body ?? '').join(' / '),
+          testoDopoSpostamento,
         })) {
           await supabase.from('event_log').insert({
             type: 'richiamo_non_spostamento_ignorato',
@@ -1662,6 +1735,65 @@ export async function drainMarioReplies(
           result.outcome = undefined;
           result.scheduledAt = undefined;
           result.note = undefined;
+        }
+      }
+
+      // «Non posso in questi giorni, riscrivo io» (PO 12/11/2026, chat 25906): la call si
+      // poteva spostare e il modello ha chiuso con RICHIAMO senza uno spostamento. Non e'
+      // una disdetta e non consuma lo spostamento: si segna l'attesa (quando il lead
+      // riscrive il bot sposta, anche a call ormai passata) e alle Conferme va la nota
+      // «IL LEAD RISCRIVE LUI PER LA NUOVA DATA». `sendOutcome` segna `cancel_requested_at`:
+      // niente promemoria e niente messaggi sulle chiamate perse per la call vecchia.
+      const riscriveLui = !!origineSposta && !!crmLeadId && eRiscriveLui({
+        outcome: result.outcome, spostaAt: result.spostaAt, spostamentoFatto, motivoNoSposta,
+        date: result.scheduledAt, callAt: callSpostabileAt, nowMs: Date.now(),
+      });
+      if (riscriveLui) {
+        await supabase.from('event_log').insert({
+          type: EVENTO_ATTESA_LEAD,
+          payload: { conversationId, crmLeadId, origine: origineSposta, callAt: callSpostabileAt, quando: result.scheduledAt ?? result.note ?? null } as never,
+          message: `[${origineSposta}] conv ${conversationId}: il lead non puo' nei giorni dello spostamento, riscrive lui per la nuova data`,
+          level: 'info',
+        });
+      }
+
+      // «Se scrive dopo dobbiamo essere avvisati» (PO 12/11/2026): il lead che doveva
+      // riscrivere ha riscritto. Una volta per attesa. Se in questo turno il bot ha spostato
+      // (arriva «Spostato dal bot»), se il lead rimanda ancora (riparte la nota «riscrive
+      // lui») o se disdice (parte la disdetta) la segnalazione c'e' gia': si chiude solo
+      // l'attesa. Altrimenti: nota alle Conferme se il bot puo' ancora spostare, richiesta
+      // di contatto a una persona se non puo' piu'. Un errore qui non si propaga.
+      if (attesaAperta && crmLeadId) {
+        const testoRiscritto = idxTurno >= 0
+          ? rows.slice(idxTurno).filter((m) => m.direction === 'in').map((m) => (m.body ?? '').trim()).filter(Boolean).join(' / ')
+          : '';
+        if (!isSoloPresaDAtto(testoRiscritto)) {
+          const tentatoENonFatto = result.spostaAt !== undefined && !spostamentoFatto;
+          const giaCoperto = spostamentoFatto ? 'spostato' : riscriveLui ? 'rimanda_ancora' : result.outcome === 'DA_SCARTARE' ? 'disdetta' : null;
+          const puoSpostare = motivoNoSposta === null && !tentatoENonFatto;
+          let esitoSegnale: string = giaCoperto ?? 'non_inviata';
+          try {
+            if (!giaCoperto) {
+              const nota = buildAttesaRiscrittoNote({
+                puoSpostare,
+                motivo: motivoNoSposta ?? (tentatoENonFatto ? 'tentativo_non_riuscito' : null),
+                leadWords: testoRiscritto,
+              });
+              const secret = process.env.BOT_WEBHOOK_SECRET;
+              const inviata = puoSpostare
+                ? (secret ? await inviaNotaAlCrm(supabase, conversationId, crmLeadId, nota, undefined, secret) : { sent: false })
+                : await sendOutcome(supabase, conversationId, { outcome: 'CONTATTO_UMANO', note: testoRiscritto, motivoContattoUmano: 'disdetta', notaContattoUmano: nota });
+              esitoSegnale = inviata.sent ? (puoSpostare ? 'nota_conferme' : 'contatto_umano') : 'non_inviata';
+            }
+          } catch {
+            esitoSegnale = 'non_inviata';
+          }
+          await supabase.from('event_log').insert({
+            type: EVENTO_ATTESA_RISCRITTO,
+            payload: { conversationId, crmLeadId, origine: origineSposta, segnale: esitoSegnale, motivoNoSposta, parole: testoRiscritto.slice(0, 200) } as never,
+            message: `[${origineSposta ?? 'attesa'}] conv ${conversationId}: il lead in attesa ha riscritto (${esitoSegnale})`,
+            level: esitoSegnale === 'non_inviata' ? 'error' : 'info',
+          });
         }
       }
 
@@ -2067,6 +2199,7 @@ export async function drainMarioReplies(
             // chiesto anche le parole vere del lead: sono l'ultimo turno della
             // cronologia, l'unica cosa che non e' una parafrasi.
             leadWords: [...history].reverse().find((t) => t.role === 'user')?.content,
+            ...(riscriveLui ? { riscriveLui: true } : {}),
             report,
             // I due giorni prenotabili che il modello ha visto in QUESTO turno: la
             // guardia sulla data li usa al posto di ricalcolarli. A mezzanotte (ora di

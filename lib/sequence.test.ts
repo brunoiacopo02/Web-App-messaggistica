@@ -369,11 +369,18 @@ describe('pickNudgeText', () => {
       expect(t).not.toMatch(/  |\{|\}|undefined|null/);
     }
   });
-  it("default: firma come Mario (persona omessa = 'Mario')", () => {
+  // Titolare 14/11/2026: «si deve dire sempre che è Marta».
+  it("default: firma come Marta (persona omessa = 'Marta'), mai Mario", () => {
     for (const id of [0, 1, 2]) {
-      expect(pickNudgeText(id, 'Luca')).toContain('Mario');
-      expect(pickNudgeText(id, 'Luca')).toBe(pickNudgeText(id, 'Luca', 'Mario'));
+      expect(pickNudgeText(id, 'Luca')).toContain('Marta');
+      expect(pickNudgeText(id, 'Luca')).not.toContain('Mario');
+      expect(pickNudgeText(id, 'Luca')).toBe(pickNudgeText(id, 'Luca', 'Marta'));
     }
+  });
+  it('i testi restano quelli di sempre, cambia solo il nome', () => {
+    expect(pickNudgeText(0, 'Luca')).toBe('Ciao Luca, sono Marta! Ancora qui se ti va di riprendere il discorso da dove eravamo rimasti. Nessuna fretta!');
+    expect(pickNudgeText(1, 'Luca')).toBe('Ehi Luca, sono Marta: ci eravamo persi a metà chiacchierata! Se ti va di continuare, io sono qui.');
+    expect(pickNudgeText(2, 'Luca')).toBe('Ciao Luca, sono Marta! Se ti è rimasto qualche dubbio o vuoi riprendere il discorso, scrivimi pure quando ti è comodo.');
   });
   it("personaName 'Marta': firma come Marta in tutte le varianti, mai Mario", () => {
     for (const id of [0, 1, 2]) {

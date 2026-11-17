@@ -55,6 +55,7 @@ risposta giusta in quei casi. I motivi possibili:
 | `lead_sconosciuto` | quel `leadId` non risulta a noi |
 | `tentativo_non_gestito` | tentativo diverso da 1 e 3 (per esempio il secondo): accettato e ignorato di proposito |
 | `template_non_configurato` | serviva il template ma non è ancora attivo da parte nostra |
+| `numero_sospeso` | i solleciti sono sospesi sul numero WhatsApp di quella chat (qualità del numero): non parte niente, si riaccendono da soli |
 | `invio_fallito` | WhatsApp non ha accettato il messaggio; potete richiamarci più tardi |
 
 Gli ultimi tre sono problemi nostri, non vostri: ve li diciamo per trasparenza, non
