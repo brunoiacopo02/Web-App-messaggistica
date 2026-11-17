@@ -18,14 +18,16 @@
  *   crea (cattiva + UNKNOWN, o UNKNOWN + cattiva, = niente).
  * - Mai fermare l'ultimo numero del giro: se resterebbero zero numeri aperti, si
  *   scrive un warn e il numero resta acceso (lo decide una persona).
- * - Il 3199 (primario) rientra dopo 4 giorni HIGH di fila con tetto 15 aperture di
- *   Mario al giorno (PO 06/11/2026: il 3199 resta basso apposta, e' uno dei due numeri
- *   del trabocco). Non sale piu' da solo: il gradino a 100000 del 29/10 e' tolto. Se
+ * - Il 3199 (primario) rientra dopo 4 giorni HIGH di fila SENZA limite (tetto 100000,
+ *   titolare 17/11/2026: i tetti restano solo come interruttore di riposo, la divisione
+ *   fra i numeri la fa il peso, lib/pesi-numeri.ts; dal 06/11 rientrava a 15). Se
  *   scende sotto HIGH in qualunque momento esce subito e si riparte da capo.
  * - Promozioni una tantum (PO 07/11/2026, `PROMOZIONI_TETTI`): 2245 e 2508 da 30 a 50
  *   dopo 3 giorni HIGH di fila, il 3199 da 15 a 30 dopo 7. Mai verso il basso, mai
  *   due volte, mai su altri numeri; evento `tetto_promosso` col totale da mettere a mano
- *   in BOT_TETTO_GIORNALIERO del CRM.
+ *   in BOT_TETTO_GIORNALIERO del CRM. Un numero gia' senza limite (o comunque a un
+ *   tetto >= quello della promozione) non viene toccato: con tutti a 100000 non fanno
+ *   piu' niente.
  *
  * Stato in `app_settings.qualita_numeri_stato` (storico per giorno = la lettura
  * peggiore del giorno, pause in corso, `ultime` = l'ultima lettura valida di ogni
@@ -92,8 +94,10 @@ export function sommaTetti(tetti: Record<string, number>): number {
 export const GIORNI_PAUSA = 3;
 /** Giorni HIGH di fila per ogni gradino del rientro del 3199 (PO 29/10/2026 sera). */
 export const GIORNI_HIGH_PER_RIENTRO = 4;
-/** PO 06/11/2026: 15 aperture di Mario al giorno (era 30, poi 100000 a regime). */
-export const TETTO_RIENTRO_PRIMARIO = 15;
+/** "Senza limite": il tetto resta solo come interruttore di riposo (0 = numero fermo). */
+export const TETTO_SENZA_LIMITE = 100000;
+/** Titolare 17/11/2026: il 3199 rientra senza limite (dal 06/11 rientrava a 15). */
+export const TETTO_RIENTRO_PRIMARIO = TETTO_SENZA_LIMITE;
 /** Letture cattive di fila perche' un secondario vada in pausa (titolare 17/11/2026). */
 export const LETTURE_CATTIVE_PER_PAUSA = 2;
 /** Una lettura precedente piu' vecchia di cosi' non fa coppia con quella di adesso. */
@@ -250,8 +254,8 @@ export function decidi(args: {
     azioni.push({ tipo: 'pausa', numero: num, qualita: q, fino, tettoPrima: tetto });
   }
 
-  // 4. Il 3199: esce se scende; rientra a 15 dopo 4 giorni HIGH di fila e li' resta
-  //    (PO 06/11/2026: nessun secondo gradino).
+  // 4. Il 3199: esce se scende; rientra senza limite dopo 4 giorni HIGH di fila
+  //    (titolare 17/11/2026; nessun gradino).
   const qP = qOggi(primario);
   const tettoP = tettoDi(primario);
   const giorniP = stato.storico[primario] ?? {};

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { decidi, piuGiorni, giornoRoma, normalizzaQualita, sommaTetti, type StatoQualita, type Qualita } from './qualita-numeri';
+import { decidi, piuGiorni, giornoRoma, normalizzaQualita, sommaTetti, TETTO_RIENTRO_PRIMARIO, type StatoQualita, type Qualita } from './qualita-numeri';
 import { eHighEFuoriPausa } from './tetti-numeri';
 
 const P = '+393520413199';
@@ -96,7 +96,7 @@ describe('decidi (PO 29/10/2026)', () => {
     expect(r.tetti[`whatsapp:${C}`]).toBe(0);
   });
 
-  it('3199: rientra a 15 dopo 4 giorni HIGH di fila; al 7° sale a 30 una volta sola (PO 07/11/2026), poi resta', () => {
+  it('3199: rientra senza limite (100000) dopo 4 giorni HIGH di fila e li resta, nessuna promozione lo tocca (titolare 17/11/2026)', () => {
     let s = vuoto();
     let tetti = tuttiAperti() as Record<string, number>;
     const giorno = (k: number) => piuGiorni('2026-11-01', k);
@@ -106,22 +106,32 @@ describe('decidi (PO 29/10/2026)', () => {
       s = r.stato; tetti = r.tetti;
     }
     const r4 = run(giorno(3), leggi({ [P]: 'HIGH' }), s, tetti);
-    expect(r4.tetti[`whatsapp:${P}`]).toBe(15);
-    expect(r4.azioni).toEqual([{ tipo: 'rientro_primario', numero: P, tetto: 15 }]);
+    expect(TETTO_RIENTRO_PRIMARIO).toBe(100000);
+    expect(r4.tetti[`whatsapp:${P}`]).toBe(100000);
+    expect(r4.azioni).toEqual([{ tipo: 'rientro_primario', numero: P, tetto: 100000 }]);
     s = r4.stato; tetti = r4.tetti;
     for (let k = 4; k < 12; k++) {
+      // Anche al 7° giorno HIGH di fila (k = 6): la promozione a 30 non lo abbassa.
       const r = run(giorno(k), leggi({ [P]: 'HIGH' }), s, tetti);
-      if (k === 6) {
-        // 7° giorno HIGH di fila (k = 0..6): promozione una tantum a 30.
-        expect(r.tetti[`whatsapp:${P}`]).toBe(30);
-        expect(r.azioni).toEqual([{ tipo: 'tetto_promosso', numero: P, da: 15, a: 30, giorniHigh: 7 }]);
-      } else {
-        expect(r.tetti[`whatsapp:${P}`]).toBe(k < 6 ? 15 : 30);
-        expect(r.azioni).toEqual([]);
-      }
+      expect(r.tetti[`whatsapp:${P}`]).toBe(100000);
+      expect(r.azioni).toEqual([]);
       s = r.stato; tetti = r.tetti;
     }
     expect(s.primario).toBeNull();
+    expect(s.promozioni).toEqual({});
+  });
+
+  it('3199 messo a 15 a mano e HIGH da 7 giorni: la promozione una tantum a 30 vale ancora (PO 07/11/2026)', () => {
+    let s = vuoto();
+    let tetti: Record<string, number> = { ...tuttiAperti(), [`whatsapp:${P}`]: 15 };
+    const promosso: number[] = [];
+    for (let k = 0; k < 9; k++) {
+      const r = run(piuGiorni('2026-11-01', k), leggi({ [P]: 'HIGH' }), s, tetti);
+      if (r.azioni.some((a) => a.tipo === 'tetto_promosso')) promosso.push(k);
+      s = r.stato; tetti = r.tetti;
+    }
+    expect(promosso).toEqual([6]);
+    expect(tetti[`whatsapp:${P}`]).toBe(30);
   });
 
   it('3199 messo a 15 a mano e HIGH: resta a 15', () => {
@@ -138,11 +148,11 @@ describe('decidi (PO 29/10/2026)', () => {
     expect(r.stato.primario).toBeNull();
   });
 
-  it('3199 a 15 che scende: esce subito e la fila riparte da zero', () => {
+  it('3199 rientrato che scende: esce subito e la fila riparte da zero', () => {
     let s = vuoto();
     let tetti = tuttiAperti() as Record<string, number>;
     for (let k = 0; k < 4; k++) { const r = run(piuGiorni('2026-11-01', k), leggi({ [P]: 'HIGH' }), s, tetti); s = r.stato; tetti = r.tetti; }
-    expect(tetti[`whatsapp:${P}`]).toBe(15);
+    expect(tetti[`whatsapp:${P}`]).toBe(100000);
     const giu = run('2026-11-05', leggi({ [P]: 'MEDIUM' }), s, tetti);
     expect(giu.tetti[`whatsapp:${P}`]).toBeUndefined();
     expect(giu.stato.primario).toBeNull();
@@ -414,6 +424,37 @@ describe('promozioni una tantum dei tetti (PO 07/11/2026)', () => {
     expect(r.azioni.filter((a) => a.tipo === 'tetto_promosso')).toEqual([]);
     expect(r.tetti[`whatsapp:${N2245}`]).toBe(80);
     expect(r.tetti[`whatsapp:${N2508}`]).toBe(0);
+  });
+
+  it('tutti senza limite (100000) e HIGH da piu di 7 giorni: nessuna promozione, nessun tetto toccato (titolare 17/11/2026)', () => {
+    const senzaLimite = (): Record<string, number> =>
+      Object.fromEntries([P, N8061, N8718, N0047, N2245, N2508].map((n) => [`whatsapp:${n}`, 100000]));
+    let s: StatoQualita = { storico: {}, pause: {} };
+    let t = senzaLimite();
+    for (let k = 0; k < 10; k++) {
+      const r = giro(piuGiorni('2026-11-18', k), tuttiHigh(), s, t);
+      expect(r.azioni).toEqual([]);
+      expect(r.tetti).toEqual(senzaLimite());
+      s = r.stato;
+      t = r.tetti;
+    }
+    // Non restano nemmeno segnate come fatte: non c'e' niente da ricordare.
+    expect(s.promozioni).toEqual({});
+  });
+
+  it('pausa e ripresa di un numero senza limite: torna a 100000, la promozione non lo abbassa a 50', () => {
+    const t = { ...tetti07(), [`whatsapp:${N2245}`]: 100000 };
+    const fermo = giro('2026-11-08', { ...tuttiHigh(), [N2245]: 'LOW' }, giaCattivi('2026-11-08', [N2245], stato07()), t);
+    expect(fermo.tetti[`whatsapp:${N2245}`]).toBe(0);
+    let s = fermo.stato;
+    let tt = fermo.tetti;
+    for (const g of ['2026-11-11', '2026-11-12', '2026-11-13', '2026-11-14']) {
+      const r = giro(g, tuttiHigh(), s, tt);
+      expect(r.azioni.some((a) => a.tipo === 'tetto_promosso' && a.numero === N2245)).toBe(false);
+      s = r.stato;
+      tt = r.tetti;
+    }
+    expect(tt[`whatsapp:${N2245}`]).toBe(100000);
   });
 
   it('sotto HIGH per la seconda lettura di fila: va in pausa e non viene promosso', () => {

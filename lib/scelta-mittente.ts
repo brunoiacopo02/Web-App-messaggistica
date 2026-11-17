@@ -8,6 +8,13 @@
  * prende quello con meno aperture di Mario oggi (`apertureMarioOggi`: agende GDO,
  * Professioni, chat aperte dal lead non contano, PO 06/11/2026).
  *
+ * "Meno aperture" e' aperture ÷ peso (titolare 17/11/2026, lib/pesi-numeri.ts): peso 1
+ * per tutti, 0,9 per i numeri dell'account principale (3199 e 8061), che a regime
+ * ricevono il 10% in meno degli altri; regolabile in `app_settings.pesi_numeri`. Vale
+ * nel giro normale, in `sceltaHighMenoCarico` e nel trabocco; a parita' resta l'ordine
+ * di sempre. I tetti restano come interruttore di riposo (tetto 0 = numero fermo): con
+ * i tetti "senza limite" (100000) la divisione la fa solo il peso.
+ *
  * Trabocco (PO 06/11/2026): tutti al tetto = il lead va comunque, ma SOLO su uno dei
  * due numeri tenuti bassi apposta (`numeriTrabocco`: 3199 e 8061), il meno carico, e
  * solo se e' HIGH (ultima lettura del cron qualita-numeri), non in pausa e con tetto
@@ -34,6 +41,7 @@ import { apertureMarioOggi, inizioGiornataRoma, EVENTO_APERTURA_MARIO } from './
 import { credenzialiPerMittente, eSuAltroAccount } from './twilio-account';
 import { spedibileDa } from './spedibilita';
 import { OPENING_ENV_KEYS } from './persona';
+import { getPesiNumeri, pesoDi, caricoPesato } from './pesi-numeri';
 
 type Supa = ReturnType<typeof getSupabaseAdmin>;
 
@@ -223,7 +231,8 @@ export function sidAperturaMario(): string[] {
 
 /**
  * Il numero HIGH (oggi, o ieri se oggi non c'e' ancora la lettura) e fuori pausa con meno
- * aperture di Mario oggi, ignorando il tetto giornaliero ma non il riposo (tetto 0).
+ * aperture di Mario oggi in rapporto al suo peso (aperture ÷ peso, lib/pesi-numeri.ts),
+ * ignorando il tetto giornaliero ma non il riposo (tetto 0).
  * null = nessuno utilizzabile o stato qualita' illeggibile.
  */
 export async function sceltaHighMenoCarico(
@@ -257,7 +266,11 @@ export async function sceltaHighMenoCarico(
     ok.push({ numero, oggi: n, ordine });
   }
   if (ok.length === 0) return null;
-  ok.sort((a, b) => (a.oggi - b.oggi) || (a.ordine - b.ordine));
+  if (ok.length > 1) {
+    const pesi = await getPesiNumeri(supabase);
+    const carico = (c: { numero: string; oggi: number }) => caricoPesato(c.oggi, pesoDi(pesi, c.numero));
+    ok.sort((a, b) => (carico(a) - carico(b)) || (a.ordine - b.ordine));
+  }
   return { numero: ok[0].numero, oggi: ok[0].oggi };
 }
 
@@ -410,9 +423,13 @@ export async function scegliMittenteNuovo(
       utilizzabili = giro.filter((c) => eHighEFuoriPausa(stato, c.numero, oggiG, ieriG));
     }
     if (utilizzabili.length > 0) {
-      // Meno aperture oggi vince; a parita' l'ordine di `numeriTrabocco`.
-      utilizzabili.sort((a, b) => (a.oggi - b.oggi)
-        || (ammessi.indexOf(soloNum(a.numero)) - ammessi.indexOf(soloNum(b.numero))));
+      // Meno aperture oggi in rapporto al peso vince; a parita' l'ordine di `numeriTrabocco`.
+      if (utilizzabili.length > 1) {
+        const pesi = await getPesiNumeri(supabase);
+        const carico = (c: { numero: string; oggi: number }) => caricoPesato(c.oggi, pesoDi(pesi, c.numero));
+        utilizzabili.sort((a, b) => (carico(a) - carico(b))
+          || (ammessi.indexOf(soloNum(a.numero)) - ammessi.indexOf(soloNum(b.numero))));
+      }
       const scelto = utilizzabili[0];
       await logUnaVoltaAlGiorno(supabase, 'mittente_trabocco', { ...base, numero: scelto.numero, oggi: scelto.oggi },
         `[numeri] tutti i numeri al tetto: ${scelto.numero} prende il trabocco (${scelto.oggi} aperture oggi)`, i.adesso);
@@ -440,11 +457,16 @@ export async function scegliMittenteNuovo(
     for (const c of candidati) mkt.set(c.numero, (await codaMarketingOggi(supabase, c.numero, i.adesso)) ?? 0);
   }
 
-  // Meno aperture oggi vince; a parita' resta l'ordine della lista (sort stabile). Con
-  // `ignoraTetti` ogni `oggi` resta 0 per tutti (il conteggio non si fa): vince il
-  // primo secondario non a riposo e spedibile nell'ordine della lista, senza
-  // bilanciamento.
-  candidati.sort((a, b) => ((mkt.get(a.numero) ?? 0) - (mkt.get(b.numero) ?? 0)) || (a.oggi - b.oggi));
+  // Meno aperture oggi in rapporto al peso vince (aperture ÷ peso, titolare 17/11/2026);
+  // a parita' resta l'ordine della lista (sort stabile). Con `ignoraTetti` ogni `oggi`
+  // resta 0 per tutti (il conteggio non si fa): vince il primo secondario non a riposo
+  // e spedibile nell'ordine della lista, senza bilanciamento. La parita' dei lead della
+  // coda marketing (prima chiave) resta sul conteggio secco, com'era.
+  if (candidati.length > 1) {
+    const pesi = await getPesiNumeri(supabase);
+    const carico = (c: { numero: string; oggi: number }) => caricoPesato(c.oggi, pesoDi(pesi, c.numero));
+    candidati.sort((a, b) => ((mkt.get(a.numero) ?? 0) - (mkt.get(b.numero) ?? 0)) || (carico(a) - carico(b)));
+  }
   const vincitore = candidati[0].numero;
   if (codaMarketing && vincitore !== primario) {
     await log(supabase, EVENTO_CODA_MARKETING, 'info', { ...base, numero: vincitore },

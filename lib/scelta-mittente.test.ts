@@ -3,12 +3,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('./spedibilita', () => ({ spedibileDa: vi.fn(async (sid: string) => ({ ok: true, sidTradotto: sid })) }));
 vi.mock('./bot2-tetto', async (orig) => ({ ...(await orig<typeof import('./bot2-tetto')>()), apertureMarioOggi: vi.fn(async () => 0) }));
 vi.mock('./tetti-numeri', async (orig) => ({ ...(await orig<typeof import('./tetti-numeri')>()), getTettiNumeri: vi.fn(), getStatoQualitaNumeri: vi.fn() }));
+vi.mock('./pesi-numeri', async (orig) => ({ ...(await orig<typeof import('./pesi-numeri')>()), getPesiNumeri: vi.fn(async () => new Map()) }));
 
 import { scegliMittenteNuovo, sidAperturaMario, conCodaMarketing, registraAperturaMario, numeriTrabocco } from './scelta-mittente';
 import { spedibileDa } from './spedibilita';
 import { apertureMarioOggi } from './bot2-tetto';
 import { getTettiNumeri, getStatoQualitaNumeri, parseTettiNumeri } from './tetti-numeri';
 import { OPENING_ENV_KEYS } from './persona';
+import { getPesiNumeri, parsePesiNumeri } from './pesi-numeri';
 
 const P = 'whatsapp:+393520413199';
 const ELIXIR = 'whatsapp:+393522018718';
@@ -76,6 +78,9 @@ beforeEach(() => {
   vi.mocked(getTettiNumeri).mockReset();
   vi.mocked(getStatoQualitaNumeri).mockReset().mockResolvedValue({ storico: tutti('HIGH'), pause: {} });
   vi.stubEnv('BOT_NUMERI_TRABOCCO', '');
+  // Riga `pesi_numeri` assente: valgono i pesi predefiniti (qui tutti i numeri stanno
+  // sull'account principale, quindi tutti 0,9: fra loro pari, come prima dei pesi).
+  vi.mocked(getPesiNumeri).mockReset().mockResolvedValue(new Map());
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
@@ -556,5 +561,180 @@ describe('scegliMittenteNuovo con la coda marketing (PO 29/10/2026)', () => {
     const { s, eventi } = supa();
     await scegli(s);
     expect(eventi.filter((e) => e.type === 'mittente_coda_marketing')).toHaveLength(0);
+  });
+});
+
+describe('divisione alla pari con peso (titolare 17/11/2026)', () => {
+  const N2245 = 'whatsapp:+393522622245';
+  const N2508 = 'whatsapp:+393522782508';
+  const senza = (n: string) => n.replace('whatsapp:', '');
+  const SENZA_LIMITE = 100000;
+  /** Aperture di oggi per numero, che salgono a ogni lead assegnato. */
+  let conta: Record<string, number>;
+  const tuttiSenzaLimite = (numeri: string[]) => tetti(Object.fromEntries(numeri.map((n) => [n, SENZA_LIMITE])));
+  const altaPerTutti = (numeri: string[]) =>
+    qualita(Object.fromEntries(numeri.map((n) => [senza(n), { [OGGI]: 'HIGH' }])));
+
+  beforeEach(() => {
+    // I tre account come in produzione: 3199 e 8061 sul principale (peso 0,9), il 0047
+    // sul secondo e 8718/2245/2508 sul terzo (peso 1).
+    vi.stubEnv('TWILIO_ACCOUNT_SID_2', 'AC_secondo');
+    vi.stubEnv('TWILIO_AUTH_TOKEN_2', 'tok_secondo');
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBERS_2', senza(N0047));
+    vi.stubEnv('TWILIO_ACCOUNT_SID_3', 'AC_terzo');
+    vi.stubEnv('TWILIO_AUTH_TOKEN_3', 'tok_terzo');
+    vi.stubEnv('TWILIO_WHATSAPP_NUMBERS_3', [ELIXIR, N2245, N2508].map(senza).join(','));
+    // L'8061 per primo nella lista: a parita' secca vincerebbe lui.
+    vi.stubEnv('BOT_NUMERI_SECONDARI', [N8061, N0047, ELIXIR, N2245, N2508].join(','));
+    conta = {};
+    vi.mocked(apertureMarioOggi).mockImplementation(async (_s, n) => conta[n] ?? 0);
+  });
+
+  it('con conteggi uguali vince un numero a peso 1, non il primo della lista a peso 0,9', async () => {
+    tuttiSenzaLimite([P, N8061, N0047, ELIXIR]);
+    conta = { [P]: 5, [N8061]: 5, [N0047]: 5, [ELIXIR]: 5 };
+    const r = await scegli(supa().s, { includiPrimario: true });
+    expect(r).toMatchObject({ from: N0047, secondario: true, motivo: 'scelto' });
+  });
+
+  it('a zero aperture per tutti resta l ordine di oggi', async () => {
+    tuttiSenzaLimite([P, N8061, N0047, ELIXIR]);
+    expect((await scegli(supa().s, { includiPrimario: true })).from).toBe(N8061);
+  });
+
+  it('9 aperture a peso 0,9 e 10 a peso 1 sono pari: decide l ordine della lista', async () => {
+    tuttiSenzaLimite([N8061, N0047]);
+    conta = { [N8061]: 9, [N0047]: 10 };
+    expect((await scegli(supa().s)).from).toBe(N8061);
+    vi.stubEnv('BOT_NUMERI_SECONDARI', [N0047, N8061].join(','));
+    expect((await scegli(supa().s)).from).toBe(N0047);
+    // Un'apertura in piu' sull'8061 e non sono piu' pari: tocca al 0047 comunque.
+    vi.stubEnv('BOT_NUMERI_SECONDARI', [N8061, N0047].join(','));
+    conta = { [N8061]: 10, [N0047]: 10 };
+    expect((await scegli(supa().s)).from).toBe(N0047);
+    // E il primario, in coda alla lista, a parita' pesata resta dietro ai secondari.
+    tuttiSenzaLimite([P, N0047]);
+    conta = { [P]: 9, [N0047]: 10 };
+    expect((await scegli(supa().s, { includiPrimario: true })).from).toBe(N0047);
+  });
+
+  const simula = async (numeri: string[], lead: number, extra: Parameters<typeof scegli>[1] = { includiPrimario: true }) => {
+    tuttiSenzaLimite(numeri);
+    altaPerTutti(numeri);
+    conta = Object.fromEntries(numeri.map((n) => [n, 0]));
+    const { s } = supa();
+    for (let k = 0; k < lead; k++) {
+      const r = await scegli(s, extra);
+      conta[r.from] += 1;
+    }
+    return conta;
+  };
+
+  it('1.000 lead su 5 numeri (3 a peso 1, 2 a 0,9): ripartizione entro un punto da quella attesa', async () => {
+    const numeri = [P, N8061, N0047, ELIXIR, N2245];
+    vi.stubEnv('BOT_NUMERI_SECONDARI', [N8061, N0047, ELIXIR, N2245].join(','));
+    const finale = await simula(numeri, 1000);
+    expect(Object.values(finale).reduce((a, b) => a + b, 0)).toBe(1000);
+    const somma = 3 * 1 + 2 * 0.9;
+    for (const n of numeri) {
+      const peso = n === P || n === N8061 ? 0.9 : 1;
+      const attesa = (peso / somma) * 100; // 20,83% a peso 1, 18,75% a peso 0,9
+      const reale = (finale[n] / 1000) * 100;
+      expect(Math.abs(reale - attesa), `${n}: ${reale}% contro ${attesa}%`).toBeLessThan(1);
+    }
+    // I due dell'account principale ricevono il 10% in meno di ciascuno degli altri.
+    for (const basso of [P, N8061]) for (const alto of [N0047, ELIXIR, N2245]) {
+      expect(finale[basso] / finale[alto]).toBeGreaterThan(0.88);
+      expect(finale[basso] / finale[alto]).toBeLessThan(0.92);
+    }
+  });
+
+  it('i sei numeri veri (4 a peso 1, 2 a 0,9), 1.000 lead: stessa regola', async () => {
+    const numeri = [P, N8061, N0047, ELIXIR, N2245, N2508];
+    const finale = await simula(numeri, 1000);
+    const somma = 4 * 1 + 2 * 0.9;
+    for (const n of numeri) {
+      const peso = n === P || n === N8061 ? 0.9 : 1;
+      expect(Math.abs((finale[n] / 1000) * 100 - (peso / somma) * 100), n).toBeLessThan(1);
+    }
+  });
+
+  it('la coda marketing non nasce mai sul 3199 nemmeno coi pesi, e fra i secondari resta alla pari', async () => {
+    const numeri = [P, N8061, N0047, ELIXIR];
+    vi.stubEnv('BOT_NUMERI_SECONDARI', [N8061, N0047, ELIXIR].join(','));
+    tuttiSenzaLimite(numeri);
+    conta = Object.fromEntries(numeri.map((n) => [n, 0]));
+    const { s, eventi } = supa();
+    for (let k = 0; k < 30; k++) {
+      const r = await scegli(s, { includiPrimario: true, codaMarketing: true });
+      conta[r.from] += 1;
+    }
+    const per = (n: string) => eventi.filter((e) => e.type === 'mittente_coda_marketing' && e.payload.numero === n).length;
+    expect([per(N8061), per(N0047), per(ELIXIR), per(P)]).toEqual([10, 10, 10, 0]);
+  });
+
+  it('il peso si regola da app_settings.pesi_numeri, anche con una riga parziale', async () => {
+    tuttiSenzaLimite([N8061, N0047]);
+    conta = { [N8061]: 5, [N0047]: 5 };
+    // Riga assente: predefinito, vince il 0047 (peso 1).
+    expect((await scegli(supa().s)).from).toBe(N0047);
+    // Riga parziale: l'8061 portato a 1 torna pari al 0047, decide l'ordine.
+    vi.mocked(getPesiNumeri).mockResolvedValue(parsePesiNumeri({ [senza(N8061)]: 1 }));
+    expect((await scegli(supa().s)).from).toBe(N8061);
+    // Il 0047 abbassato a 0,5: con 5 aperture pesa come 10, e l'8061 a 0,9 pesa 5,6.
+    vi.mocked(getPesiNumeri).mockResolvedValue(parsePesiNumeri({ [N0047]: '0,5' }));
+    expect((await scegli(supa().s)).from).toBe(N8061);
+    // Riga malformata o con valori non validi: di nuovo il predefinito.
+    vi.mocked(getPesiNumeri).mockResolvedValue(parsePesiNumeri({ [senza(N8061)]: 0, [senza(N0047)]: 'boh' }));
+    expect((await scegli(supa().s)).from).toBe(N0047);
+    vi.mocked(getPesiNumeri).mockResolvedValue(parsePesiNumeri('rotta'));
+    expect((await scegli(supa().s)).from).toBe(N0047);
+  });
+
+  it('Black Friday (sceltaHighMenoCarico): stessa divisione col peso, e il tetto non conta', async () => {
+    tetti({ [P]: 15, [N8061]: 15, [N0047]: 20, [ELIXIR]: 50 });
+    altaPerTutti([P, N8061, N0047, ELIXIR]);
+    // Tutti oltre il tetto e a pari aperture: vince un numero a peso 1.
+    conta = { [P]: 60, [N8061]: 60, [N0047]: 60, [ELIXIR]: 60 };
+    const { s, eventi } = supa();
+    expect((await scegli(s, { senzaTettiSoloHigh: true, includiPrimario: true })).from).toBe(N0047);
+    expect(eventi.find((e) => e.type === 'mittente_black_friday')?.payload).toMatchObject({ numero: N0047, oggi: 60 });
+    // 54 a peso 0,9 contro 60 a peso 1: pari, vince il primo della lista (l'8061).
+    conta = { [P]: 54, [N8061]: 54, [N0047]: 60, [ELIXIR]: 60 };
+    expect((await scegli(supa().s, { senzaTettiSoloHigh: true, includiPrimario: true })).from).toBe(N8061);
+    // Con `escludiPrimario` il 3199 resta fuori anche se il suo carico pesato e' il piu' basso.
+    conta = { [P]: 0, [N8061]: 54, [N0047]: 61, [ELIXIR]: 61 };
+    expect((await scegli(supa().s, { senzaTettiSoloHigh: true, includiPrimario: true, escludiPrimario: true })).from).toBe(N8061);
+  });
+
+  it('Black Friday, 1.000 lead su 5 numeri: ripartizione entro un punto da quella attesa', async () => {
+    const numeri = [P, N8061, N0047, ELIXIR, N2245];
+    vi.stubEnv('BOT_NUMERI_SECONDARI', [N8061, N0047, ELIXIR, N2245].join(','));
+    const finale = await simula(numeri, 1000, { senzaTettiSoloHigh: true, includiPrimario: true });
+    const somma = 3 * 1 + 2 * 0.9;
+    for (const n of numeri) {
+      const peso = n === P || n === N8061 ? 0.9 : 1;
+      expect(Math.abs((finale[n] / 1000) * 100 - (peso / somma) * 100), n).toBeLessThan(1);
+    }
+  });
+
+  it('trabocco: fra i numeri ammessi vince il meno carico in rapporto al peso', async () => {
+    vi.stubEnv('BOT_NUMERI_TRABOCCO', `${senza(N8061)},${senza(N0047)}`);
+    tetti({ [N8061]: 15, [N0047]: 15, [ELIXIR]: 50 });
+    altaPerTutti([N8061, N0047, ELIXIR]);
+    // Pari aperture oltre il tetto: prima dei pesi vinceva l'8061 (primo in `numeriTrabocco`).
+    conta = { [N8061]: 20, [N0047]: 20, [ELIXIR]: 50 };
+    expect((await scegli(supa().s)).from).toBe(N0047);
+    // 18 a peso 0,9 contro 20 a peso 1: pari, decide l'ordine di `numeriTrabocco`.
+    conta = { [N8061]: 18, [N0047]: 20, [ELIXIR]: 50 };
+    expect((await scegli(supa().s)).from).toBe(N8061);
+  });
+
+  it('un numero a tetto 0 resta fermo anche coi pesi: il tetto e l interruttore di riposo', async () => {
+    tetti({ [N8061]: SENZA_LIMITE, [N0047]: 0, [ELIXIR]: SENZA_LIMITE });
+    conta = { [N8061]: 500, [N0047]: 0, [ELIXIR]: 500 };
+    const r = await scegli(supa().s);
+    expect(r.from).toBe(ELIXIR);
+    expect(r.scartati).toContainEqual({ numero: N0047, motivo: 'tetto_zero' });
   });
 });
