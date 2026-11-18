@@ -70,6 +70,12 @@ export type StatoQualita = {
   promozioni?: Record<string, { giorno: string; da: number; a: number }>;
   /** numero (senza `whatsapp:`) → ultima lettura valida (titolare 17/11/2026). */
   ultime?: Record<string, UltimaLettura>;
+  /**
+   * Numeri (senza `whatsapp:`) che il controllo NON ferma (titolare 18/11/2026): restano
+   * aperti anche sotto HIGH finche' una persona non li toglie da questa lista. Le letture
+   * si segnano lo stesso. Si scrive a mano in `app_settings.qualita_numeri_stato.esenti`.
+   */
+  esenti?: string[];
 };
 
 /**
@@ -193,7 +199,9 @@ export function decidi(args: {
     primario: args.stato.primario ? { ...args.stato.primario } : null,
     promozioni: structuredClone(args.stato.promozioni ?? {}),
     ultime: structuredClone(args.stato.ultime ?? {}),
+    ...(Array.isArray(args.stato.esenti) ? { esenti: [...args.stato.esenti] } : {}),
   };
+  const esenti = new Set((stato.esenti ?? []).map(soloNumero));
   const ultime = (stato.ultime ??= {});
   // I tetti si scrivono con le chiavi come le trovo (con o senza `whatsapp:`).
   const tetti: Record<string, number> = { ...args.tetti };
@@ -235,6 +243,7 @@ export function decidi(args: {
   //    Una lettura cattiva isolata si segna e basta (titolare 17/11/2026).
   for (const num of secondari) {
     if (stato.pause[num]) continue;
+    if (esenti.has(num)) continue; // tenuto aperto da una persona (titolare 18/11/2026)
     const tetto = tettoDi(num);
     if (tetto <= 0) continue; // a riposo per mano di una persona: non e' affar nostro
     const q = qOggi(num);
@@ -265,7 +274,7 @@ export function decidi(args: {
   };
   // `primario.fase` ('trenta') non si scrive piu': quella rimasta da prima si azzera.
   stato.primario = null;
-  if (tettoP > 0 && (qP === 'MEDIUM' || qP === 'LOW')) {
+  if (tettoP > 0 && (qP === 'MEDIUM' || qP === 'LOW') && !esenti.has(primario)) {
     delete tetti[chiaveDi(primario)];
     azioni.push({ tipo: 'uscita_primario', numero: primario, qualita: qP });
   } else if (tettoP === 0 && tuttiHigh(oggi, GIORNI_HIGH_PER_RIENTRO)) {
@@ -348,7 +357,7 @@ export async function eseguiControlloQualita(supabase: Supa, adesso: Date = new 
   // conto dei giorni HIGH e per la coppia di letture), le pause e i tetti no.
   const statoDaScrivere: StatoQualita = auto
     ? r.stato
-    : { storico: r.stato.storico, pause: statoPrima.pause ?? {}, primario: statoPrima.primario ?? null, promozioni: statoPrima.promozioni ?? {}, ultime: r.stato.ultime ?? {} };
+    : { storico: r.stato.storico, pause: statoPrima.pause ?? {}, primario: statoPrima.primario ?? null, promozioni: statoPrima.promozioni ?? {}, ultime: r.stato.ultime ?? {}, ...(Array.isArray(statoPrima.esenti) ? { esenti: statoPrima.esenti } : {}) };
   await supabase.from('app_settings').upsert({ key: KEY_STATO, value: statoDaScrivere as never, updated_at: adesso.toISOString() });
   const cambiaTetti = auto && JSON.stringify(r.tetti) !== JSON.stringify(tetti);
   if (cambiaTetti) {

@@ -63,6 +63,8 @@ export type StatoQualitaLetto = {
   storico: Record<string, Record<string, string>>;
   pause: Record<string, unknown>;
   ultime?: Record<string, { qualita?: string; alle?: string; cattiveDiFila?: number } | undefined>;
+  /** Numeri tenuti aperti da una persona anche sotto HIGH (titolare 18/11/2026). */
+  esenti?: string[];
 };
 
 /** null = non si e' potuto leggere: nessun numero vale HIGH (fallisce chiuso). */
@@ -75,6 +77,7 @@ export async function getStatoQualitaNumeri(supabase: Supa): Promise<StatoQualit
     return {
       storico: v.storico ?? {}, pause: v.pause ?? {},
       ...(v.ultime && typeof v.ultime === 'object' ? { ultime: v.ultime } : {}),
+      ...(Array.isArray(v.esenti) ? { esenti: v.esenti.filter((x): x is string => typeof x === 'string') } : {}),
     };
   } catch {
     return null;
@@ -102,6 +105,8 @@ export async function getStatoQualitaNumeri(supabase: Supa): Promise<StatoQualit
 export function eHighEFuoriPausa(stato: StatoQualitaLetto | null, numero: string, oggi: string, ieri: string): boolean {
   if (!stato) return false;
   const n = chiave(numero);
+  // Tenuto aperto da una persona (titolare 18/11/2026): vale come sano, qualunque lettura.
+  if (stato.esenti?.some((e) => chiave(e) === n)) return true;
   if (stato.pause[n]) return false;
   const giorni = stato.storico[n] ?? {};
   const delGiorno = giorni[oggi] ?? giorni[ieri];

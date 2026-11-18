@@ -470,3 +470,38 @@ describe('promozioni una tantum dei tetti (PO 07/11/2026)', () => {
     expect(r.azioni.some((a) => a.tipo === 'tetto_promosso' && a.numero === N2245)).toBe(false);
   });
 });
+
+describe('numeri esenti: tenuti aperti da una persona (titolare 18/11/2026)', () => {
+  const G = '2026-11-19';
+  const IERI = '2026-11-18';
+
+  it('un secondario esente non va in pausa nemmeno alla seconda lettura cattiva, e resta nello stato', () => {
+    const s: StatoQualita = { ...giaCattivi(G, [C]), esenti: [C] };
+    const r = run(G, leggi({ [C]: 'LOW' }), s);
+    expect(r.stato.pause).toEqual({});
+    expect(r.tetti[`whatsapp:${C}`]).toBe(100000);
+    expect(r.stato.esenti).toEqual([C]);
+    expect(r.stato.ultime?.[C]?.cattiveDiFila).toBe(2);
+  });
+
+  it('gli altri secondari continuano a fermarsi come prima', () => {
+    const s: StatoQualita = { ...giaCattivi(G, [B]), esenti: [C] };
+    const r = run(G, leggi({ [B]: 'LOW' }), s);
+    expect(r.stato.pause[B]).toBeTruthy();
+  });
+
+  it('il 3199 esente non esce quando scende', () => {
+    const r = run(G, leggi({ [P]: 'LOW' }), { ...vuoto(), esenti: [P] }, { ...tuttiAperti(), [`whatsapp:${P}`]: 100000 });
+    expect(r.tetti[`whatsapp:${P}`]).toBe(100000);
+    expect(r.azioni).toEqual([]);
+  });
+
+  it('un numero esente vale come sano per Black Friday, trabocco e database', () => {
+    const s: StatoQualita = { ...giaCattivi(G, [C]), esenti: [`whatsapp:${C}`] };
+    const r = run(G, leggi({ [C]: 'LOW', [P]: 'LOW' }), { ...s, esenti: [`whatsapp:${C}`, P] });
+    expect(eHighEFuoriPausa(r.stato, C, G, IERI)).toBe(true);
+    expect(eHighEFuoriPausa(r.stato, `whatsapp:${P}`, G, IERI)).toBe(true);
+    expect(eHighEFuoriPausa(r.stato, B, G, IERI)).toBe(true);
+    expect(eHighEFuoriPausa({ ...r.stato, esenti: [] }, C, G, IERI)).toBe(false);
+  });
+});
